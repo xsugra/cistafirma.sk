@@ -28,14 +28,25 @@ PYTHON=$(VENV_DIR)/bin/python
 PIP=$(VENV_DIR)/bin/pip
 REQUIREMENTS_DIR=$(BACKEND_DIR)/requirements.txt
 
+
+run-frontend: venv
+	@echo "Building frontend..."
+	@cd $(FRONTEND_DIR) && npm run build
+	@echo "Running server on developer environment..."
+	@cd $(FRONTEND_DIR) && npm run dev
+
 venv:
-	touch $(VENV_DIR)/bin/activate
+	@touch $(VENV_DIR)/bin/activate
 
 venv-create:
 	@echo "Creating virtual environment and installing dependencies..."
 	@python3 -m venv $(VENV_DIR)
 	@$(PIP) install -r $(REQUIREMENTS_DIR)
 	@touch $(VENV_DIR)/bin/activate
+
+collectstatic: venv
+	@echo "Collecting static files..."
+	@$(PYTHON) $(DJANGO_MANAGE_DIR) collectstatic
 
 runserver: venv
 	@echo "Starting Django development server on localhost:8000..."
