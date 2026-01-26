@@ -1,0 +1,5 @@
+{
+  "name": "cistafirma.sk",
+  "description": "A modern, futuristic web application for verifying and monitoring companies in Slovakia, inspired by Finstat but with an advanced design. It provides detailed insights into company data, debts, VAT status, and risk analysis.",
+  "requestFramePermissions": []
+}
