@@ -10,6 +10,9 @@ class EmailOrUsernameModelBackend:
     """
 
     def authenticate(self, request, username=None, password=None, **kwargs):
+        if username is None:
+            username = kwargs.get('email')
+
         try:
             # Hľadáme užívateľa, ktorého email ALEBO username sa zhoduje so vstupom
             user = User.objects.get(Q(username=username) | Q(email=username))

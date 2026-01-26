@@ -1,3 +1,4 @@
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,6 +13,7 @@ class RegisterView(generics.CreateAPIView):
 
 
 # 2. Login (Session based pre začiatok, alebo JWT)
+@csrf_exempt
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
 
