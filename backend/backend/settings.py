@@ -5,6 +5,7 @@ import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = BASE_DIR.parent / 'frontend'
 DEV_ENV_DIR = BASE_DIR / 'source' / 'backend' / '.env.dev'
 
 load_dotenv(dotenv_path=DEV_ENV_DIR)
@@ -13,7 +14,7 @@ load_dotenv(dotenv_path=DEV_ENV_DIR)
 SECRET_KEY = os.getenv('SECRET_KEY', default='django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', default=False)
+DEBUG = os.getenv('DEBUG', default=True)
 
 ALLOWED_HOSTS = ["*"]
 
@@ -42,6 +43,11 @@ DJANGO_APPS = [
     'django.contrib.staticfiles',
 ]
 
+THIRD_PARTY_APPS = [
+    'rest_framework',
+    'corsheaders',
+]
+
 CUSTOM_APPS = [
     'users',
     'subscriptions',
@@ -51,28 +57,34 @@ CUSTOM_APPS = [
     'api',
 ]
 
-INSTALLED_APPS = DJANGO_APPS + CUSTOM_APPS
+INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + CUSTOM_APPS
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # DÔLEŽITÉ PRE PRODUKCIU
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
+
 ]
 
 ROOT_URLCONF = 'backend.urls'
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'BACKEND':
+            'django.template.backends.django.DjangoTemplates',
+        'DIRS': [
+            FRONTEND_DIR / 'dist',
+        ],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
+                'django.template.context_processors.debug',
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
@@ -125,16 +137,38 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+# --- STATIC FILES CONFIG ---
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'  # Sem sa všetko pozbiera príkazom collectstatic
 
-# CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS")
-# CORS_ALLOWS_CREDENTIALS = os.getenv("CORS_ALLOWS_CREDENTIALS")
+# Django musí servovať 'frontend/dist' na URL '/static/'.
+STATICFILES_DIRS = [
+    FRONTEND_DIR / 'dist',
+]
 
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOWS_CREDENTIALS = True
+# Whitenoise nastavenie pre kompresiu a caching
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# 1. Pridaj adresu frontendu medzi dôveryhodné pre CSRF (Django 4.0+)
+# Toto je presne to, čo vyrieši chybu "CSRF verification failed"
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# 2. Nastav CORS (ak používaš django-cors-headers)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",  # Pre istotu nechaj aj starý
+]
+
+# 3. Pre istotu povoľ credentials
+CORS_ALLOW_CREDENTIALS = True
 
 AUTH_USER_MODEL = "users.User"
 
 AUTHENTICATION_BACKENDS = [
-    'users.backends.EmailOrUsernameModelBackend'
+    'users.backends.EmailOrUsernameModelBackend',
+    'django.contrib.auth.backends.ModelBackend',  # Záloha (klasické prihlásenie)
 ]
