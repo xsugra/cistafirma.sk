@@ -179,10 +179,25 @@ packages/react-devtools-inline/dist
 packages/react-devtools-shell/dist
 packages/react-devtools-timeline/dist
 
+# old backend/registers folder
 /old
+
+# STATIC FILES serving frontend
 /backend/staticfiles/*
+
+# CELERY BEAT SCHEDULE FILES
 /celerybeat-schedule-shm
 /celerybeat-schedule-wal
 /celerybeat-schedule
+
+# Gemini INIT file
 /GEMINI.md
+
+# Temporary files from Financna Sprava
 /data
+
+# ENV files in backend folder
+/backend/.env.dev
+/backend/.env
+/backend/.env.local
+/backend/.env.prod
