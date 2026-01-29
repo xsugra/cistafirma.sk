@@ -16,3 +16,9 @@ types-requests==2.32.4.20260107
 typing_extensions==4.15.0
 urllib3==2.6.3
 whitenoise
+beautifulsoup4
+celery
+django-celery-beat
+redis
+requests
+thefuzz==0.22.1
