@@ -1,0 +1,17 @@
+FS_DATASET_URLS = {
+    "tax_debtors": "https://report.financnasprava.sk/ds_dsdd.zip",
+    "bank_accounts": "https://report.financnasprava.sk/ds_dph_iban.zip",
+    "income_tax_registered": "https://report.financnasprava.sk/ds_dsrdp.zip",
+    "tax_reliability": "https://report.financnasprava.sk/ds_iz_ran.zip",
+    "vat_payers": "https://report.financnasprava.sk/ds_dphs.zip",
+    "tax_admin_accounts": "https://report.financnasprava.sk/ds_dph_oud.zip",
+    "vat_cancellation_reasons": "https://report.financnasprava.sk/ds_dphz.zip",
+    "vat_deleted": "https://report.financnasprava.sk/ds_dphv.zip",
+    "vat_special_scheme": "https://report.financnasprava.sk/ds_dpho.zip",
+    "vat_deductions": "https://report.financnasprava.sk/ds_dphno.zip",
+    "research_development_expenses": "https://report.financnasprava.sk/ds_odp30c8.zip",
+    "investment_expenses": "https://report.financnasprava.sk/ds_odp30e9.zip",
+    "income_tax_exemption_13a": "https://report.financnasprava.sk/ds_osl13a6.zip",
+    "income_tax_exemption_13b": "https://report.financnasprava.sk/ds_osl13b7.zip",
+    "regulated_entities": "https://report.financnasprava.sk/ds_regoso.zip",
+}
