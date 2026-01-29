@@ -1,0 +1,540 @@
+Služby je moné rozdeliť do troch skupín:
+
+    zoznamy identifikátorov - slúžia na stiahnutie identifikátorov pre jednotlivé typy údajov, tieto sa následne použijú na prístup k detailom
+    detail entity - obsahuje detailné atribúty entity pre daný identifikátor
+    číselníky - zoznamy číselníkových údajov, ktorých zdrojom je ŠÚSR
+
+Aktualizácia údajov
+Údaje sú dostupné prostredníctvom API v rovnakom okamihu ako sú dostupné prostredníctvom GUI. Údaje sú v RÚZ aktualizované resp. prijímané v priebehu celého dňa a prostredníctvom API sú dostupné okamžite od okamihu ich prijatia/aktualizácie. Teda služby môžu pri zadaní rovnakých parametrov v rôznych okamihoch dňa poskytovať rôzne výsledky (typicky môže dopyt neskôr v priebehu dňa obsahovať viac údajov, ale pri správnych pravidelných inkrementálnych dopytoch sú vždy dostupné všetky pridané/zmenené údaje od daného dátumu).
+Spôsob poskytovania údajov
+
+    Všetky dátumy sú textové reťazce formátované v súlade s ISO 8601 ako RRRR-MM-DD.
+    Obdobia uvedené na titulnej strane výkazu sú textové reťazce formátované v súlade s ISO 8601 ako RRRR-MM.
+    Všetky odkazy na číselníkové hodnoty sa udávajú pomocou kódu danej položky (viac viď Číselníky).
+    Atribúty bez hodnoty (s hodnotou null) nie sú zahrnuté do odpovede. Toto platí pre jednoduché atribúty, aj pre zoznamy. Napr. ak účtovná jednotka neobsahuje idUctovnychZavierok, znamená to, že pre ňu nie sú evidované žiadne závierky (alebo nie sú verejne dostupné, viď FAQ).
+    Ak je požiadavka nesprávne formulovaná (chýbajúce alebo nesprávne formátované parametre), bude vrátený kód HTTP 400 Bad Request. Telo odpovede môže obsahovať vysvetlenie.
+    Ak neexistuje konkrétny požadovaný údaj (neexistujúce id), bude vrátený kód HTTP 404 Not Found.
+    Údaj datumPoslednejUpravy (používaný pre dopytovanie podľa zmenene-od) sa týka len konkrétnej entity a nie jej logických väzieb. Príklad: Ak pribudne nová závierka, ale účtovná jednotka nie je zmenená, prejaví sa to v zozname zmenených závierok (pribudne nové id), nie v zozname jednotiek zmenených od daného dátumu. Toto nie je nijako ovplyvnené faktom, že v detaile účtovnej jednotky dané id závierky pribudne do zoznamu jej závierok (toto nie je považované za zmenu atribútu účtovnej jednotky). Toto platí pre všetky vzťahy na úrovni objektov uvedených na obrázku vyššie.
+    Pre zoznamy, kde sa zadáva zmenene-od, platí, že budú získané všetky údaje (postupne po stránkach v poradí podľa id), ktoré boli zmenené buď v daný deň (pri zadaní vo formáte yyyy-MM-dd) repektíve od dané času (pri zadaní vo formáte yyyy-MM-dd'T'hh:mm:ssZ) alebo kedykoľvek neskôr (t.j. zmenene-od vrátane).
+    Verzia API sa objavuje v HTTP hlavičke "X-API-Version" (napr. "X-API-Version: 1.2"), z JSONu bol vypustený atribút verziaApi.
+
+Odporúčaný spôsob postupného sťahovania
+
+    Pri prvom sťahovaní údajov je možné získať všetky údaje zadaním dostatočne dávneho dátumu pre zmenene-od, napríklad: zmenene-od=2000-01-01
+    Je dôležité poznačiť si dátum, kedy bolo začaté získavanie údajov, ktoré môže trvať aj viac dní - nech je to napr. 2014-02-14.
+    Pri opakovanom sťahovaní údajov stačí získať iba záznamy, pre ktoré sa niečo zmenilo. Použije sa teda dopyt s zmenene-od=2014-02-14 (príklad z predchádzajúceho bodu). Opäť je nutné si poznačiť dátum, kedy sa začlo so sťahovaním aktualizácií (napr. 2014-03-08). Tento sa použije v ďalšom cykle aktualizácie dát. Pri opakovanom sťahovaní v rámci jedného dňa je možné využiť zadanie napr. zmenene-od=2014-02-18T12:59:59Z za predpokladu, že je možné si poznačiť presný čas spustenia sťahovania. V takomto prípade budú vrátené iba záznami zmenené od zadaného dátumu a času vrátane.
+    Je na implementácii sťahovacieho mechanizmu, či si bude zaznamenávať jeden spoločný dátum začiatku sťahovania údajov pre všetky zoznamy, alebo per zoznam (zvlášť účtovné jednotky, zvlášť závierky, atď.).
+    Ak sa periodicky zaujímate o údaje k malému zoznamu účtovných jednotiek, najjednoduchšie je periodicky spraviť dopyt na dané účtovné jednotky podľa ich id (je možné si ich zapamätať, nikdy sa nemenia) a prejsť ich údaje do hĺbky (závierky, výkazy, výročné správy) a nájsť prípadné zmeny.
+
+Mazanie údajov v RÚZ
+
+    Údaje v RÚZ typicky iba pribúdajú a nemali by byť mazané, z technických príčin sa tak ale stať môže.
+    Id danej entity sa objaví v zozname zmenených záznamov.
+    Po prístupe na detail danej entity sa vráti jej detail so skráteným zoznamom atribútov: id, datumPoslednejUpravy a stav
+
+    {"id":316853,"datumPoslednejUpravy":"2013-08-21","stav":"ZMAZANÉ"}
+
+    Vždy platí, že ak je zmazaná entita, sú zmazané aj všetky jej podúdaje (napr. pri zmazaní závierky sú zmazané aj všetky výkazy). Na identifikátory podúdajov nie je možné pristúpiť cez detail zmazanej entity, ale objavia sa v zozname zmenených entít daného typu (v našom príklade v zozname účtovných výkazov).
+    Zmazanie výkazu nespôsobí nastavenie dátumu zmeny účtovnej závierky, podobne zmazanie závierky nenastaví zmenu účtovnej jednotky, napriek tomu, že zmazané identifikátory budú chýbať v detailoch týchto inak nezmenených údajov.
+    Zmazanie príloh výkazu spôsobuje nastavenie zmeny účtovného výkazu, v ktorého detaile zmazaná príloha bude chýbať. Pri pokuse priamo stiahnúť zmazanú prílohu systém vráti HTTP 404.
+    Šablóny výkazov nikdy nie sú mazané.
+    Vo výnimočných prípadoch sa môže stať, že údaj zmizne z verejnej časti (a teda aj z Open API) bez stopy. Tieto prípady nie je možné technicky vylúčiť, ale je snaha ich výskyt minimalizovať.
+
+Iné poznámky
+
+    Prílohy výkazov sú sprístupňované mimo API cez URL zhodnú so samotnou web aplikáciou, konkrétne /domain/financialreport/attachment/id-prilohy. Zoznam id príloh je uvedený v detaile reportu (/api/uctovny-vykaz), ak nejaké prílohy obsahuje.
+    V aplikácii je možné stiahnúť aj PDF podobu štruktúrovaných dát pomocou URL /domain/financialreport/pdf/id-vykazu. Ide o vygenerované PDF, ktoré je z pohľadu dátového obsahu zhodné so samotným detailom výkazu cez API. Táto URL je z pohľadu API bezvýznamná. (Tento fakt uvádzame len preto, aby konzument API nesťahoval tieto generované PDF v presvedčení, že obsahujú nejaké dáta navyše. Ide len o vizualizáciu dát v PDF formáte.)
+
+Služby pre zoznam identifikátorov
+
+Služby sú navrhnuté na inkrementálne dopytovanie zoznamov nových/zmenených entít podľa jednotlivých ich typov (účtovné jednotky, účtovné závierky, výročné správy, účtovné výkazy). Sú navrhnuté tak, aby nebolo nutné zo strany klienta opakovane (po prvotnom stiahnutí dát) prechádzať/kontrolovať všetky identifikátory, ale sťahovať už iba tie, ktoré boli zmenené resp. pridané/zmazané v RÚZ po dátume stiahnutia posledného takéhoto inkrementu.
+URL služieb pre zoznamy identifikátorov:
+
+    /api/uctovne-jednotky
+    /api/uctovne-zavierky
+    /api/uctovne-vykazy
+    /api/vyrocne-spravy
+
+Zoznam parametrov:
+
+Všetky služby pre zoznam identifikátorov maju spoločné nasledovné parametre:
+
+    zmenene-od - povinný parameter, vráti zoznam identifikátorov, ktoré boli zmenené v daný dátum alebo neskôr. Povolené formáty sú nasledovné:
+        yyyy-MM-dd - vráti zoznam identifikátorov entít zmenených od definovaného dátumu, vrátane. Napríklad zmemene-od=2020-12-31.
+        yyyy-MM-dd'T'hh:mm:ssZ - vráti zoznam identifikátorov entít zmenených od definovaného dátumu a času, vrátane. Určené na inkrementálne sťahovanie zmenených entín v priebehu dňa. Ak si klient uloží dátum a čas spustenia posledného sťahovania, tak môže inkrementálne sťahovať identifikátory zmenených entít od tohto okamihu. Napríklad zmemene-od=2020-12-31T23:59:59Z resp. zmemene-od=2020-12-31T23:59:59+0000.
+    pokracovat-za-id - nepovinný parameter, vráti zoznam identifikátorov, ktoré sú väčšie ako zadaný identifikátor.
+    max-zaznamov - nepovinný parameter, vráti uvedený počet záznamov, maximálne 10000. Prednastavený počet je 1000.
+
+Služba pre zoznam identifikátorov účtovných jednotiek /api/uctovne-jednotky ako jediná navyše umožňuje použitie nasledovných parametrov:
+
+    ico - nepovinný parameter
+    dic - nepovinný parameter
+    pravna-forma - nepovinný parameter, kód právnej formy (viď Číselníky)
+
+Príklad vstupu:
+
+    /api/uctovne-jednotky?zmenene-od=2000-01-01&pokracovat-za-id=1&max-zaznamov=100&ico=17319617&pravna-forma=701
+    /api/uctovne-zavierky?zmenene-od=2000-01-01
+    /api/uctovne-vykazy?zmenene-od=2000-01-01
+    /api/vyrocne-spravy?zmenene-od=2000-01-01
+
+Formát odpovede:
+
+Formát odpovede je jednotný pre všetky dopyty na zoznamy identifikátorov.
+
+    id - zoznam identifikátorov, ktoré spĺňajú zadané kritériá. Ak neexistuje žiadny identifikátor prislúchajúci vstupným parametrom, je vrátený prázdny zoznam. Identifikátor je celé číslo, maximálne desaťciferné.
+    existujeDalsieId - boolean príznak - true, ak existuje aspoň jeden identifikátor, ktorý zodpovedá použitým parametrom, nenachádza sa v aktuálne vrátenom zozname a jeho hodnota je vyšší ako posledný identifikátor v aktuálne vrátenom zozname.
+
+Služba vráti požadovaný (alebo prednastavený) počet záznamov v poradí podľa id, pričom ďalšiu stránku zoznamu je možné získať opakovaním dopytu s uvedením pokracovat-za-id=xxx, kde xxx je posledný identifikátor z obdržaného zoznamu, až kým vrátený zoznam nie je prázdny. Pri potrebe znalosti počtu zostávajúcich identifikátorov je možné použiť niektorú so služieb pre počet zostávajúcich identifikátorov s uvedením parametra pokracovat-za-id=xxx, kde xxx je posledným identifikátorom z obdržaného zoznamu.
+Príklad výstupu:
+
+{"id":[1001,7148,8221,8222,8223,9911,12700], "existujeDalsieId": true}
+
+Služby pre počet zostávajúcich identifikátorov
+
+Služby vracajú počty zostávajúcich identifikátorov pre jednotlivé typy entít. Tieto je možné použiť na odhad dĺžky dopytovania zoznamov identifikátorov, prípadne pre lepšie ladenie tohto dopytovania. Nie sú nutné pre použitie služieb pre zoznamy identifikátorov.
+URL služieb pre počet zostávajúcich identifikátorov
+
+    /api/zostavajuce-id/uctovne-jednotky
+    /api/zostavajuce-id/uctovne-zavierky
+    /api/zostavajuce-id/uctovne-vykazy
+    /api/zostavajuce-id/vyrocne-spravy
+
+Zoznam parametrov:
+
+Všetky služby majú rovnaké parametre ako prislúchajúce služby pre zoznam identifikátorov (okrem parametru max-zaznamov). Je to z dôvodu, aby sa dala použiť rovnaká konfigurácia parametrov dopytu ako pre zoznam identifikátorov a teda s použitím posledného vráteného ID získať počet všetkých zostávajúcich identifikátorov danej entity.
+
+Všetky služby pre počet zostávajúcich identifikátorov majú spoločné nasledovné parametre:
+
+    zmenene-od - povinný parameter, vráti počet identifikátorov, ktoré boli zmenené v daný dátum alebo neskôr. Povolené formáty sú nasledovné:
+        yyyy-MM-dd - vráti počet identifikátorov entít zmenených od definovaného dátumu, vrátane. Napríklad zmemene-od=2020-12-31.
+        yyyy-MM-dd'T'hh:mm:ssZ - vráti počet identifikátorov entít zmenených od definovaného dátumu a času, vrátane. Napríklad zmemene-od=2020-12-31T23:59:59Z resp. zmemene-od=2020-12-31T23:59:59+0000.
+    pokracovat-za-id - nepovinný parameter, vráti počet identifikátorov, ktoré sú väčšie ako zadaný identifikátor.
+
+Služba pre počet zostávajúcich identifikátorov účtovných jednotiek /api/zostavajuce-id/uctovne-jednotky ako jediná navyše umožňuje použitie nasledovných parametrov:
+
+    ico - nepovinný parameter
+    dic - nepovinný parameter
+    pravna-forma - nepovinný parameter, kód právnej formy (viď Číselníky)
+
+Príklad vstupu:
+
+    /api/zostavajuce-id/uctovne-jednotky?zmenene-od=2000-01-01&pokracovat-za-id=1&ico=17319617&pravna-forma=701
+    /api/zostavajuce-id/uctovne-zavierky?zmenene-od=2000-01-01
+    /api/zostavajuce-id/uctovne-vykazy?zmenene-od=2000-01-01
+    /api/zostavajuce-id/vyrocne-spravy?zmenene-od=2000-01-01
+
+Formát odpovede:
+
+Formát odpovede je jednotný pre všetky dopyty na počty zostávajúcich identifikátorov.
+
+    pocetZostavajucichId - počet zostávajúcich identifikátorov, ktoré spĺňajú zadané kritériá. Typicky predstavuje počet identifikátorov entity, ktoré je ešte treba stiahnuť cez služby pre zoznam identifikátorov. Celé číslo prakticky neobmedzenej veľkosti.
+
+Príklad výstupu:
+
+{"pocetZostavajucichId":10}
+
+Služby pre detaily
+
+Tieto služby vrátia detaily jednej entity, pričom všetky majú len jeden povinný parameter:
+
+    id - identifikátor danej entity (účtovnej jednotky, účtovnej závierky, ...). Identifikátor je celé číslo, maximálne desaťciferné.
+
+Účtovná jednotka
+
+Url: /api/uctovna-jednotka
+
+Príklad vstupu: /api/uctovna-jednotka?id=336953
+Formát výstupu: (Niektoré atribúty nemusia byť v odpovedi zahrnuté)
+
+    id - identifikátor účtovnej jednotky, maximálne desaťciferné celé číslo
+    ico - IČO účtovnej jednotky, osemznakový textový reťazec
+    dic - DIČ účtovnej jednotky, desaťznakový textový reťazec
+    sid - SID účtovnej jednotky, najviac päťznakový textový reťazec
+    nazovUJ - názov účtovnej jednotky, textový reťazec s maximálnou dĺžkou 500 znakov
+    mesto - adresa účtovnej jednotky, mesto, textový reťazec s maximálnou dĺžkou 200 znakov
+    ulica - adresa účtovnej jednotky, ulica s číslom, textový reťazec s maximálnou dĺžkou 200 znakov
+    psc - adresa účtovnej jednotky, PSČ, textový reťazec s maximálnou dĺžkou 10 znakov
+    datumZalozenia - dátum založenia účtovnej jednotky, formát RRRR-MM-DD
+    datumZrusenia - dátum zrušenia účtovnej jednotky, formát RRRR-MM-DD
+    pravnaForma - kód právnej formy (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    skNace - kód SK NACE klasifikácie (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    velkostOrganizacie - kód kategórie veľkosti organizácie (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    druhVlastnictva - kód druhu vlastníctva (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    kraj - sídlo účtovnej jednotky, kód kraja (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    okres - sídlo účtovnej jednotky, kód okresu (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    sidlo - sídlo účtovnej jednotky, kód obce alebo mesta (viď Číselníky), textový reťazec s maximálnou dĺžkou 100 znakov
+    konsolidovana - boolean príznak - true, ak jednotka obsahuje aspoň jednu konsolidovanú účtovnú závierku
+    idUctovnychZavierok - zoznam identifikátorov všetkých súvisiacich účtovných závierok, identifikátor je maximálne desaťciferné celé číslo
+    idVyrocnychSprav - zoznam identifikátory všetkých súvisiacich výročných správ, identifikátor je maximálne desaťciferné celé číslo
+    zdrojDat - kód zdroja, z ktorého pochádzajú dáta (viď Zdroje dát), textový reťazec s maximálnou dĺžkou 30 znakov
+    datumPoslednejUpravy - dátum poslednej úpravy, ktorá má vplyv na zobrazenie danej účtovnej jednotky cez RÚZ API (napr. úprava dátumu založenia, sprístupnenie účtovnej jednotky cez API bez úpravy účtovnej jednotky ako takej, ...), formát RRRR-MM-DD
+
+Príklad výstupu:
+
+{
+ "id":336953,"skNace":"84110","konsolidovana":true,"ico":"00603481","dic":"2020372596",
+ "nazovUJ":"Hlavné mesto Slovenskej republiky Bratislava", "mesto":"Bratislava - mestská časť Staré Mesto",
+ "ulica":"Primaciálne námestie 1","psc":"81499","datumPoslednejUpravy":"2012-11-14", "datumZalozenia":"1991-01-01",
+ "pravnaForma":"801","velkostOrganizacie":"25","druhVlastnictva":"5","kraj":"1","okres":"SK0101", "sidlo":"528595",
+ "zdrojDat":"ŠÚSR","idUctovnychZavierok":[340867,497509,1100864,726508,727630,1296603]
+}
+
+Účtovná závierka
+
+Url: /api/uctovna-zavierka
+
+Príklad vstupu: /api/uctovna-zavierka?id=340867
+Formát výstupu: (Niektoré atribúty nemusia byť v odpovedi zahrnuté)
+
+    id - identifikátor účtovnej závierky, maximálne desaťciferné celé číslo
+    obdobieOd - účtovná závierka za obdobie - od, formát RRRR-MM
+    obdobieDo - účtovná závierka za obdobie - do, formát RRRR-MM
+    datumPodania - dátum podania účtovnej závierky (napr. evidencia na FRSR), formát RRRR-MM-DD
+    datumZostavenia - dátum, kedy bola závierka zostavená, formát RRRR-MM-DD
+    datumSchvalenia - dátum, kedy bola závierka schválená, formát RRRR-MM-DD
+    datumZostaveniaK - dátum, ku ktorému bola závierka zostavená, formát RRRR-MM-DD
+    datumPrilozeniaSpravyAuditora - dátum priloženia správy audítora, formát RRRR-MM-DD
+    nazovFondu - názov fondu, za ktorý bola závierka predložená (v prípade že sa jedná o účtovnú závierku fondu), textový reťazec s maximálnou dĺžkou 500 znakov
+    leiKod - LEI kód, pod ktorým bola závierka predložená, textový reťazec s dĺžkou 20 znakov
+    idUJ - identifikátor účtovnej jednotky, maximálne desaťciferné celé číslo
+    konsolidovana - boolean príznak - true, ak ide o konsolidovanú závierku
+    konsolidovanaZavierkaUstrednejStatnejSpravy - boolean príznak - true, ak ide o konsolidovanú závierku ústrednej štátnej správy
+    suhrnnaUctovnaZavierkaVerejnejSpravy - boolean príznak - true, ak ide o súhrnnú účtovnú závierku verejnej správy
+    typ - "Riadna", "Mimoriadna", "Priebežná" alebo "Kombinovaná" (riadna aj mimoriadna)
+    idUctovnychVykazov - zoznam identifikátorov všetkých súvisiacich účtovných výkazov, identifikátor je maximálne desaťciferné celé číslo
+    zdrojDat - kód zdroja, z ktorého pochádzajú dáta (viď Zdroje dát), textový reťazec s maximálnou dĺžkou 30 znakov
+    datumPoslednejUpravy - dátum poslednej úpravy, ktorá má vplyv na zobrazenie danej účtovnej závierky cez RÚZ API (napr. úprava dátumu zostavenia, sprístupnenie účtovnej závierky cez API bez úpravy účtovnej závierky ako takej, ...), formát RRRR-MM-DD
+
+Príklad výstupu:
+
+{
+ "id":340867,"datumPoslednejUpravy":"2011-12-08","zdrojDat":"FRSR","obdobieOd":"2009-01", "obdobieDo":"2009-12",
+ "idUJ":336953,"konsolidovana":false,"typ":"Riadna","idUctovnychVykazov":[686260,680247]
+}
+
+Účtovný výkaz
+
+Url: /api/uctovny-vykaz
+
+Príklad vstupu: /api/uctovny-vykaz?id=686260
+Formát výstupu: (Niektoré atribúty nemusia byť v odpovedi zahrnuté)
+
+    id - identifikátor účtovného výkazu, maximálne desaťciferné celé číslo
+    idUctovnejZavierky - identifikátor účtovnej závierky, ku ktorej výkaz patrí (ak patrí k výročnej správe, tento element sa vo výkaze nenachádza), maximálne desaťciferné celé číslo
+    idVyrocnejSpravy - identifikátor výročnej správy, ku ktorej výkaz patrí (ak patrí k účtovnej závierke, tento element sa vo výkaze nenachádza), maximálne desaťciferné celé číslo
+    idSablony - identifikátor zodpovedajúcej šablóny, maximálne desaťciferné celé číslo
+    mena - mena výkazu (celé eurá, tisíce, ...), najviac deväťznakový textový reťazec
+    kodDanovehoUradu - kód daňového úradu, najviac trojznakový textový reťazec
+    pristupnostDat - prístupnosť dát vychádza z legislatívnych resp. procesných dôvodov a ovplyvňuje dostupnosť dát (atribúty obsah a prilohy) jednotlivých účtovných výkazov. Nadobúda hodnoty:
+        "Verejné" - verejne prístupné všetky dáta účtovného výkazu
+        "Verejné prílohy" - verejne prístupné sú iba prílohy účtovného výkazu (nie štruktúrované dáta v atribúte obsah). Typicky sa jedná o účtovné výkazy u ktorých sa nedá garantovať správnosť týchto dát (napr. historické dáta za roky 2009 - 2012). Tieto účtovné výkazy by mali obsahovať aspoň jednu prílohu, ale zriedkavo sa môžu vyskytovať výnimky (väčšinou výkazy za roky 2009 - 2012).
+        "Neverejné" - žiadne dáta nie sú verejne prístupné. Jedná sa o účtovné výkazy uložené z legislatívnych dôvodov v neverejnej časti RÚZ.
+    prilohy - pole súvisiacich príloh, príloha je objekt zložený z atribútov:
+        id - identifikátor prílohy, maximálne desaťciferné celé číslo - následne je možné samotnú prílohu stiahnúť cez /domain/financialreport/attachment/id-prilohy
+        meno - meno prílohy, textový reťazec s maximálnou dĺžkou 100 znakov
+        mimeType - typ prílohy, textový reťazec s maximálnou dĺžkou 80 znakov
+        velkostPrilohy - veľkosť prílohy, celé číslo prakticky neobmedzenej veľkosti
+        pocetStran - počet strán výkazu, maximálne šesťciferné celé číslo
+        digest - výťah (hash) obsahu prílohy, algoritmus SHA-256, textový reťazec s dĺžkou 64 znakov
+        jazyk - jazyk prílohy, najviac trojznakový textový reťazec
+    obsah - dátový obsah výkazu pozostávajúci z:
+        titulnaStrana - titulná strana výkazu (krycí list) s identifikačnými údajmi. Všetky údaje z titulnej strany sú získavané z externých systémov. V systéme RÚZ sú ukladané ako textové reťazce bez ohraničenia dĺžky. Pri obdobiach a dátumoch ide o reťazce, kde je zaručený formát RRRR-MM, resp. RRRR-MM-DD.
+        Objekt titulnaStrana je zložený z nasledovných atribútov:
+            nazovUctovnejJednotky - názov účtovnej jednotky
+            ico - IČO účtovnej jednotky
+            dic - DIČ účtovnej jednotky
+            sid - SID účtovnej jednotky
+            adresa - adresa účtovnej jednotky, objekt zložený z atribútov:
+                ulica - ulica
+                cislo - číslo
+                psc - PSČ
+                mesto - mesto
+            miestoPodnikania - miesto podnikania účtovnej jednotky, objekt zložený z atribútov:
+                ulica - ulica
+                cislo - číslo
+                psc - PSČ
+                mesto - mesto
+            pravnaForma - kód právnej formy (viď Číselníky)
+            skNace - kód SK NACE klasifikácie (viď Číselníky)
+            typZavierky - "Riadna", "Mimoriadna", alebo "Kombinovaná" (riadna aj mimoriadna)
+            konsolidovana - boolean príznak - true, ak ide o konsolidovanú závierku
+            konsolidovanaZavierkaUstrednejStatnejSpravy - boolean príznak - true, ak ide o konsolidovanú závierku ústrednej štátnej správy
+            suhrnnaUctovnaZavierkaVerejnejSpravy - boolean príznak - true, ak ide o súhrnnú účtovnú závierku verejnej správy
+            typUctovnejJednotky - "malá", "veľká"
+            oznacenieObchodnehoRegistra - označenie obchodného registra a číslo zápisu obchodnej spoločnosti
+            nazovSpravcovskehoFondu - názov správcovskej spoločnosti/fondu (vyplnené len v prípade účtovného výkazu fondu)
+            leiKod - LEI kód (vyplnené len v prípade účtovného výkazu fondu)
+            obdobieOd - účtovný výkaz za obdobie od, formát RRRR-MM
+            obdobieDo - účtovný výkaz za obdobie do, formát RRRR-MM
+            predchadzajuceObdobieOd - účtovný výkaz za predchádzajúce obdobie od, formát RRRR-MM
+            predchadzajuceObdobieDo - účtovný výkaz za obdobie predchádzajúce do, formát RRRR-MM
+            datumVyplnenia - dátum vyplnenia účtovného výkazu, formát RRRR-MM-DD
+            datumSchvalenia - dátum schválenia účtovného výkazu, formát RRRR-MM-DD
+            datumZostavenia - dátum zostavenia účtovného výkazu, formát RRRR-MM-DD
+            datumZostaveniaK - dátum zostavenia k účtovného výkazu, formát RRRR-MM-DD
+            datumPrilozeniaSpravyAuditora - dátum priloženia správy audítora, formát RRRR-MM-DD
+        tabulky - zoznam tabuliek obsahujúcich číselné údaje:
+            nazov - názov tabuľky (napríklad "Súvaha"), objekt kde kľúč je lokalizácia a hodnota je textový reťazec s maximálnou dĺžkou 100 znakov
+            data - číselné údaje z tabuliek výkazu, čítané po riadkoch zľava doprava, číselný údaj je textový reťazec ľubovoľnej dĺžky, maxímalne však 30 ciferné a 4 desatinné miesta. Oddeľovač desatinných miest je bodka.
+    zdrojDat - kód zdroja, z ktorého pochádzajú dáta (viď Zdroje dát), textový reťazec s maximálnou dĺžkou 30 znakov
+    datumPoslednejUpravy - dátum poslednej úpravy, ktorá má vplyv na zobrazenie daného účtovného výkazu cez RÚZ API (napr. pridanie prílohy, sprístupnenie účtovného výkazu cez API bez úpravy účtovného výkazu ako takého , ...), formát RRRR-MM-DD
+
+V krycom liste pre dátove typy ENTITY_LEGAL_FORM, ENTITY_SK_NACE, ENTITY_ORGANIZATION_SIZE a ENTITY_OWNERSHIP hodnoty predstavujú kódy z čísleníka Klasifikácií a pre dátove typy ENTITY_DOMICILE, ENTITY_COUNTY, ENTITY_DISTRICT hodnoty predstavujú kódy z číselníka Lokácie. Služby pre oba čísleníky sú spomenuté nižšie v dokumentácii.
+Príklad výstupu:
+
+{
+"id":686260,
+"datumPoslednejUpravy":"2013-07-31",
+"zdrojDat":"DataCentrum",
+"idUctovnejZavierky":340867,
+"idSablony":98,
+"obsah":{
+  "titulnaStrana":{
+     "ico":"00603481",
+     "obdobieOd":"2009-01",
+     "obdobieDo":"2009-12",
+     "nazovUctovnejJednotky":"Hlavné mesto Slovenskej republiky Bratislava",
+     "adresa":{
+        "ulica":"Primaciálne námestie 1",
+        "psc":"94131",
+        "mesto":"Bratislava - mestská časť Staré Mesto"
+     },
+     "typZavierky":"Riadna"
+  },
+  "tabulky":[
+     {
+        "nazov":"Náklady",
+        "data":[
+           "4248919",
+           "17058",
+//... kratene
+           "145116521",
+           "216375501"
+        ]
+     },
+     {
+        "nazov":"Výnosy",
+        "data":[
+           "12222937",
+           "425982",
+//... kratene
+           "130597430",
+           "51660772"
+        ]
+     }
+  ]
+},
+"prilohy":[
+  {
+     "id":214469,
+     "digest":"5c4db0a4b4af7126fe1a48aa3f51fe8deae8be9d7f8b0526f92bb4a55eee9dc2",
+     "mimeType":"image/tiff",
+     "meno":"POD101_2022773060_IR_2009_617_2010_501653.TIF",
+     "velkostPrilohy":203499,
+     "pocetStran":4
+  }
+],
+}
+
+Výročná správa
+
+Url: /api/vyrocna-sprava
+
+Príklad vstupu: /api/vyrocna-sprava?id=2613005
+Formát výstupu: (Niektoré atribúty nemusia byť v odpovedi zahrnuté)
+
+    id - identifikátor výročnej správy, maximálne desaťciferné celé číslo
+    nazovUJ - názov účtovnej jednotky v čase podania výročnej správy, textový reťazec s maximálnou dĺžkou 500 znakov
+    typ - "Ročná finančná správa", "Individuálna výročná správa", "Konsolidovaná výročná správa" alebo "Súhrnná výročná správa SR"
+    nazovFondu - názov fondu, za ktorý bola výročná správa predložená (v prípade že sa jedná o výročnú správu fondu), textový reťazec s maximálnou dĺžkou 500 znakov
+    leiKod - LEI kód, pod ktorým bola výročná správa predložená, textový reťazec s dĺžkou 20 znakov
+    obdobieOd - výročná správa za obdobie - od, formát RRRR-MM
+    obdobieDo - výročná správa za obdobie - od, formát RRRR-MM
+    datumPodania - dátum podania výročnej správy (napr. evidencia na FRSR), formát RRRR-MM-DD
+    datumZostaveniaK - dátum, ku ktorému bola výročná správa zostavená, formát RRRR-MM-DD
+    pristupnostDat - prístupnosť dát vychádza z legislatívnych resp. procesných dôvodov a ovplyvňuje dostupnosť dát (atribút prilohy) jednotlivých výročných správ. Nadobúda hodnoty:
+        "Verejné" - prílohy výročnej správy sú verejne prístupné
+        "Neverejné" - prílohy výročnej správy nie sú verejne prístupné. Jedná sa o výročné správy uložené z legislatívnych dôvodov v neverejnej časti RÚZ.
+    prilohy - pole súvisiacich príloh zložené z atribútov:
+        id - identifikátor prílohy, maximálne desaťciferné celé číslo
+        meno - meno prílohy, textový reťazec s maximálnou dĺžkou 100 znakov
+        mimeType - typ prílohy, textový reťazec s maximálnou dĺžkou 80 znakov
+        velkostPrilohy - veľkosť prílohy, číselný údaj
+        digest - výťah (hash) obsahu prílohy, algoritmus SHA-256, textový reťazec s maximálnou dĺžkou 64 znakov
+    idUctovnychVykazov - zoznam identifikátorov všetkých súvisiacich účtovných výkazov, identifikátor je maximálne desaťciferné celé číslo
+    idUJ - identifikátor účtovnej jednotky, maximálne desaťciferné celé číslo
+    zdrojDat - kód zdroja, z ktorého pochádzajú dáta (viď Zdroje dát)
+    datumPoslednejUpravy - dátum poslednej úpravy, ktorá má vplyv na zobrazenie danej výročnej správy cez RÚZ API (napr. úprava dátumu podania, sprístupnenie výročnej správy cez API bez úpravy výročnej správy ako takej, ...), formát RRRR-MM-DD
+
+Príklad výstupu:
+
+{
+ "id":316853,"nazovUJ":"Continental Matador Rubber, s.r.o.","datumPoslednejUpravy":"2013-08-21","zdrojDat":"FRSR",
+ "obdobieOd":"2011-01","obdobieDo":"2011-12","datumPodania":"2013-01-01","idUJ":635004,"typ":"Individuálna výročná správa","rok":2011,
+ "prilohy":[{"id":217769,"digest":"5c4db0a4b4af7126fe1a48aa3f51fe8deae8be9d7f8b0526f92bb4a55eee9dc2","mimeType":"image/tiff",
+ "meno":"POD201_4045546120_IR_2011_617_2013_538566.TIF","velkostPrilohy":296519}]
+}
+
+Služby pre šablóny účtovných výkazov
+
+Šablóna účtovného výkazu poskytovaná cez API definuje obsah tabuľkovej časti účtovného výkazu. Dáta z krycieho listu sú obsahom účtovného výkazu aj priamo s určením svojho významu.
+
+Niektoré šablóny nekorešpondujú s oficiálnymi výkazmi a slúžia ako pseudošablóny pre ukladanie "finančných výkazov", ktoré nie je možné inak zaradiť. Príkladom je "výkaz", ktorý obsahuje iba jednu prílohu s kompletnou závierkou podľa IFRS štandardov. Takéto "výkazy" nemajú dostupné štruktúrované dáta.
+Šablóna účtovného výkazu
+
+Url: /api/sablona
+
+Táto služba vráti štruktúru jednej šablóny, pričom má jeden povinný parameter:
+
+    id - identifikátor danej šablóny. Identifikátor je celé číslo, maximálne desaťciferné.
+
+Príklad vstupu: /api/sablona?id=7
+Formát výstupu: (Niektoré atribúty nemusia byť v odpovedi zahrnuté)
+
+    id - identifikátor šablóny výkazu, maximálne desaťciferné celé číslo
+    nazov - názov šablóny, textový reťazec s maximálnou dĺžkou 100 znakov
+    nariadenieMF - označenie nariadenia Ministerstva financií, v ktorom bol výkaz uvedený, textový reťazec s maximálnou dĺžkou 100 znakov
+    platneOd - platnosť výkazu od, formát RRRR-MM-DD
+    platneDo - platnosť výkazu do (môže byť neuvedená a výkaz môže byť aktualizovaný novším s rovnakým menom), formát RRRR-MM-DD
+    tabulky - zoznam údajov pozostávajúci z:
+        nazov - názov tabuľky, objekt kde kľúč je lokalizácia a hodnota je textový reťazec
+        hlavicka - hlavička tabuľky pozostávajúca z údajov:
+            text - opis stĺpca, objekt kde kľúč je lokalizácia a hodnota je textový reťazec
+            riadok - pozícia v hlavičke, celé číslo
+            stlpec - pozícia v hlavičke, celé číslo
+            sirkaStlpca - veľkosti bunky v stĺpcoch, číslo
+            vyskaRiadku - veľkosť bunky v riadkoch, číslo
+        riadky - riadok tabuľky pozostávajúci z:
+            oznacenie - typicky špecifiký kód daného riadka
+            cisloRiadku - poradové číslo riadku
+            text - opis riadku, objekt kde kľúč je lokalizácia a hodnota je textový reťazec
+
+Príklad výstupu:
+
+{
+"id":7,
+"nazov":"Úč FO 1-01",
+"nariadenieMF":"MF/27076/1/2007-74/1",
+"platneOd":"2009-01-01",
+"tabulky":[
+  {
+     "nazov":{
+        "sk":"Príjmy"
+     },
+     "hlavicka":[
+        {
+           "text":{
+              "sk":"Príjmy"
+           },
+           "riadok":1,
+           "stlpec":1,
+           "sirkaStlpca":1,
+           "vyskaRiadku":1
+        },
+//... kratene
+     ],
+     "riadky":[
+        {
+           "text":{
+              "sk":"Predaj tovaru"
+           },
+           "cisloRiadku":1
+        },
+//... kratene
+     ]
+  },
+  {
+     "nazov":{
+        "sk":"Výdavky"
+     },
+     "hlavicka":[
+        {
+           "text":{
+              "sk":"Výdavky"
+           },
+           "riadok":1,
+           "stlpec":1,
+           "sirkaStlpca":1,
+           "vyskaRiadku":1
+        },
+//... kratene
+     ],
+     "riadky":[
+        {
+           "text":{
+              "sk":"Nákup materiálu"
+           },
+           "cisloRiadku":5
+        },
+//... kratene
+     ]
+  }
+],
+}
+
+Šablóny účtovných výkazov
+
+Url: /api/sablony
+
+Táto služba vráti pole všetkych existujúcich šablón účtovných výkazov v RÚZ, v čase dopytu. Služba nevyžaduje žiadne parametre. Má slúžiť na hromadnú aktualizáciu šablón napr. pred začiatkom sťahovania detailov účtovných výkazov s cieľom aby nebolo potrebné neustále kontrolovať existenciu šablón na ktoré odkazujú detaily účtovných výkazov. Jednotlivé šablóny vracané v poli majú rovnakú štruktúru ako je zadefinovaná vyššie pre sťahovanie šablón podľa ich identifikátora.
+Príklad výstupu:
+
+{
+"sablony":[
+    {
+        "id":7,
+        "nazov":"Úč FO 1-01",
+        "nariadenieMF":"MF/27076/1/2007-74/1",
+        "platneOd":"2009-01-01"
+    },
+    {
+        //... kratene
+    }
+]
+}
+
+
+Služby pre číselníky
+
+Číselníky vychádzajú z údajov ŠÚSR dostupného na tejto adrese (platná k máju 2020). Číselníky sa zobrazujú vždy celé, služby nevyžadujú žiadne parametre. Výstupom je pole objektov, ktoré obsahujú nasledovné atribúty:
+
+    kod - kód položky (pridelené ŠÚSR), textový reťazec s maximálnou dĺžkou 100 znakov
+    nazov - názov položky (krátka verzia názvu evidovaná v ŠÚSR) vo všetkých podporovaných jazykových variantoch
+    nadradenaLokacia (len pre lokácie - obce, okresy) - kód nadradenej lokácie, textový reťazec s maximálnou dĺžkou 100 znakov
+
+URL služieb pre klasifikácie:
+
+    /api/pravne-formy - zodpovedá ŠÚSR číselníku 0056/FORMA
+    /api/sk-nace - zodpovedá ŠÚSR číselníku 5205/SKNACE5
+    /api/druhy-vlastnictva - zodpovedá ŠÚSR číselníku 0036/DRVLST
+    /api/velkosti-organizacie - zodpovedá ŠÚSR číselníku 0073/KATP97
+
+Príklad výstupu:
+
+
+{"klasifikacie":[
+    {"nazov":{"en":"Not ascertained yet","sk":"Zatiaľ nezistené"},"kod":"0"},{"nazov":{"en":"International with preponderance of public sector","sk":"Medzinárodné s prevažujúcim verejným sektorom"},"kod":"1"},
+    {"nazov":{"en":"Private inland","sk":"Súkromné tuzemské"},"kod":"2"},{"nazov":{"en":"Cooperative-owned","sk":"Družstevné"},"kod":"3"},
+    {"nazov":{"en":"State-owned","sk":"Štátne"},"kod":"4"},{"nazov":{"en":"Municipality-owned","sk":"Vlastníctvo územnej samosprávy"},"kod":"5"},
+    {"nazov":{"en":"Ownership of associations, political parties and churches","sk":"Vlastníctvo združení, politických strán a cirkví"},"kod":"6"},
+    {"nazov":{"en":"Foreign","sk":"Zahraničné"},"kod":"7"},{"nazov":{"en":"International with preponderance of private sector","sk":"Medzinárodné s prevažujúcim súkromným sektorom"},"kod":"8"},
+    {"nazov":{"en":"Mixed (a combination of 1 through 8)","sk":"Zmiešané (kombinácia 1 až 8)"},"kod":"9"}
+]}
+
+URL služieb pre lokácie:
+
+    /api/kraje - zodpovedá ŠÚSR číselníku 0023/RSUJ3
+    /api/okresy - zodpovedá ŠÚSR číselníku 0024/LSUJ1
+    /api/sidla - zodpovedá ŠÚSR číselníku 0025/LSUJ2
+
+Príklad výstupu:
+
+
+{"lokacie":[
+    {"nazov":{"en":"Region of Bratislava","sk":"Bratislavský kraj"},"kod":"1"},{"nazov":{"en":"Region of Trnava","sk":"Trnavský kraj"},"kod":"2"},
+    {"nazov":{"en":"Region of Trenčín","sk":"Trenčiansky kraj"},"kod":"3"},{"nazov":{"en":"Region of Nitra","sk":"Nitriansky kraj"},"kod":"4"},
+    {"nazov":{"en":"Region of Žilina","sk":"Žilinský kraj"},"kod":"5"},{"nazov":{"en":"Reg.of Banská Bystrica","sk":"Banskobystrický kraj"},"kod":"6"},
+    {"nazov":{"en":"Region of Prešov","sk":"Prešovský kraj"},"kod":"7"},{"nazov":{"en":"Region of Košice","sk":"Košický kraj"},"kod":"8"},
+    {"nazov":{"en":"Abroad","sk":"Zahraničie"},"kod":"9"}
+]}
