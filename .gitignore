@@ -180,4 +180,9 @@ packages/react-devtools-shell/dist
 packages/react-devtools-timeline/dist
 
 /old
-backend/staticfiles/*
+/backend/staticfiles/*
+/celerybeat-schedule-shm
+/celerybeat-schedule-wal
+/celerybeat-schedule
+/GEMINI.md
+/data
