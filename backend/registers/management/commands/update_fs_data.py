@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
+from datetime import datetime
 from thefuzz import fuzz
 from registers.scrapers.scraper_links_dph import FS_DATASET_URLS
 from registers.scrapers.financna_sprava_scraper import download_and_parse_fs_data
@@ -26,8 +27,9 @@ class Command(BaseCommand):
                 if company:
                     self.update_company_data(company, item, key)
                 else:
-                    cleaned_name = clean_company_name(item.get('NAZOV_SUBJEKTU', ''))
-                    # self.stdout.write(f"Could not find a match for {cleaned_name}")
+                    cleaned_name = clean_company_name(item.get('NAZOV_SUBJEKTU', item.get('NAZOV_DS', '')))
+                    if cleaned_name: # Log only if a name was present
+                        self.stdout.write(f"Could not find a match for '{cleaned_name}' (ICO: {item.get('ICO', 'N/A')})")
 
         self.stdout.write(self.style.SUCCESS('Successfully updated data from Financna Sprava.'))
 
@@ -38,13 +40,13 @@ class Command(BaseCommand):
         """
         # Try to find by ICO if present
         ico = item.get('ICO')
-        if ico and ico.isdigit():
+        if ico and ico.isdigit() and len(ico) == 8:
             company = Company.objects.filter(ico=ico).first()
             if company:
                 return company
 
-        # If no ICO, try to match by name and address
-        cleaned_name = clean_company_name(item.get('NAZOV_SUBJEKTU', ''))
+        # If no ICO, try to match by name and address. Use NAZOV_DS for vat_payers
+        cleaned_name = clean_company_name(item.get('NAZOV_SUBJEKTU', item.get('NAZOV_DS', '')))
         if not cleaned_name:
             return None
             
@@ -64,7 +66,7 @@ class Command(BaseCommand):
             
             # This can be slow, for a large number of companies we would need a better approach
             for company in candidate_companies:
-                db_cleaned_name = clean_company_name(company.nazovUJ)
+                db_cleaned_name = clean_company_name(company.nazov_UJ)
                 ratio = fuzz.ratio(cleaned_name, db_cleaned_name)
                 
                 if ratio > highest_ratio:
@@ -79,7 +81,6 @@ class Command(BaseCommand):
     def update_company_data(self, company: Company, item: dict, source_key: str):
         """
         Updates the company model with data from the item.
-        This is a placeholder and should be adapted based on the data from each source.
         """
         # Specific handler for tax debtors
         if source_key == 'tax_debtors':
@@ -88,13 +89,27 @@ class Command(BaseCommand):
                 try:
                     debt_amount = parse_money(amount_str)
                     company.tax_debt = debt_amount
-                    self.stdout.write(self.style.SUCCESS(f"Updated tax debt for {company.nazovUJ} to {debt_amount}"))
+                    self.stdout.write(self.style.SUCCESS(f"Updated tax debt for {company.nazov_UJ} to {debt_amount}"))
                 except (ValueError, TypeError):
-                    self.stderr.write(self.style.ERROR(f"Could not parse money from '{amount_str}' for {company.nazovUJ}"))
+                    self.stderr.write(self.style.ERROR(f"Could not parse money from '{amount_str}' for {company.nazov_UJ}"))
 
-        # Add handlers for other source_keys here
-        # e.g., if source_key == 'vat_payers': ...
+        # Handler for VAT payers
+        elif source_key == 'vat_payers':
+            company.vat_payer = True
+            company.ic_dph = item.get('IC_DPH')
+            
+            date_str = item.get('DATUM_REG')
+            if date_str:
+                try:
+                    # The date is in DD.MM.YYYY format
+                    parsed_date = datetime.strptime(date_str, '%d.%m.%Y').date()
+                    company.datum_reg_dph = parsed_date
+                except ValueError:
+                    self.stderr.write(self.style.ERROR(f"Could not parse date '{date_str}' for {company.nazov_UJ}"))
+            
+            self.stdout.write(f"Updated VAT status for {company.nazov_UJ} (IČ DPH: {company.ic_dph})")
         
         company.fs_update_date = timezone.now()
         company.save()
+
 

@@ -22,3 +22,4 @@ django-celery-beat
 redis
 requests
 thefuzz==0.22.1
+django-celery-beat

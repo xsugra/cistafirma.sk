@@ -93,3 +93,15 @@ clean:
 	@find . -name "*.pyc" -delete
 	@find . -type d -name "__pycache__" -delete
 	@rm -rf $(VENV_DIR)
+
+celery-down:
+	@echo "Turning off all backend Celery tasks..."
+	@pkill -f "celery -A backend"
+
+run-celery-worker:
+	@echo "Running backend Celery worker..."
+	@celery -A backend.backend worker -l info &
+
+run-celery-beat:
+	@echo "Running Celery Beat scheduler"
+	@celery -A backend.backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler &

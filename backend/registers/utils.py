@@ -1,14 +1,11 @@
-
+import re
 
 def is_money(text: str) -> bool:
-    """
-    Funkciu pouzivaju scrapery:
-        - backend/registers/scrapers/soc_poist_debt.py
-        - backend/registers/scrapers/vszp_debt.py
-    Pomocná funkcia: Zistí, či string vyzerá ako peniaze.
-    """
-    # Odstranime medzery a znak EUR
-    clean = text.replace(" ", "").replace("€", "").replace(",", ".")
+    """Overí, či string vyzerá ako suma (obsahuje číslice a €)."""
+    if not text or "€" not in text:
+        return False
+    # Odstránime bordel
+    clean = text.replace("€", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
     try:
         float(clean)
         return True
@@ -17,47 +14,47 @@ def is_money(text: str) -> bool:
 
 
 def parse_money(text: str) -> float:
-    """
-    Funkciu pouzivaju scrapery:
-        - backend/registers/scrapers/soc_poist_debt.py
-        - backend/registers/scrapers/vszp_debt.py
-    Prevedie string '1 200,50 €' na float 1200.50
-    """
-    clean = text.replace(" ", "").replace("€", "").replace("\xa0", "")
-    clean = clean.replace(",", ".")
+    """Konvertuje '1 200,50 €' na float 1200.5"""
+    clean = text.replace("€", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
     return float(clean)
 
-import re
 
 def clean_company_name(name: str) -> str:
     """
-    Normalizuje názov firmy pre lepšie porovnávanie.
-    - Odstráni úvodzovky a biele miesta na začiatku a na konci
-    - Zjednotí právne formy (napr. "spol. s r.o.", "s.r.o." na "s r o")
-    - Odstráni nadbytočné medzery
-    - Prevedie na malé písmená
+    Normalizuje názov spoločnosti pre fuzzy porovnávanie.
+    - Prevedie na malé písmená.
+    - Odstráni bežné právne formy a ich variácie.
+    - Odstráni nadbytočné medzery a interpunkciu.
     """
     if not name:
         return ""
 
     name = name.lower()
-    # Odstránenie obsahu v zátvorkách, často obsahuje "v likvidácii", "v konkurze"
-    name = re.sub(r'\(.*\)', '', name)
-    # Odstránenie úvodzoviek a podobných znakov
-    name = name.replace('"', '').replace("'", "").replace("„", "").replace("“", "")
-    # Nahradenie bodiek a čiarok za medzery, aby sa zjednotili formy ako s.r.o. a s r o
-    name = name.replace('.', ' ').replace(',', ' ')
-    # Zjednotenie právnych foriem
-    replacements = {
-        'spoločnosť s ručením obmedzeným': 's r o',
-        'spol s r o': 's r o',
-        'akciová spoločnosť': 'a s',
-        'verejná obchodná spoločnosť': 'v o s',
-        # ... pridať ďalšie podľa potreby
-    }
-    for old, new in replacements.items():
-        name = name.replace(old, new)
 
-    # Odstránenie nadbytočných medzier
+    # Zoznam bežných právnych foriem a iných prípon na odstránenie
+    legal_forms_patterns = [
+        r'\s+s\s*\.?\s*r\s*\.?\s*o\s*\.?',
+        r'\s+spol\s*\.\s*s\s*r\s*\.?\s*o\s*\.?',
+        r'\s+a\s*\.?\s*s\s*\.?',
+        r'\s+akciová\s+spoločnosť',
+        r'\s+spoločnosť\s+s\s+ručením\s+obmedzeným',
+        r'\s+v\s*\.?\s*o\s*\.?\s*s\s*\.?',
+        r'\s+verejná\s+obchodná\s+spoločnosť',
+        r'\s+k\s*\.?\s*s\s*\.?',
+        r'\s+komanditná\s+spoločnosť',
+        r'\s*,\s*s\s*\.\s*r\s*\.\s*o\s*\.?',
+        r'\s*,\s*a\s*\.\s*s\s*\.?',
+        r'\s+v\s+likvidácii',
+        r'\s+v\s+konkurze',
+    ]
+
+    for pattern in legal_forms_patterns:
+        name = re.sub(pattern, '', name, flags=re.IGNORECASE)
+
+    # Odstráni interpunkciu, ktorá nie je súčasťou názvu
+    name = re.sub(r'[,.]', '', name)
+
+    # Nahradí viacnásobné medzery jednou a odstráni medzery na začiatku/konci
     name = re.sub(r'\s+', ' ', name).strip()
+
     return name

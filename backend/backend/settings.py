@@ -9,7 +9,6 @@ FRONTEND_DIR = BASE_DIR.parent / 'frontend'
 DEV_ENV_DIR = BASE_DIR / 'source' / 'backend' / '.env.dev'
 
 load_dotenv(dotenv_path=DEV_ENV_DIR)
-
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', default='django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma')
 
@@ -46,6 +45,7 @@ DJANGO_APPS = [
 THIRD_PARTY_APPS = [
     'rest_framework',
     'corsheaders',
+    'django_celery_beat', # Added for Celery Beat
 ]
 
 CUSTOM_APPS = [
@@ -172,3 +172,17 @@ AUTHENTICATION_BACKENDS = [
     'users.backends.EmailOrUsernameModelBackend',
     'django.contrib.auth.backends.ModelBackend',  # Záloha (klasické prihlásenie)
 ]
+
+
+# Celery Settings
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = "Europe/Bratislava"
+CELERY_BEAT_SCHEDULE = {
+    'schedule-insurance-debt-checks-every-12-hours': {
+        'task': 'registers.tasks.schedule_insurance_debt_checks',
+        'schedule': 43200.0,  # 12 hodín v sekundách (12 * 60 * 60)
+        'options': {'expires': 43000.0},
+    },
+}
