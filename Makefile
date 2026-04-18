@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit
 
 # ====================================================================================
 # HELP
@@ -15,6 +15,12 @@ help:
 	@echo "    make test           - Run the test suite manually"
 	@echo "    make freeze         - Freeze dependencies to requirements.txt"
 	@echo "    make clean          - Remove temporary files and venv"
+	@echo "    make docs-audit     - Validate internal Markdown links"
+	@echo "---------------------------------------------------------------------------"
+	@echo "  Pre-Push Cleanup (Git):"
+	@echo "    make clean-pre-push      - Clean and prepare git for push"
+	@echo "    make clean-pre-push-dry  - Dry-run cleanup (no changes)"
+	@echo "    make clean-pre-push-commit - Cleanup + auto-commit changes"
 	@echo "---------------------------------------------------------------------------"
 
 # ====================================================================================
@@ -94,14 +100,111 @@ clean:
 	@find . -type d -name "__pycache__" -delete
 	@rm -rf $(VENV_DIR)
 
-celery-down:
+clean-pre-push:
+	@bash scripts/pre-push-cleanup.sh
+
+clean-pre-push-dry:
+	@bash scripts/pre-push-cleanup.sh --dry-run
+
+clean-pre-push-commit:
+	@bash scripts/pre-push-cleanup.sh --commit
+
+docs-audit:
+	@echo "Running Markdown link audit..."
+	@python3 scripts/docs/check_markdown_links.py
+
+celery-down: venv
 	@echo "Turning off all backend Celery tasks..."
-	@pkill -f "celery -A backend"
+	@pkill -f "celery -A backend" || true
 
-run-celery-worker:
-	@echo "Running backend Celery worker..."
-	@celery -A backend.backend worker -l info &
+celery-purge: venv
+	@echo "Purging all pending Celery tasks from Redis..."
+	@cd $(BACKEND_DIR) && $(PYTHON) -c "from backend.celery import app; app.control.purge(); print('All pending tasks purged!')"
 
-run-celery-beat:
+run-celery-worker: venv
+	@echo "Running backend Celery worker (all queues)..."
+	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q high_priority,low_priority,celery
+
+run-celery-worker-high: venv
+	@echo "Running HIGH priority Celery worker (RUZ, FS)..."
+	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q high_priority -n worker_high@%h
+
+run-celery-worker-low: venv
+	@echo "Running LOW priority Celery worker (insurance checks)..."
+	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q low_priority,celery -n worker_low@%h
+
+run-celery-beat: venv
 	@echo "Running Celery Beat scheduler"
-	@celery -A backend.backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler &
+	@cd $(BACKEND_DIR) && celery -A backend beat -l info
+
+fetch-ruz: venv
+	@echo "Fetching RUZ data (incremental)..."
+	@cd $(BACKEND_DIR) && $(PYTHON) manage.py fetch_ruz_data
+
+fetch-ruz-full: venv
+	@echo "Fetching RUZ data (full resync from 2000-01-01)..."
+	@cd $(BACKEND_DIR) && $(PYTHON) manage.py fetch_ruz_data --full-resync
+
+
+update-fs: venv
+	@echo "Updating Financna Sprava data..."
+	@cd $(BACKEND_DIR) && $(PYTHON) manage.py update_fs_data
+
+
+# ====================================================================================
+# DOCKER COMMANDS
+# ====================================================================================
+
+docker-build:
+	@echo "Building Docker images..."
+	@docker compose build
+
+docker-up:
+	@echo "Starting all Docker services..."
+	@docker compose up -d
+
+docker-down:
+	@echo "Stopping all Docker services..."
+	@docker compose down
+
+docker-logs:
+	@echo "Showing logs from all services..."
+	@docker compose logs -f
+
+docker-logs-backend:
+	@echo "Showing backend logs..."
+	@docker compose logs -f backend
+
+docker-logs-celery:
+	@echo "Showing Celery worker logs..."
+	@docker compose logs -f celery_worker celery_beat
+
+docker-shell:
+	@echo "Opening shell in backend container..."
+	@docker compose exec backend bash
+
+docker-migrate:
+	@echo "Running migrations in Docker..."
+	@docker compose exec backend python manage.py migrate --settings=backend.settings
+
+docker-superuser:
+	@echo "Creating superuser in Docker..."
+	@docker compose exec backend python manage.py createsuperuser --settings=backend.settings
+
+docker-collectstatic:
+	@echo "Collecting static files in Docker..."
+	@docker compose exec backend python manage.py collectstatic --noinput --settings=backend.settings
+
+docker-fetch-ruz:
+	@echo "Running RUZ fetch in Docker..."
+	@docker compose exec backend python manage.py fetch_ruz_data --settings=backend.settings
+
+docker-fetch-ruz-full:
+	@echo "Running full RUZ resync in Docker..."
+	@docker compose exec backend python manage.py fetch_ruz_data --full-resync --settings=backend.settings
+
+docker-reset:
+	@echo "Resetting Docker environment (removes volumes)..."
+	@docker compose down -v
+	@docker compose build --no-cache
+	@docker compose up -d
