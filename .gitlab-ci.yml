@@ -1,0 +1,210 @@
+stages:
+  - validate
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_DRIVER: overlay2
+  BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
+  FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+  K8S_NAMESPACE: "cistafirma"
+  STRICT_K8S_VALIDATION: "false"
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+backend_validate:
+  stage: validate
+  image: python:3.12-slim
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  before_script:
+    - python --version
+    - pip install --no-cache-dir -r backend/requirements.txt
+  script:
+    - python -m compileall backend
+
+frontend_validate:
+  stage: validate
+  image: node:20-alpine
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  before_script:
+    - cd frontend
+    - |
+      if [ -f package-lock.json ]; then
+        npm ci
+      else
+        npm install
+      fi
+  script:
+    - npm run build
+
+docs_audit:
+  stage: validate
+  image: python:3.12-slim
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - python scripts/docs/check_markdown_links.py
+
+helm_render_validate:
+  stage: validate
+  image: alpine/helm:3.17.2
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - mkdir -p deploy/helm/cistafirma/.rendered
+    - helm lint deploy/helm/cistafirma
+    - helm template cistafirma-dev deploy/helm/cistafirma -f deploy/helm/cistafirma/values.yaml -f deploy/helm/cistafirma/values-dev.yaml --namespace cistafirma-dev > deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+    - helm template cistafirma-prod deploy/helm/cistafirma -f deploy/helm/cistafirma/values.yaml -f deploy/helm/cistafirma/values-prod.yaml --namespace cistafirma > deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+  artifacts:
+    paths:
+      - deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+      - deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+    expire_in: 1 day
+
+helm_k8s_validate:
+  stage: validate
+  image: bitnami/kubectl:1.30
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  needs:
+    - job: helm_render_validate
+      artifacts: true
+  before_script:
+    - |
+      if [ -n "$KUBE_CONFIG" ]; then
+        mkdir -p ~/.kube
+        echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+      fi
+  script:
+    - kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+    - kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+    - |
+      if [ -n "$KUBE_CONFIG" ] && kubectl cluster-info >/dev/null 2>&1; then
+        kubectl apply --dry-run=server -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+        kubectl apply --dry-run=server -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+      elif [ "$STRICT_K8S_VALIDATION" = "true" ]; then
+        echo "STRICT_K8S_VALIDATION=true but no usable cluster context is available."
+        exit 1
+      else
+        echo "Skipping kubectl --dry-run=server (no KUBE_CONFIG/cluster context)."
+      fi
+
+backend_tests:
+  stage: test
+  image: python:3.12-slim
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  before_script:
+    - pip install --no-cache-dir -r backend/requirements.txt
+  script:
+    - cd backend
+    - python manage.py test --verbosity=1
+
+.build_template:
+  stage: build
+  image: docker:27.1.2
+  services:
+    - docker:27.1.2-dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+
+build_backend_image:
+  extends: .build_template
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
+  script:
+    - docker build -f backend/Dockerfile -t "$BACKEND_IMAGE:$IMAGE_TAG" backend
+    - docker push "$BACKEND_IMAGE:$IMAGE_TAG"
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        docker tag "$BACKEND_IMAGE:$IMAGE_TAG" "$BACKEND_IMAGE:main"
+        docker push "$BACKEND_IMAGE:main"
+      fi
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "dev" ]; then
+        docker tag "$BACKEND_IMAGE:$IMAGE_TAG" "$BACKEND_IMAGE:dev"
+        docker push "$BACKEND_IMAGE:dev"
+      fi
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        docker tag "$BACKEND_IMAGE:$IMAGE_TAG" "$BACKEND_IMAGE:$CI_COMMIT_TAG"
+        docker push "$BACKEND_IMAGE:$CI_COMMIT_TAG"
+      fi
+
+build_frontend_image:
+  extends: .build_template
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
+  script:
+    - docker build -f frontend/Dockerfile.prod -t "$FRONTEND_IMAGE:$IMAGE_TAG" frontend
+    - docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        docker tag "$FRONTEND_IMAGE:$IMAGE_TAG" "$FRONTEND_IMAGE:main"
+        docker push "$FRONTEND_IMAGE:main"
+      fi
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "dev" ]; then
+        docker tag "$FRONTEND_IMAGE:$IMAGE_TAG" "$FRONTEND_IMAGE:dev"
+        docker push "$FRONTEND_IMAGE:dev"
+      fi
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        docker tag "$FRONTEND_IMAGE:$IMAGE_TAG" "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
+        docker push "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
+      fi
+
+.deploy_template:
+  stage: deploy
+  image: bitnami/kubectl:1.30
+  before_script:
+    - mkdir -p ~/.kube
+    - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
+    - kubectl version --client
+    - chmod +x scripts/k8s/*.sh
+  script:
+    - scripts/k8s/deploy.sh
+
+# DEV deploy on dev branch
+# Uses existing gitflow branch strategy.
+deploy_dev:
+  extends: .deploy_template
+  environment:
+    name: dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+  variables:
+    DEPLOY_ENV: dev
+    DEPLOY_IMAGE_TAG: "$IMAGE_TAG"
+    RUN_DB_BACKUP: "false"
+
+# PROD deploy on version tags (v*).
+# Manual gate is recommended for safety.
+deploy_prod:
+  extends: .deploy_template
+  environment:
+    name: production
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
+      when: manual
+  variables:
+    DEPLOY_ENV: prod
+    DEPLOY_IMAGE_TAG: "$CI_COMMIT_TAG"
+    RUN_DB_BACKUP: "true"
+
