@@ -1,0 +1,52 @@
+global:
+  backendImage:
+    repository: registry.example.com/cistafirma/backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  frontendImage:
+    repository: registry.example.com/cistafirma/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  existingSecret: cistafirma-secrets
+  ingressClassName: nginx
+  host: cistafirma.example.com
+
+config:
+  djangoSettingsModule: backend.settings
+  allowedHosts: "*"
+  corsAllowedOrigins: https://cistafirma.example.com
+  csrfTrustedOrigins: https://cistafirma.example.com
+  backendPort: "8000"
+
+backend:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+frontend:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+ingress:
+  enabled: true
+  host: cistafirma.example.com
+  tls:
+    enabled: false
+    secretName: ""
+
+migrateJob:
+  enabled: true
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 1
+

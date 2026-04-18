@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cistafirma.fullname" . }}-celery-beat
+  labels:
+    {{- include "cistafirma.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat
+spec:
+  replicas: {{ .Values.celery.beat.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cistafirma.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-beat
+  template:
+    metadata:
+      labels:
+        {{- include "cistafirma.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-beat
+    spec:
+      containers:
+        - name: celery-beat
+          image: {{ include "cistafirma.backendImage" . }}
+          imagePullPolicy: {{ .Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "cistafirma.fullname" . }}-config
+            - secretRef:
+                name: {{ include "cistafirma.existingSecret" . }}
+          command:
+            - sh
+            - -c
+            - >-
+              celery -A backend beat
+              -l info
+              --scheduler django_celery_beat.schedulers:DatabaseScheduler
+          resources:
+            {{- toYaml .Values.celery.beat.resources | nindent 12 }}
+

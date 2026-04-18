@@ -1,0 +1,16 @@
+global:
+  backendImage:
+    tag: dev
+  frontendImage:
+    tag: dev
+  host: dev.cistafirma.example.com
+
+ingress:
+  host: dev.cistafirma.example.com
+
+backend:
+  replicaCount: 1
+
+frontend:
+  replicaCount: 1
+

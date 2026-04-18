@@ -1,0 +1,7 @@
+apiVersion: v2
+name: cistafirma
+description: Production-ready Helm chart for cistafirma.sk (Django + React + Celery)
+type: application
+version: 0.1.0
+appVersion: "0.40.0"
+

@@ -1,0 +1,16 @@
+CistaFirma Helm release installed.
+
+Useful commands:
+
+- Check rollout:
+  kubectl rollout status deployment/{{ include "cistafirma.fullname" . }}-backend
+  kubectl rollout status deployment/{{ include "cistafirma.fullname" . }}-frontend
+
+- Access app:
+  http://{{ .Values.ingress.host }}
+
+- Safe upgrade pattern:
+  helm upgrade --install --wait --atomic {{ .Release.Name }} . -f values-{{ .Values.global.environment | default "dev" }}.yaml
+
+- If DB schema changes are included, the pre-upgrade migration Job is executed automatically.
+

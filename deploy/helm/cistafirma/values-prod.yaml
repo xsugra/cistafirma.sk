@@ -1,0 +1,19 @@
+global:
+  backendImage:
+    tag: latest
+  frontendImage:
+    tag: latest
+  host: cistafirma.example.com
+
+ingress:
+  host: cistafirma.example.com
+  tls:
+    enabled: true
+    secretName: cistafirma-tls
+
+backend:
+  replicaCount: 3
+
+frontend:
+  replicaCount: 3
+
