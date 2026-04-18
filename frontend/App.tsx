@@ -85,13 +85,20 @@ const normalizePath = (path: string) => {
 };
 
 const getRouteFromPath = (path: string): { id: string, params?: any } => {
-    const normalized = normalizePath(path);
+    const url = new URL(window.location.origin + path);
+    const normalized = normalizePath(url.pathname);
+    const params: any = {};
+    
+    // Parse query params (specifically for ico)
+    if (url.searchParams.has('ico')) {
+        params.ico = url.searchParams.get('ico');
+    }
 
     switch (normalized) {
         case '/':
             return {id: ROUTES.HOME};
         case '/monitoring':
-            return {id: ROUTES.MONITORING};
+            return {id: ROUTES.MONITORING, params};
         case '/blog':
             return {id: ROUTES.BLOG};
         case '/pricing':
@@ -115,33 +122,53 @@ const getRouteFromPath = (path: string): { id: string, params?: any } => {
     }
 };
 
-const getPathFromRoute = (routeId: string): string => {
+const getPathFromRoute = (routeId: string, params?: any): string => {
+    let path = '/';
     switch (routeId) {
         case ROUTES.HOME:
-            return '/';
+            path = '/';
+            break;
         case ROUTES.MONITORING:
-            return '/monitoring';
+            path = '/monitoring';
+            break;
         case ROUTES.BLOG:
-            return '/blog';
+            path = '/blog';
+            break;
         case ROUTES.PRICING:
-            return '/pricing';
+            path = '/pricing';
+            break;
         case ROUTES.LOGIN:
-            return '/login';
+            path = '/login';
+            break;
         case ROUTES.REGISTER:
-            return '/register';
+            path = '/register';
+            break;
         case ROUTES.PROFILE:
-            return '/profile';
+            path = '/profile';
+            break;
         case ROUTES.ABOUT:
-            return '/about';
+            path = '/about';
+            break;
         case ROUTES.CONTACT:
-            return '/contact';
+            path = '/contact';
+            break;
         case ROUTES.TERMS:
-            return '/terms';
+            path = '/terms';
+            break;
         case ROUTES.PRIVACY:
-            return '/privacy';
+            path = '/privacy';
+            break;
         default:
-            return '/';
+            path = '/';
     }
+
+    if (params && params.ico) {
+        const query = new URLSearchParams();
+        query.set('ico', params.ico);
+        path += '?' + query.toString();
+    }
+    
+    return path;
 };
 
 // Main App Content
@@ -152,7 +179,7 @@ const AppContent: React.FC = () => {
     // 1. Initial Load & Popstate Listener (Back/Forward buttons)
     useEffect(() => {
         const handleLocationChange = () => {
-            const currentPath = window.location.pathname;
+            const currentPath = window.location.pathname + window.location.search;
             const newView = getRouteFromPath(currentPath);
             setView(newView);
         };
@@ -170,11 +197,10 @@ const AppContent: React.FC = () => {
         setView({id: route, params});
 
         const basePath = getBasePath();
-        const routePath = getPathFromRoute(route);
+        const routePath = getPathFromRoute(route, params);
 
         // Construct full URL
         const fullPath = basePath + (routePath === '/' ? '' : routePath);
-        // If basePath is '/static' and route is '/', we want '/static/' not '/static' to be safe, or just '/static/'
         const finalUrl = fullPath === '' ? '/' : fullPath;
 
         window.history.pushState({}, '', finalUrl);

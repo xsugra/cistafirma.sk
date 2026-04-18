@@ -1,115 +1,139 @@
+"""
+Management command pre aktualizáciu dát z Finančnej správy.
+Sťahuje a spracováva datasety: daňoví dlžníci, platitelia DPH, bankové účty, atď.
+"""
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from datetime import datetime
-from thefuzz import fuzz
+from collections import defaultdict
+
 from registers.scrapers.scraper_links_dph import FS_DATASET_URLS
 from registers.scrapers.financna_sprava_scraper import download_and_parse_fs_data
+from registers.services.fs_data_handlers import FSDataHandlers
+from registers.services.fs_company_matcher import find_company_by_fuzzy_match
 from companies.models import Company
-from registers.utils import clean_company_name, parse_money
+
+
+# Mapovanie datasetov na polia pre bulk_update
+UPDATE_FIELDS_MAP = {
+    'tax_debtors': ['tax_debt'],
+    'bank_accounts': ['bank_accounts'],
+    'vat_payers': ['vat_payer', 'ic_dph', 'datum_reg_dph'],
+    'vat_deleted': ['vat_payer', 'vat_deleted_date', 'vat_deleted_reason'],
+    'tax_reliability': ['tax_reliability'],
+}
+
 
 class Command(BaseCommand):
     help = 'Downloads and updates company data from Financna Sprava.'
 
+    SUPPORTED_DATASETS = set(UPDATE_FIELDS_MAP.keys())
+    verbose: bool = False
+
+    def add_arguments(self, parser):
+        parser.add_argument('--datasets', nargs='+', type=str,
+                          help='Datasety na spracovanie (napr. --datasets tax_debtors bank_accounts)')
+        parser.add_argument('--dry-run', action='store_true',
+                          help='Spustí bez ukladania zmien do databázy')
+        parser.add_argument('--verbose-output', action='store_true', dest='verbose_output',
+                          help='Podrobný výstup pre každú aktualizáciu')
+
     def handle(self, *args, **options):
+        datasets_to_process = options.get('datasets') or self.SUPPORTED_DATASETS
+        dry_run = options.get('dry_run', False)
+        self.verbose = options.get('verbose_output', False)
+
+        if dry_run:
+            self.stdout.write(self.style.WARNING('DRY RUN MODE - žiadne zmeny sa neuložia'))
+
+        # Inicializácia handlerov
+        handlers = FSDataHandlers(
+            stdout_write=self.stdout.write,
+            stderr_write=self.stderr.write,
+            style_success=self.style.SUCCESS,
+            style_error=self.style.ERROR,
+            style_warning=self.style.WARNING,
+            verbose=self.verbose
+        )
+
+        total_stats = defaultdict(lambda: {'updated': 0, 'skipped': 0, 'not_found': 0, 'errors': 0})
+
         for key, url in FS_DATASET_URLS.items():
-            self.stdout.write(f"Processing {key} from {url}")
-            items = download_and_parse_fs_data(url)
-            
-            if not items:
-                self.stderr.write(self.style.ERROR(f"Failed to get data for {key}"))
+            if key not in datasets_to_process or key not in self.SUPPORTED_DATASETS:
                 continue
 
-            self.stdout.write(f"Found {len(items)} items for {key}.")
-            
-            for item in items:
-                company = self.find_company(item)
+            self.stdout.write(self.style.HTTP_INFO(f"\n{'='*60}\nProcessing {key}\n{'='*60}"))
 
-                if company:
-                    self.update_company_data(company, item, key)
-                else:
-                    cleaned_name = clean_company_name(item.get('NAZOV_SUBJEKTU', item.get('NAZOV_DS', '')))
-                    if cleaned_name: # Log only if a name was present
-                        self.stdout.write(f"Could not find a match for '{cleaned_name}' (ICO: {item.get('ICO', 'N/A')})")
+            stats = self._process_dataset(key, url, handlers, dry_run)
+            total_stats[key] = stats
+            self._print_stats(key, stats)
 
-        self.stdout.write(self.style.SUCCESS('Successfully updated data from Financna Sprava.'))
+        # Súhrn
+        self.stdout.write(self.style.SUCCESS(f"\n{'='*60}\nSÚHRN\n{'='*60}"))
+        for key, stats in total_stats.items():
+            self._print_stats(key, stats)
 
-    def find_company(self, item: dict) -> Company | None:
-        """
-        Finds a company in the database based on the item data from the XML.
-        Tries to match by ICO, then by name and address.
-        """
-        # Try to find by ICO if present
-        ico = item.get('ICO')
-        if ico and ico.isdigit() and len(ico) == 8:
-            company = Company.objects.filter(ico=ico).first()
+    def _process_dataset(self, key: str, url: str, handlers: FSDataHandlers, dry_run: bool) -> dict:
+        """Spracuje jeden dataset z FS."""
+        stats = {'updated': 0, 'skipped': 0, 'not_found': 0, 'errors': 0}
+
+        items = download_and_parse_fs_data(url)
+        if not items:
+            self.stderr.write(self.style.ERROR(f"Nepodarilo sa získať dáta pre {key}"))
+            return stats
+
+        self.stdout.write(f"Nájdených {len(items)} položiek.")
+
+        # Batch load firiem podľa IČO
+        companies_by_ico = self._load_companies_by_ico(items)
+        self.stdout.write(f"Načítaných {len(companies_by_ico)} firiem podľa IČO")
+
+        companies_to_save = {}
+        for idx, item in enumerate(items):
+            if idx > 0 and idx % (len(items) // 10 or 1) == 0:
+                self.stdout.write(f"  Progress: {(idx * 100) // len(items)}%")
+
+            company = companies_by_ico.get(item.get('ICO'))
+            if not company:
+                company = find_company_by_fuzzy_match(item)
+
             if company:
-                return company
-
-        # If no ICO, try to match by name and address. Use NAZOV_DS for vat_payers
-        cleaned_name = clean_company_name(item.get('NAZOV_SUBJEKTU', item.get('NAZOV_DS', '')))
-        if not cleaned_name:
-            return None
-            
-        psc = item.get('PSC', '').replace(' ', '')
-        obec = item.get('OBEC', '')
-
-        candidate_companies = Company.objects.all()
-        if psc:
-            candidate_companies = candidate_companies.filter(psc=psc)
-        if obec:
-            candidate_companies = candidate_companies.filter(mesto__icontains=obec)
-
-        # If we have candidates, perform fuzzy matching on the name
-        if candidate_companies.exists():
-            best_match = None
-            highest_ratio = 0
-            
-            # This can be slow, for a large number of companies we would need a better approach
-            for company in candidate_companies:
-                db_cleaned_name = clean_company_name(company.nazov_UJ)
-                ratio = fuzz.ratio(cleaned_name, db_cleaned_name)
-                
-                if ratio > highest_ratio:
-                    highest_ratio = ratio
-                    best_match = company
-            
-            if highest_ratio > 90: # Confidence threshold
-                return best_match
-
-        return None
-
-    def update_company_data(self, company: Company, item: dict, source_key: str):
-        """
-        Updates the company model with data from the item.
-        """
-        # Specific handler for tax debtors
-        if source_key == 'tax_debtors':
-            amount_str = item.get('CIASTKA')
-            if amount_str:
                 try:
-                    debt_amount = parse_money(amount_str)
-                    company.tax_debt = debt_amount
-                    self.stdout.write(self.style.SUCCESS(f"Updated tax debt for {company.nazov_UJ} to {debt_amount}"))
-                except (ValueError, TypeError):
-                    self.stderr.write(self.style.ERROR(f"Could not parse money from '{amount_str}' for {company.nazov_UJ}"))
+                    if handlers.update_company(company, item, key):
+                        company.fs_update_date = timezone.now()
+                        companies_to_save[company.ico] = company
+                        stats['updated'] += 1
+                    else:
+                        stats['skipped'] += 1
+                except Exception as e:
+                    self.stderr.write(self.style.ERROR(f"Chyba: {e}"))
+                    stats['errors'] += 1
+            else:
+                stats['not_found'] += 1
 
-        # Handler for VAT payers
-        elif source_key == 'vat_payers':
-            company.vat_payer = True
-            company.ic_dph = item.get('IC_DPH')
-            
-            date_str = item.get('DATUM_REG')
-            if date_str:
-                try:
-                    # The date is in DD.MM.YYYY format
-                    parsed_date = datetime.strptime(date_str, '%d.%m.%Y').date()
-                    company.datum_reg_dph = parsed_date
-                except ValueError:
-                    self.stderr.write(self.style.ERROR(f"Could not parse date '{date_str}' for {company.nazov_UJ}"))
-            
-            self.stdout.write(f"Updated VAT status for {company.nazov_UJ} (IČ DPH: {company.ic_dph})")
-        
-        company.fs_update_date = timezone.now()
-        company.save()
+        # Uloženie
+        if companies_to_save and not dry_run:
+            fields = ['fs_update_date'] + UPDATE_FIELDS_MAP.get(key, [])
+            Company.objects.bulk_update(list(companies_to_save.values()), fields, batch_size=500)
+            self.stdout.write(self.style.SUCCESS(f"Uložených {len(companies_to_save)} firiem"))
 
+        return stats
 
+    def _load_companies_by_ico(self, items: list) -> dict:
+        """Batch načítanie firiem podľa IČO."""
+        ico_list = [item.get('ICO') for item in items if item.get('ICO', '').isdigit()]
+        companies_by_ico = {}
+
+        for i in range(0, len(ico_list), 500):  # SQLite limit
+            batch = ico_list[i:i + 500]
+            for company in Company.objects.filter(ico__in=batch):
+                companies_by_ico[company.ico] = company
+
+        return companies_by_ico
+
+    def _print_stats(self, key: str, stats: dict):
+        """Vypíše štatistiky pre dataset."""
+        self.stdout.write(
+            f"  {key}: {self.style.SUCCESS(f'{stats['updated']} updated')}, "
+            f"{stats['skipped']} skipped, {stats['not_found']} not found, "
+            f"{self.style.ERROR(f'{stats['errors']} errors') if stats['errors'] else '0 errors'}"
+        )

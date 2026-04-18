@@ -24,6 +24,12 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
+            "--ico",
+            action="append",
+            dest="icos",
+            help="IČO na synchronizáciu (možno zadať viac krát). Ak je zadané, ignorujú sa ostatné filtre.",
+        )
+        parser.add_argument(
             "--limit",
             type=int,
             default=50,
@@ -44,16 +50,21 @@ class Command(BaseCommand):
         limit = options["limit"]
         only_missing = options["only_missing"]
         force = options["force"]
+        icos = options.get("icos") or []
 
-        # Filter pre právne formy zapísané v ORSR
-        companies = Company.objects.filter(
-            pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS
-        ).order_by("id")
+        # Filter pre právne formy zapísané v ORSR + len aktívne firmy (bez dátumu zrušenia)
+        if icos:
+            companies = Company.objects.filter(ico__in=icos).order_by("ico")
+        else:
+            companies = Company.objects.filter(
+                pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS,
+                datum_zrusenia__isnull=True  # Len existujúce firmy
+            ).order_by("id")
 
-        if only_missing and not force:
-            companies = companies.filter(orsr_profile__isnull=True)
+            if only_missing and not force:
+                companies = companies.filter(orsr_profile__isnull=True)
 
-        companies = companies[:limit]
+            companies = companies[:limit]
 
         total = companies.count()
         self.stdout.write(

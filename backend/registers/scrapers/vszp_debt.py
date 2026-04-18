@@ -1,13 +1,30 @@
 import logging
+from typing import Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from ..utils import parse_money, is_money
 
 logger = logging.getLogger(__name__)
 
 
-def check_vszp_debt_get(ico: str) -> float:
+def get_session_with_retry() -> requests.Session:
+    """Vytvorí requests session s retry stratégiou."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def check_vszp_debt_get(ico: str) -> Optional[float]:
     """
     Stiahne dlh z VšZP pomocou GET requestu (simuluje vyhľadávanie v URL).
     Vracia sumu v EUR. Ak dlh nie je nájdený alebo je nula, vracia 0.0.
@@ -29,8 +46,9 @@ def check_vszp_debt_get(ico: str) -> float:
     }
 
     try:
-        # 3. GET request with longer timeout
-        response = requests.get(base_url, params=params, headers=headers, timeout=15)
+        # 3. GET request with retry session and longer timeout
+        session = get_session_with_retry()
+        response = session.get(base_url, params=params, headers=headers, timeout=15)
         response.raise_for_status()
 
     except requests.exceptions.RequestException as e:

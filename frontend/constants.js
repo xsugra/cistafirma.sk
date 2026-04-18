@@ -3,7 +3,7 @@
 // We provide a fallback to localhost:8000 for local Django development
 export const API_BASE_URL = (typeof process !== 'undefined' && process.env.REACT_APP_API_URL)
     ? process.env.REACT_APP_API_URL
-    : 'http://localhost:8000/api';
+    : '/api';
 
 export const API_TIMEOUT = 10000; // Increased to 10s for slower cold starts
 

@@ -14,6 +14,7 @@ export interface Company {
   financials: Financials[];
   executives: Executive[];
   connections: Connection[];
+  orsr_profile?: OrsrProfile;
 }
 
 export interface Address {
@@ -52,14 +53,43 @@ export interface Financials {
 
 export interface Executive {
     name: string;
-    role: 'Konateľ' | 'Spoločník' | 'Prokurista';
+    role: string;
 }
 
 export interface Connection {
     companyName: string;
     ico: string;
     role: string;
-    status: 'Aktívna' | 'V likvidácii' | 'V konkurze';
+    status: 'Aktívna' | 'V likvidácii' | 'V konkurze' | 'Vymazaná';
+}
+
+export interface OrsrProfile {
+    oddiel: string;
+    oddiel_type?: string;
+    vlozka_cislo: string;
+    obchodne_meno: string;
+    sidlo: string;
+    den_zapisu: string;
+    pravna_forma: string;
+    konanie?: string;
+    prokura: string[];
+    spolocnici: string[];
+    statutarny_organ: string[];
+    vklady_spolocnikov: string[];
+    vyska_zakladneho_imania: string;
+    predmet_podnikania: string[];
+    raw_sections?: Record<string, string[]>;
+    orsr_aktualizacia_dat: string;
+    orsr_datum_vypisu: string;
+    fetch_ok: boolean;
+    last_error: string;
+
+    // Družstvá / špeciálne typy ORSR
+    predstavenstvo?: string[];
+    kontrolna_komisia?: string[];
+    zakladny_clensky_vklad?: string;
+    zapisovane_zakladne_imanie?: string;
+    dalske_pravne_skutocnosti?: string;
 }
 
 // --- USER & PROFILE TYPES ---

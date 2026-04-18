@@ -1,10 +1,11 @@
 import React, {useEffect, useState} from 'react';
 import {AnimatedSubtitle} from '../components/AnimatedSubtitle';
+import {SearchBar} from '../components/SearchBar';
 import {ROUTES} from '../constants';
 import {api} from '../api';
 
 interface HomeProps {
-    onNavigate: (route: string) => void;
+    onNavigate: (route: string, params?: any) => void;
 }
 
 export const Home: React.FC<HomeProps> = ({onNavigate}) => {
@@ -21,6 +22,10 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
         };
         loadStats();
     }, []);
+
+    const handleSearch = (query: string) => {
+        onNavigate(ROUTES.MONITORING, { ico: query });
+    };
 
     const FeatureCard = ({icon, title, text}: { icon: string, title: string, text: string }) => (
         <div
@@ -62,6 +67,10 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
 
                 <div className="mb-12 h-12">
                     <AnimatedSubtitle/>
+                </div>
+
+                <div className="max-w-2xl mx-auto mb-10 w-full relative z-20">
+                    <SearchBar onSearch={handleSearch} isLoading={false} initialIco="" />
                 </div>
 
                 <div

@@ -1,0 +1,137 @@
+#       - "${WEB_PORT:-8000}:8000"  # Expose web port for direct access if needed, nginx will use this
+# Configuration is loaded from root .env file
+# Copy from .env.default: cp .env.default .env
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cistafirma_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cistafirma}
+      POSTGRES_USER: ${POSTGRES_USER:-cistafirma}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cistafirma_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cistafirma}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cistafirma_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6380}:6379"  # Use 6380 externally to avoid conflict with local Redis
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+#       - "${WEB_PORT:-8000}:8000"  # Expose web port for direct access if needed, nginx will use this
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cistafirma_backend
+    restart: unless-stopped
+    env_file:
+      - ./.env  # Load from root .env (centralized config)
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate --settings=backend.settings &&
+             python manage.py collectstatic --noinput --settings=backend.settings &&
+             gunicorn --bind 0.0.0.0:8000 --workers ${BACKEND_WORKERS:-2} --threads ${BACKEND_THREADS:-4} --timeout 120 --worker-class gthread --worker-tmp-dir /dev/shm backend.wsgi:application"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cistafirma_frontend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      - BACKEND_HOST=backend
+      - BACKEND_PORT=8000
+      - FRONTEND_PORT=${FRONTEND_PORT:-5173}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      backend:
+        condition: service_started
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cistafirma_celery_worker
+    restart: unless-stopped
+    env_file:
+      - ./.env  # Load from root .env (centralized config)
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A backend worker -l info -Q celery,high_priority,low_priority --concurrency=2
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cistafirma_celery_beat
+    restart: unless-stopped
+    env_file:
+      - ./.env  # Load from root .env (centralized config)
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+    command: celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  frontend_node_modules:

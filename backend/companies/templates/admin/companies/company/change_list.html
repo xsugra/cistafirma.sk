@@ -1,0 +1,77 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% include "admin/cistafirma_admin_theme.html" %}
+{% endblock %}
+
+{% block object-tools-items %}
+{{ block.super }}
+{% if show_ruz_buttons %}
+<li>
+    <a href="{% url 'admin:companies_company_add_from_ruz' %}" class="admin-theme-button admin-theme-button--violet addlink">
+        Pridať z RUZ API
+    </a>
+</li>
+<li>
+    <form method="post" action="{% url 'admin:companies_company_trigger_full_ruz_sync' %}" style="display: inline;">
+        {% csrf_token %}
+        <button type="submit" class="admin-theme-button admin-theme-button--blue button"
+                onclick="return confirm('Spustiť kompletný sync z RUZ? Toto môže trvať niekoľko hodín.');"
+                style="border: none; cursor: pointer;">
+            🔄 Kompletný RUZ Sync
+        </button>
+    </form>
+</li>
+{% endif %}
+<li>
+    <a href="{% url 'admin:companies_company_export_filtered' %}?{{ request.GET.urlencode }}&format=csv" 
+       class="admin-theme-button admin-theme-button--emerald button">
+        📥 Export CSV
+    </a>
+</li>
+<li>
+    <a href="{% url 'admin:companies_company_export_filtered' %}?{{ request.GET.urlencode }}&format=xlsx" 
+       class="admin-theme-button admin-theme-button--cyan button">
+        📥 Export XLSX
+    </a>
+</li>
+{% endblock %}
+
+{% block content %}
+<div class="admin-theme-shell">
+<div class="admin-theme-hero" style="padding: 20px; margin-bottom: 20px;">
+    <h2 style="margin: 0 0 10px 0; font-size: 24px;">🏢 Správa firiem</h2>
+    <p style="margin: 0; opacity: 0.9;">
+        Prehľad databázy firiem, exportov a synchronizácií.
+    </p>
+</div>
+
+{% if dashboard_stats %}
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; margin-bottom: 20px;">
+    <div class="admin-theme-card admin-theme-card--blue">
+        <div class="admin-theme-card__eyebrow">Celkom firiem</div>
+        <div class="admin-theme-card__value" style="font-size: 28px; font-weight: 700;">{{ dashboard_stats.total|default:0 }}</div>
+    </div>
+    <div class="admin-theme-card admin-theme-card--emerald">
+        <div class="admin-theme-card__eyebrow">Aktívne firmy</div>
+        <div class="admin-theme-card__value" style="font-size: 28px; font-weight: 700;">{{ dashboard_stats.active|default:0 }}</div>
+    </div>
+    <div class="admin-theme-card admin-theme-card--amber">
+        <div class="admin-theme-card__eyebrow">S dlžobami</div>
+        <div class="admin-theme-card__value" style="font-size: 28px; font-weight: 700;">{{ dashboard_stats.with_debts|default:0 }}</div>
+    </div>
+    <div class="admin-theme-card admin-theme-card--violet">
+        <div class="admin-theme-card__eyebrow">Sync stav</div>
+        <div class="admin-theme-card__value" style="font-size: 16px; font-weight: 700;">
+            {% if dashboard_stats.sync_progress %}{{ dashboard_stats.sync_progress.get_status_display }}{% else %}Bez aktívneho syncu{% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{{ block.super }}
+</div>
+{% endblock %}
+

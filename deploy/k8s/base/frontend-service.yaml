@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cistafirma-frontend
+  namespace: cistafirma
+spec:
+  selector:
+    app: cistafirma-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+

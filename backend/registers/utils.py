@@ -1,5 +1,6 @@
 import re
 
+
 def is_money(text: str) -> bool:
     """Overí, či string vyzerá ako suma (obsahuje číslice a €)."""
     if not text or "€" not in text:
@@ -58,3 +59,49 @@ def clean_company_name(name: str) -> str:
     name = re.sub(r'\s+', ' ', name).strip()
 
     return name
+
+
+def validate_iban(iban: str) -> bool:
+    """
+    Validuje IBAN formát.
+
+    Slovenský IBAN má 24 znakov a začína na 'SK'.
+    Validuje aj základný checksum podľa ISO 13616.
+    """
+    if not iban:
+        return False
+
+    # Odstránime medzery a prevedieme na veľké písmená
+    iban = iban.replace(' ', '').upper()
+
+    # Základná validácia dĺžky a formátu
+    if len(iban) < 15 or len(iban) > 34:
+        return False
+
+    if not iban[:2].isalpha():
+        return False
+
+    if not iban[2:4].isdigit():
+        return False
+
+    # Pre slovenský IBAN kontrola dĺžky 24
+    if iban.startswith('SK') and len(iban) != 24:
+        return False
+
+    # Validácia checksum (ISO 13616)
+    try:
+        # Presunieme prvé 4 znaky na koniec
+        rearranged = iban[4:] + iban[:4]
+
+        # Prevedieme písmená na čísla (A=10, B=11, ...)
+        numeric_string = ''
+        for char in rearranged:
+            if char.isdigit():
+                numeric_string += char
+            else:
+                numeric_string += str(ord(char) - ord('A') + 10)
+
+        # Modulo 97 musí byť 1
+        return int(numeric_string) % 97 == 1
+    except (ValueError, OverflowError):
+        return False

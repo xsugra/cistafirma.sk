@@ -17,3 +17,9 @@ backend:
 frontend:
   replicaCount: 3
 
+celery:
+  worker:
+    replicaCount: 2
+  beat:
+    replicaCount: 1
+

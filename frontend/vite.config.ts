@@ -3,7 +3,20 @@ import {defineConfig, loadEnv} from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({mode}) => {
-    const env = loadEnv(mode, '.', '');
+    // Load root .env file (local dev) and merge process env (Docker runtime).
+    const env = {
+        ...process.env,
+        ...loadEnv(mode, '../', ''),
+    };
+
+    // Backend configuration from root .env
+    const BACKEND_HOST = env.BACKEND_HOST || 'localhost';
+    const BACKEND_PORT = env.BACKEND_PORT || '8080';
+    const backendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+
+    // Frontend configuration from root .env
+    const FRONTEND_PORT = env.FRONTEND_PORT || '5173';
+
     return {
         plugins: [react()],
         define: {
@@ -24,10 +37,13 @@ export default defineConfig(({mode}) => {
             manifest: true, // Užitočné pre pokročilejšie Django integrácie (voliteľné)
         },
         server: {
-            // Toto je len pre vývoj (npm run dev), aby si nemusel riešiť CORS
+            // Dev server port from root .env
+            port: parseInt(FRONTEND_PORT),
+            // Proxy API requests to backend (configured from root .env)
+            // This allows frontend to make requests to /api which get proxied to backend
             proxy: {
                 '/api': {
-                    target: 'http://localhost:8000',
+                    target: backendUrl,
                     changeOrigin: true,
                 }
             }

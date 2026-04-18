@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cistafirma.fullname" . }}-celery-worker
+  labels:
+    {{- include "cistafirma.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-worker
+spec:
+  replicas: {{ .Values.celery.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cistafirma.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-worker
+  template:
+    metadata:
+      labels:
+        {{- include "cistafirma.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-worker
+    spec:
+      containers:
+        - name: celery-worker
+          image: {{ include "cistafirma.backendImage" . }}
+          imagePullPolicy: {{ .Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "cistafirma.fullname" . }}-config
+            - secretRef:
+                name: {{ include "cistafirma.existingSecret" . }}
+          command:
+            - sh
+            - -c
+            - >-
+              celery -A backend worker
+              -l info
+              -Q {{ .Values.celery.worker.queues }}
+              --concurrency={{ .Values.celery.worker.concurrency }}
+          resources:
+            {{- toYaml .Values.celery.worker.resources | nindent 12 }}
+

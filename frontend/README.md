@@ -1,20 +1,57 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Frontend (`frontend/`)
 
-# Run and deploy your AI Studio app
+React + Vite + TypeScript aplikacia pre `cistafirma`.
 
-This contains everything you need to run your app locally.
+## Stack
 
-View your app in AI Studio: https://ai.studio/apps/drive/1fxgHssZ5GP9K550ufd6HuGwgEOA4OoHr
+- React 19
+- Vite 6
+- TypeScript
+- Recharts (grafy)
 
-## Run Locally
+## Lokalny vyvoj
 
-**Prerequisites:**  Node.js
+```bash
+cd /Users/samuelsugra/Code/cistafirma/frontend
+npm install
+npm run dev
+```
 
+Frontend defaultne bezi na:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- `http://localhost:5173/`
+
+## Build
+
+```bash
+cd /Users/samuelsugra/Code/cistafirma/frontend
+npm run build
+npm run preview
+```
+
+## Integracia s backendom
+
+- API volania idu cez `API_BASE_URL` v `constants.js`
+- default je relativna cesta `/api`
+- v lokalnom compose prostredi backend pocuva na hoste `http://localhost:8080`
+
+## Klucove subory
+
+- `api.js` - API wrapper, auth handling, parsing chyb
+- `constants.js` - feature flagy a API base konfiguracia
+- `App.tsx` - root aplikacie
+- `components/` - UI komponenty
+- `pages/` - page-level obrazovky
+
+## Poznamka k mock modu
+
+`ENABLE_MOCK_DATA` v `constants.js` vie prepnut frontend do mock rezimu bez backendu.
+
+## Kvalita pred commitom
+
+```bash
+cd /Users/samuelsugra/Code/cistafirma/frontend
+npm run build
+```
+
+Ak build prejde, zakladna integrita frontend kodu je overena.

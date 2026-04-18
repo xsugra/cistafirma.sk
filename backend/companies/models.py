@@ -1,5 +1,119 @@
 from django.db import models
-from django.utils import timezone
+
+
+# Číselník právnych foriem
+LEGAL_FORMS = {
+    '100': 'Fyzická osoba-príležitostne činná-zapísaná v registri daňového informačného systému',
+    '101': 'Podnikateľ-fyzická osoba-nezapísaný v obchodnom registri',
+    '102': 'Podnikateľ-fyzická osoba-zapísaný v obchodnom registri',
+    '103': 'Samostatne hospodáriaci roľník nezapísaný v obchodnom registri',
+    '104': 'Samostatne hospodáriaci roľník zapísaný v obchodnom registri',
+    '105': 'Slobodné povolanie-fyzická osoba podnikajúca na základe iného ako živnostenského zákona',
+    '106': 'Slobodné povolanie-fyzická osoba podnikajúca na základe iného ako živnostenského zákona zapísaná v obchodnom registri',
+    '107': 'Podnikateľ-fyzická osoba-nezapís.v OR-podnikajúca súčasne ako sam.hosp.roľník',
+    '108': 'Podnikateľ-fyzická osoba-zapís.v OR-podnikajúca súčasne ako sam.hosp.roľník',
+    '109': 'Podnikateľ-fyzická osoba-nezapís.v OR-podnikajúca súčasne ako osoba so slobodným povolaním',
+    '110': 'Podnikateľ-fyzická osoba-zapís.v OR-podnikajúca súčasne ako osoba so slobodným povolaním',
+    '111': 'Verejná obchodná spoločnosť',
+    '112': 'Spoločnosť s ručením obmedzeným',
+    '113': 'Komanditná spoločnosť',
+    '117': 'Nadácia',
+    '118': 'Neinvestičný fond',
+    '119': 'Nezisková organizácia',
+    '121': 'Akciová spoločnosť',
+    '122': 'Európske zoskupenie hospodárskych záujmov',
+    '123': 'Európska spoločnosť',
+    '124': 'Európske družstvo',
+    '205': 'Družstvo',
+    '271': 'Spoločenstvá vlastníkov pozemkov, bytov a pod.',
+    '272': 'Pozemkové spoločenstvo s právnou subjektivitou',
+    '301': 'Štátny podnik',
+    '311': 'Národná banka Slovenska',
+    '312': 'Banka-štátny peňažný ústav',
+    '321': 'Rozpočtová organizácia',
+    '331': 'Príspevková organizácia',
+    '381': 'Fondy',
+    '382': 'Verejnoprávna inštitúcia',
+    '383': 'Iná organizácia verejnej správy',
+    '421': 'Zahraničná osoba, právnická osoba so sídlom mimo územia SR',
+    '422': 'Zahraničná osoba, fyzická osoba s bydliskom mimo územia SR',
+    '433': 'Sociálna a zdravotné poisťovne',
+    '434': 'Doplnková dôchodková poisťovňa',
+    '445': 'Komoditná burza',
+    '701': 'Združenie (zväz, spolok, spoločnosť, klub ai.)',
+    '711': 'Politická strana, politické hnutie',
+    '721': 'Cirkevná organizácia',
+    '741': 'Stavovská organizácia - profesná komora',
+    '745': 'Komora (s výnimkou profesných komôr)',
+    '751': 'Záujmové združenie právnických osôb',
+    '752': 'Záujmové združenie fyzických osôb bez právnej spôsobilosti',
+    '801': 'Obec (obecný úrad), mesto (mestský úrad)',
+    '803': 'Samosprávny kraj (úrad samosprávneho kraja)',
+    '804': 'Európske zoskupenie územnej spolupráce',
+    '901': 'Zastupiteľské orgány iných štátov',
+    '911': 'Zahraničné kultúrne, informačné stredisko, rozhlasová, tlačová a televízna agentúra',
+    '921': 'Medzinárodné organizácie a združenia',
+    '931': 'Zastúpenie zahraničnej právnickej osoby',
+    '951': 'Miestna jednotka bez právnej spôsobilosti',
+    '995': 'Nešpecifikovaná právna forma',
+}
+
+# Skratky právnych foriem pre admin zobrazenie
+LEGAL_FORMS_SHORT = {
+    '100': 'FO-príležitostná',
+    '101': 'FO-podnikateľ',
+    '102': 'FO-podnikateľ v OR',
+    '103': 'SHR',
+    '104': 'SHR v OR',
+    '105': 'FO-slobodné povolanie',
+    '106': 'FO-slobodné povolanie v OR',
+    '107': 'FO-podnikateľ+SHR',
+    '108': 'FO-podnikateľ+SHR v OR',
+    '109': 'FO-podnikateľ+slobodné',
+    '110': 'FO-podnikateľ+slobodné v OR',
+    '111': 'v. o. s.',
+    '112': 's. r. o.',
+    '113': 'k. s.',
+    '117': 'nadácia',
+    '118': 'neinvestičný fond',
+    '119': 'nezisková org.',
+    '121': 'a. s.',
+    '122': 'EZÚH',
+    '123': 'európska spoločnosť',
+    '124': 'európske družstvo',
+    '205': 'družstvo',
+    '271': 'spoločenstvo vlastníkov',
+    '272': 'pozemkové spoločenstvo',
+    '301': 'štátny podnik',
+    '311': 'NBS',
+    '312': 'banka-štátny ústav',
+    '321': 'rozpočtová org.',
+    '331': 'príspevková org.',
+    '381': 'fondy',
+    '382': 'verejnoprávna inštitúcia',
+    '383': 'iná org. verejnej správy',
+    '421': 'zahraničná PO',
+    '422': 'zahraničná FO',
+    '433': 'sociálne/zdravotné poisťovne',
+    '434': 'doplnková dôchodková poisťovňa',
+    '445': 'komoditná burza',
+    '701': 'združenie',
+    '711': 'politická strana',
+    '721': 'cirkevná org.',
+    '741': 'profesná komora',
+    '745': 'komora',
+    '751': 'záujmové združenie PO',
+    '752': 'záujmové združenie FO',
+    '801': 'obec/mesto',
+    '803': 'samosprávny kraj',
+    '804': 'EZÚS',
+    '901': 'zastupiteľské orgány štátov',
+    '911': 'zahraničné kultúrne stredisko',
+    '921': 'medzinárodné org.',
+    '931': 'zastúpenie zahraničnej PO',
+    '951': 'miestna jednotka',
+    '995': 'nešpecifikovaná',
+}
 
 
 class Company(
@@ -9,143 +123,143 @@ class Company(
     Represents a company (účtovná jednotka) from the RUZ API.
     """
     ruz_id = models.IntegerField(
-        unique = True,
-        help_text = "Identifikátor účtovnej jednotky z RUZ API",
+        unique=True,
+        help_text="Identifikátor účtovnej jednotky z RUZ API",
         db_column="RUZ ID",
     )
     ico = models.CharField(
-        max_length = 8,
-        unique = True,
-        help_text = "IČO účtovnej jednotky",
+        max_length=8,
+        unique=True,
+        help_text="IČO účtovnej jednotky",
         db_column="ICO",
     )
     dic = models.CharField(
-        max_length = 10,
-        blank = True,
-        null = True,
-        help_text = "DIČ účtovnej jednotky",
+        max_length=10,
+        blank=True,
+        null=True,
+        help_text="DIČ účtovnej jednotky",
         db_column="DIC",
     )
     sid = models.CharField(
-        max_length = 5,
-        blank = True,
-        null = True,
-        help_text = "SID účtovnej jednotky",
+        max_length=5,
+        blank=True,
+        null=True,
+        help_text="SID účtovnej jednotky",
         db_column="SID",
     )
     nazov_UJ = models.CharField(
-        max_length = 500,
-        help_text = "Názov účtovnej jednotky",
+        max_length=500,
+        help_text="Názov účtovnej jednotky",
         db_column="Názov UJ",
     )
     mesto = models.CharField(
-        max_length = 200,
-        blank = True,
-        null = True,
-        help_text = "Adresa účtovnej jednotky, mesto",
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Adresa účtovnej jednotky, mesto",
         db_column="Mesto",
     )
     ulica = models.CharField(
-        max_length = 200,
-        blank = True,
-        null = True,
-        help_text = "Adresa účtovnej jednotky, ulica s číslom",
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Adresa účtovnej jednotky, ulica s číslom",
         db_column="Ulica",
     )
     psc = models.CharField(
-        max_length = 10,
-        blank = True,
-        null = True,
-        help_text = "Adresa účtovnej jednotky, PSČ",
+        max_length=10,
+        blank=True,
+        null=True,
+        help_text="Adresa účtovnej jednotky, PSČ",
         db_column="PSČ",
     )
     datum_zalozenia = models.DateField(
-        blank = True,
-        null = True,
-        help_text = "Dátum založenia účtovnej jednotky",
+        blank=True,
+        null=True,
+        help_text="Dátum založenia účtovnej jednotky",
         db_column="Dátum založenia UJ",
     )
     datum_zrusenia = models.DateField(
-        blank = True,
-        null = True,
-        help_text = "Dátum zrušenia účtovnej jednotky",
+        blank=True,
+        null=True,
+        help_text="Dátum zrušenia účtovnej jednotky",
         db_column="Dátum zrušenia UJ",
     )
     pravna_forma = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Kód právnej formy",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód právnej formy",
         db_column="Právna forma",
     )
     sk_NACE = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Kód SK NACE klasifikácie",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód SK NACE klasifikácie",
         db_column="NACE",
     )
     velkost_organizacie = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Kód kategórie veľkosti organizácie",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód kategórie veľkosti organizácie",
         db_column="Veľkosť",
     )
     druh_vlastnictva = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Kód druhu vlastníctva",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód druhu vlastníctva",
         db_column="Vlastníctvo",
     )
     kraj = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Sídlo účtovnej jednotky, kód kraja",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Sídlo účtovnej jednotky, kód kraja",
         db_column="Kraj",
     )
     okres = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Sídlo účtovnej jednotky, kód okresu",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Sídlo účtovnej jednotky, kód okresu",
         db_column="Okres",
     )
     sidlo = models.CharField(
-        max_length = 100,
-        blank = True,
-        null = True,
-        help_text = "Sídlo účtovnej jednotky, kód obce alebo mesta",
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Sídlo účtovnej jednotky, kód obce alebo mesta",
         db_column="Sídlo",
     )
     konsolidovana = models.BooleanField(
-        default = False,
-        help_text = "Príznak, či jednotka obsahuje aspoň jednu konsolidovanú účtovnú závierku",
+        default=False,
+        help_text="Príznak, či jednotka obsahuje aspoň jednu konsolidovanú účtovnú závierku",
         db_column="Konsolidovaná",
     )
     id_uctovnych_zavierok = models.JSONField(
-        default = list,
-        help_text = "Zoznam identifikátorov všetkých súvisiacich účtovných závierok",
+        default=list,
+        help_text="Zoznam identifikátorov všetkých súvisiacich účtovných závierok",
         db_column="ID UZ",
     )
     id_vyrocnych_sprav = models.JSONField(
-        default = list,
-        help_text = "Zoznam identifikátorov všetkých súvisiacich výročných správ",
+        default=list,
+        help_text="Zoznam identifikátorov všetkých súvisiacich výročných správ",
         db_column="ID VS",
     )
     zdroj_dat = models.CharField(
-        max_length = 30,
-        blank = True,
-        null = True,
-        help_text = "Kód zdroja, z ktorého pochádzajú dáta",
+        max_length=30,
+        blank=True,
+        null=True,
+        help_text="Kód zdroja, z ktorého pochádzajú dáta",
         db_column="Kód zdroja",
     )
     datum_poslednej_upravy = models.DateField(
         null=True,
         blank=True,
-        help_text = "Dátum poslednej úpravy",
+        help_text="Dátum poslednej úpravy",
         db_column="Dátum a čas kontroly RUZ",
     )
 
@@ -154,27 +268,27 @@ class Company(
     """
     debt_vszp = models.DecimalField(
         verbose_name="Dlh vo VSZP",
-        max_digits = 10,
-        decimal_places = 2,
-        null = True,
-        blank = True,
-        help_text = "Dlh vo Všeobecnej zdravotnej poisťovni",
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Dlh vo Všeobecnej zdravotnej poisťovni",
         db_column="Dlh vo VSZP"
     )
     debt_soc_poist = models.DecimalField(
         verbose_name="Dlh v SP",
-        max_digits = 10,
-        decimal_places = 2,
-        null = True,
-        blank = True,
-        help_text = "Dlh v Sociálnej poisťovni",
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Dlh v Sociálnej poisťovni",
         db_column="Dlh v SP"
     )
     last_insurance_debt = models.DateTimeField(
         verbose_name="Posledná kontrola dlhov vo VSZP a SP",
-        null = True,
-        blank = True,
-        help_text = "Dátum a čas poslednej kontroly dlhov v poisťovniach",
+        null=True,
+        blank=True,
+        help_text="Dátum a čas poslednej kontroly dlhov v poisťovniach",
         db_column="Dátum a čas kontroly VSZP/SP"
     )
 
@@ -189,7 +303,7 @@ class Company(
         null=True,
         blank=True,
         help_text="Dlh na daniach z FS",
-        db_column="Daňový dlh"
+        db_column="Daňový dlh",
     )
     vat_payer = models.BooleanField(
         verbose_name="Platiteľ DPH",
@@ -204,25 +318,121 @@ class Company(
         null=True,
         blank=True,
         help_text="Identifikačné číslo pre daň z pridanej hodnoty",
-        db_column="IČ DPH"
+        db_column="IČ DPH",
     )
     datum_reg_dph = models.DateField(
         verbose_name="Dátum registrácie DPH",
         null=True,
         blank=True,
         help_text="Dátum registrácie subjektu pre DPH",
-        db_column="Dátum registrácie DPH"
+        db_column="Dátum registrácie DPH",
+    )
+    bank_accounts = models.JSONField(
+        verbose_name="Bankové účty",
+        default=list,
+        blank=True,
+        help_text="Zoznam bankových účtov subjektu pre DPH",
+        db_column="IBANs",
+    )
+    vat_deleted_date = models.DateField(
+        verbose_name="Dátum výmazu z DPH",
+        null=True,
+        blank=True,
+        help_text="Dátum výmazu zo zoznamu platiteľov DPH",
+        db_column="Dátum výmazu DPH",
+    )
+    vat_deleted_reason = models.CharField(
+        verbose_name="Dôvod výmazu z DPH",
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Dôvod výmazu zo zoznamu platiteľov DPH",
+        db_column="Dôvod výmazu DPH",
+    )
+    tax_reliability = models.CharField(
+        verbose_name="Index daňovej spoľahlivosti",
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Index daňovej spoľahlivosti z FS (spoľahlivý, vysoko spoľahlivý, nespoľahlivý)",
+        db_column="Index daňovej spoľahlivosti",
     )
     fs_update_date = models.DateTimeField(
         verbose_name="Posledná aktualizácia z FS",
         null=True,
         blank=True,
         help_text="Dátum poslednej aktualizácie dát z FS",
-        db_column="Dátum kontroly FS"
+        db_column="Dátum kontroly FS",
     )
 
     class Meta:
-        db_table = "Firmy"
+        db_table = "Companies and SZCO"
+        verbose_name = "Firma"
+        verbose_name_plural = "Firmy"
+        ordering = ['-datum_poslednej_upravy', 'nazov_UJ']
 
     def __str__(self):
-        return self.company
+        return self.nazov_UJ
+    
+    def get_legal_form_display(self):
+        """Vráti ľudsky čitateľný názov právnej formy"""
+        if not self.pravna_forma:
+            return ''
+        return LEGAL_FORMS.get(str(self.pravna_forma), f'Neznáma forma ({self.pravna_forma})')
+    
+    def get_legal_form_short(self):
+        """Vráti skratku právnej formy"""
+        if not self.pravna_forma:
+            return ''
+        return LEGAL_FORMS_SHORT.get(str(self.pravna_forma), f'Neznáma ({self.pravna_forma})')
+    
+    def get_legal_form_with_code(self):
+        """Vráti kód so skratkou právnej formy pre admin zobrazenie"""
+        if not self.pravna_forma:
+            return ''
+        legal_short = LEGAL_FORMS_SHORT.get(str(self.pravna_forma), 'Neznáma forma')
+        return f"{self.pravna_forma} - {legal_short}"
+
+
+class CompanyFinancialResult(models.Model):
+    """Hospodárske výsledky firmy po rokoch pre grafy vo frontende."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='financial_results',
+        verbose_name='Firma',
+    )
+    year = models.PositiveIntegerField(verbose_name='Rok')
+    revenue = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Tržby',
+    )
+    profit = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Zisk',
+    )
+    source = models.CharField(
+        max_length=30,
+        blank=True,
+        default='manual',
+        verbose_name='Zdroj',
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Aktualizované')
+
+    class Meta:
+        db_table = 'Company Financial Results'
+        verbose_name = 'Hospodársky výsledok'
+        verbose_name_plural = 'Hospodárske výsledky'
+        ordering = ['-year']
+        unique_together = [('company', 'year')]
+
+    def __str__(self):
+        return f"{self.company.ico} - {self.year}"
+

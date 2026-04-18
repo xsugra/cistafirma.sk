@@ -1,0 +1,21 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% include "admin/cistafirma_admin_theme.html" %}
+{% endblock %}
+
+{% block object-tools-items %}
+{{ block.super }}
+{% if original %}
+<li>
+    <a href="{% url 'admin:companies_company_sync_now' original.pk %}"
+       class="admin-theme-button admin-theme-button--emerald"
+       onclick="return confirm('Spustiť okamžitý full sync pre túto firmu?');">
+        🔄 Sync now
+    </a>
+</li>
+{% endif %}
+{% endblock %}
+

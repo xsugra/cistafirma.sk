@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cistafirma-migrate-__RUN_ID__
+  namespace: cistafirma
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: __BACKEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: cistafirma-config
+            - secretRef:
+                name: cistafirma-secrets
+          command:
+            - sh
+            - -c
+            - |
+              python manage.py migrate --settings=backend.settings && \
+              python manage.py collectstatic --noinput --settings=backend.settings
+

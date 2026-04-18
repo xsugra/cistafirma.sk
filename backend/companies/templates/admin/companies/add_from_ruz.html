@@ -1,0 +1,42 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% include "admin/cistafirma_admin_theme.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="admin-theme-shell">
+<div class="admin-theme-hero" style="padding: 20px; margin-bottom: 20px;">
+    <h1 style="margin: 0 0 10px 0;">Pridať firmu z RUZ API</h1>
+    <p style="margin: 0; opacity: 0.9;">Zadajte IČO firmy, ktorú chcete pridať do databázy. Systém ju vyhľadá v Registri účtovných závierok a importuje všetky dostupné údaje.</p>
+</div>
+
+<form method="post" class="admin-theme-form-panel" style="padding: 18px; margin-bottom: 20px;">
+    {% csrf_token %}
+    <fieldset class="module aligned">
+        <div class="form-row">
+            <label for="ico">IČO:</label>
+            <input type="text" name="ico" id="ico" maxlength="8" pattern="[0-9]{8}" 
+                   placeholder="12345678" required style="width: 200px;">
+            <p class="help">8-miestne identifikačné číslo organizácie</p>
+        </div>
+    </fieldset>
+    
+    <div class="submit-row">
+        <input type="submit" value="Vyhľadať a importovať" class="default admin-theme-button admin-theme-button--emerald">
+        <a href="{% url 'admin:companies_company_changelist' %}" class="button cancel-link admin-theme-button admin-theme-button--slate">Zrušiť</a>
+    </div>
+</form>
+
+<div class="admin-theme-note" style="padding: 18px;">
+    <h2 style="margin-top: 0;">Poznámky</h2>
+    <ul style="margin-bottom: 0;">
+        <li>Import prebieha asynchrónne cez Celery - firma sa objaví v zozname po niekoľkých sekundách.</li>
+        <li>Ak firma s daným IČO už existuje, import sa preskočí.</li>
+        <li>RUZ API obsahuje iba firmy, ktoré podali účtovnú závierku.</li>
+    </ul>
+</div>
+</div>
+{% endblock %}

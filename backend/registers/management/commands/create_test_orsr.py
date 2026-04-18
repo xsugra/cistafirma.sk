@@ -44,8 +44,8 @@ class Command(BaseCommand):
                     'Predaj počítačového softvéru',
                 ],
                 'spolocnici': [
-                    'Ján Vážny - 50%',
-                    'Future Investments, s.r.o. - 50%',
+                    'Ján Vážny',
+                    'Future Investments, s.r.o.',
                 ],
                 'vklady_spolocnikov': [
                     'Ján Vážny: 50 000 EUR',

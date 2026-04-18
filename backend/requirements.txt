@@ -23,3 +23,5 @@ redis
 requests
 thefuzz==0.22.1
 django-celery-beat
+openpyxl==3.1.5
+django-unfold>=0.40.0

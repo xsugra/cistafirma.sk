@@ -156,6 +156,123 @@ const mapUserPayload = (data) => {
     return payload;
 };
 
+// Helper to map Django Company model to React Company type
+const mapOrsrProfileResponse = (profile) => {
+    if (!profile) return undefined;
+
+    return {
+        oddiel: profile.oddiel || '',
+        oddiel_type: profile.oddiel_type || '',
+        vlozka_cislo: profile.vlozka_cislo || '',
+        obchodne_meno: profile.obchodne_meno || '',
+        sidlo: profile.sidlo || '',
+        den_zapisu: profile.den_zapisu || null,
+        pravna_forma: profile.pravna_forma || '',
+        konanie: profile.konanie || '',
+        prokura: profile.prokura || [],
+        spolocnici: profile.spolocnici || [],
+        statutarny_organ: profile.statutarny_organ || [],
+        vklady_spolocnikov: profile.vklady_spolocnikov || [],
+        vyska_zakladneho_imania: profile.vyska_zakladneho_imania || '',
+        predmet_podnikania: profile.predmet_podnikania || [],
+        raw_sections: profile.raw_sections || {},
+        orsr_aktualizacia_dat: profile.orsr_aktualizacia_dat || null,
+        orsr_datum_vypisu: profile.orsr_datum_vypisu || null,
+        fetch_ok: Boolean(profile.fetch_ok),
+        last_error: profile.last_error || '',
+        // Družstvá / špeciálne typy ORSR
+        predstavenstvo: profile.predstavenstvo || [],
+        kontrolna_komisia: profile.kontrolna_komisia || [],
+        zakladny_clensky_vklad: profile.zakladny_clensky_vklad || '',
+        zapisovane_zakladne_imanie: profile.zapisovane_zakladne_imanie || '',
+        dalske_pravne_skutocnosti: profile.dalske_pravne_skutocnosti || '',
+    };
+};
+
+const mapCompanyResponse = (data) => {
+    const toAmount = (value) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    const debtVszp = toAmount(data.debt_vszp);
+    const debtSocPoist = toAmount(data.debt_soc_poist);
+    const debtTax = toAmount(data.tax_debt);
+
+    const debts = [
+        ...(debtVszp > 0 ? [{ id: 'vszp', source: 'VšZP', amountEur: debtVszp, dateOfRecord: data.last_insurance_debt }] : []),
+        ...(debtSocPoist > 0 ? [{ id: 'sp', source: 'Sociálna poisťovňa', amountEur: debtSocPoist, dateOfRecord: data.last_insurance_debt }] : []),
+        ...(debtTax > 0 ? [{ id: 'fs', source: 'Finančná správa', amountEur: debtTax, dateOfRecord: data.fs_update_date }] : []),
+    ];
+
+    const totalDebt = debtVszp + debtSocPoist + debtTax;
+    const hasDebt = totalDebt > 0;
+
+    const financials = Array.isArray(data.financials)
+        ? data.financials
+            .map((item) => ({
+                year: Number(item.year),
+                revenue: toAmount(item.revenue),
+                profit: toAmount(item.profit),
+            }))
+            .filter((item) => Number.isFinite(item.year))
+            .sort((a, b) => a.year - b.year)
+        : [];
+
+    const executives = Array.isArray(data.executives)
+        ? data.executives.map((item) => ({
+            name: item.name || 'Neznáma osoba',
+            role: item.role || 'Štatutár',
+        }))
+        : [];
+
+    const connections = Array.isArray(data.connections)
+        ? data.connections.map((item, index) => ({
+            companyName: item.companyName || `Prepojenie ${index + 1}`,
+            ico: item.ico || '',
+            role: item.role || 'Prepojenie',
+            status: item.status || 'Aktívna',
+        }))
+        : [];
+
+    const riskScore = hasDebt ? Math.max(5, 70 - Math.min(totalDebt / 5000, 50)) : 95;
+
+    return {
+        id: data.id,
+        ico: data.ico,
+        name: data.nazov_UJ,
+        legalForm: data.legal_form || 'Neznáma forma',
+        status: data.datum_zrusenia ? 'Vymazaná' : 'Aktívna', // Simple heuristic for now
+        registrationDate: data.datum_zalozenia,
+        address: {
+            street: data.ulica || '',
+            city: data.mesto || '',
+            zipCode: data.psc || '',
+            country: 'Slovenská republika',
+        },
+        lastUpdatedFromSource: data.datum_poslednej_upravy || new Date().toISOString(),
+        debts,
+        vatStatus: {
+            icDph: data.ic_dph,
+            isVatPayer: data.vat_payer,
+            taxReliabilityIndex: data.tax_reliability || 'Spoľahlivý',
+            reasonForDeregistration: data.vat_deleted_reason,
+            lastCheckedAt: data.fs_update_date,
+        },
+        riskScore: {
+            score: Math.round(riskScore),
+            summary: hasDebt
+                ? 'Spoločnosť vykazuje riziko z dôvodu existujúcich nedoplatkov.'
+                : 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.',
+            calculationDate: new Date().toISOString(),
+        },
+        financials,
+        executives,
+        connections,
+        orsr_profile: mapOrsrProfileResponse(data.orsr_profile),
+    };
+};
+
 export const api = {
     /**
      * Fetch landing page statistics
@@ -169,6 +286,18 @@ export const api = {
             }), 500));
         }
         return request('/stats/landing/');
+    },
+
+    /**
+     * Search companies by query (ICO or Name)
+     */
+    searchCompanies: async (query) => {
+        if (ENABLE_MOCK_DATA) {
+            return new Promise((resolve) => setTimeout(() => resolve({
+                results: [mockCompanyData]
+            }), 500));
+        }
+        return request(`/companies/search/?q=${encodeURIComponent(query)}`);
     },
 
     /**
@@ -207,7 +336,8 @@ export const api = {
                 }, 600);
             });
         }
-        return request(`/companies/${ico}/`);
+        const data = await request(`/companies/${ico}/`);
+        return mapCompanyResponse(data);
     },
 
     /**

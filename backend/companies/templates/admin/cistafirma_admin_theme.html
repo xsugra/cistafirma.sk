@@ -1,0 +1,132 @@
+<style>
+    .admin-theme-shell {
+        color: var(--body-fg, #e5e7eb);
+    }
+
+    .admin-theme-hero {
+        background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(37, 99, 235, 0.22) 45%, rgba(88, 28, 135, 0.92) 100%) !important;
+        color: var(--body-fg, #f8fafc) !important;
+        border: 1px solid var(--hairline-color, rgba(148, 163, 184, 0.18));
+        box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+    }
+
+    .admin-theme-panel,
+    .admin-theme-card,
+    .admin-theme-table-panel,
+    .admin-theme-form-panel,
+    .admin-theme-note {
+        background: rgba(15, 23, 42, 0.92) !important;
+        color: var(--body-fg, #e5e7eb) !important;
+        border: 1px solid var(--hairline-color, rgba(148, 163, 184, 0.18)) !important;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+        border-radius: 12px;
+    }
+
+    .admin-theme-card {
+        padding: 14px;
+    }
+
+    .admin-theme-card__eyebrow,
+    .admin-theme-muted {
+        color: rgba(203, 213, 225, 0.82) !important;
+    }
+
+    .admin-theme-card__value {
+        color: #f8fafc !important;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+    }
+
+    .admin-theme-card--blue { border-left: 4px solid #3b82f6 !important; }
+    .admin-theme-card--emerald { border-left: 4px solid #10b981 !important; }
+    .admin-theme-card--amber { border-left: 4px solid #f59e0b !important; }
+    .admin-theme-card--rose { border-left: 4px solid #f43f5e !important; }
+    .admin-theme-card--violet { border-left: 4px solid #8b5cf6 !important; }
+    .admin-theme-card--sky { border-left: 4px solid #0ea5e9 !important; }
+
+    .admin-theme-chip,
+    .admin-theme-button,
+    .admin-theme-button.button,
+    .admin-theme-button.addlink,
+    .admin-theme-button.default {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px !important;
+        border-radius: 10px !important;
+        text-decoration: none !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        color: #f8fafc !important;
+        transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+    }
+
+    .admin-theme-button:hover,
+    .admin-theme-chip:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.04);
+    }
+
+    .admin-theme-button--blue { background: linear-gradient(135deg, #2563eb, #1d4ed8) !important; }
+    .admin-theme-button--emerald { background: linear-gradient(135deg, #059669, #047857) !important; }
+    .admin-theme-button--amber { background: linear-gradient(135deg, #f59e0b, #d97706) !important; }
+    .admin-theme-button--red { background: linear-gradient(135deg, #ef4444, #dc2626) !important; }
+    .admin-theme-button--cyan { background: linear-gradient(135deg, #0891b2, #0e7490) !important; }
+    .admin-theme-button--slate { background: linear-gradient(135deg, #475569, #334155) !important; }
+    .admin-theme-button--violet { background: linear-gradient(135deg, #7c3aed, #6d28d9) !important; }
+
+    .admin-theme-table {
+        width: 100%;
+        border-collapse: collapse;
+        color: #e2e8f0;
+    }
+
+    .admin-theme-table thead tr {
+        background: rgba(30, 41, 59, 0.95);
+    }
+
+    .admin-theme-table th {
+        color: #cbd5e1 !important;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18) !important;
+    }
+
+    .admin-theme-table td {
+        color: #e2e8f0 !important;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12) !important;
+    }
+
+    .admin-theme-table tbody tr:hover {
+        background: rgba(59, 130, 246, 0.08);
+    }
+
+    .admin-theme-warning {
+        background: rgba(120, 53, 15, 0.92) !important;
+        color: #fef3c7 !important;
+        border-left: 4px solid #f59e0b !important;
+    }
+
+    .admin-theme-warning a {
+        color: #fde68a !important;
+    }
+
+    .admin-theme-form-panel input[type='text'],
+    .admin-theme-form-panel input[type='number'] {
+        background: rgba(15, 23, 42, 0.95) !important;
+        color: #f8fafc !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        border-radius: 10px !important;
+        padding: 10px 12px !important;
+    }
+
+    .admin-theme-form-panel input::placeholder {
+        color: rgba(203, 213, 225, 0.55) !important;
+    }
+
+    .admin-theme-form-panel .help,
+    .admin-theme-form-panel .description,
+    .admin-theme-form-panel p,
+    .admin-theme-form-panel li,
+    .admin-theme-form-panel label {
+        color: rgba(226, 232, 240, 0.9) !important;
+    }
+</style>

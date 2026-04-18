@@ -5,12 +5,14 @@ Useful commands:
 - Check rollout:
   kubectl rollout status deployment/{{ include "cistafirma.fullname" . }}-backend
   kubectl rollout status deployment/{{ include "cistafirma.fullname" . }}-frontend
+  kubectl rollout status deployment/{{ include "cistafirma.fullname" . }}-celery-worker
+  kubectl rollout status deployment/{{ include "cistafirma.fullname" . }}-celery-beat
 
 - Access app:
   http://{{ .Values.ingress.host }}
 
 - Safe upgrade pattern:
-  helm upgrade --install --wait --atomic {{ .Release.Name }} . -f values-{{ .Values.global.environment | default "dev" }}.yaml
+  helm upgrade --install --wait --atomic {{ .Release.Name }} . -f values.yaml -f values-<env>.yaml
 
 - If DB schema changes are included, the pre-upgrade migration Job is executed automatically.
 

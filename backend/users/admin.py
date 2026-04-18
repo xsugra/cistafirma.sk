@@ -3,9 +3,18 @@ from django.contrib.auth.admin import UserAdmin
 from .models import User
 from .forms import CustomUserCreationForm, CustomUserChangeForm
 
+# Import Unfold pre moderný admin
+try:
+    from unfold.admin import ModelAdmin as UnfoldModelAdmin
+    from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
+    UNFOLD_AVAILABLE = True
+except ImportError:
+    UnfoldModelAdmin = admin.ModelAdmin
+    UNFOLD_AVAILABLE = False
+
 
 @admin.register(User)
-class CustomUserAdmin(UserAdmin):
+class CustomUserAdmin(UserAdmin, UnfoldModelAdmin if UNFOLD_AVAILABLE else object):
     add_form = CustomUserCreationForm
     form = CustomUserChangeForm
     model = User

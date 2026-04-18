@@ -1,0 +1,298 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% include "admin/cistafirma_admin_theme.html" %}
+<style>
+    .sync-dashboard {
+        color: var(--body-fg, #e5e7eb);
+    }
+
+    .sync-dashboard__hero {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(37, 99, 235, 0.22) 45%, rgba(88, 28, 135, 0.92) 100%) !important;
+        color: var(--body-fg, #f8fafc) !important;
+    }
+
+    .sync-dashboard__hero p,
+    .sync-dashboard__hero small,
+    .sync-dashboard__hero label,
+    .sync-dashboard__hero span {
+        color: rgba(241, 245, 249, 0.92) !important;
+    }
+
+    .sync-dashboard__hero a,
+    .sync-dashboard__hero button {
+        color: #f8fafc !important;
+        border: 1px solid rgba(255, 255, 255, 0.14) !important;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .sync-dashboard__metric-card,
+    .sync-dashboard__recent-panel,
+    .sync-dashboard__gap-panel,
+    .sync-dashboard__list-panel {
+        background: rgba(15, 23, 42, 0.92) !important;
+        color: var(--body-fg, #e5e7eb) !important;
+    }
+
+    .sync-dashboard__metric-card {
+        border-left: 4px solid rgba(96, 165, 250, 0.8) !important;
+    }
+
+    .sync-dashboard__metric-value {
+        color: #f8fafc !important;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+    }
+
+    .sync-dashboard__metric-muted {
+        color: rgba(203, 213, 225, 0.82) !important;
+    }
+
+    .sync-dashboard__recent-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        color: var(--body-fg, #e5e7eb);
+    }
+
+    .sync-dashboard__recent-table thead tr {
+        background: rgba(30, 41, 59, 0.95);
+    }
+
+    .sync-dashboard__recent-table th {
+        color: #cbd5e1 !important;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18) !important;
+    }
+
+    .sync-dashboard__recent-table td {
+        color: #e2e8f0 !important;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12) !important;
+    }
+
+    .sync-dashboard__recent-table tbody tr:hover {
+        background: rgba(59, 130, 246, 0.08);
+    }
+
+    .sync-dashboard__gap-panel {
+        background: rgba(120, 53, 15, 0.92) !important;
+        border-left: 4px solid #f59e0b !important;
+        color: #fef3c7 !important;
+    }
+
+    .sync-dashboard__gap-panel a {
+        color: #fde68a !important;
+    }
+
+    .sync-dashboard .results,
+    .sync-dashboard .module,
+    .sync-dashboard .paginator,
+    .sync-dashboard .actions,
+    .sync-dashboard .actionlist,
+    .sync-dashboard .filtered,
+    .sync-dashboard .breadcrumbs,
+    .sync-dashboard .submit-row,
+    .sync-dashboard .topbar,
+    .sync-dashboard .object-tools,
+    .sync-dashboard .object-tools-items,
+    .sync-dashboard .related-widget-wrapper,
+    .sync-dashboard .admin-form-row,
+    .sync-dashboard .field-box,
+    .sync-dashboard .aligned .form-row,
+    .sync-dashboard .collapse,
+    .sync-dashboard .change-list,
+    .sync-dashboard .changelist-form-container {
+        color: var(--body-fg, #e5e7eb) !important;
+    }
+
+    .sync-dashboard .results,
+    .sync-dashboard .module,
+    .sync-dashboard .paginator,
+    .sync-dashboard .actions,
+    .sync-dashboard .filtered,
+    .sync-dashboard .change-list,
+    .sync-dashboard .changelist-form-container,
+    .sync-dashboard .module caption,
+    .sync-dashboard .inline-group,
+    .sync-dashboard .submit-row,
+    .sync-dashboard .related-widget-wrapper {
+        background: rgba(15, 23, 42, 0.92) !important;
+        border-color: rgba(148, 163, 184, 0.16) !important;
+    }
+
+    .sync-dashboard .results table,
+    .sync-dashboard .results thead tr,
+    .sync-dashboard .results tbody tr,
+    .sync-dashboard .results th,
+    .sync-dashboard .results td,
+    .sync-dashboard .module table,
+    .sync-dashboard .module th,
+    .sync-dashboard .module td {
+        background: transparent !important;
+        color: #e2e8f0 !important;
+        border-color: rgba(148, 163, 184, 0.14) !important;
+    }
+
+    .sync-dashboard .results thead th,
+    .sync-dashboard .module caption {
+        background: rgba(30, 41, 59, 0.95) !important;
+        color: #cbd5e1 !important;
+    }
+
+    .sync-dashboard .results tbody tr:hover,
+    .sync-dashboard .module tbody tr:hover,
+    .sync-dashboard .actionlist tbody tr:hover {
+        background: rgba(59, 130, 246, 0.08) !important;
+    }
+
+    .sync-dashboard .paginator,
+    .sync-dashboard .paginator a,
+    .sync-dashboard .paginator span {
+        color: #cbd5e1 !important;
+    }
+
+    .sync-dashboard .filtered .module,
+    .sync-dashboard .filtered .results,
+    .sync-dashboard .filtered .paginator {
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+    }
+
+    .sync-dashboard .object-tools a,
+    .sync-dashboard .object-tools button,
+    .sync-dashboard .submit-row input,
+    .sync-dashboard .submit-row a,
+    .sync-dashboard .actions select,
+    .sync-dashboard .actions button {
+        border-radius: 10px !important;
+    }
+</style>
+{% endblock %}
+
+{% block object-tools-items %}
+<li>
+    <a href="{{ trigger_full_url }}" class="button" style="background:#3b82f6;">
+        🔄 Full Sync
+    </a>
+</li>
+<li>
+    <a href="{{ trigger_incremental_url }}" class="button" style="background:#10b981;">
+        📥 Incremental Sync
+    </a>
+</li>
+<li>
+    <a href="{{ trigger_repair_url }}" class="button" style="background:#f59e0b;">
+        🔧 Repair Sync
+    </a>
+</li>
+<li>
+    <a href="{{ gap_analysis_url }}" class="button" style="background:#ef4444;">
+        🕳️ Gap Analysis
+    </a>
+</li>
+{{ block.super }}
+{% endblock %}
+
+{% block content %}
+<div class="sync-dashboard">
+<div class="sync-dashboard__hero" style="padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+    <h2 style="margin: 0 0 10px 0; font-size: 24px;">📊 RUZ Synchronizácia</h2>
+    <p style="margin: 0; opacity: 0.9;">
+        Celkom firiem v databáze: <strong>{{ total_companies|default:"0" }}</strong>
+        {% if db_stats %}
+        | RUZ ID rozsah: <strong>{{ db_stats.min_id }} - {{ db_stats.max_id }}</strong>
+        | Odhad chýbajúcich: <strong style="color: #fbbf24;">~{{ db_stats.missing_estimate }}</strong>
+        {% endif %}
+    </p>
+    <div style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
+        <a href="{{ trigger_full_url }}" style="background: rgba(255,255,255,0.2); color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            🔄 <span><strong>Full Sync</strong><br><small>Kompletná synchronizácia od 2000</small></span>
+        </a>
+        <a href="{{ trigger_incremental_url }}" style="background: rgba(255,255,255,0.2); color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            📥 <span><strong>Incremental Sync</strong><br><small>Len nové zmeny</small></span>
+        </a>
+        <a href="{{ trigger_repair_url }}" style="background: rgba(255,255,255,0.2); color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            🔧 <span><strong>Repair Sync</strong><br><small>Opraví chýbajúce firmy (API)</small></span>
+        </a>
+        <a href="{{ gap_analysis_url }}" style="background: rgba(239,68,68,0.6); color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+            🕳️ <span><strong>Gap Analysis</strong><br><small>Analýza a oprava dier</small></span>
+        </a>
+    </div>
+    
+    <!-- Full Sync od konkrétneho ID -->
+    <div style="margin-top: 15px; background: rgba(0,0,0,0.2); padding: 15px; border-radius: 8px;">
+        <form method="post" action="{{ trigger_full_from_id_url }}" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            {% csrf_token %}
+            <label style="font-weight: bold;">🎯 Full Sync od RUZ ID:</label>
+            <input type="number" name="start_id" placeholder="napr. 1000000" 
+                   style="padding: 8px 12px; border-radius: 4px; border: none; width: 150px; font-size: 14px;">
+            <button type="submit" style="background: rgba(255,255,255,0.3); color: white; padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold;">
+                ▶️ Spustiť
+            </button>
+            <small style="opacity: 0.8;">Spustí sync od zadaného RUZ ID (užitočné pre opätovné spustenie od určitého bodu)</small>
+        </form>
+    </div>
+</div>
+
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; margin-bottom: 20px;">
+    <div class="sync-dashboard__metric-card" style="border-radius:10px;padding:14px;">
+        <div class="admin-theme-muted" style="font-size:12px;">ORSR coverage</div>
+        <div class="sync-dashboard__metric-value" style="font-size:24px;font-weight:700;">{{ total_orsr_profiles|default:0 }} / {{ total_companies|default:0 }}</div>
+        <div class="sync-dashboard__metric-muted" style="font-size:12px;color:#ef4444;">Chýba: {{ companies_without_orsr|default:0 }}</div>
+    </div>
+    <div class="sync-dashboard__metric-card" style="border-radius:10px;padding:14px;">
+        <div class="admin-theme-muted" style="font-size:12px;">Financial coverage</div>
+        <div class="sync-dashboard__metric-value" style="font-size:24px;font-weight:700;">{{ companies_with_financials|default:0 }} / {{ total_companies|default:0 }}</div>
+        <div class="sync-dashboard__metric-muted" style="font-size:12px;color:#ef4444;">Chýba: {{ companies_without_financials|default:0 }}</div>
+    </div>
+    <div class="sync-dashboard__metric-card" style="border-radius:10px;padding:14px;">
+        <div class="admin-theme-muted" style="font-size:12px;">Aktívne syncy</div>
+        <div class="sync-dashboard__metric-value" style="font-size:24px;font-weight:700;color:#16a34a;">{{ running_syncs|default:0 }}</div>
+        <div class="sync-dashboard__metric-muted" style="font-size:12px;color:#cbd5e1;">Dokončené: {{ completed_syncs|default:0 }}</div>
+    </div>
+    <div class="sync-dashboard__metric-card" style="border-radius:10px;padding:14px;">
+        <div class="admin-theme-muted" style="font-size:12px;">Zlyhané syncy</div>
+        <div class="sync-dashboard__metric-value" style="font-size:24px;font-weight:700;color:#dc2626;">{{ failed_syncs|default:0 }}</div>
+        <div class="sync-dashboard__metric-muted" style="font-size:12px;color:#cbd5e1;">Monitoring health</div>
+    </div>
+</div>
+
+{% if recent_syncs %}
+<div class="sync-dashboard__recent-panel" style="border-radius:10px;padding:14px;margin-bottom:20px;">
+    <h3 style="margin:0 0 10px 0;">🧭 Posledné syncy</h3>
+    <table class="sync-dashboard__recent-table">
+        <thead>
+            <tr>
+                <th style="text-align:left;padding:8px;">Typ</th>
+                <th style="text-align:left;padding:8px;">Stav</th>
+                <th style="text-align:left;padding:8px;">Processed</th>
+                <th style="text-align:left;padding:8px;">Errors</th>
+                <th style="text-align:left;padding:8px;">Last activity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in recent_syncs %}
+            <tr>
+                <td style="padding:8px;">{{ item.get_sync_type_display }}</td>
+                <td style="padding:8px;">{{ item.get_status_display }}</td>
+                <td style="padding:8px;">{{ item.total_processed }}</td>
+                <td style="padding:8px;">{{ item.total_errors }}</td>
+                <td style="padding:8px;">{{ item.last_activity|date:"Y-m-d H:i" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if latest_gap_analysis %}
+<div class="sync-dashboard__gap-panel" style="padding: 15px; margin-bottom: 20px; border-radius: 0 8px 8px 0;">
+    <strong>🕳️ Posledná Gap Analysis:</strong>
+    {{ latest_gap_analysis.total_missing }} chýbajúcich ID v {{ latest_gap_analysis.total_gaps }} dierach
+    ({{ latest_gap_analysis.get_status_display }})
+    <a href="{{ gap_analysis_url }}" style="margin-left: 10px;">→ Zobraziť detaily</a>
+</div>
+{% endif %}
+
+{{ block.super }}
+</div>
+{% endblock %}

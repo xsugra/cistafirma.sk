@@ -1,0 +1,95 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% include "admin/cistafirma_admin_theme.html" %}
+{% endblock %}
+
+{% block object-tools-items %}
+<li>
+    <a href="{{ trigger_analyze_url }}" class="admin-theme-button admin-theme-button--blue button">
+        🔍 Spustiť analýzu dier
+    </a>
+</li>
+{{ block.super }}
+{% endblock %}
+
+{% block content %}
+<div class="admin-theme-shell">
+<div class="admin-theme-hero" style="padding: 20px; margin-bottom: 20px;">
+    <h2 style="margin: 0 0 10px 0; font-size: 24px;">🔧 Gap Analysis - Oprava dier v RUZ</h2>
+    <p style="margin: 0; opacity: 0.9;">
+        Celkom firiem v databáze: <strong>{{ total_companies|default:"0" }}</strong>
+        {% if db_stats %}
+        | RUZ ID rozsah: <strong>{{ db_stats.min_id|default:"?" }} - {{ db_stats.max_id|default:"?" }}</strong>
+        | Očakávaných: <strong>~{{ db_stats.expected|default:"?" }}</strong>
+        {% endif %}
+    </p>
+    
+    <div style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
+        <a href="{{ trigger_analyze_url }}" class="admin-theme-button admin-theme-button--blue">
+            🔍 <span><strong>Analyzovať diery</strong><br><small>Nájde chýbajúce RUZ ID</small></span>
+        </a>
+        {% if latest_analysis %}
+        <a href="{% url 'admin:registers_syncgapanalysis_change' latest_analysis.id %}" class="admin-theme-button admin-theme-button--slate">
+            📊 <span><strong>Posledná analýza</strong><br><small>{{ latest_analysis.total_missing }} chýbajúcich</small></span>
+        </a>
+        {% if latest_analysis.status == 'ready' %}
+        <a href="{% url 'admin:registers_syncgapanalysis_repair' latest_analysis.id %}" class="admin-theme-button admin-theme-button--emerald">
+            🔧 <span><strong>Opraviť diery</strong><br><small>Stiahnuť {{ latest_analysis.total_missing }} firiem</small></span>
+        </a>
+        {% elif latest_analysis.status == 'repairing' %}
+        <a href="{% url 'admin:registers_syncgapanalysis_resume' latest_analysis.id %}" class="admin-theme-button admin-theme-button--blue">
+            ▶️ <span><strong>Pokračovať v oprave</strong><br><small>Od ID {{ latest_analysis.repair_progress_id }}</small></span>
+        </a>
+        {% endif %}
+        {% endif %}
+    </div>
+    
+    {% if latest_analysis and latest_analysis.gap_ranges %}
+    <div class="admin-theme-table-panel" style="margin-top: 15px; padding: 15px;">
+        <h4 style="margin: 0 0 10px 0;">Top 5 najväčších dier:</h4>
+        <table class="admin-theme-table" style="font-size: 14px;">
+            <tr>
+                <th style="text-align: left; padding: 4px 8px;">#</th>
+                <th style="text-align: left; padding: 4px 8px;">Rozsah RUZ ID</th>
+                <th style="text-align: right; padding: 4px 8px;">Veľkosť</th>
+            </tr>
+            {% for gap in top_gaps %}
+            <tr>
+                <td style="padding: 4px 8px;">{{ forloop.counter }}</td>
+                <td style="padding: 4px 8px;">{{ gap.0 }} - {{ gap.1 }}</td>
+                <td style="text-align: right; padding: 4px 8px;"><strong>{{ gap.2 }}</strong> ID</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Quick Stats -->
+{% if latest_analysis %}
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+    <div class="admin-theme-card admin-theme-card--blue">
+        <div class="admin-theme-card__value" style="font-size: 24px; font-weight: bold; color: #60a5fa;">{{ latest_analysis.total_existing|default:"0" }}</div>
+        <div class="admin-theme-card__eyebrow" style="font-size: 12px;">Firiem v databáze</div>
+    </div>
+    <div class="admin-theme-card admin-theme-card--rose">
+        <div class="admin-theme-card__value" style="font-size: 24px; font-weight: bold; color: #f87171;">{{ latest_analysis.total_missing|default:"0" }}</div>
+        <div class="admin-theme-card__eyebrow" style="font-size: 12px;">Chýbajúcich ID</div>
+    </div>
+    <div class="admin-theme-card admin-theme-card--amber">
+        <div class="admin-theme-card__value" style="font-size: 24px; font-weight: bold; color: #fbbf24;">{{ latest_analysis.total_gaps|default:"0" }}</div>
+        <div class="admin-theme-card__eyebrow" style="font-size: 12px;">Počet dier</div>
+    </div>
+    <div class="admin-theme-card admin-theme-card--emerald">
+        <div class="admin-theme-card__value" style="font-size: 24px; font-weight: bold; color: #4ade80;">{{ latest_analysis.repaired_count|default:"0" }}</div>
+        <div class="admin-theme-card__eyebrow" style="font-size: 12px;">Opravených</div>
+    </div>
+</div>
+{% endif %}
+
+{{ block.super }}
+</div>
+{% endblock %}

@@ -1,12 +1,30 @@
 import logging
+from typing import Optional
+
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from ..utils import parse_money, is_money
 
 logger = logging.getLogger(__name__)
 
 
-def check_socpoist_debt(ico: str) -> float:
+def get_session_with_retry() -> requests.Session:
+    """Vytvorí requests session s retry stratégiou."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def check_socpoist_debt(ico: str) -> Optional[float]:
     """
     Overí dlh v Sociálnej poisťovni pre zadané IČO.
     Vracia sumu v EUR (float).
@@ -25,9 +43,10 @@ def check_socpoist_debt(ico: str) -> float:
     }
 
     try:
-        # 3. GET Request
+        # 3. GET Request s retry session
         # Timeout dávame dlhší (15s), štátne weby sú niekedy pomalé
-        response = requests.get(base_url, params=params, headers=headers, timeout=15)
+        session = get_session_with_retry()
+        response = session.get(base_url, params=params, headers=headers, timeout=15)
         response.raise_for_status()
 
         # 4. Parsing (Tu musíme byť detektívi)
