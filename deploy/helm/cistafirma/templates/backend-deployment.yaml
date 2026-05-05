@@ -17,6 +17,29 @@ spec:
         {{- include "cistafirma.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: backend
     spec:
+      initContainers:
+        - name: wait-for-migrations
+          image: {{ include "cistafirma.backendImage" . }}
+          imagePullPolicy: {{ .Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "cistafirma.fullname" . }}-config
+            - secretRef:
+                name: {{ include "cistafirma.existingSecret" . }}
+          command:
+            - sh
+            - -c
+            - |
+              until python -c "import urllib.parse as u, socket, os; url=u.urlparse(os.environ['DATABASE_URL']); s=socket.socket(); s.settimeout(3); s.connect((url.hostname, url.port or 5432)); s.close()" 2>/dev/null; do
+                echo "Waiting for Postgres..."
+                sleep 2
+              done
+              echo "Postgres reachable, waiting for migrations..."
+              until python manage.py migrate --check --settings=backend.settings 2>/dev/null; do
+                echo "Migrations pending, waiting..."
+                sleep 3
+              done
+              echo "Migrations up-to-date."
       containers:
         - name: backend
           image: {{ include "cistafirma.backendImage" . }}
@@ -42,4 +65,3 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
-

@@ -1,0 +1,91 @@
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "cistafirma.fullname" . }}-backup
+  labels:
+    {{- include "cistafirma.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  {{- if .Values.backup.storageClass }}
+  storageClassName: {{ .Values.backup.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.storageSize }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "cistafirma.fullname" . }}-postgres-backup
+  labels:
+    {{- include "cistafirma.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "cistafirma.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: {{ .Values.postgres.image }}
+              env:
+                - name: PGHOST
+                  value: {{ include "cistafirma.fullname" . }}-postgres
+                - name: PGPORT
+                  value: "5432"
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cistafirma.existingSecret" . }}
+                      key: POSTGRES_DB
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cistafirma.existingSecret" . }}
+                      key: POSTGRES_USER
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "cistafirma.existingSecret" . }}
+                      key: POSTGRES_PASSWORD
+                - name: RETENTION_DAYS
+                  value: "{{ .Values.backup.retentionDays }}"
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /backups
+                  TS=$(date +%Y%m%d_%H%M%S)
+                  OUT="/backups/${POSTGRES_DB}_${TS}.dump"
+                  echo "Starting pg_dump to ${OUT}"
+                  pg_dump --format=custom --no-owner --no-privileges \
+                    --host "$PGHOST" --port "$PGPORT" \
+                    --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+                    --file "$OUT"
+                  echo "Backup complete: $(ls -lh "$OUT" | awk '{print $5, $9}')"
+                  echo "Pruning backups older than ${RETENTION_DAYS}d..."
+                  find /backups -name "${POSTGRES_DB}_*.dump" -type f -mtime +${RETENTION_DAYS} -print -delete || true
+                  echo "Done."
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "cistafirma.fullname" . }}-backup
+{{- end }}

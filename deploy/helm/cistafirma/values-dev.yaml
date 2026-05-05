@@ -1,22 +1,73 @@
 global:
+  # Lokálny registry beží na kind sieti (172.18.0.10:5000, pozri scripts/k8s/local_registry.sh).
+  # Používame IP kvôli tomu, že DD k8s registry-mirror môže byť rozbitý a IP obchádza DNS.
   backendImage:
-    tag: dev
+    repository: 172.18.0.10:5000/cistafirma-backend
+    tag: local
+    pullPolicy: IfNotPresent
   frontendImage:
-    tag: dev
-  host: dev.cistafirma.example.com
+    repository: 172.18.0.10:5000/cistafirma-frontend
+    tag: local
+    pullPolicy: IfNotPresent
+  host: cistafirma.local
+
+config:
+  allowedHosts: "*"
+  corsAllowedOrigins: "http://localhost:8080,http://cistafirma.local"
+  csrfTrustedOrigins: "http://localhost:8080,http://cistafirma.local"
 
 ingress:
-  host: dev.cistafirma.example.com
+  enabled: false
+  host: cistafirma.local
 
 backend:
   replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
 
 frontend:
   replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+postgres:
+  storageSize: 10Gi
+
+redis:
+  storageSize: 1Gi
 
 celery:
-  worker:
-    replicaCount: 1
   beat:
     replicaCount: 1
+  workers:
+    ruz:
+      replicaCount: 1
+      concurrency: 1
+    orsr:
+      replicaCount: 1
+      concurrency: 2
+    financials:
+      replicaCount: 1
+      concurrency: 2
+    insurance:
+      replicaCount: 1
+      concurrency: 1
+    default:
+      replicaCount: 1
+      concurrency: 2
 
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+  retentionDays: 7
+  storageSize: 5Gi

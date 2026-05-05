@@ -50,18 +50,35 @@ migrateJob:
   ttlSecondsAfterFinished: 86400
   backoffLimit: 1
 
+# In-cluster Postgres + Redis (pre lokál / dev). V prod použi managed DB a tieto vypni.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  storageClass: ""
+  storageSize: 20Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  storageClass: ""
+  storageSize: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# Celery workery — každá queue má vlastný deployment, škáluje sa nezávisle.
 celery:
-  worker:
-    replicaCount: 1
-    queues: high_priority,low_priority,celery
-    concurrency: 2
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
   beat:
     replicaCount: 1
     resources:
@@ -71,4 +88,84 @@ celery:
       limits:
         cpu: 250m
         memory: 256Mi
+  workers:
+    # RUZ bulk sync — MUSÍ byť 1 replica (drží SyncProgress kurzor).
+    ruz:
+      enabled: true
+      queue: ruz_full
+      replicaCount: 1
+      concurrency: 1
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+    # ORSR scraper — škálovateľný, ale pozor na rate limit orsr.sk.
+    orsr:
+      enabled: true
+      queue: orsr
+      replicaCount: 2
+      concurrency: 2
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    # Hospodárske výsledky z RUZ API — tolerantné na paralelizmus.
+    financials:
+      enabled: true
+      queue: financials
+      replicaCount: 2
+      concurrency: 4
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    # VSZP + Soc. poisťovňa — scrapery cudzích stránok, riziko banu.
+    insurance:
+      enabled: true
+      queue: insurance
+      replicaCount: 1
+      concurrency: 2
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    # Default queue (FS, orchestračné, ad-hoc).
+    default:
+      enabled: true
+      queue: celery
+      replicaCount: 1
+      concurrency: 2
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
 
+# Denný pg_dump CronJob — zapisuje do backup PVC.
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+  retentionDays: 14
+  storageClass: ""
+  storageSize: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

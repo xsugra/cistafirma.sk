@@ -1,39 +1,72 @@
+{{- range $name, $worker := .Values.celery.workers }}
+{{- if $worker.enabled }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "cistafirma.fullname" . }}-celery-worker
+  name: {{ include "cistafirma.fullname" $ }}-celery-{{ $name }}
   labels:
-    {{- include "cistafirma.labels" . | nindent 4 }}
+    {{- include "cistafirma.labels" $ | nindent 4 }}
     app.kubernetes.io/component: celery-worker
+    cistafirma.sk/celery-queue: {{ $worker.queue | quote }}
 spec:
-  replicas: {{ .Values.celery.worker.replicaCount }}
+  replicas: {{ $worker.replicaCount }}
   selector:
     matchLabels:
-      {{- include "cistafirma.selectorLabels" . | nindent 6 }}
+      {{- include "cistafirma.selectorLabels" $ | nindent 6 }}
       app.kubernetes.io/component: celery-worker
+      cistafirma.sk/celery-queue: {{ $worker.queue | quote }}
   template:
     metadata:
       labels:
-        {{- include "cistafirma.selectorLabels" . | nindent 8 }}
+        {{- include "cistafirma.selectorLabels" $ | nindent 8 }}
         app.kubernetes.io/component: celery-worker
+        cistafirma.sk/celery-queue: {{ $worker.queue | quote }}
     spec:
-      containers:
-        - name: celery-worker
-          image: {{ include "cistafirma.backendImage" . }}
-          imagePullPolicy: {{ .Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+      initContainers:
+        - name: wait-for-deps
+          image: {{ include "cistafirma.backendImage" $ }}
+          imagePullPolicy: {{ $.Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
           envFrom:
             - configMapRef:
-                name: {{ include "cistafirma.fullname" . }}-config
+                name: {{ include "cistafirma.fullname" $ }}-config
             - secretRef:
-                name: {{ include "cistafirma.existingSecret" . }}
+                name: {{ include "cistafirma.existingSecret" $ }}
+          command:
+            - sh
+            - -c
+            - |
+              until python -c "import urllib.parse as u, socket, os; url=u.urlparse(os.environ['DATABASE_URL']); s=socket.socket(); s.settimeout(3); s.connect((url.hostname, url.port or 5432)); s.close()" 2>/dev/null; do
+                echo "Waiting for Postgres..."
+                sleep 2
+              done
+              until python -c "import urllib.parse as u, socket, os; url=u.urlparse(os.environ['REDIS_URL']); s=socket.socket(); s.settimeout(3); s.connect((url.hostname, url.port or 6379)); s.close()" 2>/dev/null; do
+                echo "Waiting for Redis..."
+                sleep 2
+              done
+              until python manage.py migrate --check --settings=backend.settings 2>/dev/null; do
+                echo "Migrations pending, waiting..."
+                sleep 3
+              done
+      containers:
+        - name: celery-worker
+          image: {{ include "cistafirma.backendImage" $ }}
+          imagePullPolicy: {{ $.Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "cistafirma.fullname" $ }}-config
+            - secretRef:
+                name: {{ include "cistafirma.existingSecret" $ }}
           command:
             - sh
             - -c
             - >-
               celery -A backend worker
               -l info
-              -Q {{ .Values.celery.worker.queues }}
-              --concurrency={{ .Values.celery.worker.concurrency }}
+              -Q {{ $worker.queue }}
+              -n worker-{{ $name }}@%h
+              --concurrency={{ $worker.concurrency }}
           resources:
-            {{- toYaml .Values.celery.worker.resources | nindent 12 }}
-
+            {{- toYaml $worker.resources | nindent 12 }}
+{{- end }}
+{{- end }}

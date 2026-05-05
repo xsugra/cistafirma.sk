@@ -7,9 +7,9 @@ metadata:
     {{- include "cistafirma.labels" . | nindent 4 }}
     app.kubernetes.io/component: migrate
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
-    helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: {{ .Values.migrateJob.backoffLimit }}
   ttlSecondsAfterFinished: {{ .Values.migrateJob.ttlSecondsAfterFinished }}
@@ -20,6 +20,22 @@ spec:
         app.kubernetes.io/component: migrate
     spec:
       restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ include "cistafirma.backendImage" . }}
+          imagePullPolicy: {{ .Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+          envFrom:
+            - secretRef:
+                name: {{ include "cistafirma.existingSecret" . }}
+          command:
+            - sh
+            - -c
+            - |
+              until python -c "import urllib.parse as u, socket, os, sys; url=u.urlparse(os.environ['DATABASE_URL']); s=socket.socket(); s.settimeout(3); s.connect((url.hostname, url.port or 5432)); s.close()" 2>/dev/null; do
+                echo "Waiting for Postgres..."
+                sleep 2
+              done
+              echo "Postgres is up."
       containers:
         - name: migrate
           image: {{ include "cistafirma.backendImage" . }}
@@ -36,4 +52,3 @@ spec:
               python manage.py migrate --settings=backend.settings && \
               python manage.py collectstatic --noinput --settings=backend.settings
 {{- end }}
-
