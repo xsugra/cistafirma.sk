@@ -14,16 +14,18 @@ PERSON_SKIP_PREFIXES = (
     'prokurista',
 )
 
+
 class CompanyListSerializer(serializers.ModelSerializer):
     legal_form_short = serializers.CharField(source='get_legal_form_short', read_only=True)
-    
+
     class Meta:
         model = Company
         fields = [
-            'id', 'ico', 'ruz_id', 'nazov_UJ', 'mesto', 'ulica', 'psc', 
-            'pravna_forma', 'legal_form_short', 'datum_zalozenia', 
+            'id', 'ico', 'ruz_id', 'nazov_UJ', 'mesto', 'ulica', 'psc',
+            'pravna_forma', 'legal_form_short', 'datum_zalozenia',
             'tax_debt', 'debt_vszp', 'debt_soc_poist'
         ]
+
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
     legal_form = serializers.CharField(source='get_legal_form_display', read_only=True)
@@ -32,7 +34,6 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     connections = serializers.SerializerMethodField()
     orsr_profile = serializers.SerializerMethodField()
 
-    # Mapovanie na frontend format ak je to nutne, ale skusime poslat co najviac dat
     class Meta:
         model = Company
         fields = '__all__'
@@ -54,29 +55,56 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         except ObjectDoesNotExist:
             return None
 
+    def _get_structured(self, profile):
+        payload = getattr(profile, 'raw_payload', None) or {}
+        structured = payload.get('structured') if isinstance(payload, dict) else None
+        return structured or {}
+
     def get_executives(self, obj):
         profile = self._get_orsr_profile(obj)
         if not profile:
             return []
 
+        structured = self._get_structured(profile)
         executives = []
-        for name in self._extract_person_names(profile.statutarny_organ):
-            executives.append({'name': name, 'role': 'Konateľ'})
+        seen = set()
 
-        for name in self._extract_person_names(getattr(profile, 'prokura', [])):
-            executives.append({'name': name, 'role': 'Prokurista'})
+        def add(person, default_role):
+            name = (person.get('name') or '').strip() if isinstance(person, dict) else str(person or '').strip()
+            if not name:
+                return
+            key = re.sub(r'\W+', '', name.casefold())
+            if not key or key in seen:
+                return
+            seen.add(key)
+            role = ''
+            if isinstance(person, dict):
+                role = (person.get('role') or default_role).strip()
+            else:
+                role = default_role
+            executives.append({'name': name, 'role': role or default_role})
 
-        existing_names = {entry['name'] for entry in executives}
-        for name in self._extract_person_names(profile.spolocnici):
-            if name in existing_names:
-                continue
-            executives.append({'name': name, 'role': 'Spoločník'})
+        for person in structured.get('statutarny_organ', []):
+            add(person, 'Konateľ')
+        for person in structured.get('predstavenstvo', []):
+            add(person, 'Člen predstavenstva')
+        for person in structured.get('prokura', []):
+            add(person, 'Prokurista')
+        for person in structured.get('spolocnici', []):
+            add(person, 'Spoločník')
+
+        # Fallback na staré flat polia ak structured chýba
+        if not executives:
+            for name in self._extract_person_names(profile.statutarny_organ):
+                add(name, 'Konateľ')
+            for name in self._extract_person_names(getattr(profile, 'prokura', [])):
+                add(name, 'Prokurista')
+            for name in self._extract_person_names(profile.spolocnici):
+                add(name, 'Spoločník')
 
         return executives
 
     def get_connections(self, obj):
-        # Aktuálne prepojenia vraciame ako ORSR osoby naviazané na firmu.
-        # Neskôr je možné rozšíriť o cross-company graf medzi firmami.
         executives = self.get_executives(obj)
         status = 'Vymazaná' if obj.datum_zrusenia else 'Aktívna'
         return [
@@ -94,22 +122,19 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         if not profile:
             return None
 
-        # Detekuj typ ORSR (Sr, Sro, Dr, atď.)
-        oddiel_type = self._detect_oddiel_type(profile.oddiel)
-        
+        structured = self._get_structured(profile)
+        oddiel_type = (profile.oddiel_type or self._detect_oddiel_type(profile.oddiel) or '').lower()
+
         result = {
             'oddiel': profile.oddiel,
-            'oddiel_type': oddiel_type or profile.oddiel_type,
+            'oddiel_type': oddiel_type,
             'vlozka_cislo': profile.vlozka_cislo,
             'obchodne_meno': profile.obchodne_meno,
             'sidlo': profile.sidlo,
             'den_zapisu': profile.den_zapisu,
             'pravna_forma': profile.pravna_forma,
-            'konanie': profile.konanie,
-            'prokura': profile.prokura,
-            'spolocnici': profile.spolocnici,
-            'statutarny_organ': profile.statutarny_organ,
-            'vklady_spolocnikov': profile.vklady_spolocnikov,
+            'konanie': profile.konanie or structured.get('konanie') or profile.konanie_menom_spolocnosti,
+            'konanie_menom_spolocnosti': profile.konanie_menom_spolocnosti,
             'vyska_zakladneho_imania': profile.vyska_zakladneho_imania,
             'predmet_podnikania': profile.predmet_podnikania,
             'raw_sections': profile.raw_sections,
@@ -117,10 +142,17 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'orsr_datum_vypisu': profile.orsr_datum_vypisu,
             'fetch_ok': profile.fetch_ok,
             'last_error': profile.last_error,
+            # Strukturované dáta (bohaté, s adresami, rolami, vznikom funkcie)
+            'structured': structured,
+            # Spätne kompatibilné flat polia
+            'spolocnici': profile.spolocnici,
+            'statutarny_organ': profile.statutarny_organ,
+            'prokura': profile.prokura,
+            'vklady_spolocnikov': profile.vklady_spolocnikov,
         }
-        
-        # Pridaj polia pre družstvá ak existujú
-        if oddiel_type and oddiel_type.lower() == 'dr':
+
+        # Polia pre družstvá a osobitné typy
+        if oddiel_type == 'dr' or profile.predstavenstvo or profile.kontrolna_komisia:
             result.update({
                 'predstavenstvo': profile.predstavenstvo,
                 'kontrolna_komisia': profile.kontrolna_komisia,
@@ -128,47 +160,57 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 'zapisovane_zakladne_imanie': profile.zapisovane_zakladne_imanie,
                 'dalske_pravne_skutocnosti': profile.dalske_pravne_skutocnosti,
             })
-        
+
         return result
-    
-    def _detect_oddiel_type(self, oddiel_text: str) -> str:
-        """Detekuje typ ORSR z textu oddiel (Sr, Sro, Dr, atď.)"""
+
+    def _detect_oddiel_type(self, oddiel_text):
         if not oddiel_text:
             return ''
-        text = oddiel_text.strip().lower()
-        for variant in ['sr', 'sro', 'dr', 'vs', 'ks', 'as']:
-            if text == variant or text.startswith(variant):
-                return variant
-        return text.split()[0] if text else ''
+        return oddiel_text.strip().split()[0].lower()
 
     def _extract_person_names(self, raw_items):
         names = []
+        seen = set()
+
         for raw in raw_items or []:
             text = (raw or '').strip()
             if not text:
                 continue
 
-            # Split multiline records and pick the first line that looks like person name.
-            for line in text.split('\n'):
-                candidate = line.strip()
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            if not lines:
+                continue
+
+            if len(lines) == 1:
+                candidate = lines[0]
                 normalized = candidate.lower()
-                if not candidate:
-                    continue
                 if any(normalized.startswith(prefix) for prefix in PERSON_SKIP_PREFIXES):
                     continue
                 if re.search(r'\d', candidate):
                     continue
-                if len(candidate) < 3:
+                if len(candidate.split()) < 2:
                     continue
-                names.append(candidate)
-                break
-
-        deduped = []
-        seen = set()
-        for name in names:
-            if name in seen:
+                key = re.sub(r'\W+', '', candidate.casefold())
+                if key and key not in seen:
+                    seen.add(key)
+                    names.append(candidate)
                 continue
-            seen.add(name)
-            deduped.append(name)
-        return deduped
 
+            parts = []
+            for line in lines:
+                normalized = line.lower()
+                if any(normalized.startswith(prefix) for prefix in PERSON_SKIP_PREFIXES):
+                    break
+                if re.search(r'\d', line):
+                    break
+                parts.append(line)
+
+            candidate = ' '.join(parts).strip()
+            if len(candidate.split()) < 2:
+                continue
+            key = re.sub(r'\W+', '', candidate.casefold())
+            if key and key not in seen:
+                seen.add(key)
+                names.append(candidate)
+
+        return names

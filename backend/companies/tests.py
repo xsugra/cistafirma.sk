@@ -88,4 +88,100 @@ class CompanyDetailSerializerProkuraTests(TestCase):
 		self.assertIn(('Martin Močko', 'Konateľ'), roles)
 		self.assertIn(('Lukáš Jurica', 'Prokurista'), roles)
 
+	def test_executives_skip_fragmented_single_token_names(self):
+		self.company.orsr_profile.statutarny_organ = ['Ing.', 'Tomáš', 'Skřipský']
+		self.company.orsr_profile.prokura = ['Petr Bartoníček']
+		self.company.orsr_profile.spolocnici = ['Finance Services SK s. r. o.']
+		self.company.orsr_profile.save()
+
+		data = CompanyDetailSerializer(self.company).data
+		names = {item['name'] for item in data['executives']}
+
+		self.assertIn('Petr Bartoníček', names)
+		self.assertIn('Finance Services SK s. r. o.', names)
+		self.assertNotIn('Ing.', names)
+		self.assertNotIn('Tomáš', names)
+
+
+class CompanyDetailSerializerStructuredTests(TestCase):
+	"""Exercises the structured-data path (new parser output in raw_payload)."""
+
+	def setUp(self):
+		self.company = Company.objects.create(
+			ruz_id=999003,
+			ico='00207306',
+			nazov_UJ='Družstvo Test',
+		)
+		self.structured = {
+			'statutarny_organ_typ': 'predstavenstvo',
+			'statutarny_organ': [
+				{
+					'name': 'Ing. Martin Backo',
+					'title': '',
+					'role': 'predseda predstavenstva',
+					'address': 'Dúbravská 672/23, Veľký Krtíš 990 01',
+					'vznik_funkcie': '29.06.2022',
+					'person_ico': '',
+					'ine_id': '',
+				},
+			],
+			'predstavenstvo': [
+				{
+					'name': 'Ing. Martin Backo',
+					'role': 'predseda predstavenstva',
+					'address': 'Dúbravská 672/23, Veľký Krtíš 990 01',
+					'vznik_funkcie': '29.06.2022',
+				},
+			],
+			'kontrolna_komisia': [
+				{
+					'name': 'Mária Kováčová',
+					'role': 'člen kontrolnej komisie',
+					'address': 'Vedľajšia 2, Nitra 949 01',
+				},
+			],
+			'spolocnici': [],
+			'prokura': [],
+			'predmet_podnikania': [{'text': 'Kúpa tovaru', 'od': '29.06.2022'}],
+		}
+		OrsrCompanyProfile.objects.create(
+			company=self.company,
+			ico='00207306',
+			oddiel='Dr',
+			oddiel_type='dr',
+			vlozka_cislo='66/R',
+			obchodne_meno='Družstvo Test',
+			pravna_forma='Družstvo',
+			predstavenstvo=['Ing. Martin Backo'],
+			kontrolna_komisia=['Mária Kováčová'],
+			raw_payload={'structured': self.structured},
+		)
+
+	def test_orsr_profile_exposes_structured_payload(self):
+		data = CompanyDetailSerializer(self.company).data
+
+		self.assertIn('orsr_profile', data)
+		orsr = data['orsr_profile']
+		self.assertEqual(orsr['oddiel_type'], 'dr')
+
+		structured = orsr['structured']
+		self.assertEqual(len(structured['statutarny_organ']), 1)
+		self.assertEqual(
+			structured['statutarny_organ'][0]['address'],
+			'Dúbravská 672/23, Veľký Krtíš 990 01',
+		)
+		self.assertEqual(
+			structured['statutarny_organ'][0]['vznik_funkcie'], '29.06.2022'
+		)
+		self.assertEqual(len(structured['kontrolna_komisia']), 1)
+		self.assertEqual(
+			structured['kontrolna_komisia'][0]['name'], 'Mária Kováčová'
+		)
+
+	def test_executives_prefer_structured_over_flat_fields(self):
+		data = CompanyDetailSerializer(self.company).data
+		executives = {(item['name'], item['role']) for item in data['executives']}
+
+		self.assertIn(('Ing. Martin Backo', 'predseda predstavenstva'), executives)
+
 
