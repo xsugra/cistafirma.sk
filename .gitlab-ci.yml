@@ -58,7 +58,9 @@ docs_audit:
 
 helm_render_validate:
   stage: validate
-  image: alpine/helm:3.17.2
+  image:
+    name: alpine/helm:3.17.2
+    entrypoint: [""]
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -75,7 +77,9 @@ helm_render_validate:
 
 helm_k8s_validate:
   stage: validate
-  image: bitnami/kubectl:1.30
+  image:
+    name: bitnami/kubectl:1.30
+    entrypoint: [""]
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -172,7 +176,9 @@ build_frontend_image:
 
 .deploy_template:
   stage: deploy
-  image: bitnami/kubectl:1.30
+  image:
+    name: bitnami/kubectl:1.30
+    entrypoint: [""]
   before_script:
     - mkdir -p ~/.kube
     - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
