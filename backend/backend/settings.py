@@ -70,6 +70,7 @@ CUSTOM_APPS = [
     'registers',
     'analyses',
     'api',
+    'adminapi',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + CUSTOM_APPS
@@ -84,7 +85,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-
+    'adminapi.middleware.AuditLogMiddleware',
 ]
 
 ROOT_URLCONF = 'backend.urls'
