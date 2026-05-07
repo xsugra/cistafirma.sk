@@ -10,9 +10,11 @@ from .services import focus_mode as focus_mode_service
 
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
+    from unfold.decorators import display as unfold_display
     UNFOLD_AVAILABLE = True
 except ImportError:
     UnfoldModelAdmin = admin.ModelAdmin
+    unfold_display = admin.display
     UNFOLD_AVAILABLE = False
 
 
@@ -53,7 +55,7 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
     )
     ordering = ['-created_at']
 
-    @admin.display(description='Stav')
+    @unfold_display(description='Stav')
     def status_display(self, obj):
         css = f'cf-badge cf-badge--{obj.status}'
         labels = {
@@ -71,7 +73,7 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             css, label
         )
 
-    @admin.display(description='Statistiky')
+    @unfold_display(description='Statistiky')
     def stats_display(self, obj):
         return format_html(
             '<span style="font-variant-numeric:tabular-nums">'
@@ -79,7 +81,7 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             obj.total_missing, obj.total_gaps
         )
 
-    @admin.display(description='Oprava')
+    @unfold_display(description='Oprava')
     def progress_display(self, obj):
         if obj.total_missing == 0:
             return '-'
@@ -93,7 +95,7 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             fill_class, min(percentage, 100), percentage
         )
 
-    @admin.display(description='Top diery')
+    @unfold_display(description='Top diery')
     def top_gaps_display(self, obj):
         if not obj.gap_ranges:
             return 'Ziadne diery'
@@ -116,13 +118,13 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             mark_safe(''.join(rows))
         )
 
-    @admin.display(description='Diery (JSON)')
+    @unfold_display(description='Diery (JSON)')
     def gap_ranges_display(self, obj):
         if not obj.gap_ranges:
             return '[]'
         return f'{len(obj.gap_ranges)} rozsahov'
 
-    @admin.display(description='Akcie')
+    @unfold_display(description='Akcie')
     def actions_display(self, obj):
         buttons = []
         if obj.status == 'ready':
@@ -242,7 +244,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
     )
     ordering = ['-last_activity']
 
-    @admin.display(description='Typ')
+    @unfold_display(description='Typ')
     def sync_type_display(self, obj):
         type_labels = {
             'full': 'Full sync',
@@ -251,7 +253,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         }
         return type_labels.get(obj.sync_type, obj.sync_type)
 
-    @admin.display(description='Stav')
+    @unfold_display(description='Stav')
     def status_display(self, obj):
         css = f'cf-badge cf-badge--{obj.status}'
         labels = {
@@ -268,7 +270,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             css, label
         )
 
-    @admin.display(description='Progress')
+    @unfold_display(description='Progress')
     def progress_display(self, obj):
         percentage = obj.get_progress_percentage()
         fill_class = 'cf-progress__fill--emerald' if percentage > 80 else 'cf-progress__fill--blue' if percentage > 20 else 'cf-progress__fill--amber'
@@ -279,7 +281,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             fill_class, min(percentage, 100), percentage
         )
 
-    @admin.display(description='Statistiky')
+    @unfold_display(description='Statistiky')
     def stats_display(self, obj):
         return format_html(
             '<span style="font-size:12px;font-variant-numeric:tabular-nums">'
@@ -290,7 +292,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             f'!{obj.total_errors}' if obj.total_errors else '-'
         )
 
-    @admin.display(description='Rychlost')
+    @unfold_display(description='Rychlost')
     def rate_display(self, obj):
         rate = obj.get_rate()
         if rate > 0:
@@ -300,7 +302,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             )
         return '-'
 
-    @admin.display(description='Akcie')
+    @unfold_display(description='Akcie')
     def actions_display(self, obj):
         buttons = []
         if obj.status in ['paused', 'failed']:
@@ -313,7 +315,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
 
     # ── Readonly field displays ──
 
-    @admin.display(description='Progress bar')
+    @unfold_display(description='Progress bar')
     def progress_bar(self, obj):
         percentage = obj.get_progress_percentage()
         return format_html(
@@ -324,7 +326,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             min(percentage, 100), percentage, obj.total_processed
         )
 
-    @admin.display(description='Odhad dokoncenia')
+    @unfold_display(description='Odhad dokoncenia')
     def estimated_completion(self, obj):
         if obj.status != 'running':
             return '-'
@@ -341,7 +343,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             return f'~{hours_remaining:.1f} hod'
         return f'~{hours_remaining / 24:.1f} dni'
 
-    @admin.display(description='Suhrn statistik')
+    @unfold_display(description='Suhrn statistik')
     def sync_stats(self, obj):
         duration = obj.get_duration()
         duration_str = str(duration).split('.')[0] if duration else '-'
@@ -507,7 +509,7 @@ class SyncFocusModeStateAdmin(UnfoldModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-    @admin.display(description='Stav')
+    @unfold_display(description='Stav')
     def state_display(self, obj):
         if obj.active:
             return format_html(
@@ -519,7 +521,7 @@ class SyncFocusModeStateAdmin(UnfoldModelAdmin):
             '<span class="cf-badge__dot"></span>Neaktivny</span>'
         )
 
-    @admin.display(description='Vypnute periodic tasky')
+    @unfold_display(description='Vypnute periodic tasky')
     def snapshot_size_display(self, obj):
         count = len(obj.snapshot or [])
         if count > 0:
@@ -554,7 +556,7 @@ class OrsrCompanyProfileAdmin(UnfoldModelAdmin):
     list_filter = ['fetch_ok', 'oddiel']
     readonly_fields = ['last_synced_at', 'raw_sections', 'raw_payload']
 
-    @admin.display(description='Stav sync')
+    @unfold_display(description='Stav sync')
     def sync_status_display(self, obj):
         if obj.fetch_ok:
             return format_html(

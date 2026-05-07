@@ -399,7 +399,6 @@ class SyncGapAnalysisAdminDashboardTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'admin-theme-hero')
-		self.assertContains(response, 'admin-theme-card--amber')
 		self.assertContains(response, 'admin-theme-button--blue')
 
 

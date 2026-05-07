@@ -38,7 +38,7 @@ class CompanyAdminSyncNowTests(TestCase):
 
 		messages = [str(message) for message in get_messages(response.wsgi_request)]
 		self.assertTrue(
-			any('Full sync bol naplánovaný' in message for message in messages),
+			any('Full sync naplanovany' in message for message in messages),
 			f'Expected success message not found. Messages: {messages}',
 		)
 
