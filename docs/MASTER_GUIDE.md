@@ -535,3 +535,32 @@ make clean-pre-push-dry && make clean-pre-push && git push
 Viac otázok? Čítaj dokumentáciu v `scripts/` alebo `SAFE_PUSH_ACTION_PLAN.md` 📖
 
 
+
+## Príkazy na zapamätanie (do budúcna)
+
+  ### 1. Vytvorenie novej branch
+  git checkout -b feature/nazov main        # nová branch z main
+  git checkout -b feature/B feature/A       # nová branch z inej branch (závislosť)
+
+  ### 2. Pridanie konkrétnych súborov (NIE git add -A)
+  git add subor1.py subor2.py dir/
+
+  ### 3. Commit
+  git commit -m "feat(app): popis zmeny"
+
+  ### 4. Prvý push (nastaví tracking na remote)
+  git push -u gitlab feature/nazov
+
+  ### 5. Ďalšie pushe na tej istej branch
+  git push
+
+  ### 6. Prepnutie medzi branches
+  git checkout main                          # späť na main
+  git checkout feature/nazov                 # na existujúcu branch
+
+  ### 7. Stash — dočasné uloženie rozpracovaných zmien
+  git stash push -u -m "popis"              # ulož všetko (aj untracked)
+  git stash apply                            # obnov (stash zostane)
+  git stash pop                              # obnov a vymaž stash
+
+
