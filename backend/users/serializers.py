@@ -55,5 +55,8 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'username',
             'first_name',
             'last_name',
-            'subscription_plan'
+            'subscription_plan',
+            'is_staff',
+            'is_superuser',
         )
+        read_only_fields = ('is_staff', 'is_superuser')
