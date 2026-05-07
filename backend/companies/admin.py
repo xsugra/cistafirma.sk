@@ -280,11 +280,11 @@ class CompanyAdmin(UnfoldModelAdmin):
     @unfold_display(description='Stav')
     def status_display(self, obj):
         if obj.datum_zrusenia:
-            return format_html(
+            return mark_safe(
                 '<span class="cf-badge cf-badge--danger">'
                 '<span class="cf-badge__dot"></span>Zrusena</span>'
             )
-        return format_html(
+        return mark_safe(
             '<span class="cf-badge cf-badge--success">'
             '<span class="cf-badge__dot"></span>Aktivna</span>'
         )
@@ -306,7 +306,7 @@ class CompanyAdmin(UnfoldModelAdmin):
     @unfold_display(description='Dan. spolahlivost')
     def tax_reliability_display(self, obj):
         if not obj.tax_reliability:
-            return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
+            return mark_safe('<span class="cf-risk cf-risk--unknown">-</span>')
         mapping = {
             'vysoko spoľahlivý': ('cf-badge--success', 'Vysoko'),
             'spoľahlivý': ('cf-badge--info', 'OK'),
@@ -339,10 +339,10 @@ class CompanyAdmin(UnfoldModelAdmin):
                 f'{total_debt:,.0f}€'
             )
         if obj.last_insurance_debt:
-            return format_html(
+            return mark_safe(
                 '<span class="cf-badge cf-badge--success">OK</span>'
             )
-        return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
+        return mark_safe('<span class="cf-risk cf-risk--unknown">-</span>')
 
     @unfold_display(description='Data')
     def data_quality_display(self, obj):

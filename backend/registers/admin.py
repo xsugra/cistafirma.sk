@@ -512,11 +512,11 @@ class SyncFocusModeStateAdmin(UnfoldModelAdmin):
     @unfold_display(description='Stav')
     def state_display(self, obj):
         if obj.active:
-            return format_html(
+            return mark_safe(
                 '<span class="cf-badge cf-badge--danger">'
                 '<span class="cf-badge__dot"></span>Focus mode AKTIVNY</span>'
             )
-        return format_html(
+        return mark_safe(
             '<span class="cf-badge cf-badge--idle">'
             '<span class="cf-badge__dot"></span>Neaktivny</span>'
         )
@@ -559,13 +559,13 @@ class OrsrCompanyProfileAdmin(UnfoldModelAdmin):
     @unfold_display(description='Stav sync')
     def sync_status_display(self, obj):
         if obj.fetch_ok:
-            return format_html(
+            return mark_safe(
                 '<span class="cf-badge cf-badge--success">OK</span>'
             )
         if obj.fetch_ok is False:
-            return format_html(
+            return mark_safe(
                 '<span class="cf-badge cf-badge--danger">Chyba</span>'
             )
-        return format_html(
+        return mark_safe(
             '<span class="cf-badge cf-badge--idle">Neoverene</span>'
         )
