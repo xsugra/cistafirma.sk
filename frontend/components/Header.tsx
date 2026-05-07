@@ -85,6 +85,16 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
                                     </>
                                 ) : (
                                     <div className="flex items-center gap-3">
+                                        {user?.isStaff && (
+                                            <button
+                                                onClick={() => handleNav(ROUTES.ADMIN)}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors border bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-sm font-medium"
+                                                title="Admin panel"
+                                            >
+                                                <i className="fas fa-shield-alt text-xs"></i>
+                                                Admin
+                                            </button>
+                                        )}
                                         <button
                                             onClick={() => handleNav(ROUTES.PROFILE)}
                                             className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors border ${activeRoute === ROUTES.PROFILE ? 'bg-blue-100 dark:bg-blue-900 border-blue-500 text-blue-600 dark:text-blue-300' : 'bg-gray-100 dark:bg-slate-800 border-gray-200 dark:border-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-700'}`}
@@ -170,6 +180,14 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
                                     <p className="text-xs text-gray-500">{user?.email}</p>
                                 </div>
                             </div>
+                            {user?.isStaff && (
+                                <button
+                                    onClick={() => handleNav(ROUTES.ADMIN)}
+                                    className="btn w-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-800"
+                                >
+                                    <i className="fas fa-shield-alt mr-2"></i>Admin Panel
+                                </button>
+                            )}
                             <button
                                 onClick={() => handleNav(ROUTES.PROFILE)}
                                 className="btn btn-primary w-full"

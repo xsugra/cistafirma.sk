@@ -131,14 +131,13 @@ const mapUserResponse = (data) => {
         id: data.id,
         email: data.email,
         username: data.username,
-        // Backend returns first_name, frontend needs firstName
         firstName: data.first_name || '',
         lastName: data.last_name || '',
-        // Backend returns subscription_plan, frontend needs plan
         plan: data.subscription_plan || 'free',
-        // Fallbacks if backend doesn't send usage data yet
         apiCallsUsed: data.api_calls_used || 0,
-        apiCallsLimit: data.api_calls_limit || 10
+        apiCallsLimit: data.api_calls_limit || 10,
+        isStaff: Boolean(data.is_staff),
+        isSuperuser: Boolean(data.is_superuser),
     };
 };
 
