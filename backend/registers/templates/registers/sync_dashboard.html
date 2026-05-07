@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sync Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+    h1, h2 { margin-bottom: 8px; }
+    .muted { color: #666; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0 24px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; background: #fafafa; }
+    .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+    .actions { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    input[type="number"] { padding: 8px; width: 120px; }
+    button { padding: 9px 14px; border: 1px solid #222; border-radius: 6px; background: #222; color: #fff; cursor: pointer; }
+    button.secondary { background: #fff; color: #222; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 14px; }
+    th { background: #f2f2f2; text-align: left; }
+    .msg { padding: 10px; border-radius: 6px; margin: 8px 0; }
+    .msg.success { background: #e8f7ee; border: 1px solid #8fd3a8; }
+    .msg.error { background: #fdeaea; border: 1px solid #e7a0a0; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+    .focus { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .focus.active { border-color: #d97706; background: #fffbeb; }
+    .focus.inactive { border-color: #ddd; background: #fafafa; }
+    .focus h2 { margin-top: 0; }
+    .focus .status-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 12px; }
+    .focus .badge { padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+    .focus .badge.on { background: #fbbf24; color: #78350f; }
+    .focus .badge.off { background: #e5e7eb; color: #374151; }
+    .focus button.danger { background: #b91c1c; border-color: #b91c1c; }
+    .focus button.success { background: #047857; border-color: #047857; }
+    .focus details { margin-top: 8px; }
+    .focus ul { margin: 6px 0 0 18px; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+    .kv dt { color: #666; }
+    .kv dd { margin: 0; }
+  </style>
+</head>
+<body>
+  <h1>Manual Sync Dashboard</h1>
+  <p class="muted">Staff ovládanie pre ORSR + hospodárske výsledky. Spúšťa Celery tasky dávkovo.</p>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="msg {% if message.tags == 'error' %}error{% else %}success{% endif %}">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="focus {% if focus_mode.active %}active{% else %}inactive{% endif %}">
+    <div class="status-row">
+      <h2>Focus mode</h2>
+      {% if focus_mode.active %}
+        <span class="badge on">AKTÍVNY</span>
+      {% else %}
+        <span class="badge off">neaktívny</span>
+      {% endif %}
+    </div>
+
+    {% if focus_mode.active %}
+      <dl class="kv">
+        <dt>Aktivované</dt><dd>{{ focus_mode.activated_at|default:"—" }}</dd>
+        <dt>Aktivoval</dt><dd>{{ focus_mode.activated_by|default:"—" }}</dd>
+        <dt>Vypnuté periodic tasky</dt><dd>{{ focus_mode.snapshot_size }}</dd>
+        <dt>Naposledy revoknuté</dt><dd>{{ focus_mode.last_revoked_count }}</dd>
+      </dl>
+      <form method="post" style="margin-top: 12px;">
+        {% csrf_token %}
+        <button class="success" type="submit" name="action" value="exit_focus_mode">
+          Obnoviť normálny režim
+        </button>
+      </form>
+    {% else %}
+      <p class="muted">Zastaví všetky Celery tasky a periodic beat entries mimo zoznamu nižšie,
+        aby sa celý worker výkon sústredil na dotiahnutie ORSR profilov a hospodárskych výsledkov.</p>
+      <form method="post">
+        {% csrf_token %}
+        <button class="danger" type="submit" name="action" value="enter_focus_mode">
+          🛑 Zastaviť ostatné sync tasky (ORSR + financie only)
+        </button>
+      </form>
+    {% endif %}
+
+    <details>
+      <summary>Ponechané tasky ({{ focus_mode.keep_tasks|length }})</summary>
+      <ul>
+        {% for name in focus_mode.keep_tasks %}
+          <li><code>{{ name }}</code></li>
+        {% endfor %}
+      </ul>
+    </details>
+
+    <details>
+      <summary>
+        Živé tasky vo workeri
+        {% if not focus_mode.inspect_ok %}<em>(inspect nedostupný)</em>{% endif %}
+      </summary>
+      {% if focus_mode.active_by_name %}
+        <ul>
+          {% for name, count in focus_mode.active_by_name.items %}
+            <li><code>{{ name }}</code> × {{ count }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">Žiadne aktívne tasky.</p>
+      {% endif %}
+    </details>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div>Aktívne relevantné PO</div>
+      <div class="value">{{ eligible_total }}</div>
+    </div>
+    <div class="card">
+      <div>ORSR hotové</div>
+      <div class="value">{{ with_orsr }}</div>
+    </div>
+    <div class="card">
+      <div>ORSR chýba</div>
+      <div class="value">{{ missing_orsr }}</div>
+    </div>
+    <div class="card">
+      <div>Financials hotové</div>
+      <div class="value">{{ with_financials }}</div>
+    </div>
+    <div class="card">
+      <div>Financials chýba</div>
+      <div class="value">{{ missing_financials }}</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <h2>Spustiť sync</h2>
+    <p class="muted">Jedno kliknutie = ORSR + financials pre rovnakú dávku firiem.</p>
+
+    <form method="post">
+      {% csrf_token %}
+      <div class="row">
+        <label for="limit">Batch size:</label>
+        <input id="limit" name="limit" type="number" min="1" max="500000" value="200">
+        <button type="submit" name="action" value="start_full_manual_sync">Spustiť ORSR + Financials</button>
+        <button class="secondary" type="submit" name="action" value="start_orsr_only">Len ORSR</button>
+        <button class="secondary" type="submit" name="action" value="start_financials_only">Len Financials</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="split">
+    <div>
+      <h2>Posledné ORSR syncy</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>IČO</th>
+            <th>Firma</th>
+            <th>Synced</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in latest_orsr %}
+            <tr>
+              <td>{{ row.ico }}</td>
+              <td>{{ row.company.nazov_UJ }}</td>
+              <td>{{ row.last_synced_at }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3">Zatiaľ bez ORSR záznamov.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div>
+      <h2>Posledné financial rows</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>IČO</th>
+            <th>Rok</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in latest_financial_rows %}
+            <tr>
+              <td>{{ row.company.ico }}</td>
+              <td>{{ row.year }}</td>
+              <td>{{ row.updated_at }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3">Zatiaľ bez financial záznamov.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
+

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -423,3 +424,337 @@ class OrsrCompanyProfile(models.Model):
 
     def __str__(self):
         return f"ORSR {self.ico} - {self.obchodne_meno or self.company.nazov_UJ}"
+
+
+class SyncFocusModeState(models.Model):
+    """
+    Singleton-style (pk=1) toggle pre "Focus Mode":
+    zastaví všetky Celery tasky mimo whitelistu (ORSR + financials)
+    a vypne zodpovedajúce PeriodicTask entries v django-celery-beat.
+    """
+
+    active = models.BooleanField(default=False, verbose_name='Aktívny')
+    snapshot = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name='Snapshot vypnutých PeriodicTask',
+        help_text='Zoznam {"id": int, "enabled": bool} pre obnovu pri deaktivácii.',
+    )
+    last_revoked = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name='Naposledy revoknuté tasky',
+        help_text='Zoznam {"worker", "name", "id"} z posledného enter_focus_mode volania.',
+    )
+    activated_at = models.DateTimeField(null=True, blank=True, verbose_name='Aktivované o')
+    deactivated_at = models.DateTimeField(null=True, blank=True, verbose_name='Deaktivované o')
+    activated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+        verbose_name='Aktivoval',
+    )
+    notes = models.TextField(blank=True, default='', verbose_name='Poznámky')
+
+    class Meta:
+        verbose_name = 'Focus mode stav'
+        verbose_name_plural = 'Focus mode stav'
+
+    def __str__(self):
+        return 'Focus mode: ' + ('aktívny' if self.active else 'neaktívny')
+
+    @classmethod
+    def load(cls):
+        """Load singleton row (pk=1), creating it on first access."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+# ============================================================================
+# Admin overhaul: per-company sync status + structured job tracking + audit log.
+# Replaces / augments SyncProgress and SyncGapAnalysis above.
+# ============================================================================
+
+
+class CompanySyncStatus(models.Model):
+    """Per-company, per-source sync state.
+
+    One row per (company, source). Used by the new sync_engine to compute
+    retry schedules, surface failed companies in admin, and decide which
+    companies to refresh in batch tasks.
+    """
+
+    SOURCE_RUZ = "ruz"
+    SOURCE_ORSR = "orsr"
+    SOURCE_FINANCIALS = "financials"
+    SOURCE_VSZP = "vszp"
+    SOURCE_SOCIAL = "social"
+    SOURCE_FS = "fs"
+    SOURCE_CHOICES = [
+        (SOURCE_RUZ, "RUZ základné údaje"),
+        (SOURCE_ORSR, "ORSR profil"),
+        (SOURCE_FINANCIALS, "Finančné výkazy"),
+        (SOURCE_VSZP, "VšZP dlhy"),
+        (SOURCE_SOCIAL, "Sociálna poisťovňa"),
+        (SOURCE_FS, "Finančná správa"),
+    ]
+
+    ERROR_TYPE_CHOICES = [
+        ("", "—"),
+        ("http_429", "HTTP 429 (rate limit)"),
+        ("http_404", "HTTP 404 (not found)"),
+        ("http_5xx", "HTTP 5xx (server error)"),
+        ("timeout", "Timeout"),
+        ("parse_error", "Parsing chyba"),
+        ("network", "Sieťová chyba"),
+        ("validation", "Validačná chyba"),
+        ("unknown", "Neznáma"),
+    ]
+
+    company = models.ForeignKey(
+        "companies.Company",
+        on_delete=models.CASCADE,
+        related_name="sync_statuses",
+        verbose_name="Firma",
+    )
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        verbose_name="Zdroj",
+    )
+
+    last_attempted_at = models.DateTimeField(null=True, blank=True, verbose_name="Posledný pokus")
+    last_succeeded_at = models.DateTimeField(null=True, blank=True, verbose_name="Posledný úspech")
+    last_error = models.TextField(blank=True, default="", verbose_name="Posledná chyba")
+    last_error_type = models.CharField(
+        max_length=20,
+        choices=ERROR_TYPE_CHOICES,
+        blank=True,
+        default="",
+        verbose_name="Typ chyby",
+    )
+
+    consecutive_failures = models.PositiveIntegerField(default=0, verbose_name="Po sebe idúce chyby")
+    next_retry_at = models.DateTimeField(null=True, blank=True, verbose_name="Ďalší pokus o")
+    is_blocked = models.BooleanField(default=False, verbose_name="Manuálne zablokované")
+    blocked_reason = models.TextField(blank=True, default="", verbose_name="Dôvod blokovania")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Stav sync firmy"
+        verbose_name_plural = "Stavy sync firiem"
+        unique_together = [("company", "source")]
+        indexes = [
+            models.Index(fields=["source", "last_succeeded_at"], name="reg_css_source_succ_idx"),
+            models.Index(fields=["source", "consecutive_failures"], name="reg_css_source_fail_idx"),
+            models.Index(fields=["source", "next_retry_at"], name="reg_css_source_retry_idx"),
+            models.Index(fields=["is_blocked"], name="reg_css_blocked_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.company_id}/{self.source} (failures={self.consecutive_failures})"
+
+    @property
+    def is_healthy(self) -> bool:
+        return self.consecutive_failures == 0 and self.last_succeeded_at is not None
+
+
+class SyncJob(models.Model):
+    """A single sync run. Replaces SyncProgress with proper per-run tracking.
+
+    Each invocation of a bulk sync (full RUZ, ORSR batch, financial batch,
+    insurance check, FS update, manual one-off) creates a SyncJob row.
+    """
+
+    JOB_TYPE_CHOICES = [
+        ("ruz_full", "RUZ Full Sync"),
+        ("ruz_incremental", "RUZ Incremental"),
+        ("ruz_repair", "RUZ Repair (gap fill)"),
+        ("orsr_batch", "ORSR Batch"),
+        ("financials_batch", "Financials Batch"),
+        ("insurance_batch", "Insurance Debt Batch"),
+        ("fs_update", "Finančná správa"),
+        ("manual", "Manuálne (jedna firma)"),
+    ]
+
+    STATUS_CHOICES = [
+        ("queued", "Vo fronte"),
+        ("running", "Beží"),
+        ("paused", "Pozastavený"),
+        ("completed", "Dokončený"),
+        ("failed", "Zlyhalo"),
+        ("cancelled", "Zrušený"),
+    ]
+
+    TRIGGERED_VIA_CHOICES = [
+        ("admin_ui", "Admin UI"),
+        ("beat_schedule", "Beat scheduler"),
+        ("cli", "CLI / management command"),
+        ("api", "API"),
+        ("system", "Systém (watchdog, retry)"),
+    ]
+
+    job_type = models.CharField(max_length=30, choices=JOB_TYPE_CHOICES, verbose_name="Typ úlohy")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued", verbose_name="Stav")
+
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        verbose_name="Spustil",
+    )
+    triggered_via = models.CharField(
+        max_length=20,
+        choices=TRIGGERED_VIA_CHOICES,
+        default="system",
+        verbose_name="Spustené cez",
+    )
+    parameters = models.JSONField(default=dict, blank=True, verbose_name="Parametre")
+
+    total_items = models.PositiveIntegerField(null=True, blank=True, verbose_name="Celkový počet")
+    processed_items = models.PositiveIntegerField(default=0, verbose_name="Spracovaných")
+    succeeded_items = models.PositiveIntegerField(default=0, verbose_name="Úspešných")
+    failed_items = models.PositiveIntegerField(default=0, verbose_name="Chybných")
+    skipped_items = models.PositiveIntegerField(default=0, verbose_name="Preskočených")
+
+    queued_at = models.DateTimeField(auto_now_add=True, verbose_name="Vložené do fronty")
+    started_at = models.DateTimeField(null=True, blank=True, verbose_name="Spustené")
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name="Dokončené")
+    last_heartbeat = models.DateTimeField(null=True, blank=True, verbose_name="Posledný heartbeat")
+
+    last_error = models.TextField(blank=True, default="", verbose_name="Posledná chyba")
+    notes = models.TextField(blank=True, default="", verbose_name="Poznámky")
+    celery_task_id = models.CharField(max_length=255, blank=True, default="", verbose_name="Celery task ID")
+
+    class Meta:
+        verbose_name = "Sync úloha"
+        verbose_name_plural = "Sync úlohy"
+        ordering = ["-queued_at"]
+        indexes = [
+            models.Index(fields=["status", "job_type"], name="reg_sj_status_type_idx"),
+            models.Index(fields=["-queued_at"], name="reg_sj_queued_idx"),
+            models.Index(fields=["-started_at"], name="reg_sj_started_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_job_type_display()} #{self.pk} ({self.get_status_display()})"
+
+    @property
+    def progress_percentage(self) -> float:
+        if not self.total_items:
+            return 0.0
+        return round((self.processed_items / self.total_items) * 100, 1)
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if not self.started_at:
+            return None
+        end = self.completed_at or timezone.now()
+        return (end - self.started_at).total_seconds()
+
+    @property
+    def items_per_hour(self) -> float:
+        dur = self.duration_seconds
+        if not dur or dur <= 0:
+            return 0.0
+        return round(self.processed_items / (dur / 3600), 1)
+
+    def heartbeat(self):
+        """Bump last_heartbeat without saving the entire row."""
+        SyncJob.objects.filter(pk=self.pk).update(last_heartbeat=timezone.now())
+
+
+class SyncJobItem(models.Model):
+    """Per-item record inside a SyncJob. Acts as a dead-letter queue for failures."""
+
+    STATUS_CHOICES = [
+        ("pending", "Čaká"),
+        ("running", "Spracováva sa"),
+        ("success", "Úspech"),
+        ("failed", "Zlyhalo"),
+        ("skipped", "Preskočené"),
+    ]
+
+    job = models.ForeignKey(SyncJob, on_delete=models.CASCADE, related_name="items")
+    company = models.ForeignKey(
+        "companies.Company",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    item_key = models.CharField(max_length=64, verbose_name="Kľúč", help_text="ICO alebo RUZ ID")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    attempts = models.PositiveIntegerField(default=0)
+
+    error_message = models.TextField(blank=True, default="")
+    error_type = models.CharField(
+        max_length=20,
+        choices=CompanySyncStatus.ERROR_TYPE_CHOICES,
+        blank=True,
+        default="",
+    )
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Položka sync úlohy"
+        verbose_name_plural = "Položky sync úloh"
+        indexes = [
+            models.Index(fields=["job", "status"], name="reg_sji_job_status_idx"),
+            models.Index(fields=["status", "company"], name="reg_sji_status_comp_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.job_id}/{self.item_key} [{self.status}]"
+
+
+class AuditLog(models.Model):
+    """Append-only log of admin actions for accountability and debugging."""
+
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        verbose_name="Aktér",
+    )
+    action = models.CharField(
+        max_length=80,
+        verbose_name="Akcia",
+        help_text="napr. 'sync.trigger', 'company.update', 'user.deactivate'",
+    )
+    target_type = models.CharField(max_length=40, blank=True, default="", verbose_name="Typ cieľa")
+    target_id = models.CharField(max_length=64, blank=True, default="", verbose_name="ID cieľa")
+    payload = models.JSONField(default=dict, blank=True, verbose_name="Payload")
+
+    method = models.CharField(max_length=10, blank=True, default="", verbose_name="HTTP metóda")
+    path = models.CharField(max_length=255, blank=True, default="", verbose_name="URL cesta")
+    status_code = models.PositiveSmallIntegerField(null=True, blank=True, verbose_name="HTTP status")
+    ip_address = models.GenericIPAddressField(null=True, blank=True, verbose_name="IP adresa")
+    user_agent = models.TextField(blank=True, default="", verbose_name="User agent")
+
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Vytvorené")
+
+    class Meta:
+        verbose_name = "Audit log"
+        verbose_name_plural = "Audit log"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["-created_at"], name="reg_audit_created_idx"),
+            models.Index(fields=["actor", "-created_at"], name="reg_audit_actor_idx"),
+            models.Index(fields=["action", "-created_at"], name="reg_audit_action_idx"),
+            models.Index(fields=["target_type", "target_id"], name="reg_audit_target_idx"),
+        ]
+
+    def __str__(self):
+        actor = self.actor.email if self.actor_id else "system"
+        return f"{actor} → {self.action} [{self.target_type}:{self.target_id}]"
