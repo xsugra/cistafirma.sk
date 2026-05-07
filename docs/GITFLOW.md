@@ -1,7 +1,3 @@
-# Prispievanie do `cistafirma`
-
-Dakujeme, ze chces prispiet. Tento dokument definuje standard pre zmeny kodu, dokumentacie a release pripravy.
-
 ## 1. Vetvy a flow
 
 - feature prace rob na vetvach `feature/<scope>-<name>`
