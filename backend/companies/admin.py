@@ -10,7 +10,6 @@ from io import BytesIO
 from .models import Company, CompanyFinancialResult, LEGAL_FORMS_SHORT
 from registers.models import OrsrCompanyProfile
 
-# Import Unfold pre moderný admin
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
     from unfold.decorators import action as unfold_action
@@ -22,39 +21,29 @@ except ImportError:
 
 
 class LegalFormFilter(admin.SimpleListFilter):
-    title = 'Právna forma'
+    title = 'Pravna forma'
     parameter_name = 'pravna_forma'
 
     def lookups(self, request, model_admin):
-        # Bezpečne získame všetky unikátne právne formy pomocou Django ORM
         try:
-            # Použijeme values_list s distinct pre unikátne hodnoty
             used_forms_queryset = Company.objects.exclude(
                 pravna_forma__isnull=True
             ).exclude(
                 pravna_forma__exact=''
             ).values_list('pravna_forma', flat=True).distinct().order_by('pravna_forma')
-            
-            # Konvertujeme na set pre istotu a potom zoradíme
             used_forms = sorted(set(used_forms_queryset))
-            
             lookups = []
             for form_code in used_forms:
-                # Konvertujeme na string a očistíme
                 form_code_str = str(form_code).strip()
-                if form_code_str:  # Preskočíme prázdne hodnoty
-                    # Použijeme skratky pre filter
-                    form_short = LEGAL_FORMS_SHORT.get(form_code_str, f'Neznáma ({form_code_str})')
+                if form_code_str:
+                    form_short = LEGAL_FORMS_SHORT.get(form_code_str, f'Neznama ({form_code_str})')
                     lookups.append((form_code_str, f'{form_code_str} - {form_short}'))
-            
             return lookups
-            
-        except Exception as e:
-            # Ak sa niečo pokazí, vrátime aspoň základné formy
+        except Exception:
             return [
                 ('112', '112 - s. r. o.'),
                 ('121', '121 - a. s.'),
-                ('101', '101 - FO-podnikateľ'),
+                ('101', '101 - FO-podnikatel'),
                 ('111', '111 - v. o. s.'),
             ]
 
@@ -65,35 +54,70 @@ class LegalFormFilter(admin.SimpleListFilter):
 
 
 class RokZalozeniaFilter(admin.SimpleListFilter):
-    """Filter pre rok založenia firmy - umožňuje filtrovať firmy podľa roku vzniku."""
-    title = 'Rok založenia'
+    title = 'Rok zalozenia'
     parameter_name = 'rok_zalozenia'
 
     def lookups(self, request, model_admin):
         try:
-            # Získame všetky unikátne roky založenia z databázy
-            # datum_zalozenia je DateField, extrahujeme rok
             years_queryset = Company.objects.exclude(
                 datum_zalozenia__isnull=True
             ).dates('datum_zalozenia', 'year', order='DESC')
-            
-            lookups = []
-            for date_obj in years_queryset:
-                year = date_obj.year
-                lookups.append((str(year), str(year)))
-            
-            return lookups
-            
+            return [(str(d.year), str(d.year)) for d in years_queryset]
         except Exception:
-            # Fallback - vrátime posledných 30 rokov
             import datetime
             current_year = datetime.date.today().year
             return [(str(y), str(y)) for y in range(current_year, current_year - 30, -1)]
 
     def queryset(self, request, queryset):
         if self.value():
-            year = int(self.value())
-            return queryset.filter(datum_zalozenia__year=year)
+            return queryset.filter(datum_zalozenia__year=int(self.value()))
+        return queryset
+
+
+class HasDebtFilter(admin.SimpleListFilter):
+    title = 'Stav dlhov'
+    parameter_name = 'has_debt'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('yes', 'S dlhmi'),
+            ('no', 'Bez dlhov'),
+        ]
+
+    def queryset(self, request, queryset):
+        from django.db.models import Q
+        if self.value() == 'yes':
+            return queryset.filter(
+                Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
+            )
+        if self.value() == 'no':
+            return queryset.exclude(
+                Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
+            )
+        return queryset
+
+
+class DataCompletenessFilter(admin.SimpleListFilter):
+    title = 'Kompletnost dat'
+    parameter_name = 'data_completeness'
+
+    def lookups(self, request, model_admin):
+        return [
+            ('has_orsr', 'S ORSR profilom'),
+            ('no_orsr', 'Bez ORSR profilu'),
+            ('has_financials', 'S financnymi vysledkami'),
+            ('no_financials', 'Bez financnych vysledkov'),
+        ]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'has_orsr':
+            return queryset.filter(orsr_profile__isnull=False)
+        if self.value() == 'no_orsr':
+            return queryset.filter(orsr_profile__isnull=True)
+        if self.value() == 'has_financials':
+            return queryset.filter(financial_results__isnull=False).distinct()
+        if self.value() == 'no_financials':
+            return queryset.filter(financial_results__isnull=True)
         return queryset
 
 
@@ -111,7 +135,7 @@ class OrsrCompanyProfileInline(admin.StackedInline):
         'last_synced_at', 'raw_sections', 'raw_payload',
     ]
     fieldsets = (
-        ('ORSR základ', {
+        ('ORSR zaklad', {
             'fields': (
                 ('ico', 'oddiel', 'vlozka_cislo'),
                 'obchodne_meno',
@@ -119,11 +143,11 @@ class OrsrCompanyProfileInline(admin.StackedInline):
                 ('den_zapisu', 'pravna_forma'),
             ),
         }),
-        ('ORSR osoby a väzby', {
+        ('ORSR osoby a vazby', {
             'fields': ('statutarny_organ', 'prokura', 'spolocnici', 'vklady_spolocnikov'),
             'classes': ('collapse',),
         }),
-        ('ORSR podnikanie a kapitál', {
+        ('ORSR podnikanie a kapital', {
             'fields': ('predmet_podnikania', 'konanie_menom_spolocnosti', 'vyska_zakladneho_imania'),
             'classes': ('collapse',),
         }),
@@ -151,60 +175,47 @@ class CompanyFinancialResultInline(admin.TabularInline):
 
 @admin.register(Company)
 class CompanyAdmin(UnfoldModelAdmin):
-    """
-    Profesionálne admin rozhranie pre správu firiem.
-    Zahŕňa vyhľadávanie, filtrovanie, custom akcie pre RUZ sync a kontrolu dlhov.
-    """
-    
-    # === LIST DISPLAY ===
     list_display = [
-        'ico', 'nazov_UJ', 'mesto', 'legal_form_display', 
-        'datum_zalozenia', 'datum_zrusenia_display',
+        'ico', 'nazov_UJ', 'mesto', 'legal_form_display',
+        'datum_zalozenia', 'status_display',
         'vat_payer_display', 'tax_reliability_display',
-        'debt_status_display', 'datum_poslednej_upravy',
+        'risk_display', 'data_quality_display',
+        'datum_poslednej_upravy',
     ]
-    
+
     list_display_links = ['ico', 'nazov_UJ']
     inlines = [OrsrCompanyProfileInline, CompanyFinancialResultInline]
     change_form_template = 'admin/companies/company/change_form.html'
 
-    # === SEARCH ===
     search_fields = [
         'ico', 'nazov_UJ', 'dic', 'ic_dph', 'mesto', 'ulica', 'ruz_id',
     ]
-    search_help_text = "Vyhľadávanie podľa IČO, názvu, DIČ, IČ DPH, mesta, ulice alebo RUZ ID"
-    
-    # === FILTERING ===
+    search_help_text = "Hladanie: ICO, nazov, DIC, IC DPH, mesto, ulica, RUZ ID"
+
     list_filter = [
-        LegalFormFilter,  # Nahradíme obyčajný filter za custom filter
-        RokZalozeniaFilter,  # Filter podľa roku založenia
+        LegalFormFilter,
+        RokZalozeniaFilter,
+        HasDebtFilter,
+        DataCompletenessFilter,
         'kraj',
         'velkost_organizacie',
         'vat_payer',
         'tax_reliability',
         'konsolidovana',
-        ('datum_zrusenia', admin.EmptyFieldListFilter),  # Aktívne/Zrušené firmy
-        ('debt_vszp', admin.EmptyFieldListFilter),
-        ('debt_soc_poist', admin.EmptyFieldListFilter),
-        ('tax_debt', admin.EmptyFieldListFilter),
+        ('datum_zrusenia', admin.EmptyFieldListFilter),
     ]
-    
-    # === ORDERING ===
+
     ordering = ['-datum_poslednej_upravy', 'nazov_UJ']
-    
-    # === PAGINATION ===
     list_per_page = 50
     list_max_show_all = 500
-    
-    # === READONLY FIELDS ===
+
     readonly_fields = [
         'ruz_id', 'datum_poslednej_upravy', 'last_insurance_debt', 'fs_update_date',
         'id_uctovnych_zavierok', 'id_vyrocnych_sprav',
     ]
-    
-    # === FIELDSETS ===
+
     fieldsets = (
-        ('Základné údaje', {
+        ('Zakladne udaje', {
             'fields': (
                 ('ico', 'dic', 'sid'),
                 'nazov_UJ',
@@ -218,20 +229,20 @@ class CompanyAdmin(UnfoldModelAdmin):
                 'sidlo',
             )
         }),
-        ('Klasifikácia', {
+        ('Klasifikacia', {
             'fields': (
                 ('pravna_forma', 'sk_NACE'),
                 ('velkost_organizacie', 'druh_vlastnictva'),
                 'konsolidovana',
             )
         }),
-        ('Dátumy', {
+        ('Datumy', {
             'fields': (
                 ('datum_zalozenia', 'datum_zrusenia'),
                 'datum_poslednej_upravy',
             )
         }),
-        ('DPH a Finančná správa', {
+        ('DPH a Financna sprava', {
             'fields': (
                 ('vat_payer', 'ic_dph'),
                 ('datum_reg_dph', 'vat_deleted_date'),
@@ -243,77 +254,128 @@ class CompanyAdmin(UnfoldModelAdmin):
             ),
             'classes': ('collapse',),
         }),
-        ('Dlhy v poisťovniach', {
+        ('Dlhy v poistovniach', {
             'fields': (
                 ('debt_vszp', 'debt_soc_poist'),
                 'last_insurance_debt',
             ),
             'classes': ('collapse',),
         }),
-        ('Účtovné závierky a Výročné správy', {
+        ('Uctovne zavierky a Vyrocne spravy', {
             'fields': (
                 'id_uctovnych_zavierok',
                 'id_vyrocnych_sprav',
             ),
             'classes': ('collapse',),
         }),
-        ('Zdroj dát', {
+        ('Zdroj dat', {
             'fields': ('zdroj_dat',),
             'classes': ('collapse',),
         }),
     )
-    
-    # === CUSTOM DISPLAY METHODS ===
-    @admin.display(description='Zrušená', boolean=True)
-    def datum_zrusenia_display(self, obj):
-        return obj.datum_zrusenia is not None
-    
-    @admin.display(description='Platiteľ DPH', boolean=True)
+
+    # ── Display Methods ──
+
+    @admin.display(description='Stav')
+    def status_display(self, obj):
+        if obj.datum_zrusenia:
+            return format_html(
+                '<span class="cf-badge cf-badge--danger">'
+                '<span class="cf-badge__dot"></span>Zrusena</span>'
+            )
+        return format_html(
+            '<span class="cf-badge cf-badge--success">'
+            '<span class="cf-badge__dot"></span>Aktivna</span>'
+        )
+
+    @admin.display(description='DPH', boolean=True)
     def vat_payer_display(self, obj):
         return obj.vat_payer
-    
-    @admin.display(description='Právna forma')
+
+    @admin.display(description='Pravna forma')
     def legal_form_display(self, obj):
         if not obj.pravna_forma:
             return '-'
-        form_short = LEGAL_FORMS_SHORT.get(str(obj.pravna_forma), 'Neznáma')
-        return f"{obj.pravna_forma} - {form_short}"
-    
-    @admin.display(description='Daňová spoľahlivosť')
+        form_short = LEGAL_FORMS_SHORT.get(str(obj.pravna_forma), '?')
+        return format_html(
+            '<span title="{}">{}</span>',
+            f'{obj.pravna_forma}', form_short
+        )
+
+    @admin.display(description='Dan. spolahlivost')
     def tax_reliability_display(self, obj):
         if not obj.tax_reliability:
-            return '-'
-        colors = {
-            'vysoko spoľahlivý': 'green',
-            'spoľahlivý': 'blue', 
-            'nespoľahlivý': 'red',
+            return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
+        mapping = {
+            'vysoko spoľahlivý': ('cf-badge--success', 'Vysoko'),
+            'spoľahlivý': ('cf-badge--info', 'OK'),
+            'nespoľahlivý': ('cf-badge--danger', 'Nespolahlivy'),
         }
-        color = colors.get(obj.tax_reliability.lower(), 'gray')
-        return format_html(
-            '<span style="color: {}; font-weight: bold;">{}</span>',
-            color, obj.tax_reliability
-        )
-    
-    @admin.display(description='Stav dlhov')
-    def debt_status_display(self, obj):
-        debts = []
+        css, label = mapping.get(obj.tax_reliability.lower(), ('cf-badge--idle', obj.tax_reliability))
+        return format_html('<span class="cf-badge {}">{}</span>', css, label)
+
+    @admin.display(description='Riziko')
+    def risk_display(self, obj):
+        issues = []
+        total_debt = 0
         if obj.debt_vszp and obj.debt_vszp > 0:
-            debts.append(f'VŠZP: {obj.debt_vszp}€')
+            issues.append(f'VSZP {obj.debt_vszp:,.0f}&euro;')
+            total_debt += obj.debt_vszp
         if obj.debt_soc_poist and obj.debt_soc_poist > 0:
-            debts.append(f'SP: {obj.debt_soc_poist}€')
+            issues.append(f'SP {obj.debt_soc_poist:,.0f}&euro;')
+            total_debt += obj.debt_soc_poist
         if obj.tax_debt and obj.tax_debt > 0:
-            debts.append(f'Dane: {obj.tax_debt}€')
-        
-        if debts:
+            issues.append(f'Dan {obj.tax_debt:,.0f}&euro;')
+            total_debt += obj.tax_debt
+
+        if issues:
+            level = 'cf-badge--danger' if total_debt > 1000 else 'cf-badge--warning'
             return format_html(
-                '<span style="color: red;">{}</span>',
-                ', '.join(debts)
+                '<span class="{}" title="{}">'
+                '<span class="cf-badge__dot"></span>{}</span>',
+                f'cf-badge {level}',
+                ', '.join(issues).replace('&euro;', '€'),
+                f'{total_debt:,.0f}€'
             )
-        elif obj.last_insurance_debt:
-            return mark_safe('<span style="color: green;">✓ OK</span>')
-        return '-'
-    
-    # === ADMIN ACTIONS ===
+        if obj.last_insurance_debt:
+            return format_html(
+                '<span class="cf-badge cf-badge--success">OK</span>'
+            )
+        return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
+
+    @admin.display(description='Data')
+    def data_quality_display(self, obj):
+        parts = []
+        has_orsr = hasattr(obj, 'orsr_profile') and obj.orsr_profile is not None
+        try:
+            has_orsr = obj.orsr_profile is not None
+        except OrsrCompanyProfile.DoesNotExist:
+            has_orsr = False
+
+        has_financials = obj.financial_results.exists() if hasattr(obj, 'financial_results') else False
+
+        if has_orsr:
+            parts.append('<span title="ORSR profil" style="color:var(--cf-emerald-500)">OR</span>')
+        else:
+            parts.append('<span title="Chyba ORSR" style="color:var(--cf-slate-300)">OR</span>')
+
+        if has_financials:
+            parts.append('<span title="Financne vysledky" style="color:var(--cf-emerald-500)">FIN</span>')
+        else:
+            parts.append('<span title="Chybaju financie" style="color:var(--cf-slate-300)">FIN</span>')
+
+        if obj.vat_payer is not None:
+            parts.append('<span title="DPH info" style="color:var(--cf-emerald-500)">DPH</span>')
+        else:
+            parts.append('<span title="Chyba DPH" style="color:var(--cf-slate-300)">DPH</span>')
+
+        return format_html(
+            '<span style="font-size:11px;font-weight:600;display:flex;gap:4px;">{}</span>',
+            mark_safe(' '.join(parts))
+        )
+
+    # ── Actions ──
+
     actions = [
         'sync_from_ruz',
         'sync_from_orsr',
@@ -326,74 +388,50 @@ class CompanyAdmin(UnfoldModelAdmin):
         'export_filtered_to_csv',
         'export_filtered_to_xlsx',
     ]
-    
-    @admin.action(description='🔄 Synchronizovať z RUZ API')
+
+    @admin.action(description='Sync z RUZ API')
     def sync_from_ruz(self, request, queryset):
         from registers.tasks import sync_single_company_from_ruz
         count = 0
         for company in queryset:
             sync_single_company_from_ruz.delay(company.ico)
             count += 1
-        self.message_user(
-            request, 
-            f'Naplánovaná synchronizácia z RUZ pre {count} firiem.',
-            messages.SUCCESS
-        )
+        self.message_user(request, f'Naplanovana synchronizacia z RUZ pre {count} firiem.', messages.SUCCESS)
 
-    @admin.action(description='🏛️ Synchronizovať údaje z ORSR')
+    @admin.action(description='Sync z ORSR')
     def sync_from_orsr(self, request, queryset):
         from registers.tasks import sync_company_orsr_data
-
         count = 0
         for company in queryset:
             sync_company_orsr_data.delay(company.id)
             count += 1
-        self.message_user(
-            request,
-            f'Naplánovaná synchronizácia z ORSR pre {count} firiem.',
-            messages.SUCCESS
-        )
+        self.message_user(request, f'Naplanovana synchronizacia z ORSR pre {count} firiem.', messages.SUCCESS)
 
-    @admin.action(description='📈 Synchronizovať hospodárske výsledky z RUZ')
+    @admin.action(description='Sync hosp. vysledky z RUZ')
     def sync_financials_from_ruz(self, request, queryset):
         from registers.tasks import sync_company_financials_from_ruz
-
         count = 0
         for company in queryset:
             sync_company_financials_from_ruz.delay(company.id)
             count += 1
+        self.message_user(request, f'Naplanovana synchronizacia hosp. vysledkov pre {count} firiem.', messages.SUCCESS)
 
-        self.message_user(
-            request,
-            f'Naplánovaná synchronizácia hospodárskych výsledkov pre {count} firiem.',
-            messages.SUCCESS,
-        )
-
-    @admin.action(description='🏥 Skontrolovať dlhy v poisťovniach')
+    @admin.action(description='Kontrola dlhov v poistovniach')
     def check_insurance_debts(self, request, queryset):
         from registers.tasks import update_insurance_debt
         count = 0
         for company in queryset:
             update_insurance_debt.delay(company.id)
             count += 1
-        self.message_user(
-            request,
-            f'Naplánovaná kontrola dlhov pre {count} firiem.',
-            messages.SUCCESS
-        )
-    
-    @admin.action(description='📊 Aktualizovať z Finančnej správy')
+        self.message_user(request, f'Naplanovana kontrola dlhov pre {count} firiem.', messages.SUCCESS)
+
+    @admin.action(description='Aktualizovat z Financnej spravy')
     def check_fs_data(self, request, queryset):
-        # FS update funguje cez hromadný príkaz, tu len oznámime
         from registers.tasks import update_fs_data_task
         update_fs_data_task.delay()
-        self.message_user(
-            request,
-            'Spustená aktualizácia z Finančnej správy pre všetky firmy.',
-            messages.SUCCESS
-        )
-    
-    @admin.action(description='🔄 Kompletný refresh všetkých dát')
+        self.message_user(request, 'Spustena aktualizacia z Financnej spravy.', messages.SUCCESS)
+
+    @admin.action(description='Kompletny refresh dat')
     def refresh_all_data(self, request, queryset):
         from registers.tasks import (
             sync_single_company_from_ruz,
@@ -408,38 +446,34 @@ class CompanyAdmin(UnfoldModelAdmin):
             sync_company_financials_from_ruz.delay(company.id)
             update_insurance_debt.delay(company.id)
             count += 1
-        self.message_user(
-            request,
-            f'Naplánovaný kompletný refresh pre {count} firiem.',
-            messages.SUCCESS
-        )
-    
-    # === EXPORT FIELDS DEFINITION ===
+        self.message_user(request, f'Naplanovany kompletny refresh pre {count} firiem.', messages.SUCCESS)
+
+    # ── Export Fields ──
+
     EXPORT_FIELDS = [
-        ('ico', 'IČO'),
-        ('nazov_UJ', 'Názov'),
-        ('dic', 'DIČ'),
-        ('ic_dph', 'IČ DPH'),
+        ('ico', 'ICO'),
+        ('nazov_UJ', 'Nazov'),
+        ('dic', 'DIC'),
+        ('ic_dph', 'IC DPH'),
         ('ulica', 'Ulica'),
         ('mesto', 'Mesto'),
-        ('psc', 'PSČ'),
+        ('psc', 'PSC'),
         ('okres', 'Okres'),
         ('kraj', 'Kraj'),
-        ('pravna_forma', 'Právna forma'),
+        ('pravna_forma', 'Pravna forma'),
         ('sk_NACE', 'SK NACE'),
-        ('velkost_organizacie', 'Veľkosť organizácie'),
-        ('datum_zalozenia', 'Dátum založenia'),
-        ('datum_zrusenia', 'Dátum zrušenia'),
-        ('vat_payer', 'Platiteľ DPH'),
-        ('tax_reliability', 'Daňová spoľahlivosť'),
-        ('tax_debt', 'Daňový dlh'),
-        ('debt_vszp', 'Dlh VŠZP'),
-        ('debt_soc_poist', 'Dlh Sociálna poisťovňa'),
-        ('datum_poslednej_upravy', 'Posledná aktualizácia'),
+        ('velkost_organizacie', 'Velkost organizacie'),
+        ('datum_zalozenia', 'Datum zalozenia'),
+        ('datum_zrusenia', 'Datum zrusenia'),
+        ('vat_payer', 'Platitel DPH'),
+        ('tax_reliability', 'Danova spolahlivost'),
+        ('tax_debt', 'Danovy dlh'),
+        ('debt_vszp', 'Dlh VSZP'),
+        ('debt_soc_poist', 'Dlh Socialna poistovna'),
+        ('datum_poslednej_upravy', 'Posledna aktualizacia'),
     ]
-    
+
     def _get_export_data(self, queryset):
-        """Helper to extract export data from queryset."""
         data = []
         for company in queryset:
             row = []
@@ -448,17 +482,13 @@ class CompanyAdmin(UnfoldModelAdmin):
                 if value is None:
                     value = ''
                 elif isinstance(value, bool):
-                    value = 'Áno' if value else 'Nie'
+                    value = 'Ano' if value else 'Nie'
                 row.append(value)
             data.append(row)
         return data
-    
+
     def get_filtered_queryset(self, request):
-        """Get the filtered queryset that matches the current admin changelist view."""
-        # Start with all companies
         queryset = Company.objects.all()
-        
-        # Apply search filter
         search_query = request.GET.get('q', '')
         if search_query:
             from django.db.models import Q
@@ -471,8 +501,6 @@ class CompanyAdmin(UnfoldModelAdmin):
                 Q(ulica__icontains=search_query) |
                 Q(ruz_id__icontains=search_query)
             )
-        
-        # Apply list filters from GET parameters
         filter_mappings = {
             'pravna_forma__exact': 'pravna_forma',
             'kraj__exact': 'kraj',
@@ -480,14 +508,13 @@ class CompanyAdmin(UnfoldModelAdmin):
             'vat_payer__exact': 'vat_payer',
             'tax_reliability__exact': 'tax_reliability',
             'konsolidovana__exact': 'konsolidovana',
-            'pravna_forma': 'pravna_forma',  # pre jednoduché filtre
+            'pravna_forma': 'pravna_forma',
             'kraj': 'kraj',
             'velkost_organizacie': 'velkost_organizacie',
             'vat_payer': 'vat_payer',
             'tax_reliability': 'tax_reliability',
             'konsolidovana': 'konsolidovana',
         }
-        
         for param, field in filter_mappings.items():
             value = request.GET.get(param)
             if value and value != 'all':
@@ -497,182 +524,118 @@ class CompanyAdmin(UnfoldModelAdmin):
                     queryset = queryset.filter(**{field: False})
                 else:
                     queryset = queryset.filter(**{field: value})
-        
-        # Handle EmptyFieldListFilter (isnull filters)
         isnull_mappings = {
             'datum_zrusenia__isempty': 'datum_zrusenia__isnull',
             'debt_vszp__isempty': 'debt_vszp__isnull',
             'debt_soc_poist__isempty': 'debt_soc_poist__isnull',
             'tax_debt__isempty': 'tax_debt__isnull',
         }
-        
         for param, filter_field in isnull_mappings.items():
             value = request.GET.get(param)
-            if value == '1':  # "Yes" = field is empty/null
+            if value == '1':
                 queryset = queryset.filter(**{filter_field: True})
-            elif value == '0':  # "No" = field has value
+            elif value == '0':
                 queryset = queryset.filter(**{filter_field: False})
-        
-        # Handle ordering
-        ordering = request.GET.get('o')
-        if ordering:
-            try:
-                # Convert admin ordering parameter to Django field names
-                order_fields = []
-                for field_idx in ordering.split('.'):
-                    if field_idx.startswith('-'):
-                        desc = True
-                        field_idx = field_idx[1:]
-                    else:
-                        desc = False
-                    
-                    field_idx = int(field_idx)
-                    if 0 <= field_idx < len(self.list_display):
-                        field_name = self.list_display[field_idx]
-                        if desc:
-                            field_name = f'-{field_name}'
-                        order_fields.append(field_name)
-                
-                if order_fields:
-                    queryset = queryset.order_by(*order_fields)
-            except (ValueError, IndexError):
-                pass
-        
         return queryset
-    
-    @admin.action(description='📥 Exportovať vybrané do CSV')
+
+    @admin.action(description='Export vybranych do CSV')
     def export_to_csv(self, request, queryset):
         response = HttpResponse(content_type='text/csv; charset=utf-8')
         response['Content-Disposition'] = 'attachment; filename="firmy_export.csv"'
-        response.write('\ufeff')  # BOM for Excel UTF-8 support
-        
+        response.write('﻿')
         writer = csv.writer(response, delimiter=';')
         writer.writerow([label for _, label in self.EXPORT_FIELDS])
-        
         for row in self._get_export_data(queryset):
             writer.writerow(row)
-        
-        self.message_user(request, f'Exportovaných {queryset.count()} firiem do CSV.', messages.SUCCESS)
+        self.message_user(request, f'Exportovanych {queryset.count()} firiem do CSV.', messages.SUCCESS)
         return response
-    
-    @admin.action(description='📥 Exportovať všetky filtrované do CSV')
+
+    @admin.action(description='Export vsetkych filtrovanych do CSV')
     def export_filtered_to_csv(self, request, queryset):
-        """Export all filtered results from changelist to CSV"""
-        # Get the same filtered queryset that admin is currently displaying
         filtered_queryset = self.get_filtered_queryset(request)
-        
         response = HttpResponse(content_type='text/csv; charset=utf-8')
         response['Content-Disposition'] = 'attachment; filename="firmy_filtrovane_export.csv"'
-        response.write('\ufeff')  # BOM for Excel UTF-8 support
-        
+        response.write('﻿')
         writer = csv.writer(response, delimiter=';')
         writer.writerow([label for _, label in self.EXPORT_FIELDS])
-        
         for row in self._get_export_data(filtered_queryset):
             writer.writerow(row)
-        
-        self.message_user(request, f'Exportovaných {filtered_queryset.count()} filtrovaných firiem do CSV.', messages.SUCCESS)
+        self.message_user(request, f'Exportovanych {filtered_queryset.count()} filtrovanych firiem do CSV.', messages.SUCCESS)
         return response
-    
-    @admin.action(description='📥 Exportovať vybrané do XLSX')
+
+    @admin.action(description='Export vybranych do XLSX')
     def export_to_xlsx(self, request, queryset):
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill
         except ImportError:
-            self.message_user(request, 'Chýba knižnica openpyxl. Nainštalujte: pip install openpyxl', messages.ERROR)
+            self.message_user(request, 'Chyba kniznica openpyxl. Nainstalujte: pip install openpyxl', messages.ERROR)
             return
-        
         wb = Workbook()
         ws = wb.active
         ws.title = 'Firmy'
-        
-        # Header row with styling
         header_font = Font(bold=True)
         header_fill = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')
-        
         headers = [label for _, label in self.EXPORT_FIELDS]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
             cell.fill = header_fill
-        
-        # Data rows
         for row_idx, row_data in enumerate(self._get_export_data(queryset), 2):
             for col_idx, value in enumerate(row_data, 1):
                 ws.cell(row=row_idx, column=col_idx, value=str(value) if value else '')
-        
-        # Auto-adjust column widths
         for col in ws.columns:
             max_length = max(len(str(cell.value or '')) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
-        
-        # Create response
         output = BytesIO()
         wb.save(output)
         output.seek(0)
-        
         response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = 'attachment; filename="firmy_export.xlsx"'
-        
-        self.message_user(request, f'Exportovaných {queryset.count()} firiem do XLSX.', messages.SUCCESS)
+        self.message_user(request, f'Exportovanych {queryset.count()} firiem do XLSX.', messages.SUCCESS)
         return response
-    
-    @admin.action(description='📥 Exportovať všetky filtrované do XLSX')
+
+    @admin.action(description='Export vsetkych filtrovanych do XLSX')
     def export_filtered_to_xlsx(self, request, queryset):
-        """Export all filtered results from changelist to XLSX"""
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill
         except ImportError:
-            self.message_user(request, 'Chýba knižnica openpyxl. Nainštalujte: pip install openpyxl', messages.ERROR)
+            self.message_user(request, 'Chyba kniznica openpyxl. Nainstalujte: pip install openpyxl', messages.ERROR)
             return
-        
-        # Get the same filtered queryset that admin is currently displaying
         filtered_queryset = self.get_filtered_queryset(request)
-        
         wb = Workbook()
         ws = wb.active
         ws.title = 'Firmy'
-        
-        # Header row with styling
         header_font = Font(bold=True)
         header_fill = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')
-        
         headers = [label for _, label in self.EXPORT_FIELDS]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
             cell.fill = header_fill
-        
-        # Data rows
         for row_idx, row_data in enumerate(self._get_export_data(filtered_queryset), 2):
             for col_idx, value in enumerate(row_data, 1):
                 ws.cell(row=row_idx, column=col_idx, value=str(value) if value else '')
-        
-        # Auto-adjust column widths
         for col in ws.columns:
             max_length = max(len(str(cell.value or '')) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
-        
-        # Create response
         output = BytesIO()
         wb.save(output)
         output.seek(0)
-        
         response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = 'attachment; filename="firmy_filtrovane_export.xlsx"'
-        
-        self.message_user(request, f'Exportovaných {filtered_queryset.count()} filtrovaných firiem do XLSX.', messages.SUCCESS)
+        self.message_user(request, f'Exportovanych {filtered_queryset.count()} filtrovanych firiem do XLSX.', messages.SUCCESS)
         return response
-    
-    # === CUSTOM ADMIN VIEWS ===
+
+    # ── Custom Admin Views ──
+
     def get_urls(self):
         from django.urls import path
         urls = super().get_urls()
@@ -701,247 +664,153 @@ class CompanyAdmin(UnfoldModelAdmin):
         return custom_urls + urls
 
     def sync_now_view(self, request, company_id: int):
-        """Spustí okamžitý full sync pre jednu firmu z detailu adminu."""
         from registers.tasks import sync_company_now
-
         try:
             company = Company.objects.get(id=company_id)
         except Company.DoesNotExist:
             self.message_user(request, 'Firma neexistuje.', messages.ERROR)
             return HttpResponseRedirect(reverse('admin:companies_company_changelist'))
-
         try:
             sync_company_now.delay(company.id)
             self.message_user(
                 request,
-                f'✅ Full sync bol naplánovaný pre {company.nazov_UJ} ({company.ico}).',
+                f'Full sync naplanovany pre {company.nazov_UJ} ({company.ico}).',
                 messages.SUCCESS,
             )
         except Exception as exc:
             self.message_user(
                 request,
-                f'❌ Nepodarilo sa spustiť sync: {str(exc)[:120]}',
+                f'Nepodarilo sa spustit sync: {str(exc)[:120]}',
                 messages.ERROR,
             )
-
         return HttpResponseRedirect(reverse('admin:companies_company_change', args=[company.id]))
-    
+
     def export_filtered_view(self, request):
-        """Export all filtered companies to CSV or XLSX."""
         export_format = request.GET.get('format', 'csv')
-        
-        # Start with all companies
-        queryset = Company.objects.all()
-        
-        # Apply search filter
-        search_query = request.GET.get('q', '')
-        if search_query:
-            from django.db.models import Q
-            queryset = queryset.filter(
-                Q(ico__icontains=search_query) |
-                Q(nazov_UJ__icontains=search_query) |
-                Q(dic__icontains=search_query) |
-                Q(ic_dph__icontains=search_query) |
-                Q(mesto__icontains=search_query) |
-                Q(ulica__icontains=search_query) |
-                Q(ruz_id__icontains=search_query)
-            )
-        
-        # Apply list filters from GET parameters
-        filter_mappings = {
-            'pravna_forma__exact': 'pravna_forma',
-            'kraj__exact': 'kraj',
-            'velkost_organizacie__exact': 'velkost_organizacie',
-            'vat_payer__exact': 'vat_payer',
-            'tax_reliability__exact': 'tax_reliability',
-            'konsolidovana__exact': 'konsolidovana',
-        }
-        
-        for param, field in filter_mappings.items():
-            value = request.GET.get(param)
-            if value:
-                if value in ('True', 'true', '1'):
-                    queryset = queryset.filter(**{field: True})
-                elif value in ('False', 'false', '0'):
-                    queryset = queryset.filter(**{field: False})
-                else:
-                    queryset = queryset.filter(**{field: value})
-        
-        # Handle EmptyFieldListFilter (isnull filters)
-        isnull_mappings = {
-            'datum_zrusenia__isempty': 'datum_zrusenia__isnull',
-            'debt_vszp__isempty': 'debt_vszp__isnull',
-            'debt_soc_poist__isempty': 'debt_soc_poist__isnull',
-            'tax_debt__isempty': 'tax_debt__isnull',
-        }
-        
-        for param, filter_field in isnull_mappings.items():
-            value = request.GET.get(param)
-            if value == '1':  # "Yes" = field is empty/null
-                queryset = queryset.filter(**{filter_field: True})
-            elif value == '0':  # "No" = field has value
-                queryset = queryset.filter(**{filter_field: False})
-        
+        queryset = self.get_filtered_queryset(request)
         if export_format == 'xlsx':
             return self._export_queryset_xlsx(queryset)
-        else:
-            return self._export_queryset_csv(queryset)
-    
+        return self._export_queryset_csv(queryset)
+
     def _export_queryset_csv(self, queryset):
-        """Generate CSV response from queryset."""
         response = HttpResponse(content_type='text/csv; charset=utf-8')
         response['Content-Disposition'] = 'attachment; filename="firmy_export.csv"'
-        response.write('\ufeff')  # BOM for Excel UTF-8 support
-        
+        response.write('﻿')
         writer = csv.writer(response, delimiter=';')
         writer.writerow([label for _, label in self.EXPORT_FIELDS])
-        
         for row in self._get_export_data(queryset):
             writer.writerow(row)
-        
         return response
-    
+
     def _export_queryset_xlsx(self, queryset):
-        """Generate XLSX response from queryset."""
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill
         except ImportError:
-            return HttpResponse('Chýba knižnica openpyxl.', status=500)
-        
+            return HttpResponse('Chyba kniznica openpyxl.', status=500)
         wb = Workbook()
         ws = wb.active
         ws.title = 'Firmy'
-        
         header_font = Font(bold=True)
         header_fill = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')
-        
         headers = [label for _, label in self.EXPORT_FIELDS]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
             cell.fill = header_fill
-        
         for row_idx, row_data in enumerate(self._get_export_data(queryset), 2):
             for col_idx, value in enumerate(row_data, 1):
                 ws.cell(row=row_idx, column=col_idx, value=str(value) if value else '')
-        
         for col in ws.columns:
             max_length = max(len(str(cell.value or '')) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
-        
         output = BytesIO()
         wb.save(output)
         output.seek(0)
-        
         response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = 'attachment; filename="firmy_export.xlsx"'
         return response
-    
+
     def add_company_from_ruz_view(self, request):
-        """View pre pridanie novej firmy podľa IČO z RUZ."""
         from django.shortcuts import render, redirect
-        from registers.integrations.ruz_api import RuzApi
-        
         if request.method == 'POST':
             ico = request.POST.get('ico', '').strip()
             if not ico:
-                self.message_user(request, 'IČO je povinné.', messages.ERROR)
+                self.message_user(request, 'ICO je povinne.', messages.ERROR)
                 return redirect('admin:companies_company_changelist')
-            
-            # Skontroluj či firma už existuje
             if Company.objects.filter(ico=ico).exists():
-                self.message_user(
-                    request, 
-                    f'Firma s IČO {ico} už existuje v databáze.',
-                    messages.WARNING
-                )
+                self.message_user(request, f'Firma s ICO {ico} uz existuje v databaze.', messages.WARNING)
                 return redirect('admin:companies_company_changelist')
-            
-            # Skúsime Celery task, ak nie je dostupný, spustíme synchrónne
             try:
                 from registers.tasks import sync_single_company_from_ruz
                 sync_single_company_from_ruz.delay(ico)
-                self.message_user(
-                    request,
-                    f'Spustené vyhľadávanie a import firmy s IČO {ico} z RUZ (asynchrónne).',
-                    messages.SUCCESS
-                )
+                self.message_user(request, f'Import firmy s ICO {ico} z RUZ bol naplanovany.', messages.SUCCESS)
             except Exception as celery_error:
-                # Celery/Redis nie je dostupný - spustíme synchrónne
                 try:
                     from registers.tasks import sync_single_company_from_ruz
                     result = sync_single_company_from_ruz(ico)
-                    self.message_user(
-                        request,
-                        f'Import dokončený: {result}',
-                        messages.SUCCESS
-                    )
+                    self.message_user(request, f'Import dokonceny: {result}', messages.SUCCESS)
                 except Exception as e:
-                    self.message_user(
-                        request,
-                        f'Chyba pri importe: {str(e)}',
-                        messages.ERROR
-                    )
-            
+                    self.message_user(request, f'Chyba pri importe: {str(e)}', messages.ERROR)
             return redirect('admin:companies_company_changelist')
-        
-        # GET request - zobraz formulár
         context = {
             **self.admin_site.each_context(request),
-            'title': 'Pridať firmu z RUZ API',
+            'title': 'Pridat firmu z RUZ API',
             'opts': self.model._meta,
         }
         return render(request, 'admin/companies/add_from_ruz.html', context)
-    
+
     def trigger_full_ruz_sync_view(self, request):
-        """View pre spustenie kompletnej synchronizácie z RUZ."""
         from django.shortcuts import redirect
         from registers.tasks import fetch_ruz_data_task
-        
         if request.method == 'POST':
             try:
                 fetch_ruz_data_task.delay()
                 self.message_user(
                     request,
-                    'Spustená kompletná synchronizácia z RUZ API. Toto môže trvať niekoľko hodín.',
+                    'Kompletna synchronizacia z RUZ API bola spustena.',
                     messages.SUCCESS
                 )
             except Exception as e:
                 self.message_user(
                     request,
-                    f'Celery/Redis nie je dostupný. Spustite Redis: brew services start redis. Chyba: {str(e)[:100]}',
+                    f'Celery/Redis nie je dostupny. Chyba: {str(e)[:100]}',
                     messages.ERROR
                 )
         return redirect('admin:companies_company_changelist')
-    
+
     def changelist_view(self, request, extra_context=None):
-        """Pridáme extra tlačidlá a štatistiky do changelist view."""
         from registers.models import SyncProgress
         from django.db.models import Count, Q
-        
+
         extra_context = extra_context or {}
         extra_context['show_ruz_buttons'] = True
-        
-        # Štatistiky pre dashboard
+
         total_companies = Company.objects.count()
         active_companies = Company.objects.filter(datum_zrusenia__isnull=True).count()
         companies_with_debts = Company.objects.filter(
             Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
         ).count()
-        
-        # Sync stav
+        companies_with_orsr = OrsrCompanyProfile.objects.count()
+        companies_with_financials = CompanyFinancialResult.objects.values('company_id').distinct().count()
+
         sync_progress = SyncProgress.objects.filter(sync_type='full').first()
-        
+
         extra_context['dashboard_stats'] = {
             'total': total_companies,
             'active': active_companies,
             'inactive': total_companies - active_companies,
             'with_debts': companies_with_debts,
+            'with_orsr': companies_with_orsr,
+            'without_orsr': max(total_companies - companies_with_orsr, 0),
+            'with_financials': companies_with_financials,
+            'without_financials': max(total_companies - companies_with_financials, 0),
             'sync_progress': sync_progress,
+            'orsr_pct': round(companies_with_orsr / total_companies * 100, 1) if total_companies else 0,
+            'fin_pct': round(companies_with_financials / total_companies * 100, 1) if total_companies else 0,
         }
-        
+
         return super().changelist_view(request, extra_context=extra_context)

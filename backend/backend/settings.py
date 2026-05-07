@@ -70,6 +70,7 @@ CUSTOM_APPS = [
     'registers',
     'analyses',
     'api',
+    'adminapi',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + CUSTOM_APPS
@@ -84,7 +85,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-
+    'adminapi.middleware.AuditLogMiddleware',
 ]
 
 ROOT_URLCONF = 'backend.urls'
@@ -222,15 +223,28 @@ CELERY_ENABLE_UTC = True
 # Django Celery Beat - fix for Python 3.12+ zoneinfo issue
 DJANGO_CELERY_BEAT_TZ_AWARE = False
 
-# Queue configuration - high_priority for RUZ/FS, low_priority for insurance checks
+# Queue layout: každá queue mapuje na samostatný Celery worker deployment v k8s.
+# - ruz_full: sekvenčné RUZ bulk operácie (1 worker only, drží SyncProgress kurzor)
+# - orsr: ORSR scraper per-company (horizontálne škálovateľný, pozor na rate limit)
+# - financials: RUZ hospodárske výsledky per-company
+# - insurance: VSZP + Soc. poisťovňa scrapery (rate-limited, riziko banu)
+# - celery: default queue pre FS, orchestračné a ad-hoc úlohy
 CELERY_TASK_QUEUES = {
-    'high_priority': {
-        'exchange': 'high_priority',
-        'routing_key': 'high_priority',
+    'ruz_full': {
+        'exchange': 'ruz_full',
+        'routing_key': 'ruz_full',
     },
-    'low_priority': {
-        'exchange': 'low_priority',
-        'routing_key': 'low_priority',
+    'orsr': {
+        'exchange': 'orsr',
+        'routing_key': 'orsr',
+    },
+    'financials': {
+        'exchange': 'financials',
+        'routing_key': 'financials',
+    },
+    'insurance': {
+        'exchange': 'insurance',
+        'routing_key': 'insurance',
     },
     'celery': {
         'exchange': 'celery',
@@ -242,37 +256,32 @@ CELERY_TASK_QUEUES = {
 CELERY_TASK_DEFAULT_QUEUE = 'celery'
 
 CELERY_BEAT_SCHEDULE = {
-    # Kontrola dlhov v poisťovniach každých 12 hodín (low priority)
     'schedule-insurance-debt-checks-every-12-hours': {
         'task': 'registers.tasks.schedule_insurance_debt_checks',
-        'schedule': 43200.0,  # 12 hodín v sekundách (12 * 60 * 60)
-        'options': {'expires': 43000.0, 'queue': 'low_priority'},
+        'schedule': 43200.0,
+        'options': {'expires': 43000.0, 'queue': 'insurance'},
     },
-    # Aktualizácia dát z RUZ API každých 6 hodín (high priority)
     'fetch-ruz-data-every-6-hours': {
         'task': 'registers.tasks.fetch_ruz_data_task',
-        'schedule': 21600.0,  # 6 hodín v sekundách (6 * 60 * 60)
-        'options': {'expires': 21000.0, 'queue': 'high_priority'},
+        'schedule': 21600.0,
+        'options': {'expires': 21000.0, 'queue': 'ruz_full'},
     },
-    # Aktualizácia dát z Finančnej správy raz denne (high priority)
     'update-fs-data-daily': {
         'task': 'registers.tasks.update_fs_data_task',
-        'schedule': 86400.0,  # 24 hodín v sekundách
-        'options': {'expires': 85000.0, 'queue': 'high_priority'},
+        'schedule': 86400.0,
+        'options': {'expires': 85000.0, 'queue': 'celery'},
     },
-    # ORSR profily pre firmy bez ORSR záznamu (každé 4 hodiny, dávka 500)
     'sync-missing-orsr-profiles-every-4-hours': {
         'task': 'registers.tasks.schedule_missing_orsr_sync',
         'schedule': 14400.0,
         'args': [500],
-        'options': {'expires': 14000.0, 'queue': 'low_priority'},
+        'options': {'expires': 14000.0, 'queue': 'orsr'},
     },
-    # Hospodárske výsledky z RUZ (každých 12 hodín, dávka 500)
     'sync-ruz-financials-every-12-hours': {
         'task': 'registers.tasks.schedule_ruz_financials_sync',
         'schedule': 43200.0,
         'args': [500],
-        'options': {'expires': 43000.0, 'queue': 'low_priority'},
+        'options': {'expires': 43000.0, 'queue': 'financials'},
     },
 }
 
@@ -283,30 +292,30 @@ from django.urls import reverse_lazy
 
 UNFOLD = {
     "SITE_TITLE": "CistaFirma",
-    "SITE_HEADER": "CistaFirma Admin",
-    "SITE_SUBHEADER": "Správa firiem a registrov",
-    "SITE_SYMBOL": "verified",  # Material Symbols icon
+    "SITE_HEADER": "CistaFirma",
+    "SITE_SUBHEADER": "Verifikacia a monitoring firiem",
+    "SITE_SYMBOL": "verified",
     "SHOW_HISTORY": True,
     "SHOW_VIEW_ON_SITE": True,
-    
-    # Sidebar konfigurácia
+    "ENVIRONMENT": "development" if DEBUG else "production",
+
     "SIDEBAR": {
         "show_search": True,
-        "show_all_applications": True,
+        "show_all_applications": False,
         "navigation": [
             {
-                "title": "Dashboard",
+                "title": "Prehľad",
                 "separator": True,
                 "items": [
                     {
-                        "title": "Prehľad",
+                        "title": "Dashboard",
                         "icon": "dashboard",
                         "link": reverse_lazy("admin:index"),
                     },
                 ],
             },
             {
-                "title": "Správa firiem",
+                "title": "Dáta",
                 "separator": True,
                 "collapsible": True,
                 "items": [
@@ -314,6 +323,11 @@ UNFOLD = {
                         "title": "Firmy",
                         "icon": "business",
                         "link": reverse_lazy("admin:companies_company_changelist"),
+                    },
+                    {
+                        "title": "ORSR profily",
+                        "icon": "account_balance",
+                        "link": reverse_lazy("admin:registers_orsrcompanyprofile_changelist"),
                     },
                 ],
             },
@@ -328,9 +342,31 @@ UNFOLD = {
                         "link": reverse_lazy("admin:users_user_changelist"),
                     },
                     {
-                        "title": "Plány predplatného",
+                        "title": "Predplatné",
                         "icon": "credit_card",
                         "link": reverse_lazy("admin:subscriptions_subscriptionplan_changelist"),
+                    },
+                ],
+            },
+            {
+                "title": "Synchronizácia",
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": "Sync RUZ",
+                        "icon": "sync",
+                        "link": reverse_lazy("admin:registers_syncprogress_changelist"),
+                    },
+                    {
+                        "title": "Gap Analysis",
+                        "icon": "troubleshoot",
+                        "link": reverse_lazy("admin:registers_syncgapanalysis_changelist"),
+                    },
+                    {
+                        "title": "Focus Mode",
+                        "icon": "center_focus_strong",
+                        "link": reverse_lazy("admin:registers_syncfocusmodestate_changelist"),
                     },
                 ],
             },
@@ -340,11 +376,6 @@ UNFOLD = {
                 "collapsible": True,
                 "items": [
                     {
-                        "title": "Synchronizácia RUZ",
-                        "icon": "sync",
-                        "link": reverse_lazy("admin:registers_syncprogress_changelist"),
-                    },
-                    {
                         "title": "Periodické úlohy",
                         "icon": "schedule",
                         "link": reverse_lazy("admin:django_celery_beat_periodictask_changelist"),
@@ -353,21 +384,20 @@ UNFOLD = {
             },
         ],
     },
-    
-    # Farby a štýl - modrá téma
+
     "COLORS": {
         "primary": {
-            "50": "240 249 255",
-            "100": "224 242 254",
-            "200": "186 230 253",
-            "300": "125 211 252",
-            "400": "56 189 248",
-            "500": "14 165 233",
-            "600": "2 132 199",
-            "700": "3 105 161",
-            "800": "7 89 133",
-            "900": "12 74 110",
-            "950": "8 47 73",
+            "50": "239 246 255",
+            "100": "219 234 254",
+            "200": "191 219 254",
+            "300": "147 197 253",
+            "400": "96 165 250",
+            "500": "59 130 246",
+            "600": "37 99 235",
+            "700": "29 78 216",
+            "800": "30 64 175",
+            "900": "30 58 138",
+            "950": "23 37 84",
         },
     },
 }

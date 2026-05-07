@@ -37,6 +37,7 @@ urlpatterns = [
     path('api/auth/', include('users.urls')),
     path('api/registers/', include('registers.urls')),
     path('api/companies/', include('companies.urls')),
+    path('api/admin/', include('adminapi.urls')),
 ]
 
 # Add frontend catch-all only if frontend is built, otherwise just root info
