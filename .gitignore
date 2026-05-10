@@ -88,6 +88,10 @@ frontend/.env.*
 !backend/.env.docker.default
 !frontend/env.default
 
+# Local k8s secrets (never commit real credentials)
+deploy/k8s/local-secret.yaml
+deploy/k8s/*-secret-local.yaml
+
 # Generated FS data (local fetch artifacts)
 backend/data/fs_data/**/*.xml
 backend/data/fs_data/**/*.xsd

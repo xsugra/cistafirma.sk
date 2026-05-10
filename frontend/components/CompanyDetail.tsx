@@ -1,11 +1,12 @@
 import React, {useState} from 'react';
-import type {Company} from '../types';
+import type {Company, OrsrPerson, OrsrContribution, OrsrCapital, OrsrStructured} from '../types';
 import {InfoCard} from './InfoCard';
 import {StatusBadge} from './StatusBadge';
 import {FinancialChart} from './FinancialChart';
 import {RiskDonut} from './RiskDonut';
 import {AiSummary} from './AiSummary';
 import {api} from '../api';
+import {getLegalFormProfile} from '../utils/legalFormProfile';
 
 interface CompanyDetailProps {
     company: Company;
@@ -21,121 +22,148 @@ const DetailItem: React.FC<{ label: string; value: React.ReactNode; icon: string
     </div>
 );
 
-const TITLE_PREFIXES = new Set(['ing.', 'mgr.', 'bc.', 'mudr.', 'judr.', 'phdr.', 'rndr.', 'mvdr.', 'doc.', 'prof.', 'arch.', 'paeddr.', 'thdr.', 'pharmdr.']);
-
-const normalizeLine = (value: string) => value.replace(/\s+/g, ' ').trim();
-
-const isMetaLine = (line: string) => /^(?:\(od:.*\)|vznik funkcie:|osoba je stotožnená|prokurista je|konateľ|spoločník|prokúra|predstavenstvo|kontrolná komisia|člen)$/i.test(line.trim());
-
-const isAddressLine = (line: string) =>
-    /\b\d{3}\s?\d{2}\b/.test(line) ||
-    /^\d+\/\d+[a-zA-Z]?$/i.test(line) ||
-    /^\d+[a-zA-Z]?$/i.test(line) ||
-    /\b(?:ul\.|ulica|nám\.|mesto)\b/i.test(line);
-
-const startsWithTitle = (tokens: string[]) => {
-    const first = (tokens[0] || '').toLowerCase().replace(/\.$/, '.');
-    return TITLE_PREFIXES.has(first);
+const formatDate = (value?: string): string => {
+    if (!value) return '';
+    // ISO formát z backendu
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const [y, m, d] = value.split('-');
+        return `${d}.${m}.${y}`;
+    }
+    return value;
 };
 
-const looksLikeNameToken = (text: string) => !!text && !/\d/.test(text) && /^[A-ZÁÄČĎÉÍĹĽŇÓÔÖŘŠŤÚÝŽ]/.test(text);
+const displayName = (person: OrsrPerson): string => {
+    const parts = [person.title, person.name].filter(Boolean);
+    return parts.join(' ').trim() || person.name || '';
+};
 
-const stripTrailingRole = (line: string) => normalizeLine(line)
-    .replace(/\s*\([^)]*\)\s*$/, '')
-    .replace(/\s*-\s*(predseda\s+predstavenstva|člen\s+predstavenstva|predseda|člen|konateľ|prokurista|riaditeľ).*$/i, '')
-    .trim();
-
-const extractPeopleFromLines = (lines: string[] = []) => {
-    const cleaned: string[] = [];
-    const seen = new Set<string>();
-    let current: string[] = [];
-    let inAddressBlock = false;
-
-    const flush = () => {
-        if (current.length < 2) {
-            current = [];
-            return;
-        }
-        const limit = startsWithTitle(current) ? 3 : 2;
-        if (current.length < limit) {
-            current = [];
-            return;
-        }
-        const name = current.slice(0, limit).join(' ');
-        current = [];
-        if (!seen.has(name)) {
-            seen.add(name);
-            cleaned.push(name);
-        }
+const PersonCard: React.FC<{
+    person: OrsrPerson;
+    accent: 'blue' | 'purple' | 'amber' | 'green' | 'rose' | 'sky';
+    icon: string;
+}> = ({person, accent, icon}) => {
+    const accentMap: Record<string, string> = {
+        blue: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-500/30 text-blue-600 dark:text-blue-400',
+        purple: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-500/30 text-purple-600 dark:text-purple-400',
+        amber: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-500/30 text-amber-600 dark:text-amber-400',
+        green: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-500/30 text-green-600 dark:text-green-400',
+        rose: 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400',
+        sky: 'bg-sky-50 dark:bg-sky-900/20 border-sky-200 dark:border-sky-500/30 text-sky-600 dark:text-sky-400',
     };
+    const name = displayName(person);
 
-    for (const raw of lines) {
-        const line = normalizeLine(raw || '');
-        if (!line) continue;
-        if (isMetaLine(line)) { flush(); inAddressBlock = false; continue; }
-        if (inAddressBlock) continue;
-        if (isAddressLine(line)) { flush(); inAddressBlock = true; continue; }
+    return (
+        <div className={`p-3 rounded-lg border ${accentMap[accent]}`}>
+            <div className="flex items-start gap-3">
+                <i className={`fas ${icon} mt-1`}></i>
+                <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-900 dark:text-white break-words">{name}</p>
+                    {person.role && (
+                        <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mt-0.5">
+                            {person.role}
+                        </p>
+                    )}
+                    {person.address && (
+                        <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                            <i className="fas fa-map-marker-alt mr-2 text-gray-400"></i>
+                            {person.address}
+                        </p>
+                    )}
+                    <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {person.vznik_funkcie && (
+                            <span><i className="fas fa-calendar-plus mr-1"></i>Vznik funkcie: {person.vznik_funkcie}</span>
+                        )}
+                        {person.person_ico && (
+                            <span><i className="fas fa-hashtag mr-1"></i>IČO: {person.person_ico}</span>
+                        )}
+                        {person.ine_id && (
+                            <span><i className="fas fa-id-card mr-1"></i>{person.ine_id}</span>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
-        const cleanLine = stripTrailingRole(line);
-        if (!cleanLine || isAddressLine(cleanLine) || !looksLikeNameToken(cleanLine)) continue;
+const PeopleSection: React.FC<{
+    title: string;
+    icon: string;
+    people: OrsrPerson[];
+    accent: 'blue' | 'purple' | 'amber' | 'green' | 'rose' | 'sky';
+    personIcon: string;
+    emptyLabel: string;
+    subtitle?: string;
+}> = ({title, icon, people, accent, personIcon, emptyLabel, subtitle}) => (
+    <InfoCard title={title} icon={icon}>
+        {subtitle && (
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3 italic">{subtitle}</p>
+        )}
+        {people.length > 0 ? (
+            <div className="space-y-3">
+                {people.map((person, idx) => (
+                    <PersonCard key={`${person.name}-${idx}`} person={person} accent={accent} icon={personIcon}/>
+                ))}
+            </div>
+        ) : (
+            <div className="text-center py-4 text-gray-500 dark:text-gray-400">
+                <i className="fas fa-info-circle mr-2"></i>{emptyLabel}
+            </div>
+        )}
+    </InfoCard>
+);
 
-        const tokens = cleanLine.split(' ');
-        if (tokens.length >= 2) {
-            if (startsWithTitle(tokens) && tokens.length === 2) {
-                current = tokens;
-                continue;
+const normalizePeople = (value: unknown): OrsrPerson[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item): OrsrPerson | null => {
+            if (!item) return null;
+            if (typeof item === 'string') {
+                return item.trim() ? {name: item.trim()} : null;
             }
-            if (!seen.has(cleanLine)) {
-                seen.add(cleanLine);
-                cleaned.push(cleanLine);
+            if (typeof item === 'object') {
+                const person = item as OrsrPerson;
+                return person.name ? person : null;
             }
-            current = [];
-            inAddressBlock = true;
-            continue;
+            return null;
+        })
+        .filter((p): p is OrsrPerson => p !== null);
+};
+
+/** Oreže ORSR číselnú hodnotu (napr. "27 882,891855") na max 2 desatinné miesta.
+ * ORSR historicky nesie 6-miestne desatinné zvyšky z SKK→EUR konverzie (2009). */
+const trimOrsrNumber = (raw: string): string => {
+    return raw.replace(/(\d),(\d{2})(\d+)/g, (_m, intPart, twoDec, _rest) => `${intPart},${twoDec}`);
+};
+
+/** Znormalizuje celý riadok typu "27 882,891855 EUR Rozsah splatenia: 27 882,891855 EUR". */
+const normalizeAmountText = (raw?: string | null): string => {
+    if (!raw) return '';
+    return trimOrsrNumber(raw).trim();
+};
+
+const formatCapital = (capital?: OrsrCapital | null, fallback?: string): string => {
+    if (capital && capital.imanie) {
+        const imanie = trimOrsrNumber(capital.imanie);
+        const currency = capital.currency || 'EUR';
+        const parts = [`${imanie} ${currency}`.trim()];
+        if (capital.rozsah_splatenia) {
+            const splatene = trimOrsrNumber(capital.rozsah_splatenia);
+            parts.push(`splatené ${splatene} ${currency}`.trim());
         }
-
-        current.push(cleanLine);
-        const requiredTokens = startsWithTitle(current) ? 3 : 2;
-        if (current.length === requiredTokens) {
-            flush();
-            inAddressBlock = true;
-        }
+        return parts.join(' • ');
     }
-
-    flush();
-    return cleaned;
+    return normalizeAmountText(fallback);
 };
 
-const getRawSection = (rawSections: Record<string, string[]> | undefined, ...keys: string[]) => {
-    for (const key of keys) {
-        const value = rawSections?.[key];
-        if (Array.isArray(value) && value.length > 0) return value;
-    }
-    return [] as string[];
-};
-
-const uniqueLines = (lines: string[]) => Array.from(new Set(lines.map(normalizeLine).filter(Boolean)));
-
-const extractMoneySummary = (lines: string[]) => {
-    const text = uniqueLines(lines).join(' ');
-    if (!text) return '';
-
-    const matches = text.match(/\d[\d\s]*(?:[.,]\d+)?\s*(?:EUR|Sk)/gi) || [];
-    const deduped = uniqueLines(matches.map(m => m.replace(/\s+/g, ' ').trim()));
-    if (deduped.length > 0) return deduped.join(' • ');
-
-    return normalizeLine(text);
-};
-
-const formatShareholderContributions = (shareholders: string[], contributionLines: string[]) => {
-    const names = uniqueLines(shareholders);
-    const moneySummary = extractMoneySummary(contributionLines);
-
-    if (names.length === 0 && !moneySummary) return [] as string[];
-    if (names.length === 1 && moneySummary) return [`${names[0]} – vklad ${moneySummary}`];
-    if (names.length > 1 && moneySummary) return names.map(name => `${name} – vklad ${moneySummary}`);
-    if (names.length > 0) return names;
-    return uniqueLines(contributionLines);
+const formatContribution = (contrib: OrsrContribution): string => {
+    if (contrib.summary) return contrib.summary;
+    const parts = [];
+    if (contrib.name) parts.push(contrib.name);
+    if (contrib.vklad) parts.push(`vklad ${contrib.vklad} ${contrib.currency || 'EUR'}`);
+    if (contrib.splatene) parts.push(`splatené ${contrib.splatene} ${contrib.currency || 'EUR'}`);
+    if (contrib.typ) parts.push(`(${contrib.typ})`);
+    return parts.join(' • ');
 };
 
 export const CompanyDetail: React.FC<CompanyDetailProps> = ({company}) => {
@@ -143,33 +171,44 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({company}) => {
     const [isWatching, setIsWatching] = useState(false);
     const [watchLoading, setWatchLoading] = useState(false);
     const [showAllPredmety, setShowAllPredmety] = useState(false);
+
     const orsrProfile = company.orsr_profile;
-    const rawSections = orsrProfile?.raw_sections;
+    const structured: OrsrStructured = orsrProfile?.structured || {};
+    const oddielType = (orsrProfile?.oddiel_type || '').toLowerCase();
 
-    // Rozdeliť executives po roli
-    const statutari = company.executives.filter(e => e.role === 'Konateľ');
-    const spolocnici = orsrProfile?.spolocnici?.length
-        ? orsrProfile.spolocnici
-        : extractPeopleFromLines(getRawSection(rawSections, 'Spoločníci'));
-    const prokuristy = orsrProfile?.prokura?.length
-        ? orsrProfile.prokura
-        : extractPeopleFromLines(getRawSection(rawSections, 'Prokúra'));
+    const statutari = normalizePeople(structured.statutarny_organ?.length ? structured.statutarny_organ : orsrProfile?.statutarny_organ);
+    const spolocnici = normalizePeople(structured.spolocnici?.length ? structured.spolocnici : orsrProfile?.spolocnici);
+    const prokuristy = normalizePeople(structured.prokura?.length ? structured.prokura : orsrProfile?.prokura);
+    const predstavenstvo = normalizePeople(structured.predstavenstvo?.length ? structured.predstavenstvo : orsrProfile?.predstavenstvo);
+    const kontrolnaKomisia = normalizePeople(structured.kontrolna_komisia?.length ? structured.kontrolna_komisia : orsrProfile?.kontrolna_komisia);
+    const dozornaRada = normalizePeople(structured.dozorna_rada || []);
+    const akcionari = normalizePeople(structured.akcionari || []);
 
-    // Predmety podnikania - zobrazovať max 3, ostatné skryť
-    const predmetyDisplay = orsrProfile?.predmet_podnikania?.length
-        ? orsrProfile.predmet_podnikania
-        : getRawSection(rawSections, 'Predmet podnikania (činnosti)');
-    const predmetyVisible = predmetyDisplay.slice(0, 3);
-    const predmetyHidden = predmetyDisplay.slice(3);
-    const capitalText = extractMoneySummary(
-        orsrProfile?.vyska_zakladneho_imania
-            ? [orsrProfile.vyska_zakladneho_imania]
-            : getRawSection(rawSections, 'Výška základného imania')
-    );
-    const vkladySpolocnikov = orsrProfile?.vklady_spolocnikov?.length
-        ? orsrProfile.vklady_spolocnikov
-        : getRawSection(rawSections, 'Výška vkladu každého spoločníka');
-    const vkladySpolocnikovDisplay = formatShareholderContributions(spolocnici, vkladySpolocnikov);
+    const predmety = structured.predmet_podnikania?.length
+        ? structured.predmet_podnikania.map(p => p.text)
+        : (orsrProfile?.predmet_podnikania || []);
+    const predmetyVisible = predmety.slice(0, 3);
+    const predmetyHidden = predmety.slice(3);
+
+    const capitalText = formatCapital(structured.vyska_zakladneho_imania, orsrProfile?.vyska_zakladneho_imania);
+    const vklady = structured.vklady_spolocnikov || [];
+    const konanie = orsrProfile?.konanie_menom_spolocnosti || structured.konanie || orsrProfile?.konanie || '';
+    const prokuraOpravnenie = (structured.prokura_oprávnenie as string[] | undefined) || [];
+
+    // Profile driven podľa typu oddielu (Sro / Sa / Dr / Po / Sr / Pš / Pšn / Firm / default).
+    const profile = getLegalFormProfile(oddielType);
+
+    // Sekcia sa ukazuje ak:
+    //  (a) profil ju má zadefinovanú, A ZÁROVEŇ
+    //  (b) máme nejaké dáta alebo chceme zobraziť empty state (iba pri "hlavných" úlohách).
+    const showStatutar = Boolean(profile.statutar) && (statutari.length > 0 || !profile.predstavenstvo);
+    const showPredstavenstvo = Boolean(profile.predstavenstvo);
+    const showDozornaRada = Boolean(profile.dozornaRada) && dozornaRada.length > 0;
+    const showKontrolnaKomisia = Boolean(profile.kontrolnaKomisia);
+    const showSpolocnici = Boolean(profile.spolocnici) && (spolocnici.length > 0 || !profile.akcionari);
+    const showAkcionari = Boolean(profile.akcionari);
+    const showProkura = Boolean(profile.prokura) && (prokuristy.length > 0 || prokuraOpravnenie.length > 0);
+    const showKonanie = Boolean(profile.konanie) && Boolean(konanie);
 
     const handleWatchToggle = async () => {
         setWatchLoading(true);
@@ -190,7 +229,14 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({company}) => {
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
                         <h2 className="text-3xl font-bold text-gray-900 dark:text-white">{company.name}</h2>
-                        <p className="text-gray-500 dark:text-gray-400">{company.legalForm}</p>
+                        <p className="text-gray-500 dark:text-gray-400">
+                            {company.legalForm || profile.label}
+                        </p>
+                        {orsrProfile?.oddiel && orsrProfile?.vlozka_cislo && (
+                            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                                Oddiel: {orsrProfile.oddiel} • Vložka číslo: {orsrProfile.vlozka_cislo} • {profile.label}
+                            </p>
+                        )}
                     </div>
                     <div className="flex items-center gap-4">
                         <StatusBadge status={company.status}/>
@@ -217,13 +263,14 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({company}) => {
                 <div
                     className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 border-t border-gray-200 dark:border-slate-800 pt-6">
                     <DetailItem label="IČO" value={company.ico} icon="fa-hashtag"/>
-                    <DetailItem label="Adresa" value={`${company.address.street}, ${company.address.city}`}
+                    <DetailItem label="Adresa"
+                                value={orsrProfile?.sidlo || `${company.address.street}, ${company.address.city}`}
                                 icon="fa-map-marker-alt"/>
                     <DetailItem label="Dátum vzniku"
-                                value={new Date(company.registrationDate).toLocaleDateString('sk-SK')}
+                                value={formatDate(orsrProfile?.den_zapisu) || new Date(company.registrationDate).toLocaleDateString('sk-SK')}
                                 icon="fa-calendar-alt"/>
                     <DetailItem label="Posledná aktualizácia"
-                                value={new Date(company.lastUpdatedFromSource).toLocaleString('sk-SK')}
+                                value={formatDate(orsrProfile?.orsr_aktualizacia_dat) || new Date(company.lastUpdatedFromSource).toLocaleString('sk-SK')}
                                 icon="fa-sync-alt"/>
                 </div>
             </div>
@@ -281,89 +328,168 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({company}) => {
                         )}
                     </InfoCard>
 
-                    {/* Štatutári */}
-                    <InfoCard title="Štatutári" icon="fa-gavel">
-                        {statutari.length > 0 ? (
-                            <div className="space-y-2">
-                                {statutari.map((exec, index) => (
-                                    <div key={index} className="flex items-center space-x-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-500/30">
-                                        <i className="fas fa-badge-check text-blue-600 dark:text-blue-400"></i>
-                                        <p className="font-medium text-gray-800 dark:text-gray-200">{exec.name}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-center py-4 text-gray-500 dark:text-gray-400">
-                                <i className="fas fa-info-circle mr-2"></i> Žiadnych štatutárov
-                            </div>
-                        )}
-                    </InfoCard>
+                    {/* Predstavenstvo (a.s., družstvo) – má prioritu pred statutármi */}
+                    {showPredstavenstvo && (
+                        <PeopleSection
+                            title={profile.predstavenstvo!.title}
+                            icon={profile.predstavenstvo!.icon}
+                            people={predstavenstvo.length ? predstavenstvo : statutari}
+                            accent="blue"
+                            personIcon="fa-user-tie"
+                            subtitle={profile.predstavenstvo!.subtitle}
+                            emptyLabel={profile.predstavenstvo!.emptyLabel || 'Žiadni členovia'}
+                        />
+                    )}
 
-                    {/* Spoločníci */}
-                    <InfoCard title="Spoločníci" icon="fa-handshake">
-                        {spolocnici.length > 0 ? (
-                            <div className="space-y-2">
-                                {spolocnici.map((exec, index) => (
-                                    <div key={index} className="flex items-center space-x-3 p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-500/30">
-                                        <i className="fas fa-user-tie text-purple-600 dark:text-purple-400"></i>
-                                        <p className="font-medium text-gray-800 dark:text-gray-200">{exec}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-center py-4 text-gray-500 dark:text-gray-400">
-                                <i className="fas fa-info-circle mr-2"></i> Žiadnych spoločníkov
-                            </div>
-                        )}
-                    </InfoCard>
+                    {/* Štatutárny orgán (s.r.o., v.o.s., k.s., zahraničné podniky) */}
+                    {showStatutar && (
+                        <PeopleSection
+                            title={profile.statutar!.title}
+                            icon={profile.statutar!.icon}
+                            people={statutari}
+                            accent="blue"
+                            personIcon="fa-badge-check"
+                            subtitle={
+                                profile.statutar!.subtitle ||
+                                (structured.statutarny_organ_typ ? `Typ: ${structured.statutarny_organ_typ}` : undefined)
+                            }
+                            emptyLabel={profile.statutar!.emptyLabel || 'Žiadny štatutárny orgán'}
+                        />
+                    )}
+
+                    {/* Konanie menom spoločnosti */}
+                    {showKonanie && (
+                        <InfoCard title="Konanie menom spoločnosti" icon="fa-signature">
+                            <p className="text-gray-700 dark:text-gray-300 whitespace-pre-line leading-relaxed">{konanie}</p>
+                        </InfoCard>
+                    )}
+
+                    {/* Dozorná rada (a.s.) */}
+                    {showDozornaRada && (
+                        <PeopleSection
+                            title={profile.dozornaRada!.title}
+                            icon={profile.dozornaRada!.icon}
+                            people={dozornaRada}
+                            accent="sky"
+                            personIcon="fa-user-shield"
+                            subtitle={profile.dozornaRada!.subtitle}
+                            emptyLabel={profile.dozornaRada!.emptyLabel || 'Žiadni členovia'}
+                        />
+                    )}
+
+                    {/* Kontrolná komisia (družstvo) */}
+                    {showKontrolnaKomisia && (
+                        <PeopleSection
+                            title={profile.kontrolnaKomisia!.title}
+                            icon={profile.kontrolnaKomisia!.icon}
+                            people={kontrolnaKomisia}
+                            accent="green"
+                            personIcon="fa-user-shield"
+                            subtitle={profile.kontrolnaKomisia!.subtitle}
+                            emptyLabel={profile.kontrolnaKomisia!.emptyLabel || 'Žiadni členovia'}
+                        />
+                    )}
+
+                    {/* Spoločníci (s.r.o., v.o.s., k.s.) */}
+                    {showSpolocnici && (
+                        <PeopleSection
+                            title={profile.spolocnici!.title}
+                            icon={profile.spolocnici!.icon}
+                            people={spolocnici}
+                            accent="purple"
+                            personIcon="fa-user-tie"
+                            subtitle={profile.spolocnici!.subtitle}
+                            emptyLabel={profile.spolocnici!.emptyLabel || 'Žiadni spoločníci'}
+                        />
+                    )}
+
+                    {/* Akcionári (a.s.) */}
+                    {showAkcionari && (
+                        <PeopleSection
+                            title={profile.akcionari!.title}
+                            icon={profile.akcionari!.icon}
+                            people={akcionari}
+                            accent="rose"
+                            personIcon="fa-building"
+                            subtitle={profile.akcionari!.subtitle}
+                            emptyLabel={profile.akcionari!.emptyLabel || 'Jediný akcionár sa nezverejňuje'}
+                        />
+                    )}
 
                     {/* Prokúra */}
-                    <InfoCard title="Prokúra" icon="fa-file-signature">
-                        {prokuristy.length > 0 ? (
-                            <div className="space-y-2">
-                                {prokuristy.map((exec, index) => (
-                                    <div key={index} className="flex items-center space-x-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-500/30">
-                                        <i className="fas fa-pen-fancy text-amber-600 dark:text-amber-400"></i>
-                                        <p className="font-medium text-gray-800 dark:text-gray-200">{exec}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-center py-4 text-gray-500 dark:text-gray-400">
-                                <i className="fas fa-info-circle mr-2"></i> Žiadnej prokúry
-                            </div>
-                        )}
-                    </InfoCard>
+                    {showProkura && (
+                        <PeopleSection
+                            title={profile.prokura!.title}
+                            icon={profile.prokura!.icon}
+                            people={prokuristy}
+                            accent="amber"
+                            personIcon="fa-pen-fancy"
+                            emptyLabel={profile.prokura!.emptyLabel || 'Žiadna prokúra'}
+                            subtitle={prokuraOpravnenie.length > 0 ? prokuraOpravnenie.join(' ') : profile.prokura!.subtitle}
+                        />
+                    )}
 
-                    {/* Základné imanie a vklady */}
+                    {/* Základné imanie a vklady (len ak to má pre danú formu zmysel) */}
+                    {(profile.imanie || profile.vkladySpolocnikov || profile.zapisovaneImanie || profile.clenskyVklad || profile.akcie) && (
                     <InfoCard title="Kapitál a Vklady" icon="fa-coins">
                         <div className="space-y-4">
-                            {capitalText && (
+                            {profile.imanie && capitalText && (
                                 <DetailItem
                                     label="Základné imanie"
                                     value={capitalText}
                                     icon="fa-building"
                                 />
                             )}
-                            {vkladySpolocnikovDisplay.length > 0 && (
+                            {profile.zapisovaneImanie && orsrProfile?.zapisovane_zakladne_imanie && (
+                                <DetailItem
+                                    label="Zapisované základné imanie"
+                                    value={normalizeAmountText(orsrProfile.zapisovane_zakladne_imanie)}
+                                    icon="fa-building-columns"
+                                />
+                            )}
+                            {profile.clenskyVklad && orsrProfile?.zakladny_clensky_vklad && (
+                                <DetailItem
+                                    label="Základný členský vklad"
+                                    value={<span className="whitespace-pre-line">{normalizeAmountText(orsrProfile.zakladny_clensky_vklad)}</span>}
+                                    icon="fa-user-group"
+                                />
+                            )}
+                            {profile.vkladySpolocnikov && vklady.length > 0 && (
                                 <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
                                     <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Vklady spoločníkov:</p>
                                     <div className="space-y-1">
-                                        {vkladySpolocnikovDisplay.slice(0, 3).map((vklad, idx) => (
-                                            <p key={idx} className="text-sm text-gray-700 dark:text-gray-300">• {vklad}</p>
+                                        {vklady.slice(0, 5).map((v, idx) => (
+                                            <p key={idx} className="text-sm text-gray-700 dark:text-gray-300">
+                                                • {formatContribution(v)}
+                                            </p>
                                         ))}
-                                        {vkladySpolocnikovDisplay.length > 3 && (
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 italic">... a {vkladySpolocnikovDisplay.length - 3} ďalších</p>
+                                        {vklady.length > 5 && (
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+                                                ... a {vklady.length - 5} ďalších
+                                            </p>
                                         )}
+                                    </div>
+                                </div>
+                            )}
+                            {profile.akcie && structured.akcie && structured.akcie.length > 0 && (
+                                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Akcie:</p>
+                                    <div className="space-y-1">
+                                        {structured.akcie.slice(0, 5).map((a, idx) => (
+                                            <p key={idx} className="text-sm text-gray-700 dark:text-gray-300">
+                                                • {a.text}
+                                            </p>
+                                        ))}
                                     </div>
                                 </div>
                             )}
                         </div>
                     </InfoCard>
+                    )}
 
                     {/* Predmety podnikania */}
                     <InfoCard title="Predmety Podnikania" icon="fa-briefcase">
-                        {predmetyDisplay.length > 0 ? (
+                        {predmety.length > 0 ? (
                             <div className="space-y-2">
                                 {predmetyVisible.map((predmet, index) => (
                                     <div key={index} className="flex items-start space-x-2 p-2">
@@ -398,10 +524,19 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({company}) => {
                             </div>
                         ) : (
                             <div className="text-center py-4 text-gray-500 dark:text-gray-400">
-                                <i className="fas fa-info-circle mr-2"></i> Žiadnych predmetov podnikania
+                                <i className="fas fa-info-circle mr-2"></i> Žiadne predmety podnikania
                             </div>
                         )}
                     </InfoCard>
+
+                    {/* Ďalšie právne skutočnosti (podľa profilu: Sro/Sa/Dr/Po/Pš/Pšn) */}
+                    {profile.dalsiePravneSkutocnosti && orsrProfile?.dalske_pravne_skutocnosti && (
+                        <InfoCard title="Ďalšie právne skutočnosti" icon="fa-scroll">
+                            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-line leading-relaxed">
+                                {orsrProfile.dalske_pravne_skutocnosti}
+                            </p>
+                        </InfoCard>
+                    )}
                 </div>
                 <div className="lg:col-span-1 space-y-8">
                     <InfoCard title="Risk Skóre" icon="fa-tachometer-alt">

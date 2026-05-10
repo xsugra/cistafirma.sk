@@ -16,6 +16,7 @@ import {Privacy} from './pages/Privacy';
 import {Terms} from './pages/Terms';
 import {Contact} from './pages/Contact';
 import {NotFound} from './pages/NotFound';
+import {AdminApp} from './admin/AdminApp';
 import {ROUTES} from './constants';
 import './styles/animations.css';
 
@@ -117,6 +118,8 @@ const getRouteFromPath = (path: string): { id: string, params?: any } => {
             return {id: ROUTES.TERMS};
         case '/privacy':
             return {id: ROUTES.PRIVACY};
+        case '/admin':
+            return {id: ROUTES.ADMIN};
         default:
             return {id: ROUTES.NOT_FOUND};
     }
@@ -158,6 +161,9 @@ const getPathFromRoute = (routeId: string, params?: any): string => {
         case ROUTES.PRIVACY:
             path = '/privacy';
             break;
+        case ROUTES.ADMIN:
+            path = '/admin';
+            break;
         default:
             path = '/';
     }
@@ -174,7 +180,7 @@ const getPathFromRoute = (routeId: string, params?: any): string => {
 // Main App Content
 const AppContent: React.FC = () => {
     const [view, setView] = useState<{ id: string, params?: any }>({id: ROUTES.HOME});
-    const {isAuthenticated, isLoading} = useAuth();
+    const {user, isAuthenticated, isLoading} = useAuth();
 
     // 1. Initial Load & Popstate Listener (Back/Forward buttons)
     useEffect(() => {
@@ -256,6 +262,22 @@ const AppContent: React.FC = () => {
                 return <NotFound onNavigate={handleNavigate}/>;
         }
     };
+
+    // Admin panel — takes over the full viewport, no Header/Footer
+    if (view.id === ROUTES.ADMIN) {
+        if (!isAuthenticated) {
+            handleNavigate(ROUTES.LOGIN);
+            return null;
+        }
+        return (
+            <ErrorBoundary>
+                <AdminApp
+                    onExit={() => handleNavigate(ROUTES.HOME)}
+                    userName={user?.email || user?.username}
+                />
+            </ErrorBoundary>
+        );
+    }
 
     return (
         <div

@@ -63,6 +63,60 @@ export interface Connection {
     status: 'Aktívna' | 'V likvidácii' | 'V konkurze' | 'Vymazaná';
 }
 
+export interface OrsrPerson {
+    name: string;
+    title?: string;
+    role?: string;
+    address?: string;
+    address_lines?: string[];
+    vznik_funkcie?: string;
+    ine_id?: string;
+    person_ico?: string;
+    od?: string;
+    notes?: string[];
+}
+
+export interface OrsrContribution {
+    name: string;
+    vklad?: string;
+    splatene?: string;
+    typ?: string;
+    currency?: string;
+    od?: string;
+    summary?: string;
+}
+
+export interface OrsrCapital {
+    imanie?: string;
+    rozsah_splatenia?: string;
+    currency?: string;
+    raw?: string;
+    od?: string;
+}
+
+export interface OrsrPredmet {
+    text: string;
+    od?: string;
+}
+
+export interface OrsrStructured {
+    statutarny_organ?: OrsrPerson[];
+    statutarny_organ_typ?: string;
+    spolocnici?: OrsrPerson[];
+    vklady_spolocnikov?: OrsrContribution[];
+    prokura?: OrsrPerson[];
+    prokura_oprávnenie?: string[];
+    predstavenstvo?: OrsrPerson[];
+    kontrolna_komisia?: OrsrPerson[];
+    dozorna_rada?: OrsrPerson[];
+    akcionari?: OrsrPerson[];
+    predmet_podnikania?: OrsrPredmet[];
+    dalsie_pravne_skutocnosti?: OrsrPredmet[];
+    akcie?: OrsrPredmet[];
+    vyska_zakladneho_imania?: OrsrCapital;
+    konanie?: string;
+}
+
 export interface OrsrProfile {
     oddiel: string;
     oddiel_type?: string;
@@ -72,6 +126,7 @@ export interface OrsrProfile {
     den_zapisu: string;
     pravna_forma: string;
     konanie?: string;
+    konanie_menom_spolocnosti?: string;
     prokura: string[];
     spolocnici: string[];
     statutarny_organ: string[];
@@ -90,6 +145,9 @@ export interface OrsrProfile {
     zakladny_clensky_vklad?: string;
     zapisovane_zakladne_imanie?: string;
     dalske_pravne_skutocnosti?: string;
+
+    // Strukturované dáta z nového parsera
+    structured?: OrsrStructured;
 }
 
 // --- USER & PROFILE TYPES ---
@@ -103,6 +161,8 @@ export interface User {
     plan: 'free' | 'plus' | 'pro' | 'business';
     apiCallsUsed: number;
     apiCallsLimit: number;
+    isStaff: boolean;
+    isSuperuser: boolean;
 }
 
 export interface WatchlistEntry {

@@ -24,6 +24,7 @@ export const ROUTES = {
     REGISTER: 'register',
     PRICING: 'pricing',
     PROFILE: 'profile',
+    ADMIN: 'admin',
     NOT_FOUND: '404'
 };
 

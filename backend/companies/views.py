@@ -1,5 +1,6 @@
 from rest_framework import viewsets, filters, status, permissions
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from .models import Company
 from .serializers import CompanyListSerializer, CompanyDetailSerializer
@@ -9,6 +10,13 @@ from django.db.models import Q
 import logging
 logger = logging.getLogger(__name__)
 
+
+class CompanyListPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
     """
     API endpoint that allows companies to be viewed or searched.
@@ -16,6 +24,7 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Company.objects.all()
     serializer_class = CompanyListSerializer
     permission_classes = [permissions.AllowAny] # Zmena z predvoleného IsAuthenticated
+    pagination_class = CompanyListPagination
     filter_backends = [filters.SearchFilter]
     search_fields = ['ico', 'nazov_UJ']
     lookup_field = 'ico'
