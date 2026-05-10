@@ -1,0 +1,43 @@
+import React, { useState } from 'react';
+import { AdminLayout } from './AdminLayout';
+import { Dashboard } from './pages/Dashboard';
+import { Companies } from './pages/Companies';
+import { Users } from './pages/Users';
+import { SyncJobs } from './pages/SyncJobs';
+import { ScheduledTasks } from './pages/ScheduledTasks';
+import { AuditLog } from './pages/AuditLog';
+import { System } from './pages/System';
+import type { AdminPage } from './types';
+
+interface Props {
+  onExit: () => void;
+  userName?: string;
+}
+
+export function AdminApp({ onExit, userName }: Props) {
+  const [page, setPage] = useState<AdminPage>('dashboard');
+
+  const renderPage = () => {
+    switch (page) {
+      case 'dashboard': return <Dashboard />;
+      case 'companies': return <Companies />;
+      case 'users': return <Users />;
+      case 'sync-jobs': return <SyncJobs />;
+      case 'scheduled-tasks': return <ScheduledTasks />;
+      case 'audit-log': return <AuditLog />;
+      case 'system': return <System />;
+      default: return <Dashboard />;
+    }
+  };
+
+  return (
+    <AdminLayout
+      activePage={page}
+      onNavigate={setPage}
+      onExit={onExit}
+      userName={userName}
+    >
+      {renderPage()}
+    </AdminLayout>
+  );
+}

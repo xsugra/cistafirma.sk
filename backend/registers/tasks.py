@@ -12,16 +12,17 @@ from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi
 from .services.orsr_sync import OrsrSyncService
 from .services.ruz_financials_sync import RuzFinancialsSyncService
+from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='ruz_full')
 def fetch_ruz_data_task():
     """
     Celery task to fetch company data from the RUZ API.
-    Runs on high_priority queue to not be blocked by insurance checks.
+    Runs on ruz_full/celery queue in its own worker deployment.
     Automatically resumes from last position if sync was interrupted.
     """
     from registers.models import SyncProgress
@@ -44,8 +45,8 @@ def fetch_ruz_data_task():
 
 
 # Obmedzenie na 20 requestov za minútu, 3 pokusy s odkladom 1 minúta
-# Beží na low_priority queue aby neblokovala dôležitejšie úlohy
-@shared_task(queue='low_priority', rate_limit='20/m', max_retries=3, default_retry_delay=60)
+# Beží na insurance queue (samostatný worker, rate-limited aby sa vyhlo banu).
+@shared_task(queue='insurance', rate_limit='20/m', max_retries=3, default_retry_delay=60)
 def update_insurance_debt(company_id: int):
     """
     Stiahne a aktualizuje dlhy pre jednu konkretnu firmu.
@@ -85,7 +86,7 @@ def update_insurance_debt(company_id: int):
         # Celery sa pokusi ulohu zopakovat vdaka @shared_task
         raise e
 
-@shared_task(queue='low_priority')
+@shared_task(queue='insurance')
 def schedule_insurance_debt_checks():
     """
     Naplanuje kontrolu dlhov pre vsetky firmy, ktore neboli skontrolovane za poslednych 12 hodin.
@@ -109,7 +110,7 @@ def schedule_insurance_debt_checks():
     logger.info(f"Všetkých {count} úloh na kontrolu dlhov v poisťovniach bolo naplánovaných.")
 
 
-@shared_task(queue='low_priority')
+@shared_task(queue='insurance')
 def force_check_all_companies_debts():
     """
     Manuálne spustí kontrolu dlhov pre VŠETKY firmy v databáze,
@@ -127,18 +128,18 @@ def force_check_all_companies_debts():
     logger.info(f"Manuálny trigger: Všetkých {count} úloh na kontrolu dlhov bolo naplánovaných.")
     return f"Naplánovaná kontrola pre {count} firiem."
 
-@shared_task(queue='high_priority')
+@shared_task(queue='celery')
 def update_fs_data_task():
     """
     Celery task to trigger the update_fs_data management command.
-    Runs on high_priority queue to not be blocked by insurance checks.
+    Runs on ruz_full/celery queue in its own worker deployment.
     """
     logger.info("Triggering update_fs_data command...")
     call_command('update_fs_data')
     logger.info("update_fs_data command finished.")
 
 
-@shared_task(queue='high_priority', max_retries=3, default_retry_delay=30)
+@shared_task(queue='celery', max_retries=3, default_retry_delay=30)
 def sync_single_company_from_ruz(ico: str):
     """
     Synchronizuje jednu firmu z RUZ API podľa IČO.
@@ -164,7 +165,8 @@ def sync_single_company_from_ruz(ico: str):
         if details:
             company = _update_company_from_ruz_data(details)
             if company:
-                sync_company_orsr_data.delay(company.id)
+                if is_orsr_eligible_company(company):
+                    sync_company_orsr_data.delay(company.id)
                 sync_company_financials_from_ruz.delay(company.id)
             logger.info(f"Firma {ico} úspešne aktualizovaná z RUZ.")
             return f"Aktualizovaná firma {ico}"
@@ -181,7 +183,8 @@ def sync_single_company_from_ruz(ico: str):
     if details:
         company = _update_company_from_ruz_data(details)
         if company:
-            sync_company_orsr_data.delay(company.id)
+            if is_orsr_eligible_company(company):
+                sync_company_orsr_data.delay(company.id)
             sync_company_financials_from_ruz.delay(company.id)
             logger.info(f"Firma {ico} úspešne importovaná z RUZ (RUZ ID: {company.ruz_id})")
             return f"Importovaná firma {ico}"
@@ -234,7 +237,7 @@ def _update_company_from_ruz_data(data: dict):
     return company
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='celery')
 def search_and_add_company_by_ico(ico: str):
     """
     Vyhľadá firmu podľa IČO v RUZ API pomocou alternatívneho prístupu.
@@ -242,7 +245,7 @@ def search_and_add_company_by_ico(ico: str):
     """
     return sync_single_company_from_ruz(ico)
 
-@shared_task(queue='high_priority')
+@shared_task(queue='ruz_full')
 def resume_full_ruz_sync():
     """
     Celery task to resume a paused or failed full RUZ sync.
@@ -265,7 +268,7 @@ def resume_full_ruz_sync():
     return f"Resumed sync from RUZ ID {progress.last_processed_ruz_id}"
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='ruz_full')
 def start_full_ruz_sync(reset=False):
     """
     Celery task to start a new full RUZ sync.
@@ -283,7 +286,7 @@ def start_full_ruz_sync(reset=False):
     return "Full sync started"
 
 
-@shared_task(queue='high_priority', time_limit=86400)  # 24h limit
+@shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
 def start_full_ruz_sync_from_id(start_id: int):
     """
     Celery task na spustenie Full Sync od konkrétneho RUZ ID.
@@ -313,7 +316,7 @@ def start_full_ruz_sync_from_id(start_id: int):
     return f"Full sync from ID {start_id} started"
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='ruz_full')
 def start_incremental_sync():
     """
     Celery task na spustenie inkrementálnej synchronizácie.
@@ -324,7 +327,7 @@ def start_incremental_sync():
     return "Incremental sync completed"
 
 
-@shared_task(queue='high_priority', time_limit=86400)  # 24h limit
+@shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
 def start_repair_sync(start_id=None, workers=3):
     """
     Celery task na spustenie repair synchronizácie.
@@ -344,7 +347,7 @@ def start_repair_sync(start_id=None, workers=3):
     return "Repair sync completed"
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='ruz_full')
 def resume_repair_sync(workers=3):
     """
     Celery task na pokračovanie pozastavenej repair synchronizácie.
@@ -368,7 +371,7 @@ def resume_repair_sync(workers=3):
 
 # === GAP ANALYSIS TASKS ===
 
-@shared_task(queue='high_priority', time_limit=3600)  # 1h limit
+@shared_task(queue='ruz_full', time_limit=3600)  # 1h limit
 def analyze_ruz_gaps(expected_max=None):
     """
     Celery task na analýzu dier v RUZ ID.
@@ -393,7 +396,7 @@ def analyze_ruz_gaps(expected_max=None):
     return "Analysis completed"
 
 
-@shared_task(queue='high_priority', time_limit=86400)  # 24h limit
+@shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
 def repair_ruz_gaps(analysis_id=None, workers=5, resume=False):
     """
     Celery task na opravu chýbajúcich RUZ záznamov podľa analýzy.
@@ -415,7 +418,7 @@ def repair_ruz_gaps(analysis_id=None, workers=5, resume=False):
     return "Gap repair completed"
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='ruz_full')
 def resume_gap_repair(workers=5):
     """
     Celery task na pokračovanie pozastavenej opravy dier.
@@ -436,11 +439,19 @@ def resume_gap_repair(workers=5):
     return f"Resumed gap repair from ID {analysis.repair_progress_id}"
 
 
-@shared_task(queue='low_priority', rate_limit='15/m', max_retries=2, default_retry_delay=60)
+@shared_task(queue='orsr', rate_limit='15/m', max_retries=2, default_retry_delay=60)
 def sync_company_orsr_data(company_id: int):
     """Stiahne ORSR profil pre jednu firmu podľa IČO."""
     try:
         company = Company.objects.get(id=company_id)
+        if not is_orsr_eligible_company(company):
+            logger.info(
+                "ORSR sync skipped for company_id=%s ico=%s legal_form=%s",
+                company_id,
+                company.ico,
+                company.pravna_forma,
+            )
+            return f"ORSR sync skipped for {company.ico}"
         service = OrsrSyncService()
         profile = service.sync_company(company)
         logger.info(
@@ -459,11 +470,15 @@ def sync_company_orsr_data(company_id: int):
         raise
 
 
-@shared_task(queue='low_priority')
+@shared_task(queue='orsr')
 def schedule_missing_orsr_sync(limit: int = 200):
     """Naplánuje ORSR sync pre firmy, ktoré ešte nemajú ORSR profil."""
     company_ids = list(
-        Company.objects.filter(orsr_profile__isnull=True)
+        Company.objects.filter(
+            orsr_profile__isnull=True,
+            pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS,
+            datum_zrusenia__isnull=True,
+        )
         .order_by('id')
         .values_list('id', flat=True)[:limit]
     )
@@ -474,7 +489,7 @@ def schedule_missing_orsr_sync(limit: int = 200):
     return f"Scheduled ORSR sync for {len(company_ids)} companies"
 
 
-@shared_task(queue='low_priority', rate_limit='20/m', max_retries=2, default_retry_delay=60)
+@shared_task(queue='financials', rate_limit='20/m', max_retries=2, default_retry_delay=60)
 def sync_company_financials_from_ruz(company_id: int):
     """Stiahne a uloží hospodárske výsledky firmy z RUZ API."""
     try:
@@ -489,17 +504,28 @@ def sync_company_financials_from_ruz(company_id: int):
     return f"RUZ financial sync finished for {company.ico}, rows={upserts}"
 
 
-@shared_task(queue='low_priority')
-def schedule_ruz_financials_sync(limit: int = 200):
+@shared_task(queue='financials')
+def schedule_ruz_financials_sync(limit: int = 200, eligible_only: bool = False, missing_only: bool = False):
     """Naplánuje RUZ financial sync pre dávku firiem."""
-    company_ids = list(Company.objects.order_by('id').values_list('id', flat=True)[:limit])
+    qs = Company.objects.order_by('id')
+
+    if eligible_only:
+        qs = qs.filter(
+            pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS,
+            datum_zrusenia__isnull=True,
+        )
+
+    if missing_only:
+        qs = qs.filter(financial_results__isnull=True)
+
+    company_ids = list(qs.values_list('id', flat=True)[:limit])
     for company_id in company_ids:
         sync_company_financials_from_ruz.delay(company_id)
     logger.info("Scheduled RUZ financial sync for %s companies", len(company_ids))
     return f"Scheduled RUZ financial sync for {len(company_ids)} companies"
 
 
-@shared_task(queue='high_priority')
+@shared_task(queue='celery')
 def sync_company_now(company_id: int):
     """Spustí kompletný sync jednej firmy: RUZ, ORSR, financials a poisťovne."""
     try:
@@ -509,7 +535,8 @@ def sync_company_now(company_id: int):
         return f"Company {company_id} does not exist"
 
     sync_single_company_from_ruz.delay(company.ico)
-    sync_company_orsr_data.delay(company.id)
+    if is_orsr_eligible_company(company):
+        sync_company_orsr_data.delay(company.id)
     sync_company_financials_from_ruz.delay(company.id)
     update_insurance_debt.delay(company.id)
     logger.info("Scheduled full sync for company_id=%s ico=%s", company_id, company.ico)
