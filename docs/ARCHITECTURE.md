@@ -1,23 +1,23 @@
-# Architektura
+# Architektúra
 
-Tento dokument popisuje logicku aj runtime architekturu projektu `cistafirma`.
+Tento dokument popisuje logickú aj runtime architektúru projektu `cistafirma`.
 
-## 1. Logicke komponenty
+## 1. Logické komponenty
 
-- `frontend/` - React aplikacia, ktora vola backend cez `/api`
-- `backend/` - Django + DRF API, admin, auth, business logika
-- `registers` modul - synchronizacia dat z externych zdrojov a periodicke ulohy
-- `companies` modul - read-only API pre vyhladavanie/detail firiem
-- `users` modul - registracia, JWT token, profil pouzivatela
-- Celery worker + beat - asynchronne vykonavanie a planovanie uloh
-- Redis - broker/result backend pre Celery
-- PostgreSQL (resp. SQLite fallback) - trvale ulozisko
+- `frontend/` – React aplikácia, ktorá volá backend cez `/api`
+- `backend/` – Django + DRF API, admin, auth, business logika
+- `registers` modul – synchronizácia dát z externých zdrojov a periodické úlohy
+- `companies` modul – read-only API pre vyhľadávanie/detail firiem
+- `users` modul – registrácia, JWT token, profil používateľa
+- Celery worker + beat – asynchrónne vykonávanie a plánovanie úloh
+- Redis – broker/result backend pre Celery
+- PostgreSQL (resp. SQLite fallback) – trvalé úložisko
 
-## 2. Runtime topologia
+## 2. Runtime topológia
 
 ```mermaid
 flowchart TD
-    Browser[Browser] --> Frontend[Frontend Vite/React]
+    Browser[Prehliadač] --> Frontend[Frontend Vite/React]
     Frontend -->|/api| Django[Django API]
 
     Django --> DB[(PostgreSQL / SQLite)]
@@ -29,83 +29,90 @@ flowchart TD
 
     Worker --> RUZ[RUZ API]
     Worker --> ORSR[ORSR]
-    Worker --> VSZP[VSZP]
-    Worker --> SOC[Sociálna poistovna]
-    Worker --> FS[Financna sprava]
+    Worker --> VSZP[VŠZP]
+    Worker --> SOC[Sociálna poisťovňa]
+    Worker --> FS[Finančná správa]
 ```
 
-## 3. Aplikacne moduly (backend)
+## 3. Aplikačné moduly (backend)
 
 ### `users`
 
-- JWT autentifikacia (`/api/auth/token/`, `/api/auth/token/refresh/`)
-- registracia (`/api/auth/register/`)
-- profil (`/api/auth/profile/`)
+- JWT autentifikácia (`/api/auth/token/`, `/api/auth/token/refresh/`)
+- Registrácia (`/api/auth/register/`)
+- Profil (`/api/auth/profile/`)
 
 ### `companies`
 
-- list/search/detail endpointy pre firmy (`/api/companies/`)
-- lookup podla `ico`
-- agregovany detail vratane ORSR profilu a financnych vysledkov
+- List/search/detail endpointy pre firmy (`/api/companies/`)
+- Lookup podľa `ico`
+- Agregovaný detail vrátane ORSR profilu a finančných výsledkov
 
 ### `registers`
 
-- trigger endpointy pre manualne spustenie sync taskov
-- Celery tasky pre RUZ, ORSR, financne vysledky, poistovne
-- orchestrace full/incremental/repair sync flow
+- Trigger endpointy pre manuálne spustenie sync taskov
+- Celery tasky pre RUZ, ORSR, finančné výsledky, poisťovne
+- Orchestrácia full/incremental/repair sync flow
 
-## 4. Data synchronizacia
+### `adminapi`
 
-Periodicke ulohy su definovane v `backend/backend/settings.py` cez `CELERY_BEAT_SCHEDULE`.
+- Admin API endpointy (`/api/admin/`)
+- `AuditLogMiddleware` pre logovanie admin operácií
 
-Aktualny planovac spusta najma:
+## 4. Dátová synchronizácia
 
-- kontrolu dlhov v poistovniach
-- inkrementalne stahovanie dat z RUZ
-- aktualizaciu FS dat
-- ORSR sync pre chybajuce profily
-- RUZ financial sync
+Periodické úlohy sú definované v `backend/backend/settings.py` cez `CELERY_BEAT_SCHEDULE`.
 
-## 5. Vyhladavaci flow (request lifecycle)
+Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
+
+| Queue | Interval | Úloha |
+|---|---|---|
+| `ruz_full` | 6 h | Inkrementálne sťahovanie dát z RUZ |
+| `orsr` | 4 h | ORSR sync pre chýbajúce profily |
+| `financials` | 12 h | RUZ finančné výsledky per-company |
+| `insurance` | 12 h | Kontrola dlhov v poisťovniach (VŠZP, Soc. poisťovňa) |
+| `celery` (default) | 24 h | Aktualizácia FS dát, orchestračné a ad-hoc úlohy |
+
+## 5. Vyhľadávací flow (request lifecycle)
 
 ```mermaid
 sequenceDiagram
-    participant U as User
+    participant U as Používateľ
     participant FE as Frontend
     participant BE as Django API
-    participant DB as Database
+    participant DB as Databáza
 
-    U->>FE: zada ICO alebo nazov
+    U->>FE: zadá IČO alebo názov
     FE->>BE: GET /api/companies/search/?q=...
     BE->>DB: query na Company
-    DB-->>BE: vysledky
-    BE-->>FE: JSON results
+    DB-->>BE: výsledky
+    BE-->>FE: JSON response
     FE-->>U: zoznam firiem
 
-    U->>FE: otvori detail firmy
+    U->>FE: otvorí detail firmy
     FE->>BE: GET /api/companies/{ico}/
     BE->>DB: company + orsr_profile + financial_results
-    DB-->>BE: detailne data
+    DB-->>BE: detailné dáta
     BE-->>FE: JSON detail
-    FE-->>U: detail firmy + risk signaly
+    FE-->>U: detail firmy + rizikové signály
 ```
 
-## 6. Konfiguracia prostredia
+## 6. Konfigurácia prostredia
 
-- Root `.env` je centralny zdroj konfiguracie
-- Backend nacitava najprv root `.env`, fallback na backend-specific `.env` subory
-- Docker Compose mapuje backend na host port `8080`, frontend na `5173`
+- Root `.env` je centrálny zdroj konfigurácie.
+- Backend načítava najprv root `.env`, fallback na backend-specific `.env` súbory.
+- Docker Compose mapuje backend na host port `8080`, frontend na `5173`.
 
-## 7. Design rozhodnutia
+## 7. Dizajnové rozhodnutia
 
-- **Monorepo**: spolocny release rytmus frontend/backend/deploy
-- **Async pipeline**: heavy I/O synchronizacie mimo request-response cesty
-- **K8s migrate-first deploy**: schema migracie pred rolloutom app deploymentov
-- **API-first backend**: frontend zavisly na stabilnych DRF endpointoch
+- **Monorepo** – spoločný release rytmus frontend/backend/deploy.
+- **Async pipeline** – heavy I/O synchronizácie mimo request-response cesty.
+- **K8s migrate-first deploy** – schéma migrácie pred rolloutom app deploymentov.
+- **API-first backend** – frontend závislý na stabilných DRF endpointoch.
 
-## 8. Rizikove miesta, na ktore mysliet
+## 8. Rizikové miesta
 
-- data quality/external API availability (RUZ/ORSR)
-- queue backlog pri vacsom sync jobe
-- schema zmeny vyzadujuce backward-compatible migracie
-- konzistencia dokumentacie pri rychlych zmenach endpointov
+- Kvalita dát / dostupnosť externých API (RUZ, ORSR).
+- Queue backlog pri väčšom sync jobe.
+- Schéma zmeny vyžadujúce backward-compatible migrácie.
+- Konzistencia dokumentácie pri rýchlych zmenách endpointov.

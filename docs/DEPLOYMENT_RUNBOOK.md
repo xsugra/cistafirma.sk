@@ -1,19 +1,19 @@
 # Deployment Runbook
 
-Prakticky prevadzkovy runbook pre nasadzovanie `cistafirma` do Kubernetes.
+Praktický prevádzkový runbook pre nasadzovanie `cistafirma` do Kubernetes.
 
-Tento dokument je orientovany na realne kroky pri release, rollbacku a rieseni incidentov.
+Tento dokument je orientovaný na reálne kroky pri release, rollbacku a riešení incidentov.
 
 ## 1. Predpoklady
 
-- funkcny `kubectl` context na cielovy cluster
-- nastavene CI/CD premenne (`KUBE_CONFIG`, image registry creds)
-- dostupne image tagy backend/frontend
-- dostupny Kubernetes Secret (`cistafirma-secrets`)
+- Funkčný `kubectl` context na cieľový cluster.
+- Nastavené CI/CD premenné (`KUBE_CONFIG`, image registry credentials).
+- Dostupné image tagy backend/frontend.
+- Dostupný Kubernetes Secret (`cistafirma-secrets`).
 
-## 2. Nasadenie - happy path
+## 2. Nasadenie – happy path
 
-Pouzivane skripty:
+Používané skripty:
 
 - `scripts/k8s/deploy.sh`
 - `scripts/k8s/migrate.sh`
@@ -22,24 +22,24 @@ Pouzivane skripty:
 
 ```mermaid
 flowchart TD
-    A[Start deploy] --> B{RUN_DB_BACKUP=true?}
-    B -- ano --> C[Spust backup_postgres.sh]
-    B -- nie --> D[Pokracuj]
+    A[Štart deploy] --> B{RUN_DB_BACKUP=true?}
+    B -- áno --> C[Spusť backup_postgres.sh]
+    B -- nie --> D[Pokračuj]
     C --> D
-    D --> E[Vytvor namespace ak chyba]
-    E --> F[Spust migrate job]
-    F --> G{Migration complete?}
-    G -- nie --> H[Stop deploy, analyzuj logs]
-    G -- ano --> I[Apply K8s overlay]
+    D --> E[Vytvor namespace ak chýba]
+    E --> F[Spusť migračný job]
+    F --> G{Migrácia dokončená?}
+    G -- nie --> H[Stop deploy, analyzuj logy]
+    G -- áno --> I[Apply K8s overlay]
     I --> J[Rollout backend]
     J --> K[Rollout frontend]
-    K --> L[Deploy complete]
+    K --> L[Deploy dokončený]
 ```
 
-## 3. Manualny deploy (mimo CI)
+## 3. Manuálny deploy (mimo CI)
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 export BACKEND_IMAGE=registry.example.com/group/project/backend
 export FRONTEND_IMAGE=registry.example.com/group/project/frontend
 export DEPLOY_IMAGE_TAG=v1.0.0
@@ -51,31 +51,29 @@ scripts/k8s/deploy.sh
 
 ## 4. Rollback
 
-Rollback skript:
-
-- `scripts/k8s/rollback.sh`
+Rollback skript: `scripts/k8s/rollback.sh`
 
 ```mermaid
 flowchart LR
     A[Incident po deployi] --> B[Spusti rollback.sh]
     B --> C[Undo backend/frontend deployment]
     C --> D[Wait rollout status]
-    D --> E{Sluzba obnovena?}
-    E -- ano --> F[Uzavri incident]
-    E -- nie --> G[DB restore + hlbsia analyza]
+    D --> E{Služba obnovená?}
+    E -- áno --> F[Uzavri incident]
+    E -- nie --> G[DB restore + hlbšia analýza]
 ```
 
-Manualny rollback:
+Manuálny rollback:
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 export K8S_NAMESPACE=cistafirma
 scripts/k8s/rollback.sh
 ```
 
 ## 5. Incident triage checklist
 
-1. Over status workloadov:
+1. Over stav workloadov:
 
 ```bash
 kubectl get pods -n cistafirma
@@ -83,7 +81,7 @@ kubectl get jobs -n cistafirma
 kubectl get events -n cistafirma --sort-by=.metadata.creationTimestamp
 ```
 
-2. Skontroluj migrate job logs:
+2. Skontroluj migrate job logy:
 
 ```bash
 kubectl logs job/<migrate-job-name> -n cistafirma
@@ -96,7 +94,7 @@ kubectl describe deployment cistafirma-backend -n cistafirma
 kubectl describe deployment cistafirma-frontend -n cistafirma
 ```
 
-4. Ak treba rollbackni app vrstvu, DB obnovuj iba ked je to nevyhnutne.
+4. Ak treba, rollbackni app vrstvu. DB obnovuj iba keď je to nevyhnutné.
 
 ## 6. DB backup a restore
 
@@ -105,10 +103,10 @@ Skripty:
 - `scripts/k8s/backup_postgres.sh`
 - `scripts/k8s/restore_postgres.sh`
 
-Priklad backup:
+Príklad backup:
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 export DB_HOST=postgres-host
 export DB_PORT=5432
 export DB_NAME=cistafirma
@@ -117,10 +115,10 @@ export DB_PASSWORD=secret
 scripts/k8s/backup_postgres.sh
 ```
 
-Priklad restore:
+Príklad restore:
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 export DB_HOST=postgres-host
 export DB_PORT=5432
 export DB_NAME=cistafirma
@@ -132,13 +130,15 @@ scripts/k8s/restore_postgres.sh
 
 ## 7. Release matrix
 
-- `dev` branch -> automaticky deploy do dev prostredia
-- `main` branch -> build + priprava artefaktov
-- `vX.Y.Z` tag -> manualny produkcny deploy gate
+| Vetva / Tag | Správanie |
+|---|---|
+| `dev` branch | Automatický deploy do dev prostredia. |
+| `main` branch | Build + príprava artefaktov; manuálny gate na dev deploy. |
+| `vX.Y.Z` tag | Manuálny produkčný deploy gate. |
 
-## 8. Operacne odporucania
+## 8. Operačné odporúčania
 
-- Migracie drzat backward-compatible.
-- Pred produkcnym release vzdy overit `helm lint` + dry-run validacie.
-- Pri kritickom incidente preferovat rychly app rollback pred riskantnym DB restore.
-- Zmenu runbooku robit spolu so zmenou deploy skriptov.
+- Migrácie držať backward-compatible.
+- Pred produkčným releaseom vždy overiť `helm lint` + dry-run validácie.
+- Pri kritickom incidente preferovať rýchly app rollback pred riskantným DB restore.
+- Zmenu runbooku robiť spolu so zmenou deploy skriptov.

@@ -1,41 +1,45 @@
+# Prispievanie do CistaFirma
+
+Tento dokument popisuje workflow, vetvy, commit konvencie a povinný štandard pre všetky merge requesty v projekte CistaFirma.
+
 ## 1. Vetvy a flow
 
-- feature prace rob na vetvach `feature/<scope>-<name>`
-- urgentne opravy na `hotfix/<scope>-<name>`
-- integracia prebieha do `dev`
-- produkcne releasy idu cez tagy `vX.Y.Z`
+- Feature práce rob na vetvách `feature/<scope>-<name>`.
+- Urgentné opravy na `hotfix/<scope>-<name>`.
+- Integrácia prebieha do `dev`.
+- Produkčné releasy idú cez tagy `vX.Y.Z`.
 
-## 2. Povinny standard pre kazdy MR
+## 2. Povinný štandard pre každý MR
 
-1. zmena ma jasny ciel a je popisana v MR
-2. lokalne prebehla aspon minimalna validacia (build/test/lint podla typu zmeny)
-3. dokumentacia je aktualizovana, ak sa meni API, deploy alebo workflow
-4. zmena neobsahuje hesla, tokeny ani citlive udaje
-5. pri schema/deploy zmene je popisany rollback plan
+1. Zmena má jasný cieľ a je popísaná v MR.
+2. Lokálne prebehla aspoň minimálna validácia (build/test/lint podľa typu zmeny).
+3. Dokumentácia je aktualizovaná, ak sa mení API, deploy alebo workflow.
+4. Zmena neobsahuje heslá, tokeny ani citlivé údaje.
+5. Pri schéma/deploy zmene je popísaný rollback plán.
 
-## 3. Lokalna kontrola pred pushom
+## 3. Lokálna kontrola pred pushom
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 python3 scripts/docs/check_markdown_links.py
 helm lint deploy/helm/cistafirma
 ```
 
-Podla povahy zmeny dopln:
+Podľa povahy zmeny doplň:
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma/frontend
+cd frontend
 npm run build
 ```
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma/backend
+cd backend
 python manage.py test --verbosity=1
 ```
 
-## 4. Dokumentacia pri zmenach
+## 4. Dokumentácia pri zmenách
 
-Pri zmene API/deploy flow aktualizuj aj relevantne docs:
+Pri zmene API/deploy flow aktualizuj aj relevantné docs:
 
 - `README.md`
 - `docs/API_REFERENCE.md`
@@ -44,16 +48,16 @@ Pri zmene API/deploy flow aktualizuj aj relevantne docs:
 - `docs/DEVOPS_CICD.md`
 - `docs/DEPLOYMENT_RUNBOOK.md`
 
-## 5. Commit a review odporucania
+## 5. Commit a review odporúčania
 
-- mensie, tematicke commity su lepsie ako jeden velky dump
-- v MR popise uvadzaj **co sa meni**, **preco sa to meni**, **ako to overit**
-- pri rizikovej zmene pridaj aj **plan navratu (rollback)**
+- Menšie, tematické commity sú lepšie ako jeden veľký dump.
+- V MR popise uvádzaj **čo sa mení**, **prečo sa to mení**, **ako to overiť**.
+- Pri rizikovej zmene pridaj aj **plán návratu (rollback)**.
 
-## 6. Definicia hotovo
+## 6. Definícia „hotovo"
 
-MR je pripraveny na merge, ked:
+MR je pripravený na merge, keď:
 
-- quality gate v CI prejde,
-- reviewer rozumie dopadu zmeny,
-- dokumentacia a check-list su kompletne.
+- Quality gate v CI prejde.
+- Reviewer rozumie dopadu zmeny.
+- Dokumentácia a check-list sú kompletné.

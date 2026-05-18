@@ -90,7 +90,7 @@ file SAFE_PUSH_ACTION_PLAN.md
 
 ### Spôsob A: Via Makefile (Odporúčané)
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresara projektu
 
 # Krok 1: Prehliadka
 make clean-pre-push-dry
@@ -104,7 +104,7 @@ git push
 
 ### Spôsob B: Priamy Bash Skript
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresara projektu
 
 # Prehliadka
 ./scripts/pre-push-cleanup.sh --dry-run
@@ -118,7 +118,7 @@ cd /Users/samuelsugra/Code/cistafirma
 
 ### Spôsob C: Manuálne (bez skriptu)
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresara projektu
 
 # Cleanup lokal artefaktov
 find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

@@ -1,55 +1,58 @@
-# Dokumentacia projektu `cistafirma`
+# Dokumentácia projektu `cistafirma`
 
-Toto je centralny vstupny bod dokumentacie pre backend, frontend, data sync a deployment.
+Toto je centrálny vstupný bod dokumentácie pre backend, frontend, dátovú synchronizáciu a deployment.
 
 ## Obsah
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) - systemova architektura, komponenty, async pipeline, Mermaid diagramy
-- [`API_REFERENCE.md`](API_REFERENCE.md) - aktualne API endpointy, auth flow, priklady request/response
-- [`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md) - lokalny setup, vyvojovy workflow, testovanie, troubleshooting
-- [`DEVOPS_CICD.md`](DEVOPS_CICD.md) - pipeline, branch/tag strategia, deployment a rollback
-- [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) - operacny deploy/rollback postup, incident triage, backup/restore
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) - pravidla prispievania a MR standard
-- [`archive/README.md`](archive/README.md) - archivovane a historicke dokumenty
+| Dokument | Popis |
+|---|---|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Systémová architektúra, komponenty, async pipeline, Mermaid diagramy |
+| [`API_REFERENCE.md`](API_REFERENCE.md) | Aktuálne API endpointy, auth flow, príklady request/response |
+| [`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md) | Lokálny setup, vývojový workflow, testovanie, troubleshooting |
+| [`DEVOPS_CICD.md`](DEVOPS_CICD.md) | Pipeline, branch/tag stratégia, deployment a rollback |
+| [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) | Operačný deploy/rollback postup, incident triage, backup/restore |
+| [`GITFLOW.md`](GITFLOW.md) | Pravidlá prispievania a MR štandard |
+| [`K8S_LOCAL_RUNBOOK.md`](K8S_LOCAL_RUNBOOK.md) | Lokálny Kubernetes setup na Docker Desktop |
+| [`archive/README.md`](archive/README.md) | Archivované a historické dokumenty |
 
-## Rychla orientacia
+## Rýchla orientácia
 
 ```mermaid
 mindmap
   root((cistafirma docs))
     Produkt
       README.md
-    Vyvoj
+    Vývoj
       DEVELOPER_GUIDE.md
       API_REFERENCE.md
-    Architektura
+    Architektúra
       ARCHITECTURE.md
-    Prevadzka
+    Prevádzka
       DEVOPS_CICD.md
       DEPLOYMENT_RUNBOOK.md
-      deploy/k8s/README.md
-      deploy/helm/cistafirma/README.md
-    Archiv
+      K8S_LOCAL_RUNBOOK.md
+    Archív
       archive/README.md
 ```
 
-## Kde hladat co
+## Kde hľadať čo
 
-- Ak ides implementovat feature: zacni v `DEVELOPER_GUIDE.md`
-- Ak potrebujes endpoint alebo payload: otvor `API_REFERENCE.md`
-- Ak riesis async ulohy, queue, sync: pozri `ARCHITECTURE.md`
-- Ak riesis release/deploy: pozri `DEVOPS_CICD.md`
-- Ak riesis incident alebo rollback: pozri `DEPLOYMENT_RUNBOOK.md`
+- Ak ideš implementovať feature → začni v `DEVELOPER_GUIDE.md`.
+- Ak potrebuješ endpoint alebo payload → otvor `API_REFERENCE.md`.
+- Ak riešiš async úlohy, queue, sync → pozri `ARCHITECTURE.md`.
+- Ak riešiš release/deploy → pozri `DEVOPS_CICD.md`.
+- Ak riešiš incident alebo rollback → pozri `DEPLOYMENT_RUNBOOK.md`.
+- Ak nastavuješ lokálny K8s → pozri `K8S_LOCAL_RUNBOOK.md`.
 
-## Audit dokumentacie
+## Audit dokumentácie
 
-Pred release alebo vacsim MR spusti audit internych odkazov:
+Pred releaseom alebo väčším MR spusti audit interných odkazov:
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 make docs-audit
 ```
 
 ## Rozsah a garancia
 
-Obsah je zosynchronizovany so stavom kodu v repozitari k aktualnemu commitu. Pri vacsich zmenach API alebo deployment flow odporucame upravit dokumentaciu v rovnakom PR.
+Obsah je zosynchronizovaný so stavom kódu v repozitári k aktuálnemu commitu. Pri väčších zmenách API alebo deployment flow odporúčame upraviť dokumentáciu v rovnakom MR.

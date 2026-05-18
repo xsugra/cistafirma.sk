@@ -1,31 +1,31 @@
 # Helm chart: `cistafirma`
 
-Produkcne orientovany Helm chart pre platformu `cistafirma.sk`.
+Produkčne orientovaný Helm chart pre platformu `cistafirma.sk`.
 
-## Co nasadzuje
+## Čo nasadzuje
 
-- Django backend
-- React/Vite frontend servovany cez nginx
-- Celery worker
-- Celery beat scheduler
-- Kubernetes ingress
-- Pre-install / pre-upgrade migracny job
+- Django backend (gunicorn).
+- React/Vite frontend servovaný cez nginx.
+- Celery worker (queues: `ruz_full`, `orsr`, `financials`, `insurance`, `celery`).
+- Celery beat scheduler.
+- Kubernetes ingress.
+- Pre-install / pre-upgrade migračn�� job.
 
 ## Secrets
 
-Chart standardne ocakava existujuci Kubernetes Secret:
+Chart štandardne očakáva existujúci Kubernetes Secret:
 
 - `cistafirma-secrets`
 
-Mal by obsahovat minimalne:
+Mal by obsahovať minimálne:
 
 - `SECRET_KEY`
 - `DATABASE_URL`
-- volitelne Redis/Celery premenne, ak ich overrideujes v Secrete
+- Voliteľne Redis/Celery premenné, ak ich overrideuješ v Secrete.
 
-Celery pody pouzivaju backend image a ocakavaju rovnaku app konfiguraciu plus Redis broker/backend cez premenne ako `REDIS_URL`, `CELERY_BROKER_URL` alebo `CELERY_RESULT_BACKEND`.
+Celery pody používajú backend image a očakávajú rovnakú app konfiguráciu plus Redis broker/backend cez premenné ako `REDIS_URL`, `CELERY_BROKER_URL` alebo `CELERY_RESULT_BACKEND`.
 
-## Instalacne priklady
+## Inštalačné príklady
 
 ### Dev
 
@@ -51,20 +51,20 @@ helm upgrade --install cistafirma-prod . \
 
 ## Image tagy v CI/CD
 
-V GitLab CI odovzdaj buildnuty image tag cez `--set global.backendImage.tag=$CI_COMMIT_TAG` a `--set global.frontendImage.tag=$CI_COMMIT_TAG`.
+V GitLab CI odovzdaj buildnutý image tag cez `--set global.backendImage.tag=$CI_COMMIT_TAG` a `--set global.frontendImage.tag=$CI_COMMIT_TAG`.
 
-## Bezpecny deploy flow pre DB
+## Bezpečný deploy flow pre DB
 
 1. Urob backup DB.
-2. Spusti Helm pre-upgrade migracny job.
+2. Spusti Helm pre-upgrade migračný job.
 3. Rolloutni backend a frontend.
 4. Over readiness probe.
 
-Tento postup chrani existujuce DB data a robi schema zmeny explicitnymi.
+Tento postup chráni existujúce DB dáta a robí schéma zmeny explicitnými.
 
-## Validacia
+## Validácia
 
-Pred aplikovanim chartu odporucane kontroly:
+Pred aplikovaním chartu odporúčané kontroly:
 
 ```bash
 helm lint .
@@ -76,10 +76,9 @@ kubectl apply --dry-run=server -f /tmp/cistafirma-dev-render.yaml
 kubectl apply --dry-run=server -f /tmp/cistafirma-prod-render.yaml
 ```
 
-V GitLab CI job `helm_render_validate` spusti `helm lint` a oba `helm template` rendery. Job `helm_k8s_validate` potom spusti oba `kubectl --dry-run=client` checky a, ak je dostupny validny `KUBE_CONFIG`, aj oba server dry-run checky. Ak nastavis `STRICT_K8S_VALIDATION=true`, job failne v pripade, ze server dry-run sa neda spustit.
+V GitLab CI job `helm_render_validate` spustí `helm lint` a oba `helm template` rendery. Job `helm_k8s_validate` potom spustí oba `kubectl --dry-run=client` checky a, ak je dostupný validný `KUBE_CONFIG`, aj oba server dry-run checky. Ak nastavíš `STRICT_K8S_VALIDATION=true`, job failne v prípade, že server dry-run sa nedá spustiť.
 
-CI flow je rozdeleny do dvoch jobov:
+CI flow je rozdelený do dvoch jobov:
 
-- `helm_render_validate`: lint + render + upload artefaktov
-- `helm_k8s_validate`: client dry-run vzdy, server dry-run pri dostupnom cluster pristupe
-
+- **`helm_render_validate`** – lint + render + upload artefaktov.
+- **`helm_k8s_validate`** – client dry-run vždy, server dry-run pri dostupnom cluster prístupe.

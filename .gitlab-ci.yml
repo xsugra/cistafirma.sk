@@ -183,9 +183,8 @@ build_frontend_image:
     - mkdir -p ~/.kube
     - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
     - kubectl version --client
-    - chmod +x scripts/k8s/*.sh
   script:
-    - scripts/k8s/deploy.sh
+    - sh scripts/k8s/deploy.sh
 
 # DEV deploy on dev branch (auto)
 deploy_dev:
@@ -224,4 +223,3 @@ deploy_prod:
     DEPLOY_ENV: prod
     DEPLOY_IMAGE_TAG: "$CI_COMMIT_TAG"
     RUN_DB_BACKUP: "true"
-

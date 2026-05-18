@@ -1,14 +1,14 @@
 global:
-  # Lokálny registry beží na kind sieti (172.18.0.10:5000, pozri scripts/k8s/local_registry.sh).
+  # Lokálny registry beží na kind sieti (172.18.0.2:5000, pozri scripts/k8s/local_registry.sh).
   # Používame IP kvôli tomu, že DD k8s registry-mirror môže byť rozbitý a IP obchádza DNS.
   backendImage:
-    repository: 172.18.0.10:5000/cistafirma-backend
+    repository: 172.18.0.2:5000/cistafirma-backend
     tag: local
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   frontendImage:
-    repository: 172.18.0.10:5000/cistafirma-frontend
+    repository: 172.18.0.2:5000/cistafirma-frontend
     tag: local
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   host: cistafirma.local
 
 config:

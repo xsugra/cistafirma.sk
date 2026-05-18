@@ -167,7 +167,7 @@ git ls-files -i --exclude-standard -z | xargs -0 git rm --cached
 ## 🔗 Related Documentation
 
 - **Projekt README:** [`../README.md`](../README.md)
-- **Contributing Guide:** [`../CONTRIBUTING.md`](../CONTRIBUTING.md)
+- **Contributing Guide:** [`../docs/GITFLOW.md`](../docs/GITFLOW.md)
 - **Developer Guide:** [`../docs/DEVELOPER_GUIDE.md`](../docs/DEVELOPER_GUIDE.md)
 - **Architecture:** [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)
 - **Kubernetes:** [`./k8s/`](./k8s/)
@@ -178,7 +178,7 @@ git ls-files -i --exclude-standard -z | xargs -0 git rm --cached
 
 - **Otázky o pre-push cleanup?** Pozri [PRE_PUSH_CLEANUP_GUIDE.md](PRE_PUSH_CLEANUP_GUIDE.md)
 - **Rýchly reference?** Pozri [PRE_PUSH_CLEANUP_CHEATSHEET.md](PRE_PUSH_CLEANUP_CHEATSHEET.md)
-- **Contributing?** Pozri [`../CONTRIBUTING.md`](../CONTRIBUTING.md)
+- **Contributing?** Pozri [`../docs/GITFLOW.md`](../docs/GITFLOW.md)
 - **Development setup?** Pozri [`../docs/DEVELOPER_GUIDE.md`](../docs/DEVELOPER_GUIDE.md)
 
 ---

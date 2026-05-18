@@ -1,70 +1,70 @@
-# Developer Guide
+# Vývojársky sprievodca
 
-Prakticky guide pre vyvojarov pracujucich na monorepe `cistafirma`.
+Praktický guide pre vývojárov pracujúcich na monorepe `cistafirma`.
 
 ## 1. Predpoklady
 
 - Docker Desktop + `docker compose`
 - Node.js 20+
 - Python 3.12+
-- (volitelne) `kubectl`, `helm` pre deployment validacie
+- (voliteľne) `kubectl`, `helm` pre deployment validácie
 
-## 2. Lokalny setup
+## 2. Lokálny setup
 
-### Krok 1: env konfiguracia
+### Krok 1: Konfigurácia prostredia
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresára projektu
 cp .env.default .env
 ```
 
-### Krok 2: spustenie sluzieb
+### Krok 2: Spustenie služieb
 
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
-### Krok 3: healthcheck a smoke test
+### Krok 3: Healthcheck a smoke test
 
 ```bash
 curl http://localhost:8080/healthz/
 curl "http://localhost:8080/api/companies/search/?q=MARO"
 ```
 
-## 3. Vyvojove workflowy
+## 3. Vývojové workflow
 
 ### Backend zmeny
 
-1. uprav kod v `backend/`
-2. spusti testy
-3. over migracie (ak menis modely)
-4. over endpoint manualnym requestom
+1. Uprav kód v `backend/`.
+2. Spusti testy.
+3. Over migrácie (ak meníš modely).
+4. Over endpoint manuálnym requestom.
 
-Priklad:
+Príklad:
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma/backend
+cd backend
 python manage.py test --verbosity=1
 ```
 
 ### Frontend zmeny
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma/frontend
+cd frontend
 npm install
 npm run dev
 npm run build
 ```
 
-## 4. Asynchronne ulohy (Celery)
+## 4. Asynchrónne úlohy (Celery)
 
-Docker Compose spusta:
+Docker Compose spúšťa:
 
-- `celery_worker`
-- `celery_beat`
+- `celery_worker` – konzumuje všetky queues (`celery`, `ruz_full`, `orsr`, `financials`, `insurance`).
+- `celery_beat` – scheduler periodických úloh.
 
-Manualne trigger endpointy:
+Manuálne trigger endpointy:
 
 - `/api/registers/trigger-ruz-fetch/`
 - `/api/registers/trigger-insurance-debt-check/`
@@ -74,17 +74,20 @@ Manualne trigger endpointy:
 
 Pipeline (`.gitlab-ci.yml`) obsahuje:
 
-- `backend_validate` - compile check
-- `frontend_validate` - frontend build
-- `helm_render_validate` - Helm lint + render
-- `helm_k8s_validate` - kubectl dry-run validacie
-- `backend_tests` - Django tests
+| Job | Čo robí |
+|---|---|
+| `backend_validate` | Kontrola kompilácie |
+| `frontend_validate` | Frontend build |
+| `docs_audit` | Validácia Markdown odkazov |
+| `helm_render_validate` | Helm lint + render |
+| `helm_k8s_validate` | kubectl dry-run validácie |
+| `backend_tests` | Django testy |
 
 ## 6. Deploy workflow (K8s)
 
-- pre dev/prod deploy sa pouzivaju `scripts/k8s/*.sh`
-- migracia DB sa vykonava pred rolloutom deploymentov
-- detailny postup, rollback a triage je v `docs/DEPLOYMENT_RUNBOOK.md`
+- Pre dev/prod deploy sa používajú `scripts/k8s/*.sh`.
+- Migrácia DB sa vykonáva pred rolloutom deploymentov.
+- Detailný postup, rollback a triage je v [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md).
 
 ```mermaid
 flowchart LR
@@ -95,48 +98,47 @@ flowchart LR
     E --> F[Rollout status check]
 ```
 
-## 7. Najcastejsie commandy
+## 7. Najčastejšie príkazy
 
 ```bash
-# logs
-cd /Users/samuelsugra/Code/cistafirma
+# Logy
 docker compose logs -f backend
 docker compose logs -f celery_worker celery_beat
 
-# django inside container
+# Django inside container
 docker compose exec backend python manage.py migrate --settings=backend.settings
 docker compose exec backend python manage.py createsuperuser --settings=backend.settings
 
-# reset stack
+# Reset stacku
 docker compose down
 docker compose up -d
 ```
 
 ## 8. Troubleshooting
 
-### Frontend nevie volat backend
+### Frontend nevie volať backend
 
-- skontroluj, ci backend bezi: `docker compose ps`
-- skontroluj `http://localhost:8080/healthz/`
-- skontroluj browser console + network tab
+- Skontroluj, či backend beží: `docker compose ps`.
+- Skontroluj `http://localhost:8080/healthz/`.
+- Skontroluj browser console + network tab.
 
-### Celery ulohy sa nespracuvaju
+### Celery úlohy sa nespracúvajú
 
-- skontroluj `redis` service
-- skontroluj worker logs
-- over env pre `CELERY_BROKER_URL` a `CELERY_RESULT_BACKEND`
+- Skontroluj `redis` service.
+- Skontroluj worker logy: `docker compose logs -f celery_worker`.
+- Over env premenné `CELERY_BROKER_URL` a `CELERY_RESULT_BACKEND`.
 
-### Migrations/deploy issue na K8s
+### Migrácia/deploy problém na K8s
 
-- skontroluj migrate job logs
-- over `KUBE_CONFIG` v CI
-- spusti rollback script (`scripts/k8s/rollback.sh`) ak rollout zlyhal
+- Skontroluj migrate job logy.
+- Over `KUBE_CONFIG` v CI.
+- Spusti rollback script (`scripts/k8s/rollback.sh`) ak rollout zlyhal.
 
-## 9. Dokumentacny standard
+## 9. Dokumentačný štandard
 
-Pri zmene API/deploy flow aktualizuj spolu s kodom aj:
+Pri zmene API/deploy flow aktualizuj spolu s kódom aj:
 
 - `docs/API_REFERENCE.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DEVOPS_CICD.md`
-- root `README.md` (ak ide o user-visible zmenu)
+- Root `README.md` (ak ide o user-visible zmenu)

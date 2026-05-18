@@ -32,7 +32,7 @@ Image-y sa pullujú z lokálneho registra `172.18.0.10:5000` (kontajner `kind-re
 ## Prvý setup (fresh install)
 
 ```bash
-cd /Users/samuelsugra/Code/cistafirma
+# z root adresara projektu
 
 # 1. Lokálny registry (ak ešte nebeží)
 docker run -d --restart=always -p 127.0.0.1:5001:5000 --network kind --name kind-registry registry:2 || true
