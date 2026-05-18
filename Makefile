@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
 
 # ====================================================================================
 # HELP
@@ -123,15 +123,15 @@ celery-purge: venv
 
 run-celery-worker: venv
 	@echo "Running backend Celery worker (all queues)..."
-	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q high_priority,low_priority,celery
+	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q celery,ruz_full,orsr,financials,insurance
 
-run-celery-worker-high: venv
-	@echo "Running HIGH priority Celery worker (RUZ, FS)..."
-	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q high_priority -n worker_high@%h
+run-celery-worker-sync: venv
+	@echo "Running Celery worker for data sync (RUZ, ORSR, financials)..."
+	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q ruz_full,orsr,financials -n worker_sync@%h
 
-run-celery-worker-low: venv
-	@echo "Running LOW priority Celery worker (insurance checks)..."
-	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q low_priority,celery -n worker_low@%h
+run-celery-worker-insurance: venv
+	@echo "Running Celery worker for insurance checks..."
+	@cd $(BACKEND_DIR) && celery -A backend worker -l info -Q insurance,celery -n worker_insurance@%h
 
 run-celery-beat: venv
 	@echo "Running Celery Beat scheduler"

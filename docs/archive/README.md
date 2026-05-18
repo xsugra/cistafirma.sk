@@ -12,6 +12,14 @@ Archiv sluzi na zachovanie kontextu bez prehlcovania root adresara.
 
 ## Obsah
 
+### Pre-push cleanup dokumenty (zjednodusene do scripts/PRE_PUSH_CLEANUP_CHEATSHEET.md)
+
+- [`MASTER_GUIDE.md`](MASTER_GUIDE.md)
+- [`SAFE_PUSH_ACTION_PLAN.md`](SAFE_PUSH_ACTION_PLAN.md)
+- [`SAFE_PUSH_COMPLETE.md`](SAFE_PUSH_COMPLETE.md)
+- [`PRE_PUSH_CLEANUP_SETUP.md`](PRE_PUSH_CLEANUP_SETUP.md)
+- [`ORIENTATION.md`](ORIENTATION.md)
+
 ### Setup dokumenty
 
 - [`setup/quickstart.md`](setup/quickstart.md)

@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cistafirma-backend
-  namespace: cistafirma
 spec:
   replicas: 2
   selector:

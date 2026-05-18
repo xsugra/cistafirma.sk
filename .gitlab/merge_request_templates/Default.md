@@ -1,7 +1,7 @@
-## Prehlad zmeny
+## Prehľad zmeny
 
-- Co presne sa meni:
-- Preco sa to meni:
+- Čo presne sa mení:
+- Prečo sa to mení:
 - Dopad na backend/frontend/deploy:
 
 ## Typ zmeny
@@ -9,30 +9,30 @@
 - [ ] Feature
 - [ ] Bugfix
 - [ ] Refaktor
-- [ ] Dokumentacia
+- [ ] Dokumentácia
 - [ ] DevOps/infra
 
-## Kontrolny zoznam pred review
+## Kontrolný zoznam pred review
 
-- [ ] Zmenu som lokalne overil(a)
-- [ ] Ak bolo relevantne, spustil(a) som testy/build/lint
-- [ ] Aktualizoval(a) som dokumentaciu
-- [ ] Nepridavam ziadne citlive udaje ani tajomstva
-- [ ] Pri zmene deploy/schema je popisany rollback plan
+- [ ] Zmenu som lokálne overil(a)
+- [ ] Ak bolo relevantné, spustil(a) som testy/build/lint
+- [ ] Aktualizoval(a) som dokumentáciu
+- [ ] Nepridávam žiadne citlivé údaje ani tajomstvá (secrets)
+- [ ] Pri zmene deploy/schema je popísaný rollback plan
 
 ## Overenie
 
-Prikazy alebo kroky, ktore boli vykonane:
+Príkazy alebo kroky, ktoré boli vykonané:
 
 ```bash
-# sem dopln realne prikazy
+# sem doplň reálne príkazy
 ```
 
 ## Rollback plan
 
-- Ako vratit zmenu, ak sa po merge objavi problem:
+- Ako vrátiť zmenu, ak sa po merge objaví problém:
 
-## Poznamky pre reviewerov
+## Poznámky pre reviewerov
 
-- Rizikove miesta:
-- Co si pozriet prednostne:
+- Rizikové miesta:
+- Čo si pozrieť prednostne:

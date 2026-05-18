@@ -1,43 +1,45 @@
-# DevOps / CI-CD dokumentacia
+# DevOps / CI·CD dokumentácia
 
-Tento dokument popisuje aktualny release a deployment tok projektu `cistafirma`.
+Tento dokument popisuje aktuálny release a deployment tok projektu `cistafirma`.
 
-## Git strategia
+## Git stratégia
 
-- `main`: produkcne pripravena vetva
-- `dev`: integracna vetva pre aktivny vyvoj
-- release cez tagy: `vX.Y.Z`
+- `main` – produkčne pripravená vetva.
+- `dev` – integračná vetva pre aktívny vývoj.
+- Release cez tagy: `vX.Y.Z`.
 
-Odporucane nazvy vetiev:
+Odporúčané názvy vetiev:
 
 - `feature/<scope>-<name>`
 - `hotfix/<scope>-<name>`
 
-Promocny model:
+Promočný model:
 
-1. feature -> merge do `dev`
-2. testovanie v dev prostredi
-3. merge `dev` -> `main`
-4. vytvorenie tagu `vX.Y.Z` na `main`
-5. manualny produkcny deploy z tag pipeline
+1. Feature → merge do `dev`.
+2. Testovanie v dev prostredí.
+3. Merge `dev` → `main`.
+4. Vytvorenie tagu `vX.Y.Z` na `main`.
+5. Manuálny produkčný deploy z tag pipeline.
 
-## Fazy pipeline
+## Fázy pipeline
 
-Definovane v [`.gitlab-ci.yml`](../.gitlab-ci.yml):
+Definované v [`.gitlab-ci.yml`](../.gitlab-ci.yml):
 
-1. `validate`
-   - kontrola backend kompilacie
-   - frontend build kontrola
-   - `helm_render_validate`: Helm lint + render pre dev/prod values
-   - `helm_k8s_validate`: Kubernetes dry-run validacia (`client` vzdy, `server` ak je `KUBE_CONFIG`)
-2. `test`
-   - Django test suite
-3. `build`
-   - build + push backend image
-   - build + push frontend image
-4. `deploy`
-   - auto deploy do dev pre vetvu `dev`
-   - manualny deploy do produkcie pre `v*` tagy
+1. **`validate`**
+   - `backend_validate` – kontrola backend kompilácie.
+   - `frontend_validate` – frontend build kontrola.
+   - `docs_audit` – validácia interných Markdown odkazov.
+   - `helm_render_validate` – Helm lint + render pre dev/prod values.
+   - `helm_k8s_validate` – Kubernetes dry-run validácia (`client` vždy, `server` ak je `KUBE_CONFIG`).
+2. **`test`**
+   - `backend_tests` – Django test suite.
+3. **`build`**
+   - `build_backend_image` – build + push backend image (len `dev`, `main` a `v*` tagy).
+   - `build_frontend_image` – build + push frontend image (len `dev`, `main` a `v*` tagy).
+4. **`deploy`**
+   - `deploy_dev` – automatický deploy do dev pre vetvu `dev`.
+   - `deploy_main_to_dev` – manuálny deploy z `main` do dev prostredia.
+   - `deploy_prod` – manuálny deploy do produkcie pre `v*` tagy.
 
 ```mermaid
 flowchart LR
@@ -48,66 +50,69 @@ flowchart LR
 
     B --> B1[backend_validate]
     B --> B2[frontend_validate]
-    B --> B3[helm_render_validate]
-    B --> B4[helm_k8s_validate]
+    B --> B3[docs_audit]
+    B --> B4[helm_render_validate]
+    B --> B5[helm_k8s_validate]
 ```
 
-## Bezpecny tok migracii databazy
+## Bezpečný tok migrácií databázy
 
-Kazdy deploy ide v tomto poradi:
+Každý deploy ide v tomto poradí:
 
-1. volitelny DB backup (`RUN_DB_BACKUP=true`)
-2. migracny job na novom backend image
-3. rollout aplikacnych deploymentov
+1. Voliteľný DB backup (`RUN_DB_BACKUP=true`).
+2. Migračný job na novom backend image.
+3. Rollout aplikačných deploymentov.
 
-Preco je to tak:
+Prečo je to tak:
 
-- aplikacia nespusti stare schema proti novemu kodu
-- migracie su explicitne a auditovatelne
-- rollback app vrstvy je rychlejsi, DB restore iba ked je naozaj potrebny
+- Aplikácia nespustí staré schéma proti novému kódu.
+- Migrácie sú explicitné a auditovateľné.
+- Rollback app vrstvy je rýchlejší; DB restore iba keď je naozaj potrebný.
 
 ```mermaid
 sequenceDiagram
     participant CI as GitLab CI
     participant K8S as Kubernetes
-    participant DB as Databaza
+    participant DB as Databáza
 
     CI->>K8S: Spustenie deploy skriptu
-    CI->>DB: Volitelny backup (RUN_DB_BACKUP=true)
-    CI->>K8S: Aplikacia migracneho jobu
-    K8S-->>CI: Migracia dokoncena
-    CI->>K8S: Aplikacia app manifestov / overlay
-    CI->>K8S: Cakanie na rollout status
+    CI->>DB: Voliteľný backup (RUN_DB_BACKUP=true)
+    CI->>K8S: Aplikácia migračného jobu
+    K8S-->>CI: Migrácia dokončená
+    CI->>K8S: Aplikácia app manifestov / overlay
+    CI->>K8S: Čakanie na rollout status
 ```
 
 ## Rollback playbook
 
-1. rollback app vrstvy:
+1. Rollback app vrstvy:
 
 ```bash
 scripts/k8s/rollback.sh
 ```
 
-2. ak je nutny schema/data rollback, potom DB restore:
+2. Ak je nutný schéma/data rollback, potom DB restore:
 
 ```bash
 scripts/k8s/restore_postgres.sh
 ```
 
-Podrobny prevadzkovy postup: [`docs/DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md)
+Podrobný prevádzkový postup: [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md)
 
-## Povinne CI premenne
+## Povinné CI premenné
 
-- `CI_REGISTRY_USER`
-- `CI_REGISTRY_PASSWORD`
-- `KUBE_CONFIG` (base64 kubeconfig, povinne pre deploy joby a Helm `server` dry-run)
-- `STRICT_K8S_VALIDATION` (volitelne; `true` = fail ak server dry-run nemoze bezat)
+| Premenná | Popis |
+|---|---|
+| `CI_REGISTRY_USER` | Registry používateľ (automaticky z GitLab) |
+| `CI_REGISTRY_PASSWORD` | Registry heslo (automaticky z GitLab) |
+| `KUBE_CONFIG` | Base64 kubeconfig; povinné pre deploy joby a Helm `server` dry-run |
+| `STRICT_K8S_VALIDATION` | Voliteľné; `true` = fail ak server dry-run nemôže bežať |
 
-Volitelne pre DB backup v pipeline:
+Voliteľné pre DB backup v pipeline:
 
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
 
-## Helm validacne prikazy (lokalne)
+## Helm validačné príkazy (lokálne)
 
 ```bash
 cd deploy/helm/cistafirma
@@ -120,27 +125,29 @@ kubectl apply --dry-run=server -f /tmp/cistafirma-dev-render.yaml
 kubectl apply --dry-run=server -f /tmp/cistafirma-prod-render.yaml
 ```
 
-### CI validacne joby
+### CI validačné joby
 
-- `helm_render_validate`
-  - spusti `helm lint`
-  - vyrenderuje dev/prod manifesty
-  - ulozi render artefakty pre nasledujuci job
-- `helm_k8s_validate`
-  - pouzije render artefakty
-  - spusti `kubectl --dry-run=client` pre oba manifesty
-  - spusti `kubectl --dry-run=server`, ak je dostupny cluster context
-  - failne pri `STRICT_K8S_VALIDATION=true`, ak server validaciu nevie spustit
+- **`helm_render_validate`**
+  - Spustí `helm lint`.
+  - Vyrenderuje dev/prod manifesty.
+  - Uloží render artefakty pre nasledujúci job.
+- **`helm_k8s_validate`**
+  - Použije render artefakty.
+  - Spustí `kubectl --dry-run=client` pre oba manifesty.
+  - Spustí `kubectl --dry-run=server`, ak je dostupný cluster context.
+  - Failne pri `STRICT_K8S_VALIDATION=true`, ak server validáciu nevie spustiť.
 
-## Spravanie release
+## Správanie release
 
-- `dev` vetva: automaticky deploy do dev prostredia
-- `main` vetva: build artefaktov bez automatickeho produkcneho deploya
-- `vX.Y.Z` tag: manualny gate pre produkcny deploy
+| Vetva / Tag | Správanie |
+|---|---|
+| `dev` | Automatický deploy do dev prostredia. |
+| `main` | Build artefaktov + manuálny gate pre deploy do dev. |
+| `vX.Y.Z` tag | Manuálny gate pre produkčný deploy. |
 
-## Dalsie odporucane hardening kroky
+## Ďalšie odporúčané hardening kroky
 
-- doplnit SAST/dependency scanning
-- doplnit smoke testy po deployi
-- vynutit protected tagy pre produkcne releasy
-- presunut secrets do Vault/SealedSecrets/ExternalSecrets
+- Doplniť SAST/dependency scanning.
+- Doplniť smoke testy po deployi.
+- Vynútiť protected tagy pre produkčné releasy.
+- Presunúť secrets do Vault / SealedSecrets / ExternalSecrets.

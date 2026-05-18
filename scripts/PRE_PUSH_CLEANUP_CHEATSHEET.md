@@ -292,5 +292,5 @@ make clean-pre-push-commit && git push
 ---
 
 **Otázky?** Pozri [PRE_PUSH_CLEANUP_GUIDE.md](PRE_PUSH_CLEANUP_GUIDE.md)  
-**Viac info:** [CONTRIBUTING.md](../CONTRIBUTING.md)
+**Viac info:** [docs/GITFLOW.md](../docs/GITFLOW.md)
 

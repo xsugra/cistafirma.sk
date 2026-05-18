@@ -348,10 +348,10 @@ bash scripts/pre-push-cleanup.sh --dry-run
 
 - [Git .gitignore dokumentácia](https://git-scm.com/docs/gitignore)
 - [Git rm dokumentácia](https://git-scm.com/docs/git-rm)
-- [Projekt CONTRIBUTING.md](../CONTRIBUTING.md)
+- [Projekt docs/GITFLOW.md](../docs/GITFLOW.md)
 - [Git workflow guide](https://git-scm.com/docs/gittutorial)
 
 ---
 
-**Viac otázok?** Pozri [DEVELOPER_GUIDE.md](../docs/DEVELOPER_GUIDE.md) alebo [CONTRIBUTING.md](../CONTRIBUTING.md).
+**Viac otázok?** Pozri [DEVELOPER_GUIDE.md](../docs/DEVELOPER_GUIDE.md) alebo [docs/GITFLOW.md](../docs/GITFLOW.md).
 

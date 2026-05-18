@@ -104,7 +104,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A backend worker -l info -Q celery,high_priority,low_priority --concurrency=2
+    command: celery -A backend worker -l info -Q celery,ruz_full,orsr,financials,insurance --concurrency=2
 
   celery_beat:
     build:

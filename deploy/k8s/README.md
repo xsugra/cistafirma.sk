@@ -1,53 +1,55 @@
 # Kubernetes nasadenie
 
-Tento adresar obsahuje Kubernetes layout pre `cistafirma`, pripraveny pre GitLab CI/CD.
+Tento adresár obsahuje Kubernetes layout pre `cistafirma`, pripravený pre GitLab CI/CD.
 
-## Struktura
+## Štruktúra
 
-- `base/`: spolocne manifesty (namespace, deploymenty, services, ingress, migracny job)
-- `overlays/dev`: dev-specific zmeny (replicas, host)
-- `overlays/prod`: produkcne zmeny (replicas, host)
-- `optional/postgres-statefulset.yaml`: volitelna sablona in-cluster PostgreSQL
-- `secret.example.yaml`: sablona pozadovaneho Kubernetes Secretu
+| Cesta | Popis |
+|---|---|
+| `base/` | Spoločné manifesty (namespace, deploymenty, services, ingress, migračný job) |
+| `overlays/dev` | Dev-specific zmeny (replicas, host) |
+| `overlays/prod` | Produkčné zmeny (replicas, host) |
+| `optional/postgres-statefulset.yaml` | Voliteľná šablóna in-cluster PostgreSQL |
+| `secret.example.yaml` | Šablóna požadovaného Kubernetes Secretu |
 
-## Povinny Secret
+## Povinný Secret
 
-Pred prvym deployom vytvor `cistafirma-secrets` v namespace `cistafirma`.
+Pred prvým deployom vytvor `cistafirma-secrets` v namespace `cistafirma`:
 
 ```bash
 kubectl apply -f deploy/k8s/secret.example.yaml
 ```
 
-Potom nahrad placeholder hodnoty realnymi secretmi vo vlastnom secure workflow (nikdy necommituj realne tajomstva).
+Potom nahraď placeholder hodnoty reálnymi secretmi vo vlastnom secure workflow (nikdy necommituj reálne tajomstvá).
 
 ## CI/CD flow
 
-Pipeline v [`.gitlab-ci.yml`](../../.gitlab-ci.yml) robi:
+Pipeline v [`.gitlab-ci.yml`](../../.gitlab-ci.yml) robí:
 
-1. validate (python compile + frontend build)
-2. backend tests
-3. Docker image build/push (backend + frontend)
-4. deploy via `scripts/k8s/deploy.sh`
+1. Validate (Python compile + frontend build + Helm lint + K8s dry-run).
+2. Backend testy.
+3. Docker image build/push (backend + frontend).
+4. Deploy via `scripts/k8s/deploy.sh`.
 
-Branch/tag strategia:
+Branch/tag stratégia:
 
-- `dev` branch -> automaticky deploy do dev overlay
-- `v*` tagy -> manualny deploy do prod overlay
+- `dev` branch → automatický deploy do dev overlay.
+- `v*` tagy → manuálny deploy do prod overlay.
 
-## Bezpecna migracna strategia DB
+## Bezpečná migračná stratégia DB
 
-`deploy.sh` spusta dedikovany Kubernetes migracny job **pred** rolloutom deploymentov.
+`deploy.sh` spúšťa dedikovaný Kubernetes migračný job **pred** rolloutom deploymentov.
 
-Poradie migracie:
+Poradie:
 
-1. volitelny DB backup
-2. spustenie migracneho jobu (`python manage.py migrate` + `collectstatic`)
-3. aplikovanie app overlay manifestov
-4. cakanie na backend/frontend rollout status
+1. Voliteľný DB backup.
+2. Spustenie migračného jobu (`python manage.py migrate` + `collectstatic`).
+3. Aplikovanie app overlay manifestov.
+4. Čakanie na backend/frontend rollout status.
 
-Tento postup chrani existujuce DB data a brani spusteniu app podov proti zastaranej schemme.
+Tento postup chráni existujúce DB dáta a bráni spusteniu app podov proti zastaranej schéme.
 
-## Manualne operacie
+## Manuálne operácie
 
 ### Nasadenie
 
@@ -61,7 +63,7 @@ export K8S_NAMESPACE=cistafirma
 scripts/k8s/deploy.sh
 ```
 
-### Iba migracia
+### Iba migrácia
 
 ```bash
 export BACKEND_IMAGE_REF=registry.example.com/group/project/backend:v1.0.0
@@ -100,10 +102,9 @@ export BACKUP_FILE=./backups/cistafirma_YYYYMMDD_HHMMSS.dump
 scripts/k8s/restore_postgres.sh
 ```
 
-## Poznamky
+## Poznámky
 
-- Aktualny backend image entrypoint pouziva gunicorn a ocakava env z secret/configmap.
-- Ak pouzivas managed DB (odporucane pre produkciu), nechaj `optional/postgres-statefulset.yaml` vypnuty.
-- DB migracie drz backward-compatible pocas rolling update.
-- Kompletny operator runbook (deploy/rollback/incident): [`docs/DEPLOYMENT_RUNBOOK.md`](../../docs/DEPLOYMENT_RUNBOOK.md)
-
+- Aktuálny backend image entrypoint používa gunicorn a očakáva env z secret/configmap.
+- Ak používaš managed DB (odporúčané pre produkciu), nechaj `optional/postgres-statefulset.yaml` vypnutý.
+- DB migrácie drž backward-compatible počas rolling update.
+- Kompletný operačný runbook (deploy/rollback/incident): [`docs/DEPLOYMENT_RUNBOOK.md`](../../docs/DEPLOYMENT_RUNBOOK.md).
