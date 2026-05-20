@@ -1,134 +1,201 @@
-# CistaFirma.sk
+<div align="center">
 
-> Moderná platforma na overovanie firiem, rizík, dlhov a registrových dát na Slovensku.
+# 🏢 cistafirma.sk
 
-Monorepo obsahuje backend (Django + DRF), frontend (React + Vite), asynchrónne spracovanie (Celery) a deployment tooling (Docker Compose, Kubernetes, Helm, GitLab CI/CD).
+**Moderná platforma na overovanie firiem, rizík, dlhov a registrových dát na Slovensku.**
 
-## Prečo tento projekt
+[![Django](https://img.shields.io/badge/Django-6.x-092E20?style=flat-square&logo=django&logoColor=white)](https://www.djangoproject.com/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-Ready-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Helm](https://img.shields.io/badge/Helm-3-0F1689?style=flat-square&logo=helm&logoColor=white)](https://helm.sh/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-`cistafirma` spája verejne dostupné zdroje (RUZ, ORSR, poisťovne, FS dáta) do jedného workflow pre rýchle preverenie firmy podľa IČO alebo názvu. Cieľom je dať návštevníkovi jasný a rýchly pohľad na:
+---
 
-- základné profilové údaje firmy,
-- finančné výsledky,
-- signály rizika a dlhy,
-- historické a synchronizačné metadáta.
+Spája verejne dostupné zdroje — **RUZ**, **ORSR**, **poisťovne**, **Finančná správa** — do jedného workflow.  
+Rýchle preverenie firmy podľa **IČO** alebo **názvu** s jasným prehľadom o rizikách.
 
-## Systém na 10 sekúnd
+</div>
+
+---
+
+## ✨ Čo ponúka
+
+<table>
+<tr>
+<td width="25%" align="center">
+
+**📋 Profil firmy**
+
+Základné údaje, štatutári, sídlo, história
+
+</td>
+<td width="25%" align="center">
+
+**📊 Financie**
+
+Výsledky hospodárenia, účtovné závierky
+
+</td>
+<td width="25%" align="center">
+
+**⚠️ Rizikové signály**
+
+Dlhy, poistné nedoplatky, varovania
+
+</td>
+<td width="25%" align="center">
+
+**🔄 Živé dáta**
+
+Automatická synchronizácia z registrov
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🏗️ Architektúra
 
 ```mermaid
 flowchart LR
-    U[Používateľ v prehliadači] --> F[Frontend React/Vite]
-    F --> B[Backend Django REST API]
-    B --> DB[(PostgreSQL / SQLite)]
+    U[Prehliadac] --> F[Frontend\nReact + Vite]
+    F --> B[Backend\nDjango REST API]
+    B --> DB[(PostgreSQL)]
     B --> R[(Redis)]
     R --> CW[Celery Worker]
     CB[Celery Beat] --> R
-    CW --> EX[Externí poskytovatelia dát\nRUZ, ORSR, VŠZP, Soc. poisť., FS]
+    CW --> EX[Externe zdroje\nRUZ, ORSR, VSZP\nSoc. poist., FS]
     CW --> DB
 ```
 
-## Štruktúra monorepa
+---
 
-| Adresár | Popis |
-|---|---|
-| `backend/` | Django projekt (`users`, `companies`, `registers`, `subscriptions`, `analyses`, `adminapi`) |
-| `frontend/` | React + TypeScript UI |
-| `deploy/helm/cistafirma/` | Helm chart (backend, frontend, worker, beat, ingress, migračný job) |
-| `deploy/k8s/` | Kustomize layout (base + overlays pre dev/prod) |
-| `scripts/k8s/` | Deployment, migrácia, backup/restore, rollback skripty |
-| `docs/` | Centrálna dokumentácia pre vývojárov a DevOps |
+## 📁 Štruktúra monorepa
 
-## Rýchly štart (lokálne)
-
-### 1) Príprava konfigurácie
-
-```bash
-# z root adresára projektu
-cp .env.default .env
+```
+cistafirma/
+├── backend/                 Django projekt
+│   ├── companies/           Firemné profily, vyhľadávanie
+│   ├── registers/           Integrácie s externými registrami
+│   ├── users/               Autentifikácia (email + JWT)
+│   ├── subscriptions/       Predplatné a prístupové plány
+│   ├── analyses/            Rizikové skórovanie
+│   └── adminapi/            Admin rozhranie
+│
+├── frontend/                React 19 · TypeScript · Vite SPA
+│
+├── deploy/
+│   ├── helm/cistafirma/     Helm chart
+│   └── k8s/                 Kustomize (base + dev/prod overlay)
+│
+├── scripts/k8s/             Deploy, migrácia, backup skripty
+└── docs/                    Dokumentácia
 ```
 
-### 2) Spustenie celého stacku cez Docker Compose
+---
+
+## 🚀 Rýchly štart
+
+### Predpoklady
+
+> Docker a Docker Compose nainštalované na systéme.
+
+### 1. Konfigurácia
+
+```bash
+cp .env.default .env        # Uprav podľa potreby
+```
+
+### 2. Spustenie
 
 ```bash
 docker compose up -d
-docker compose ps
+docker compose ps            # Over, či všetko beží
 ```
 
-Predvolené endpointy:
-
-| Služba | URL |
-|---|---|
-| Frontend | `http://localhost:5173/` |
-| Backend API | `http://localhost:8080/api/` |
-| Admin | `http://localhost:8080/admin/` |
-| Healthcheck | `http://localhost:8080/healthz/` |
-
-### 3) Základné overenie
+### 3. Overenie
 
 ```bash
 curl http://localhost:8080/healthz/
 curl "http://localhost:8080/api/companies/search/?q=MARO"
 ```
 
-## Dokumentácia
+### Predvolené endpointy
 
-Kompletný dokumentačný hub je v [`docs/README.md`](docs/README.md).
+| Služba | Adresa |
+|:---|:---|
+| **Frontend** | [`localhost:5173`](http://localhost:5173/) |
+| **API** | [`localhost:8080/api/`](http://localhost:8080/api/) |
+| **Admin** | [`localhost:8080/admin/`](http://localhost:8080/admin/) |
+| **Healthcheck** | [`localhost:8080/healthz/`](http://localhost:8080/healthz/) |
 
-| Dokument | Popis |
-|---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Systémová architektúra, komponenty, async pipeline |
-| [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | API endpointy, auth flow, príklady |
-| [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) | Lokálny setup, vývojový workflow, testovanie |
-| [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md) | Operačný deploy/rollback postup, incident triage |
-| [`docs/DEVOPS_CICD.md`](docs/DEVOPS_CICD.md) | CI/CD pipeline, branch/tag stratégia |
-| [`deploy/helm/cistafirma/README.md`](deploy/helm/cistafirma/README.md) | Helm chart dokumentácia |
-| [`deploy/k8s/README.md`](deploy/k8s/README.md) | Kubernetes deployment |
+---
 
-## CI/CD v skratke
+## 🛠️ Technológie
 
-| Fáza | Čo robí |
-|---|---|
-| `validate` | Backend compile, frontend build, Helm render + K8s dry-run validácie, docs audit |
-| `test` | Django test suite |
-| `build` | Build a push backend + frontend Docker image |
-| `deploy` | Auto deploy do dev z `dev` vetvy; manuálny prod deploy z `v*` tagov |
+| Vrstva | Technológie |
+|:---|:---|
+| **Backend** | Django 6 · DRF · SimpleJWT · Celery · django-celery-beat |
+| **Dáta** | PostgreSQL (prod) · SQLite (lokálne) · Redis (broker + cache) |
+| **Frontend** | React 19 · Vite · TypeScript · Recharts |
+| **Infraštruktúra** | Docker Compose · Helm 3 · Kubernetes · GitLab CI/CD |
 
-Podrobnosti: [`docs/DEVOPS_CICD.md`](docs/DEVOPS_CICD.md)
+---
 
-## Technológie
+## 🔄 CI/CD Pipeline
 
-| Vrstva | Stack |
-|---|---|
-| Backend | Django 6, Django REST Framework, SimpleJWT, Celery, django-celery-beat |
-| Dátová vrstva | PostgreSQL (produkcia), SQLite fallback (lokálne), Redis broker/backend |
-| Frontend | React 19, Vite, TypeScript, Recharts |
-| Deploy | Docker Compose, Helm 3, Kubernetes, GitLab CI |
+```
+  validate        test          build         deploy
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│ compile  │  │  Django   │  │  Docker  │  │ dev auto │
+│ build    │──│  test     │──│  images  │──│ prod tag │
+│ lint     │  │  suite    │  │  push    │  │ (manual) │
+└──────────┘  └──────────┘  └──────────┘  └──────────┘
+```
 
-## Pre vývojárov
+> **`dev`** vetva → automatický deploy · **`v*.*.*`** tag → manuálny produkčný deploy
 
-- Setup a workflow: [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md)
-- API endpointy a príklady: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
-- Async úlohy a synchronizácia dát: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+---
 
-## Prispievanie
+## 📚 Dokumentácia
 
-- Pravidlá prispievania: [`docs/GITFLOW.md`](docs/GITFLOW.md)
-- PR/MR checklist: [`.gitlab/merge_request_templates/Default.md`](.gitlab/merge_request_templates/Default.md)
-- Archív dokumentácie: [`docs/archive/README.md`](docs/archive/README.md)
+| | Dokument | Popis |
+|:---|:---|:---|
+| 🏛️ | [Architektúra](docs/ARCHITECTURE.md) | Systémové komponenty, async pipeline |
+| 🔌 | [API referencia](docs/API_REFERENCE.md) | Endpointy, auth flow, príklady |
+| 👨‍💻 | [Developer guide](docs/DEVELOPER_GUIDE.md) | Lokálny setup, workflow, testovanie |
+| 🚢 | [Deployment runbook](docs/DEPLOYMENT_RUNBOOK.md) | Deploy, rollback, incident triage |
+| ⚙️ | [CI/CD](docs/DEVOPS_CICD.md) | Pipeline, branch a tag stratégia |
+| ☸️ | [Helm chart](deploy/helm/cistafirma/README.md) | Chart konfigurácia a values |
+| 📦 | [Kubernetes](deploy/k8s/README.md) | Kustomize deployment |
+| 🌿 | [Git workflow](docs/GITFLOW.md) | Pravidlá prispievania |
 
-## Audit dokumentácie
+---
 
-Pred väčším MR alebo releaseom odporúčame skontrolovať konzistenciu dokumentácie:
+## 🧪 Audit dokumentácie
+
+Pred väčším MR alebo releaseom skontroluj konzistenciu:
 
 ```bash
-# z root adresára projektu
 make docs-audit
 ```
 
-## Stav repozitára
+---
 
-Projekt je aktívne rozpracovaný. Pri zavádzaní zmien odporúčame:
+## 🤝 Prispievanie
 
-1. spustiť lokálne validácie,
-2. skontrolovať Helm render + dry-run,
-3. až potom push do CI pipeline.
+1. Prečítaj si [Git workflow](docs/GITFLOW.md)
+2. Použi [MR šablónu](.gitlab/merge_request_templates/Default.md)
+3. Spusti lokálne validácie pred pushom
+4. Skontroluj Helm render + dry-run
+
+---
+
+<div align="center">
+
+**cistafirma.sk** · Overuj firmy s istotou.
+
+</div>

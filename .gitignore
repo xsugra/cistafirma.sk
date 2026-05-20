@@ -98,4 +98,5 @@ backend/data/fs_data/**/*.xsd
 backend/data/fs_data/**/*.zip
 
 # Keep docs and source files by default (no blanket excludes below)
-CLAUDE.mdgraphify-out/
+CLAUDE.md
+graphify-out/
