@@ -46,24 +46,24 @@ class CompanyAdminSyncNowTests(TestCase):
 		response = self.client.get(reverse('admin:companies_company_changelist'))
 
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'admin-theme-hero')
-		self.assertContains(response, 'admin-theme-card--violet')
-		self.assertContains(response, 'admin-theme-button--emerald')
+		self.assertContains(response, 'cf-hero')
+		self.assertContains(response, 'cf-metric__accent--violet')
+		self.assertContains(response, 'cf-btn cf-btn--secondary')
 
 	def test_company_change_form_renders_sync_now_button(self):
 		response = self.client.get(reverse('admin:companies_company_change', args=[self.company.id]))
 
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'admin-theme-button--emerald')
+		self.assertContains(response, 'cf-btn cf-btn--secondary')
 		self.assertContains(response, 'Sync now')
 
 	def test_add_from_ruz_page_renders_consistent_dark_panel(self):
 		response = self.client.get(reverse('admin:companies_company_add_from_ruz'))
 
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'admin-theme-hero')
-		self.assertContains(response, 'admin-theme-form-panel')
-		self.assertContains(response, 'admin-theme-button--emerald')
+		self.assertContains(response, 'cf-hero')
+		self.assertContains(response, 'cf-form')
+		self.assertContains(response, 'cf-btn cf-btn--primary')
 
 
 class CompanyDetailSerializerProkuraTests(TestCase):

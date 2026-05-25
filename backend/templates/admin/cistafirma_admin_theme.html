@@ -608,4 +608,73 @@
     background: rgba(16,185,129,.1);
     border-color: rgba(16,185,129,.2);
 }
+
+/* ── Object Tools Override ── */
+ul.object-tools,
+.object-tools,
+[class*="object-tools"] {
+    display: flex !important;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    list-style: none !important;
+    list-style-type: none !important;
+    padding: 0 !important;
+    margin: 0 0 12px !important;
+}
+ul.object-tools li,
+.object-tools li,
+.object-tools > li,
+[class*="object-tools"] li {
+    list-style: none !important;
+    list-style-type: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+ul.object-tools li::before,
+.object-tools li::before,
+ul.object-tools li::marker,
+.object-tools li::marker {
+    content: none !important;
+    display: none !important;
+}
+.object-tools li a,
+.object-tools li button,
+.object-tools li form button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--cf-radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none !important;
+    border: 1px solid var(--cf-slate-200);
+    cursor: pointer;
+    transition: all var(--cf-transition);
+    line-height: 1.3;
+    white-space: nowrap;
+    background: var(--cf-slate-50);
+    color: var(--cf-slate-600);
+}
+.object-tools li a:hover,
+.object-tools li button:hover,
+.object-tools li form button:hover {
+    background: var(--cf-slate-100);
+    color: var(--cf-slate-800);
+    box-shadow: var(--cf-shadow-sm);
+}
+.dark .object-tools li a,
+.dark .object-tools li button,
+.dark .object-tools li form button {
+    background: var(--cf-slate-800);
+    color: var(--cf-slate-300);
+    border-color: var(--cf-slate-700);
+}
+.dark .object-tools li a:hover,
+.dark .object-tools li button:hover,
+.dark .object-tools li form button:hover {
+    background: var(--cf-slate-700);
+    color: var(--cf-slate-100);
+}
 </style>

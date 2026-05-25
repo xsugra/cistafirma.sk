@@ -378,7 +378,7 @@ class SyncProgressAdminDashboardTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertTemplateUsed(response, 'admin/registers/syncprogress/change_list.html')
-		self.assertContains(response, 'RUZ Synchronizácia')
+		self.assertContains(response, 'RUZ Synchronizacia')
 		self.assertContains(response, 'ORSR coverage')
 		self.assertContains(response, 'Financial coverage')
 
@@ -398,8 +398,8 @@ class SyncGapAnalysisAdminDashboardTests(TestCase):
 		response = self.client.get(url)
 
 		self.assertEqual(response.status_code, 200)
-		self.assertContains(response, 'admin-theme-hero')
-		self.assertContains(response, 'admin-theme-button--blue')
+		self.assertContains(response, 'cf-hero')
+		self.assertContains(response, 'cf-btn cf-btn--secondary')
 
 
 class OrsrEligibilityTests(TestCase):
