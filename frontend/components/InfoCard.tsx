@@ -5,9 +5,10 @@ interface InfoCardProps {
   title: string;
   icon: string;
   children: React.ReactNode;
+  noPadding?: boolean;
 }
 
-export const InfoCard: React.FC<InfoCardProps> = ({ title, icon, children }) => {
+export const InfoCard: React.FC<InfoCardProps> = ({ title, icon, children, noPadding }) => {
   return (
     <div className="bg-light-card dark:bg-dark-card rounded-xl border border-light-border dark:border-dark-border shadow-lg dark:shadow-none overflow-hidden transition-all duration-300">
       <div className="px-6 py-4 bg-gray-50/50 dark:bg-slate-900/50 border-b border-light-border dark:border-dark-border">
@@ -18,7 +19,7 @@ export const InfoCard: React.FC<InfoCardProps> = ({ title, icon, children }) => 
           {title}
         </h3>
       </div>
-      <div className="p-6">
+      <div className={noPadding ? '' : 'p-6'}>
         {children}
       </div>
     </div>

@@ -19,25 +19,25 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({children, title, subtitle
                     {/* Animated Background Mesh */}
                     <div className="absolute inset-0 z-0 opacity-40">
                         <div
-                            className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-600 via-indigo-700 to-purple-900"></div>
+                            className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-600 via-blue-700 to-blue-900"></div>
                         <div
                             className="absolute -top-24 -left-24 w-64 h-64 bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
                         <div
-                            className="absolute top-1/2 right-0 w-64 h-64 bg-purple-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+                            className="absolute top-1/2 right-0 w-64 h-64 bg-blue-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
                         <div
-                            className="absolute bottom-0 left-1/4 w-64 h-64 bg-indigo-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
+                            className="absolute bottom-0 left-1/4 w-64 h-64 bg-sky-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
                     </div>
 
                     {/* Content */}
                     <div className="relative z-10">
                         <div className="flex items-center gap-3 mb-8">
                             <img
-                                src="logo/logo_cistafirma-ikona.png"
+                                src="/logo/cistafirma-logo.png"
                                 alt="Logo"
                                 className="h-10 w-auto object-contain"
                             />
                             <span
-                                className="text-2xl font-bold tracking-tight text-white drop-shadow-sm">cistafirma.sk</span>
+                                className="text-2xl font-bold font-heading tracking-tight text-white drop-shadow-sm">cistafirma.sk</span>
                         </div>
 
                         <h2 className="text-3xl md:text-4xl font-bold leading-tight mb-6 text-transparent bg-clip-text bg-gradient-to-r from-white to-blue-200">

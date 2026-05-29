@@ -8,13 +8,13 @@ export const AnimatedSubtitle: React.FC = () => {
     useEffect(() => {
         const intervalId = setInterval(() => {
             setCurrentIndex(prevIndex => (prevIndex + 1) % parts.length);
-        }, 3000); 
+        }, 3000);
 
         return () => clearInterval(intervalId);
     }, []);
 
     return (
-        <div className="animated-subtitle-container text-lg text-gray-600 dark:text-gray-400 text-center mb-8">
+        <div className="animated-subtitle-container hero-text-muted text-lg text-gray-600 dark:text-gray-400 text-center mb-8">
             <span key={currentIndex} className="animated-subtitle-text font-medium">
                 {parts[currentIndex]}
             </span>

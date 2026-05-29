@@ -14,6 +14,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initi
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const isFocused = useRef(false);
 
   useEffect(() => {
     setQuery(initialIco);
@@ -43,7 +44,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initi
       try {
         const data = await api.searchCompanies(trimmedQuery);
         setSuggestions(data.results || []);
-        setShowSuggestions(true);
+        if (isFocused.current) setShowSuggestions(true);
       } catch (e) {
         console.error("Autocomplete error", e);
       } finally {
@@ -77,7 +78,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initi
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => query.length >= 2 && setShowSuggestions(true)}
+            onFocus={() => { isFocused.current = true; if (query.length >= 2 && suggestions.length > 0) setShowSuggestions(true); }}
+            onBlur={() => { isFocused.current = false; }}
             placeholder="Zadajte IČO alebo názov firmy..."
             className="w-full bg-transparent text-base sm:text-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 py-3 sm:py-4 pr-24 sm:pr-36 outline-none"
             disabled={isLoading}

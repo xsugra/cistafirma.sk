@@ -49,6 +49,31 @@ export interface Financials {
   year: number;
   revenue: number;
   profit: number;
+  totalRevenue: number;
+  costs: number;
+  incomeTax: number;
+  incomeTaxPaid: number;
+  assetsTotal: number;
+  assetsIntangible: number;
+  assetsTangible: number;
+  assetsFinancial: number;
+  assetsInventory: number;
+  assetsReceivablesLong: number;
+  assetsReceivablesShort: number;
+  assetsFinancialAccounts: number;
+  assetsAccruals: number;
+  equity: number;
+  equityBasic: number;
+  equityCapitalFunds: number;
+  equityProfitFunds: number;
+  equityRetained: number;
+  liabilitiesTotal: number;
+  liabilitiesReserves: number;
+  liabilitiesLong: number;
+  liabilitiesShort: number;
+  liabilitiesAccruals: number;
+  debtRatio: number | null;
+  grossMargin: number | null;
 }
 
 export interface Executive {
