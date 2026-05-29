@@ -100,7 +100,7 @@ export function Users() {
                     </td>
                     <td className="px-4 py-3 text-xs">
                       {u.is_superuser ? (
-                        <span className="text-purple-600 dark:text-purple-400 font-semibold">Superuser</span>
+                        <span className="text-blue-600 dark:text-blue-400 font-semibold">Superuser</span>
                       ) : u.is_staff ? (
                         <span className="text-amber-600 dark:text-amber-400 font-semibold">Staff</span>
                       ) : (

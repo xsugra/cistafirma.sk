@@ -1,30 +1,23 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { adminApi } from '../api';
+import { useAsyncData } from '../../hooks/useAsyncData';
 import type { ScheduledTask } from '../types';
 
 export function ScheduledTasks() {
-  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data: tasks, isLoading: loading, error, refetch } = useAsyncData<ScheduledTask[]>(
+    () => adminApi.listScheduledTasks().then(res => res.results || []),
+    [],
+  );
   const [toggling, setToggling] = useState<number | null>(null);
-
-  const fetchTasks = () => {
-    setLoading(true);
-    adminApi.listScheduledTasks()
-      .then(res => setTasks(res.results || []))
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { fetchTasks(); }, []);
+  const [mutationError, setMutationError] = useState('');
 
   const toggle = async (id: number) => {
     setToggling(id);
     try {
-      const res = await adminApi.toggleScheduledTask(id);
-      setTasks(prev => prev.map(t => t.id === id ? { ...t, enabled: res.enabled } : t));
+      await adminApi.toggleScheduledTask(id);
+      refetch();
     } catch (e: any) {
-      setError(e.message);
+      setMutationError(e.message);
     } finally {
       setToggling(null);
     }
@@ -35,16 +28,16 @@ export function ScheduledTasks() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Periodické úlohy</h1>
         <button
-          onClick={fetchTasks}
+          onClick={refetch}
           className="px-3 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm transition-colors"
         >
           <i className="fas fa-sync-alt" />
         </button>
       </div>
 
-      {error && (
+      {(error || mutationError) && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3 text-sm text-red-700 dark:text-red-300">
-          <i className="fas fa-exclamation-circle mr-2" />{error}
+          <i className="fas fa-exclamation-circle mr-2" />{error || mutationError}
         </div>
       )}
 
@@ -65,7 +58,7 @@ export function ScheduledTasks() {
             <tbody>
               {loading ? (
                 <tr><td colSpan={7} className="text-center py-12 text-slate-400"><i className="fas fa-spinner fa-spin mr-2" />Načítavam...</td></tr>
-              ) : tasks.length === 0 ? (
+              ) : !tasks || tasks.length === 0 ? (
                 <tr><td colSpan={7} className="text-center py-12 text-slate-400">Žiadne periodické úlohy</td></tr>
               ) : (
                 tasks.map(t => (

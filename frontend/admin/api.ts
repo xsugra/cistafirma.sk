@@ -9,39 +9,12 @@ import type {
   ScheduledTask,
   SyncJob,
 } from './types';
+import { apiRequest } from '../lib/apiClient';
 
 const API_BASE = '/api/admin';
 
-async function adminRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem('token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers as Record<string, string> || {}),
-  };
-
-  const response = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
-
-  if (response.status === 401) {
-    localStorage.removeItem('token');
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'));
-    throw new Error('Platnosť prihlásenia vypršala.');
-  }
-
-  if (!response.ok) {
-    const text = await response.text();
-    let msg: string;
-    try {
-      const data = JSON.parse(text);
-      msg = data.detail || JSON.stringify(data);
-    } catch {
-      msg = text.slice(0, 200) || `HTTP ${response.status}`;
-    }
-    throw new Error(msg);
-  }
-
-  if (response.status === 204) return {} as T;
-  return response.json();
+function adminRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  return apiRequest<T>(endpoint, options, API_BASE);
 }
 
 export const adminApi = {

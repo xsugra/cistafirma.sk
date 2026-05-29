@@ -1,14 +1,12 @@
 import React, {useState} from 'react';
+import { useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {useAuth} from '../context/AuthContext';
 import {AuthLayout} from '../components/AuthLayout';
+import {ROUTES} from '../constants';
 
-interface LoginProps {
-    onSuccess: () => void;
-    onRegisterClick: () => void;
-}
-
-export const Login: React.FC<LoginProps> = ({onSuccess, onRegisterClick}) => {
+export const Login: React.FC = () => {
+    const navigate = useNavigate();
     const {login} = useAuth();
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
@@ -23,10 +21,8 @@ export const Login: React.FC<LoginProps> = ({onSuccess, onRegisterClick}) => {
         try {
             const data: any = await api.login(identifier, password);
             login(data.user, data.token);
-            // Call the callback provided by App.tsx router instead of useNavigate
-            onSuccess();
+            navigate(ROUTES.HOME);
         } catch (err: any) {
-            // Use the specific error message from api.js (which now handles CORS detection)
             setError(err.message || 'Prihlásenie zlyhalo. Skontrolujte svoje údaje.');
         } finally {
             setLoading(false);
@@ -48,7 +44,7 @@ export const Login: React.FC<LoginProps> = ({onSuccess, onRegisterClick}) => {
 
             <form onSubmit={handleSubmit} className="space-y-5">
                 <div className="form-group">
-                    <label className="form-label">Email alebo login</label>
+                    <label className="form-label">Email alebo používateľské meno</label>
                     <div className="input-wrapper">
                         <i className="fas fa-user input-icon"></i>
                         <input
@@ -121,7 +117,7 @@ export const Login: React.FC<LoginProps> = ({onSuccess, onRegisterClick}) => {
                 <p className="text-gray-500 dark:text-gray-400 text-sm">
                     Ešte nemáte účet?{' '}
                     <button
-                        onClick={onRegisterClick}
+                        onClick={() => navigate(ROUTES.REGISTER)}
                         className="text-blue-600 dark:text-blue-400 font-bold hover:underline transition-colors"
                     >
                         Zaregistrujte sa zadarmo
