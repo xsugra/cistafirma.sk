@@ -189,7 +189,6 @@ make help
 
 ## 🔗 Súvisiace Dokumenty
 
-- `CONTRIBUTING.md` - Contributing pravidlá
 - `docs/DEVELOPER_GUIDE.md` - Development setup
 - `docs/ARCHITECTURE.md` - Projekt architektúra
 

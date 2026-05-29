@@ -18,8 +18,22 @@ frontend:
   replicaCount: 3
 
 celery:
-  worker:
-    replicaCount: 2
   beat:
     replicaCount: 1
+  workers:
+    ruz:
+      replicaCount: 1
+    orsr:
+      replicaCount: 2
+    financials:
+      replicaCount: 2
+    insurance:
+      replicaCount: 1
+    default:
+      replicaCount: 1
+
+pdb:
+  enabled: true
+  backendMinAvailable: 2
+  frontendMinAvailable: 2
 

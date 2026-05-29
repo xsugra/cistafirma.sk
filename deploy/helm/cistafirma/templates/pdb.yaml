@@ -1,0 +1,29 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cistafirma.fullname" . }}-backend
+  labels:
+    {{- include "cistafirma.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  minAvailable: {{ .Values.pdb.backendMinAvailable }}
+  selector:
+    matchLabels:
+      {{- include "cistafirma.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cistafirma.fullname" . }}-frontend
+  labels:
+    {{- include "cistafirma.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  minAvailable: {{ .Values.pdb.frontendMinAvailable }}
+  selector:
+    matchLabels:
+      {{- include "cistafirma.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+{{- end }}
