@@ -5,9 +5,57 @@ from typing import Dict, List, Optional, Tuple
 
 from companies.models import Company, CompanyFinancialResult
 from registers.integrations.ruz_api import RuzApi
+from registers.services.pdf_financial_parser import extract_financials_from_attachments
 
 
 logger = logging.getLogger(__name__)
+
+
+BALANCE_SHEET_KEYS = ("suvaha", "bilancia", "balance sheet", "strana aktiv", "strana pasiv", "assets", "liabilities")
+
+ASSETS_LABELS = {
+    "dlhodoby nehmotny majetok sucet": "assets_intangible",
+    "dlhodoby hmotny majetok sucet": "assets_tangible",
+    "dlhodoby financny majetok sucet": "assets_financial",
+    "zasoby sucet": "assets_inventory",
+    "zasoby spolu": "assets_inventory",
+    "dlhodobe pohladavky sucet": "assets_receivables_long",
+    "dlhodobe pohladavky spolu": "assets_receivables_long",
+    "kratkodobe pohladavky sucet": "assets_receivables_short",
+    "kratkodobe pohladavky spolu": "assets_receivables_short",
+    "financne ucty sucet": "assets_financial_accounts",
+    "financne ucty spolu": "assets_financial_accounts",
+    "krabezny financny majetok": "assets_financial_accounts",
+}
+
+ASSETS_TOTAL_LABELS = ("majetok spolu", "aktiva celkom", "spolu majetok")
+
+LIABILITIES_LABELS = {
+    "zakladne imanie sucet": "equity_basic",
+    "zakladne imanie": "equity_basic",
+    "kapitalove fondy sucet": "equity_capital_funds",
+    "kapitalove fondy spolu": "equity_capital_funds",
+    "fondy zo zisku": "equity_profit_funds",
+    "zakonne rezervne fondy": "equity_profit_funds",
+    "vysledok hospodarenia minulych rokov": "equity_retained",
+    "rezervy sucet": "liabilities_reserves",
+    "rezervy spolu": "liabilities_reserves",
+    "dlhodobe rezervy": "liabilities_reserves",
+    "dlhodobe zavazky sucet": "liabilities_long",
+    "dlhodobe zavazky spolu": "liabilities_long",
+    "kratkodobe zavazky sucet": "liabilities_short",
+    "kratkodobe zavazky spolu": "liabilities_short",
+}
+
+EQUITY_TOTAL_LABELS = ("vlastne imanie sucet", "vlastne imanie spolu", "vlastny kapital")
+LIABILITIES_TOTAL_LABELS = ("cudzie zdroje", "zavazky celkom", "cudzie zdroje spolu")
+
+PL_EXTENDED_LABELS = {
+    "pridana hodnota": "added_value",
+}
+
+
+_template_cache: Dict[int, Dict] = {}
 
 
 class RuzFinancialsSyncService:
@@ -19,9 +67,8 @@ class RuzFinancialsSyncService:
 
     def __init__(self, api: Optional[RuzApi] = None):
         self.api = api or RuzApi()
-        self._template_cache: Dict[int, Dict] = {}
 
-    def sync_company(self, company: Company, max_statements: int = 20) -> int:
+    def sync_company(self, company: Company, max_statements: int = 30) -> int:
         """Fetch and upsert yearly financial data for one company. Returns number of upserts."""
         if not company.ruz_id:
             detail = self.api.get_company_by_ico(company.ico)
@@ -50,17 +97,16 @@ class RuzFinancialsSyncService:
             if not report_ids:
                 continue
 
-            revenue, profit = self._extract_financials_from_reports(report_ids)
-            if revenue is None and profit is None:
+            financials = self._extract_financials_from_reports(report_ids)
+            if financials.get("revenue") is None and financials.get("profit") is None:
                 continue
 
             CompanyFinancialResult.objects.update_or_create(
                 company=company,
                 year=year,
                 defaults={
-                    "revenue": revenue,
-                    "profit": profit,
                     "source": "ruz_api",
+                    **{k: v for k, v in financials.items() if v is not None},
                 },
             )
             upserts += 1
@@ -68,7 +114,6 @@ class RuzFinancialsSyncService:
         return upserts
 
     def _extract_year(self, statement: Dict) -> Optional[int]:
-        # Prefer obdobieDo (YYYY-MM), fallback to obdobieOd.
         for key in ("obdobieDo", "obdobieOd"):
             value = statement.get(key)
             if not value:
@@ -78,28 +123,29 @@ class RuzFinancialsSyncService:
                 return int(match.group(1))
         return None
 
-    def _extract_financials_from_reports(self, report_ids: List[int]) -> Tuple[Optional[Decimal], Optional[Decimal]]:
-        best_revenue = None
-        best_cost = None
-        best_profit = None
+    def _extract_financials_from_reports(self, report_ids: List[int]) -> Dict[str, Optional[Decimal]]:
+        result: Dict[str, Optional[Decimal]] = {}
+        pdf_attachments: List[Dict] = []
 
         for report_id in report_ids:
             report = self.api.get_financial_report_details(report_id)
             if not report:
                 continue
 
+            # Collect PDF attachments for fallback parsing
+            for attachment in (report.get("prilohy") or []):
+                if (attachment.get("mimeType") or "").startswith("application/pdf"):
+                    pdf_attachments.append(attachment)
+
             tables = ((report.get("obsah") or {}).get("tabulky") or [])
             template_tables = self._get_template_tables(report.get("idSablony"))
 
             for idx, table in enumerate(tables):
                 template_table = template_tables[idx] if idx < len(template_tables) else None
-                rev, cost, prof = self._extract_with_template(table, template_table)
-                if rev is not None:
-                    best_revenue = self._pick_better(best_revenue, rev)
-                if cost is not None:
-                    best_cost = self._pick_better(best_cost, cost)
-                if prof is not None:
-                    best_profit = self._pick_better(best_profit, prof)
+                extracted = self._extract_with_template(table, template_table)
+                for key, value in extracted.items():
+                    if value is not None:
+                        result[key] = self._pick_better(result.get(key), value)
 
             for table in tables:
                 name = self._normalize_text(self._table_name(table))
@@ -111,66 +157,156 @@ class RuzFinancialsSyncService:
                     continue
 
                 if any(k in name for k in self.REVENUE_KEYS):
-                    best_revenue = self._pick_better(best_revenue, total)
+                    result["revenue"] = self._pick_better(result.get("revenue"), total)
                 elif any(k in name for k in self.COST_KEYS):
-                    best_cost = self._pick_better(best_cost, total)
+                    result["costs"] = self._pick_better(result.get("costs"), total)
                 elif any(k in name for k in self.PROFIT_KEYS):
-                    best_profit = self._pick_better(best_profit, total)
+                    result["profit"] = self._pick_better(result.get("profit"), total)
 
-        if best_profit is None and best_revenue is not None and best_cost is not None:
-            best_profit = best_revenue - best_cost
+        # Fallback: if structured obsah yielded nothing, try PDF attachments
+        if result.get("revenue") is None and result.get("profit") is None and pdf_attachments:
+            logger.info("No structured financial data found, attempting PDF extraction from %d attachments", len(pdf_attachments))
+            pdf_result = extract_financials_from_attachments(pdf_attachments, session=self.api.session)
+            for key, value in pdf_result.items():
+                if value is not None:
+                    result[key] = self._pick_better(result.get(key), value)
 
-        return best_revenue, best_profit
+        if result.get("profit") is None and result.get("revenue") is not None and result.get("costs") is not None:
+            result["profit"] = result["revenue"] - result["costs"]
+
+        return result
 
     def _get_template_tables(self, template_id: Optional[int]) -> List[Dict]:
         if not template_id:
             return []
-        if template_id not in self._template_cache:
+        if template_id not in _template_cache:
             template = self.api.get_report_template_details(template_id) or {}
-            self._template_cache[template_id] = template
-        return self._template_cache[template_id].get("tabulky", []) or []
+            _template_cache[template_id] = template
+        return _template_cache[template_id].get("tabulky", []) or []
 
-    def _extract_with_template(self, table: Dict, template_table: Optional[Dict]) -> Tuple[Optional[Decimal], Optional[Decimal], Optional[Decimal]]:
+    def _extract_with_template(self, table: Dict, template_table: Optional[Dict]) -> Dict[str, Optional[Decimal]]:
+        extracted: Dict[str, Optional[Decimal]] = {}
+
         if not template_table:
-            return None, None, None
+            return extracted
 
         data = table.get("data") or []
         rows = template_table.get("riadky") or []
         if not data or not rows:
-            return None, None, None
+            return extracted
 
         if len(data) >= len(rows) * 2:
-            # Most reports carry current + previous period in alternating columns.
             get_row_value = lambda idx: self._to_decimal(data[idx * 2])
         else:
             get_row_value = lambda idx: self._to_decimal(data[idx]) if idx < len(data) else None
 
-        revenue = None
-        cost = None
-        profit = None
+        table_name = self._normalize_text(
+            self._table_name(template_table) or self._table_name(table)
+        )
+        is_balance_sheet = any(k in table_name for k in BALANCE_SHEET_KEYS) if table_name else False
+
+        is_assets_table = any(k in table_name for k in ("strana aktiv", "assets")) if table_name else False
+        is_liabilities_table = any(k in table_name for k in ("strana pasiv", "liabilities")) if table_name else False
+
+        in_liabilities_section = is_liabilities_table
 
         for idx, row in enumerate(rows):
             row_label = self._normalize_text(((row.get("text") or {}).get("sk") or ""))
             if not row_label:
                 continue
             value = get_row_value(idx)
-            if value is None:
-                continue
 
-            if ("vynosy z hospodarskej cinnosti spolu" in row_label) or ("trzby z predaja" in row_label and revenue is None):
-                revenue = self._pick_better(revenue, value)
+            # P&L extraction (revenue, cost, profit)
+            if ("vynosy z hospodarskej cinnosti spolu" in row_label) or ("trzby z predaja" in row_label and "revenue" not in extracted):
+                if value is not None:
+                    extracted["revenue"] = self._pick_better(extracted.get("revenue"), value)
+
+            if "vynosy z financnej cinnosti spolu" in row_label or "financne vynosy spolu" in row_label or "financne vynosy sucet" in row_label:
+                if value is not None:
+                    rev = extracted.get("revenue")
+                    base = rev if rev is not None else Decimal(0)
+                    extracted["total_revenue"] = base + value
+
+            if "vynosy z hospodarskej cinnosti spolu" in row_label:
+                if value is not None and "total_revenue" not in extracted:
+                    extracted["total_revenue"] = value
+
             if "naklady na hospodarsku cinnost spolu" in row_label:
-                cost = self._pick_better(cost, value)
+                if value is not None:
+                    extracted["costs"] = self._pick_better(extracted.get("costs"), value)
+
             if (
                 "vysledok hospodarenia z hospodarskej cinnosti" in row_label
                 or "vysledok hospodarenia za uctovne obdobie po zdaneni" in row_label
             ):
-                profit = self._pick_better(profit, value)
+                if value is not None:
+                    extracted["profit"] = self._pick_better(extracted.get("profit"), value)
 
-        if profit is None and revenue is not None and cost is not None:
-            profit = revenue - cost
+            # P&L extended
+            if "dan z prijmov" in row_label and "odlozena" not in row_label:
+                if "splatna" in row_label:
+                    if value is not None:
+                        extracted["income_tax_paid"] = value
+                elif value is not None:
+                    extracted["income_tax"] = value
 
-        return revenue, cost, profit
+            for label_key, field_name in PL_EXTENDED_LABELS.items():
+                if label_key in row_label and value is not None:
+                    extracted[field_name] = self._pick_better(extracted.get(field_name), value)
+
+            # Balance sheet extraction
+            if not is_balance_sheet:
+                continue
+
+            if any(k in row_label for k in ("vlastne imanie", "vlastny kapital", "pasiva", "zavazky")):
+                in_liabilities_section = True
+
+            if self._is_summary_row(row_label, ("spolu majetok", "aktiva celkom", "majetok spolu")):
+                if value is not None:
+                    extracted["assets_total"] = self._pick_better(extracted.get("assets_total"), value)
+                continue
+
+            if self._is_summary_row(row_label, ("vlastne imanie", "vlastny kapital")):
+                if value is not None:
+                    extracted["equity"] = self._pick_better(extracted.get("equity"), value)
+                continue
+
+            if self._is_summary_row(row_label, ("zavazky", "cudzie zdroje")):
+                if value is not None:
+                    extracted["liabilities_total"] = self._pick_better(extracted.get("liabilities_total"), value)
+                continue
+
+            if "casove rozlisenie" in row_label and value is not None:
+                if in_liabilities_section:
+                    extracted["liabilities_accruals"] = value
+                else:
+                    extracted["assets_accruals"] = value
+                continue
+
+            if not in_liabilities_section:
+                for label_key, field_name in ASSETS_LABELS.items():
+                    if label_key in row_label and value is not None:
+                        extracted[field_name] = self._pick_better(extracted.get(field_name), value)
+                        break
+            else:
+                for label_key, field_name in LIABILITIES_LABELS.items():
+                    if label_key in row_label and value is not None:
+                        extracted[field_name] = self._pick_better(extracted.get(field_name), value)
+                        break
+
+        if extracted.get("profit") is None and extracted.get("revenue") is not None and extracted.get("costs") is not None:
+            extracted["profit"] = extracted["revenue"] - extracted["costs"]
+
+        return extracted
+
+    def _is_summary_row(self, label: str, prefixes: tuple) -> bool:
+        for prefix in prefixes:
+            if not label.startswith(prefix):
+                continue
+            rest = label[len(prefix):].strip()
+            if not rest or rest.startswith("r.") or rest.startswith("sucet") or rest.startswith("spolu"):
+                return True
+        return False
 
     def _table_name(self, table: Dict) -> str:
         name = table.get("nazov")
@@ -187,7 +323,6 @@ class RuzFinancialsSyncService:
                 numbers.append(parsed)
         if not numbers:
             return None
-        # In RUZ tables the total is usually at the end.
         return numbers[-1]
 
     def _to_decimal(self, value) -> Optional[Decimal]:
@@ -215,4 +350,3 @@ class RuzFinancialsSyncService:
             "aacdeeillnoorrstuyzAACDEEILLNOORRSTUYZ",
         )
         return (value or "").translate(ascii_map).lower()
-

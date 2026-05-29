@@ -254,11 +254,10 @@ class SyncProgress(models.Model):
         return f"{self.get_sync_type_display()} - {self.get_status_display()} ({self.total_processed} firiem)"
     
     def get_progress_percentage(self):
-        """Odhadovaný progress v percentách (cca 400000 firiem v RUZ)"""
-        estimated_total = 400000
-        if self.total_processed >= estimated_total:
+        from core.constants import RUZ_ESTIMATED_COMPANY_COUNT
+        if self.total_processed >= RUZ_ESTIMATED_COMPANY_COUNT:
             return 100
-        return round((self.total_processed / estimated_total) * 100, 1)
+        return round((self.total_processed / RUZ_ESTIMATED_COMPANY_COUNT) * 100, 1)
     
     def get_duration(self):
         """Vráti trvanie synchronizácie"""

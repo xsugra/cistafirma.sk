@@ -1,14 +1,58 @@
 from rest_framework import viewsets, filters, status, permissions
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes as perm_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
-from .models import Company
-from .serializers import CompanyListSerializer, CompanyDetailSerializer
 from django.db.models import Q
-
+from django.utils import timezone
+from .models import Company, Watchlist
+from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+@api_view(['GET'])
+@perm_classes([permissions.AllowAny])
+def landing_stats(request):
+    today = timezone.now().date()
+    companies_indexed = Company.objects.count()
+    risky = Company.objects.filter(
+        Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
+    ).count()
+    daily_checks = Company.objects.filter(
+        datum_poslednej_upravy=today
+    ).count()
+    return Response({
+        'companiesIndexed': companies_indexed,
+        'dailyChecks': daily_checks,
+        'riskyCompaniesDetected': risky,
+    })
+
+
+class WatchlistViewSet(viewsets.ModelViewSet):
+    serializer_class = WatchlistSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Watchlist.objects.filter(user=self.request.user).select_related('company')
+
+    def create(self, request, *args, **kwargs):
+        ico = request.data.get('ico', '').strip()
+        if not ico:
+            return Response({'detail': 'IČO je povinné.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            company = Company.objects.get(ico=ico)
+        except Company.DoesNotExist:
+            return Response({'detail': 'Firma s týmto IČO neexistuje.'}, status=status.HTTP_404_NOT_FOUND)
+        obj, created = Watchlist.objects.get_or_create(user=request.user, company=company)
+        if not created:
+            return Response({'detail': 'Firma je už vo watchliste.'}, status=status.HTTP_200_OK)
+        return Response(WatchlistSerializer(obj).data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CompanyListPagination(PageNumberPagination):

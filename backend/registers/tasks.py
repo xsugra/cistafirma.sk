@@ -1,4 +1,4 @@
-from celery import shared_task
+from celery import shared_task, chain, chord, group
 from django.db.models import Q
 from django.core.management import call_command
 from django.utils import timezone
@@ -8,12 +8,12 @@ import logging
 
 from .scrapers.vszp_debt import check_vszp_debt_get
 from .scrapers.soc_poist_debt import check_socpoist_debt
-from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi
-from .services.orsr_sync import OrsrSyncService
+from .services.rpo_sync import RpoSyncService
 from .services.ruz_financials_sync import RuzFinancialsSyncService
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company
+from core.task_utils import BaseSyncTask
 
 logger = logging.getLogger(__name__)
 
@@ -44,47 +44,27 @@ def fetch_ruz_data_task():
     logger.info("RUZ data fetch completed.")
 
 
-# Obmedzenie na 20 requestov za minútu, 3 pokusy s odkladom 1 minúta
-# Beží na insurance queue (samostatný worker, rate-limited aby sa vyhlo banu).
-@shared_task(queue='insurance', rate_limit='20/m', max_retries=3, default_retry_delay=60)
+@shared_task(base=BaseSyncTask, queue='insurance', rate_limit='20/m')
 def update_insurance_debt(company_id: int):
-    """
-    Stiahne a aktualizuje dlhy pre jednu konkretnu firmu.
-    """
-    try:
-        company = Company.objects.get(id=company_id)
-        logger.info(f"Spustam kontrolu dlhov pre {company.nazov_UJ} (ICO: {company.ico})")
+    company = Company.objects.get(id=company_id)
 
-        # Ziskanie dat zo scraperov
-        # Pridame error handling, ak scraper vrati None
-        debt_vszp = check_vszp_debt_get(company.ico)
-        debt_soc_poist = check_socpoist_debt(company.ico)
+    debt_vszp = check_vszp_debt_get(company.ico)
+    debt_soc_poist = check_socpoist_debt(company.ico)
 
-        # Aktualizacia databazy
-        update_fields = []
-        if debt_vszp is not None:
-            company.debt_vszp = debt_vszp
-            update_fields.append('debt_vszp')
+    update_fields = []
+    if debt_vszp is not None:
+        company.debt_vszp = debt_vszp
+        update_fields.append('debt_vszp')
+    if debt_soc_poist is not None:
+        company.debt_soc_poist = debt_soc_poist
+        update_fields.append('debt_soc_poist')
 
-        if debt_soc_poist is not None:
-            company.debt_soc_poist = debt_soc_poist
-            update_fields.append('debt_soc_poist')
+    company.last_insurance_debt = timezone.now()
+    update_fields.append('last_insurance_debt')
 
-        company.last_insurance_debt = timezone.now()
-        update_fields.append('last_insurance_debt')
-
-        # Ulozime iba zmenene polia pre efektivitu
-        if update_fields:
-            company.save(update_fields=update_fields)
-            logger.info(f"Uspesne aktualizovane dlhy z poistovni pre {company.nazov_UJ}.")
-
-
-    except Company.DoesNotExist:
-        logger.error(f"Firma s ID {company_id} nebola nájdená.")
-    except Exception as e:
-        logger.error(f"Neočakávaná chyba pri aktualizácii dlhov pre firmu ID {company_id}: {e}")
-        # Celery sa pokusi ulohu zopakovat vdaka @shared_task
-        raise e
+    if update_fields:
+        company.save(update_fields=update_fields)
+        logger.info("Insurance debts updated for %s (ICO: %s)", company.nazov_UJ, company.ico)
 
 @shared_task(queue='insurance')
 def schedule_insurance_debt_checks():
@@ -139,57 +119,35 @@ def update_fs_data_task():
     logger.info("update_fs_data command finished.")
 
 
-@shared_task(queue='celery', max_retries=3, default_retry_delay=30)
+@shared_task(base=BaseSyncTask, queue='celery')
 def sync_single_company_from_ruz(ico: str):
     """
     Synchronizuje jednu firmu z RUZ API podľa IČO.
     Ak firma neexistuje v DB, vytvorí ju. Ak existuje, aktualizuje ju.
-    
-    Používa priame vyhľadávanie podľa IČO cez RUZ API parameter.
+    Neodpaľuje ďalšie tasky — to robí orchestrátor.
     """
-    logger.info(f"Spúšťam sync z RUZ pre IČO: {ico}")
-    
-    # Sanitizácia IČO
     ico = ico.strip().zfill(8)
-    
     api = RuzApi()
-    
-    # Skúsime nájsť firmu v DB
+
     existing_company = Company.objects.filter(ico=ico).first()
-    
+
     if existing_company and existing_company.ruz_id:
-        # Máme RUZ ID, môžeme priamo získať detaily
-        logger.info(f"Firma {ico} existuje, RUZ ID: {existing_company.ruz_id}")
         details = api.get_company_details(existing_company.ruz_id)
-        
         if details:
-            company = _update_company_from_ruz_data(details)
-            if company:
-                if is_orsr_eligible_company(company):
-                    sync_company_orsr_data.delay(company.id)
-                sync_company_financials_from_ruz.delay(company.id)
-            logger.info(f"Firma {ico} úspešne aktualizovaná z RUZ.")
+            _update_company_from_ruz_data(details)
+            logger.info("Firma %s aktualizovana z RUZ.", ico)
             return f"Aktualizovaná firma {ico}"
-        else:
-            logger.warning(f"Nepodarilo sa získať detaily pre RUZ ID {existing_company.ruz_id}")
-            return f"Nepodarilo sa aktualizovať firmu {ico}"
-    
-    # Firma neexistuje alebo nemá RUZ ID - vyhľadáme priamo podľa IČO
-    logger.info(f"Hľadám firmu {ico} v RUZ API...")
-    
-    # Použijeme novú metódu pre priame vyhľadávanie podľa IČO
+        logger.warning("Nepodarilo sa ziskat detaily pre RUZ ID %s", existing_company.ruz_id)
+        return f"Nepodarilo sa aktualizovať firmu {ico}"
+
     details = api.get_company_by_ico(ico)
-    
     if details:
         company = _update_company_from_ruz_data(details)
         if company:
-            if is_orsr_eligible_company(company):
-                sync_company_orsr_data.delay(company.id)
-            sync_company_financials_from_ruz.delay(company.id)
-            logger.info(f"Firma {ico} úspešne importovaná z RUZ (RUZ ID: {company.ruz_id})")
+            logger.info("Firma %s importovana z RUZ (RUZ ID: %s)", ico, company.ruz_id)
             return f"Importovaná firma {ico}"
-    
-    logger.warning(f"Firma s IČO {ico} nebola nájdená v RUZ API.")
+
+    logger.warning("Firma s ICO %s nebola najdena v RUZ API.", ico)
     return f"Firma {ico} nebola nájdená v RUZ"
 
 
@@ -439,35 +397,17 @@ def resume_gap_repair(workers=5):
     return f"Resumed gap repair from ID {analysis.repair_progress_id}"
 
 
-@shared_task(queue='orsr', rate_limit='15/m', max_retries=2, default_retry_delay=60)
+@shared_task(base=BaseSyncTask, queue='orsr', rate_limit='15/m')
 def sync_company_orsr_data(company_id: int):
-    """Stiahne ORSR profil pre jednu firmu podľa IČO."""
-    try:
-        company = Company.objects.get(id=company_id)
-        if not is_orsr_eligible_company(company):
-            logger.info(
-                "ORSR sync skipped for company_id=%s ico=%s legal_form=%s",
-                company_id,
-                company.ico,
-                company.pravna_forma,
-            )
-            return f"ORSR sync skipped for {company.ico}"
-        service = OrsrSyncService()
-        profile = service.sync_company(company)
-        logger.info(
-            "ORSR sync OK for company_id=%s ico=%s oddiel=%s vlozka=%s",
-            company_id,
-            company.ico,
-            profile.oddiel,
-            profile.vlozka_cislo,
-        )
-        return f"ORSR sync OK for {company.ico}"
-    except Company.DoesNotExist:
-        logger.warning("ORSR sync skipped, company does not exist: id=%s", company_id)
-        return f"Company {company_id} does not exist"
-    except OrsrScraperError as exc:
-        logger.warning("ORSR sync failed for company_id=%s: %s", company_id, exc)
-        raise
+    company = Company.objects.get(id=company_id)
+    if not is_orsr_eligible_company(company):
+        logger.info("ORSR sync skipped for company_id=%s ico=%s", company_id, company.ico)
+        return f"ORSR sync skipped for {company.ico}"
+
+    service = RpoSyncService()
+    profile = service.sync_company(company)
+    logger.info("RPO sync OK for company_id=%s ico=%s", company_id, company.ico)
+    return f"RPO sync OK for {company.ico}"
 
 
 @shared_task(queue='orsr')
@@ -489,15 +429,9 @@ def schedule_missing_orsr_sync(limit: int = 200):
     return f"Scheduled ORSR sync for {len(company_ids)} companies"
 
 
-@shared_task(queue='financials', rate_limit='20/m', max_retries=2, default_retry_delay=60)
+@shared_task(base=BaseSyncTask, queue='financials', rate_limit='20/m')
 def sync_company_financials_from_ruz(company_id: int):
-    """Stiahne a uloží hospodárske výsledky firmy z RUZ API."""
-    try:
-        company = Company.objects.get(id=company_id)
-    except Company.DoesNotExist:
-        logger.warning("RUZ financial sync skipped, company does not exist: id=%s", company_id)
-        return f"Company {company_id} does not exist"
-
+    company = Company.objects.get(id=company_id)
     service = RuzFinancialsSyncService()
     upserts = service.sync_company(company)
     logger.info("RUZ financial sync company_id=%s ico=%s rows=%s", company_id, company.ico, upserts)
@@ -526,20 +460,32 @@ def schedule_ruz_financials_sync(limit: int = 200, eligible_only: bool = False, 
 
 
 @shared_task(queue='celery')
-def sync_company_now(company_id: int):
-    """Spustí kompletný sync jednej firmy: RUZ, ORSR, financials a poisťovne."""
-    try:
-        company = Company.objects.get(id=company_id)
-    except Company.DoesNotExist:
-        logger.warning("Full company sync skipped, company does not exist: id=%s", company_id)
-        return f"Company {company_id} does not exist"
+def orchestrate_full_company_sync(company_id: int):
+    """
+    Hierarchicky sync jednej firmy:
+    1. RUZ základné údaje
+    2. Paralelne: RUZ financials + ORSR (ak eligible)
+    3. Po dokončení oboch: kontrola dlhov v poisťovniach
+    """
+    company = Company.objects.get(id=company_id)
 
-    sync_single_company_from_ruz.delay(company.ico)
+    parallel_tasks = [sync_company_financials_from_ruz.si(company.id)]
     if is_orsr_eligible_company(company):
-        sync_company_orsr_data.delay(company.id)
-    sync_company_financials_from_ruz.delay(company.id)
-    update_insurance_debt.delay(company.id)
-    logger.info("Scheduled full sync for company_id=%s ico=%s", company_id, company.ico)
-    return f"Scheduled full sync for {company.ico}"
+        parallel_tasks.append(sync_company_orsr_data.si(company.id))
+
+    workflow = chain(
+        sync_single_company_from_ruz.si(company.ico),
+        chord(group(parallel_tasks), update_insurance_debt.si(company.id)),
+    )
+    workflow.apply_async()
+    logger.info("Orchestrated sync for company_id=%s ico=%s", company_id, company.ico)
+    return f"Orchestrated sync for {company.ico}"
+
+
+@shared_task(queue='celery')
+def sync_company_now(company_id: int):
+    """Backward-compatible wrapper — delegates to orchestrator."""
+    orchestrate_full_company_sync.delay(company_id)
+    return f"Delegated to orchestrator for company {company_id}"
 
 

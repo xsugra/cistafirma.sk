@@ -1,6 +1,5 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from django.db import connection
 from companies.models import Company
 from registers.models import SyncGapAnalysis
 import time
@@ -40,15 +39,14 @@ class Command(BaseCommand):
         try:
             # Získame základné štatistiky z DB efektívne
             self.stdout.write('Načítavam existujúce RUZ ID z databázy...')
-            
-            # Použijeme raw SQL pre efektivitu na veľkých datasetoch
-            with connection.cursor() as cursor:
-                cursor.execute('''
-                    SELECT MIN(ruz_id), MAX(ruz_id), COUNT(ruz_id) 
-                    FROM "Companies and SZCO" 
-                    WHERE ruz_id IS NOT NULL
-                ''')
-                db_min, db_max, total_count = cursor.fetchone()
+
+            from django.db.models import Min, Max, Count
+            stats = Company.objects.filter(ruz_id__isnull=False).aggregate(
+                min_id=Min('ruz_id'),
+                max_id=Max('ruz_id'),
+                total=Count('ruz_id'),
+            )
+            db_min, db_max, total_count = stats['min_id'], stats['max_id'], stats['total']
             
             if db_min is None:
                 self.stdout.write(self.style.ERROR('Žiadne záznamy s RUZ ID v databáze!'))

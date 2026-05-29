@@ -3,6 +3,8 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import os
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -21,11 +23,14 @@ elif DOCKER_ENV_PATH.exists():
     load_dotenv(dotenv_path=DOCKER_ENV_PATH)
 elif BACKEND_ENV_PATH.exists():
     load_dotenv(dotenv_path=BACKEND_ENV_PATH)
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', default='django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma')
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', default=True)
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
+
+# SECURITY WARNING: keep the secret key used in production secret!
+_default_secret = 'django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma'
+SECRET_KEY = os.getenv('SECRET_KEY', default=_default_secret if DEBUG else '')
+if not SECRET_KEY:
+    raise ImproperlyConfigured('SECRET_KEY must be set in production (DEBUG=False).')
 
 ALLOWED_HOSTS = ["*"]
 
@@ -64,10 +69,12 @@ THIRD_PARTY_APPS = [
 ]
 
 CUSTOM_APPS = [
+    'core',
     'users',
     'subscriptions',
     'companies',
     'registers',
+    'connections',
     'analyses',
     'api',
     'adminapi',
@@ -254,6 +261,30 @@ CELERY_TASK_QUEUES = {
 
 # Default queue
 CELERY_TASK_DEFAULT_QUEUE = 'celery'
+
+CELERY_TASK_ROUTES = {
+    'registers.tasks.fetch_ruz_data_task': {'queue': 'ruz_full'},
+    'registers.tasks.resume_full_ruz_sync': {'queue': 'ruz_full'},
+    'registers.tasks.start_full_ruz_sync': {'queue': 'ruz_full'},
+    'registers.tasks.start_full_ruz_sync_from_id': {'queue': 'ruz_full'},
+    'registers.tasks.start_incremental_sync': {'queue': 'ruz_full'},
+    'registers.tasks.start_repair_sync': {'queue': 'ruz_full'},
+    'registers.tasks.resume_repair_sync': {'queue': 'ruz_full'},
+    'registers.tasks.analyze_ruz_gaps': {'queue': 'ruz_full'},
+    'registers.tasks.repair_ruz_gaps': {'queue': 'ruz_full'},
+    'registers.tasks.resume_gap_repair': {'queue': 'ruz_full'},
+    'registers.tasks.sync_company_orsr_data': {'queue': 'orsr'},
+    'registers.tasks.schedule_missing_orsr_sync': {'queue': 'orsr'},
+    'registers.tasks.sync_company_financials_from_ruz': {'queue': 'financials'},
+    'registers.tasks.schedule_ruz_financials_sync': {'queue': 'financials'},
+    'registers.tasks.update_insurance_debt': {'queue': 'insurance'},
+    'registers.tasks.schedule_insurance_debt_checks': {'queue': 'insurance'},
+    'registers.tasks.force_check_all_companies_debts': {'queue': 'insurance'},
+    'registers.tasks.update_fs_data_task': {'queue': 'celery'},
+    'registers.tasks.sync_single_company_from_ruz': {'queue': 'celery'},
+    'registers.tasks.sync_company_now': {'queue': 'celery'},
+    'registers.tasks.orchestrate_full_company_sync': {'queue': 'celery'},
+}
 
 CELERY_BEAT_SCHEDULE = {
     'schedule-insurance-debt-checks-every-12-hours': {
