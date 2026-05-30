@@ -21,17 +21,17 @@
 |-------|-------|--------|------|
 | `Makefile` | +3 targety | ✅ Integrovaný | `clean-pre-push*` commands |
 | `.gitignore` | Audítovaný | ✅ Aktuálny | Všetky nechcené patterns |
-| `PRE_PUSH_CLEANUP_SETUP.md` | Existing | ✅ Ref docs | Setup dokumentácia |
-| `SAFE_PUSH_ACTION_PLAN.md` | **NEW** | ✅ Hotový | Praktický action plan |
+| `docs/archive/PRE_PUSH_CLEANUP_SETUP.md` | Archived | ℹ️ Ref docs | Setup dokumentácia |
+| `docs/archive/SAFE_PUSH_ACTION_PLAN.md` | Archived | ℹ️ Ref docs | Praktický action plan |
 
 ### ✅ Dokumentácia
 
 | Dokument | Formát | Účel | Čas Čítania |
 |----------|--------|------|------------|
-| `SAFE_PUSH_ACTION_PLAN.md` | Markdown | Praktický náhľad | 3-5 min |
+| `docs/archive/SAFE_PUSH_ACTION_PLAN.md` | Markdown | Archivovaný náhľad | 3-5 min |
 | `scripts/PRE_PUSH_CLEANUP_GUIDE.md` | Markdown | Podrobný guide | 10-15 min |
 | `scripts/PRE_PUSH_CLEANUP_CHEATSHEET.md` | Markdown | Quick reference | 1-2 min |
-| `PRE_PUSH_CLEANUP_SETUP.md` | Markdown | Setup info | 5 min |
+| `docs/archive/PRE_PUSH_CLEANUP_SETUP.md` | Markdown | Archivovaná setup info | 5 min |
 
 ---
 
@@ -62,7 +62,7 @@ grep -E "^clean-pre-push" Makefile
 ```bash
 # ✅ Počet liniek
 wc -l .gitignore
-# Output: 97
+# Output: 105
 
 # ✅ Obsahuje Python patterns
 grep "__pycache__" .gitignore

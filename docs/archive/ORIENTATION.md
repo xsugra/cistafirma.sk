@@ -8,7 +8,8 @@
 
 ```bash
 # Spusť interaktívne menu a vyber akciu
-bash QUICK_START.sh
+# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+make clean-pre-push
 
 # Hotovo! 🎉
 ```
@@ -61,7 +62,8 @@ git push                      # Push
 
 ### Spôsob 1: Menu (Najjednoduchšie)
 ```bash
-bash QUICK_START.sh
+# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+make clean-pre-push
 ```
 
 ### Spôsob 2: Makefile (Odporúčané)
@@ -88,7 +90,7 @@ git push
 ├── SAFE_PUSH_ACTION_PLAN.md          ⭐ PRAKTICKÝ NÁHĽAD (3-5 min)
 ├── INTEGRATION_CHECKLIST.md          ✓ Kompletný checklist (10 min)
 ├── PRE_PUSH_CLEANUP_SETUP.md         ✓ Setup info (5 min)
-└── QUICK_START.sh                     ✓ Interactive menu
+└── scripts/pre-push-cleanup.sh          ✓ Cleanup skript
 ```
 
 ### Dokumentácia (Scripts)
@@ -112,7 +114,7 @@ scripts/
 
 ### Level 1: Absolútny Začiatočník
 1. Čítaj: `MASTER_GUIDE.md` (5 min)
-2. Spusti: `bash QUICK_START.sh`
+2. Spusti: `make clean-pre-push`
 3. Vyber: "Prehliadka"
 4. ✅ Hotovo
 
@@ -143,7 +145,8 @@ scripts/
 
 ```
 Keď Sa Ponáhľaš:         ⏱️ 2-3 min
-  └─ bash QUICK_START.sh
+  └─ # Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+make clean-pre-push
 
 Keď Máš 5 Minút:         ⏱️ 5 min
   └─ cat SAFE_PUSH_ACTION_PLAN.md
@@ -164,7 +167,8 @@ Keď Máš Čas:             ⏱️ 30 min
 
 ```bash
 # Spustiť interactive menu
-bash QUICK_START.sh
+# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+make clean-pre-push
 
 # Prehliadka bez zmien
 make clean-pre-push-dry
@@ -219,7 +223,7 @@ A: Spustenie <1 min, čítanie 5-15 min
 A: Áno! Dry-run test bez zmien. Všetko reversible.
 
 ### Q: Čím začať?
-A: `bash QUICK_START.sh` alebo `cat SAFE_PUSH_ACTION_PLAN.md`
+A: `make clean-pre-push` alebo `cat SAFE_PUSH_ACTION_PLAN.md`
 
 ### Q: Čo keď niečo pôjde zle?
 A: `git reflog` a `git reset --hard`
@@ -235,7 +239,8 @@ A: V tomto súbore + v `scripts/` + v root adresári
 # Vyber Jeden:
 
 # Najrýchlejšie
-bash QUICK_START.sh
+# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+make clean-pre-push
 
 # Alebo Priamo
 make clean-pre-push-dry && make clean-pre-push && git push
@@ -265,7 +270,7 @@ Status:         ✅ Production Ready
 
 Teraz si pripravený! Vyber svoj spôsob a začni:
 
-1. **Interaktívne:** `bash QUICK_START.sh`
+1. **Interaktívne:** `make clean-pre-push`
 2. **Makefile:** `make clean-pre-push-dry`
 3. **Čítanie:** `cat SAFE_PUSH_ACTION_PLAN.md`
 

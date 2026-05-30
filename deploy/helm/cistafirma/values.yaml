@@ -38,6 +38,12 @@ frontend:
       cpu: 500m
       memory: 512Mi
 
+# PodDisruptionBudget — zabraňuje evikcii všetkých replík naraz pri node draine.
+pdb:
+  enabled: true
+  backendMinAvailable: 1
+  frontendMinAvailable: 1
+
 ingress:
   enabled: true
   host: cistafirma.example.com

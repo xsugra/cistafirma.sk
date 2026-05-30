@@ -10,8 +10,8 @@
 ## 📌 RÝCHLY START (Bez Čítania)
 
 ```bash
-# Spusť interactive menu
-bash QUICK_START.sh
+# Spusť interaktívny cleanup
+make clean-pre-push
 
 # Vyber "Prehliadka" → "Cleanup" → "git push"
 # HOTOVO! ✅
@@ -44,7 +44,7 @@ git push                   # Push!
 | # | Súbor | Veľkosť | Typ | Status |
 |---|-------|---------|-----|--------|
 | 1 | `scripts/pre-push-cleanup.sh` | 212 riadkov | Bash/Zsh | ✅ Executable |
-| 2 | `QUICK_START.sh` | ~120 riadkov | Interactive Menu | ✅ Executable |
+| 2 | `scripts/pre-push-cleanup.sh` (cez `make clean-pre-push`) | ~120 riadkov | CLI nástroj | ✅ Použiteľné |
 
 ### Konfigurácia (2 aktualizované súbory)
 
@@ -59,7 +59,8 @@ git push                   # Push!
 
 ### Možnosť 1: Interaktívne Menu (NAJJEDNODUCHŠIE)
 ```bash
-bash QUICK_START.sh
+# Použi Makefile
+make clean-pre-push
 
 # Vyberieš z menu:
 # 1. Prehliadka (dry-run)
@@ -121,7 +122,8 @@ git push
 
 **Keď chceš hneď začať (1 minúta):**
 ```bash
-bash QUICK_START.sh
+# Použi Makefile
+make clean-pre-push
 ```
 
 **Keď potrebuješ praktické info (3-5 minút):**
@@ -344,7 +346,7 @@ bash scripts/pre-push-cleanup.sh --dry-run
                  │
                  ▼
         ┌──────────────────────────────────┐
-        │ bash QUICK_START.sh              │
+        │ make clean-pre-push                │
         │ ALEBO                            │
         │ make clean-pre-push-dry          │
         └────────┬───────────────────────┘
@@ -390,14 +392,11 @@ brew install git  # na macOS
 apt install git   # na Ubuntu/Debian
 ```
 
-### Q: "Permission denied na QUICK_START.sh"
+### Q: "Ako spustiť cleanup?"
 ```bash
-# Urob skript executable
-chmod +x QUICK_START.sh
-chmod +x scripts/pre-push-cleanup.sh
-
-# Potom spusti
-bash QUICK_START.sh
+# Použi Makefile (skript je už executable)
+make clean-pre-push
+chmod +x scripts/pre-push-cleanup.sh  # ak treba
 ```
 
 ### Q: "Nechcel som mazať ten súbor!"
@@ -428,7 +427,7 @@ git reset --hard ORIG_HEAD
 | **Prehliadka** | `make clean-pre-push-dry` | <10s |
 | **Cleanup** | `make clean-pre-push` | <1min |
 | **Cleanup+Commit** | `make clean-pre-push-commit` | <1min |
-| **Menu** | `bash QUICK_START.sh` | 30s |
+| **Menu** | `make clean-pre-push` | 30s |
 | **Git Status** | `git status` | <1s |
 | **Push** | `git push` | 1-10s |
 
@@ -470,7 +469,8 @@ Complexity:       Low (bezpečný)
 
 ```bash
 # Najjednoduchšie - Interactive Menu
-bash QUICK_START.sh
+# Použi Makefile
+make clean-pre-push
 
 # Alebo - Makefile
 make clean-pre-push-dry
@@ -494,8 +494,8 @@ git push
 - `scripts/PRE_PUSH_CLEANUP_CHEATSHEET.md` - Rýchla ref.
 
 **Potrebuješ spustiť:**
-- `bash QUICK_START.sh` - Interactive menu
-- `make clean-pre-push-dry` - Prehliadka
+- `make clean-pre-push` - Interaktívny cleanup
+- `make clean-pre-push-dry` - Prehliadka (dry-run)
 - `make clean-pre-push` - Cleanup
 - `git push` - Push
 
@@ -520,7 +520,8 @@ Máš kompletný "safe push" setup:
 **Teraz môžeš bezpečne push-núť! 🚀**
 
 ```bash
-bash QUICK_START.sh
+# Použi Makefile
+make clean-pre-push
 # alebo
 make clean-pre-push-dry && make clean-pre-push && git push
 ```

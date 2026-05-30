@@ -61,7 +61,7 @@ npm run build
 
 Docker Compose spúšťa:
 
-- `celery_worker` – konzumuje všetky queues (`celery`, `ruz_full`, `orsr`, `financials`, `insurance`).
+- `celery_worker_ruz`, `celery_worker_orsr`, `celery_worker_financials`, `celery_worker_insurance`, `celery_worker_default` – každý konzumuje vlastnú queue.
 - `celery_beat` – scheduler periodických úloh.
 
 Manuálne trigger endpointy:
@@ -103,7 +103,7 @@ flowchart LR
 ```bash
 # Logy
 docker compose logs -f backend
-docker compose logs -f celery_worker celery_beat
+docker compose logs -f celery_worker_ruz celery_worker_orsr celery_worker_financials celery_worker_insurance celery_worker_default celery_beat
 
 # Django inside container
 docker compose exec backend python manage.py migrate --settings=backend.settings
@@ -125,7 +125,7 @@ docker compose up -d
 ### Celery úlohy sa nespracúvajú
 
 - Skontroluj `redis` service.
-- Skontroluj worker logy: `docker compose logs -f celery_worker`.
+- Skontroluj worker logy: `docker compose logs -f celery_worker_ruz` (alebo inú queue podľa potreby).
 - Over env premenné `CELERY_BROKER_URL` a `CELERY_RESULT_BACKEND`.
 
 ### Migrácia/deploy problém na K8s

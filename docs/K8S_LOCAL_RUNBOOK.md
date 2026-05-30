@@ -49,7 +49,7 @@ docker push localhost:5001/cistafirma-frontend:local
 
 # 4. Namespace + Secret (iba prvýkrát)
 kubectl create namespace cistafirma --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f deploy/k8s/local-secret.yaml
+kubectl apply -f deploy/k8s/secret.example.yaml
 
 # 5. Helm install
 helm upgrade --install cistafirma deploy/helm/cistafirma \

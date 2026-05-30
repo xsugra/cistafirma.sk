@@ -71,3 +71,8 @@ backup:
   schedule: "0 3 * * *"
   retentionDays: 7
   storageSize: 5Gi
+
+pdb:
+  enabled: true
+  backendMinAvailable: 1
+  frontendMinAvailable: 1

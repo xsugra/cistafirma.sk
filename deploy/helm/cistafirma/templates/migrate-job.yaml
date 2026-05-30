@@ -40,6 +40,13 @@ spec:
         - name: migrate
           image: {{ include "cistafirma.backendImage" . }}
           imagePullPolicy: {{ .Values.global.backendImage.pullPolicy | default "IfNotPresent" }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
           envFrom:
             - configMapRef:
                 name: {{ include "cistafirma.fullname" . }}-config

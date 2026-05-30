@@ -1,6 +1,10 @@
 # Kubernetes nasadenie
 
-Tento adresár obsahuje Kubernetes layout pre `cistafirma`, pripravený pre GitLab CI/CD.
+> ⚠️ **DEPRECATED** — CI/CD od verzie 0.41+ používa Helm chart (`deploy/helm/cistafirma/`) na deploy.
+> Raw K8s manifesty v tomto adresári sú ponechané ako referencia, ale už nie sú udržiavané.
+> Pre aktuálny deploy flow viď [`scripts/k8s/helm-deploy.sh`](../../scripts/k8s/helm-deploy.sh) a [`deploy/helm/cistafirma/`](../helm/cistafirma/).
+
+---
 
 ## Štruktúra
 
@@ -29,7 +33,7 @@ Pipeline v [`.gitlab-ci.yml`](../../.gitlab-ci.yml) robí:
 1. Validate (Python compile + frontend build + Helm lint + K8s dry-run).
 2. Backend testy.
 3. Docker image build/push (backend + frontend).
-4. Deploy via `scripts/k8s/deploy.sh`.
+4. Deploy via `scripts/k8s/helm-deploy.sh`.
 
 Branch/tag stratégia:
 

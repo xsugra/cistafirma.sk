@@ -10,8 +10,8 @@
 ## 🚀 RÝCHLY START (30 SEKÚND)
 
 ```bash
-# Spusť interaktívne menu
-bash QUICK_START.sh
+# Spusť interaktívny cleanup
+make clean-pre-push
 
 # Vyber "Prehliadka" → "Cleanup" → git push ✅
 ```
@@ -29,7 +29,7 @@ bash QUICK_START.sh
 | 3 | `INTEGRATION_CHECKLIST.md` | 📄 | 350+ | Kompletný checklist |
 | 4 | `ORIENTATION.md` | 📄 | 300+ | Orientácia kde čítať |
 | 5 | `PRE_PUSH_CLEANUP_SETUP.md` | 📄 | 228 | Setup info |
-| 6 | `QUICK_START.sh` | 🔧 | 2.7k | Interactive menu |
+| 6 | `scripts/pre-push-cleanup.sh` (cez `make clean-pre-push`) | 🔧 | 2.7k | Cleanup CLI nástroj |
 
 ### ✅ Existujúce Súbory v `scripts/` (3)
 
@@ -55,7 +55,7 @@ bash QUICK_START.sh
 ✅ Makefile Targety:    Integrované (3 nové)
 ✅ Gitignore:           Audítovaný (python, node, build, sekretné súbory)
 ✅ Dokumentácia:        Kompletná (8 súborov, 1500+ riadkov)
-✅ Interactive Menu:    Hotový (QUICK_START.sh)
+✅ Interactive Menu:    Hotový (cez `make clean-pre-push`)
 ✅ Dry-Run Test:        OK
 ✅ Production Ready:    ✓ Áno!
 ```
@@ -66,7 +66,8 @@ bash QUICK_START.sh
 
 ### 🏃 Keď Si v Ponáhľaní (2-3 min)
 ```bash
-bash QUICK_START.sh      # Interactive menu, vyber akciu
+# Spusť cleanup
+make clean-pre-push      # Interaktívny výber akcie
 # Hotovo!
 ```
 
@@ -95,7 +96,7 @@ cat scripts/PRE_PUSH_CLEANUP_CHEATSHEET.md   # Quick commands
 
 ### 1️⃣ INTERAKTÍVNY MENU (Najjednoduchšie)
 ```bash
-bash QUICK_START.sh
+make clean-pre-push      # Interaktívny výber akcie
 
 # Vyberieš z menu:
 # 1. Prehliadka (dry-run)
@@ -141,7 +142,7 @@ git push
 ## 🎯 TYPICKÝ WORKFLOW
 
 ```
-1. bash QUICK_START.sh          ← Spusť menu
+1. make clean-pre-push      # Interaktívny výber akcie          ← Spusť menu
 2. Vyber "Prehliadka"           ← Prehliadka
 3. Čítaj Output                 ← Skontroluj
 4. Vyber "Cleanup"              ← Cleanup
@@ -194,7 +195,7 @@ Scripts (3):
 
 ### Bash Skripty (2)
 ```
-  ├── QUICK_START.sh                     ✓ Interactive menu
+  ├── scripts/pre-push-cleanup.sh          ✓ Cleanup skript
   └── scripts/pre-push-cleanup.sh       ✓ Main cleanup script
 ```
 
@@ -238,7 +239,7 @@ Virtual Environments:
 
 ### 👶 Úplný Začiatočník
 1. Čítaj: `MASTER_GUIDE.md` (5 min)
-2. Spusti: `bash QUICK_START.sh`
+2. Spusti: `make clean-pre-push`
 3. ✅ Hotovo
 
 ### 🧑‍💻 Developer
@@ -260,7 +261,7 @@ Virtual Environments:
 
 ### Najjednoduchšie:
 ```bash
-bash QUICK_START.sh
+make clean-pre-push      # Interaktívny výber akcie
 ```
 
 ### Alebo Makefile:
@@ -327,7 +328,7 @@ Máš kompletný "safe push" setup:
 3. `ORIENTATION.md` - Kde čítať (3 min)
 
 **Potrebuješ Spustiť:**
-1. `bash QUICK_START.sh` - Interactive menu
+1. `make clean-pre-push      # Interaktívny výber akcie` - Interactive menu
 2. `make clean-pre-push-dry` - Prehliadka
 3. `make clean-pre-push` - Cleanup
 4. `git push` - Push!
