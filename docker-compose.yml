@@ -137,9 +137,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      celery_worker_default:
+      backend:
         condition: service_started
-    command: celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: >
+      sh -c "echo 'Waiting for migrations...' &&
+             while ! python manage.py migrate --check 2>/dev/null; do
+               sleep 2
+             done &&
+             echo 'Migrations ready, starting beat...' &&
+             celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
 
 volumes:
   postgres_data:
