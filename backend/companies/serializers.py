@@ -1,18 +1,10 @@
-from rest_framework import serializers
-from .models import Company
 import re
+
 from django.core.exceptions import ObjectDoesNotExist
+from rest_framework import serializers
 
-
-PERSON_SKIP_PREFIXES = (
-    'vklad:',
-    'splatené:',
-    'vznik funkcie:',
-    'spôsob konania',
-    'konatelia',
-    'prokúra',
-    'prokurista',
-)
+from core.constants import PERSON_SKIP_PREFIXES
+from .models import Company, Watchlist
 
 
 class CompanyListSerializer(serializers.ModelSerializer):
@@ -25,6 +17,28 @@ class CompanyListSerializer(serializers.ModelSerializer):
             'pravna_forma', 'legal_form_short', 'datum_zalozenia',
             'tax_debt', 'debt_vszp', 'debt_soc_poist'
         ]
+
+
+class WatchlistSerializer(serializers.ModelSerializer):
+    ico = serializers.CharField(source='company.ico', read_only=True)
+    name = serializers.CharField(source='company.nazov_UJ', read_only=True)
+    status = serializers.SerializerMethodField()
+    riskScore = serializers.SerializerMethodField()
+    addedAt = serializers.DateTimeField(source='added_at', read_only=True)
+
+    class Meta:
+        model = Watchlist
+        fields = ['id', 'ico', 'name', 'status', 'riskScore', 'addedAt']
+
+    def get_status(self, obj):
+        return 'Vymazaná' if obj.company.datum_zrusenia else 'Aktívna'
+
+    def get_riskScore(self, obj):
+        c = obj.company
+        total_debt = float(c.debt_vszp or 0) + float(c.debt_soc_poist or 0) + float(c.tax_debt or 0)
+        if total_debt > 0:
+            return max(5, int(70 - min(total_debt / 5000, 50)))
+        return 100
 
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
@@ -40,14 +54,53 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
 
     def get_financials(self, obj):
         results = obj.financial_results.all().order_by('year')
-        return [
-            {
-                'year': result.year,
-                'revenue': float(result.revenue or 0),
-                'profit': float(result.profit or 0),
-            }
-            for result in results
-        ]
+        out = []
+        for r in results:
+            assets_total = float(r.assets_total or 0)
+            liabilities_total = float(r.liabilities_total or 0)
+            liabilities_accruals = float(r.liabilities_accruals or 0)
+            revenue = float(r.revenue or 0)
+            added_value = float(r.added_value or 0)
+
+            debt_ratio = None
+            if assets_total:
+                debt_ratio = round((liabilities_total + liabilities_accruals) / assets_total * 100, 2)
+
+            gross_margin = None
+            if revenue:
+                gross_margin = round(added_value / revenue * 100, 2)
+
+            out.append({
+                'year': r.year,
+                'revenue': revenue,
+                'profit': float(r.profit or 0),
+                'totalRevenue': float(r.total_revenue or 0),
+                'costs': float(r.costs or 0),
+                'incomeTax': float(r.income_tax or 0),
+                'incomeTaxPaid': float(r.income_tax_paid or 0),
+                'assetsTotal': assets_total,
+                'assetsIntangible': float(r.assets_intangible or 0),
+                'assetsTangible': float(r.assets_tangible or 0),
+                'assetsFinancial': float(r.assets_financial or 0),
+                'assetsInventory': float(r.assets_inventory or 0),
+                'assetsReceivablesLong': float(r.assets_receivables_long or 0),
+                'assetsReceivablesShort': float(r.assets_receivables_short or 0),
+                'assetsFinancialAccounts': float(r.assets_financial_accounts or 0),
+                'assetsAccruals': float(r.assets_accruals or 0),
+                'equity': float(r.equity or 0),
+                'equityBasic': float(r.equity_basic or 0),
+                'equityCapitalFunds': float(r.equity_capital_funds or 0),
+                'equityProfitFunds': float(r.equity_profit_funds or 0),
+                'equityRetained': float(r.equity_retained or 0),
+                'liabilitiesTotal': liabilities_total,
+                'liabilitiesReserves': float(r.liabilities_reserves or 0),
+                'liabilitiesLong': float(r.liabilities_long or 0),
+                'liabilitiesShort': float(r.liabilities_short or 0),
+                'liabilitiesAccruals': liabilities_accruals,
+                'debtRatio': debt_ratio,
+                'grossMargin': gross_margin,
+            })
+        return out
 
     def _get_orsr_profile(self, obj):
         try:

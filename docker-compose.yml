@@ -84,14 +84,13 @@ services:
         condition: service_started
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
 
-  celery_worker:
+  x-celery-worker: &celery-worker
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: cistafirma_celery_worker
     restart: unless-stopped
     env_file:
-      - ./.env  # Load from root .env (centralized config)
+      - ./.env
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
       - REDIS_URL=redis://redis:6379/0
@@ -104,29 +103,41 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A backend worker -l info -Q celery,ruz_full,orsr,financials,insurance --concurrency=2
+
+  celery_worker_ruz:
+    <<: *celery-worker
+    container_name: cistafirma_celery_ruz
+    command: celery -A backend worker -l info -Q ruz_full -n worker_ruz@%h --concurrency=1
+
+  celery_worker_orsr:
+    <<: *celery-worker
+    container_name: cistafirma_celery_orsr
+    command: celery -A backend worker -l info -Q orsr -n worker_orsr@%h --concurrency=2
+
+  celery_worker_financials:
+    <<: *celery-worker
+    container_name: cistafirma_celery_financials
+    command: celery -A backend worker -l info -Q financials -n worker_financials@%h --concurrency=4
+
+  celery_worker_insurance:
+    <<: *celery-worker
+    container_name: cistafirma_celery_insurance
+    command: celery -A backend worker -l info -Q insurance -n worker_insurance@%h --concurrency=2
+
+  celery_worker_default:
+    <<: *celery-worker
+    container_name: cistafirma_celery_default
+    command: celery -A backend worker -l info -Q celery -n worker_default@%h --concurrency=2
 
   celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *celery-worker
     container_name: cistafirma_celery_beat
-    restart: unless-stopped
-    env_file:
-      - ./.env  # Load from root .env (centralized config)
-    environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    volumes:
-      - ./backend:/app
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-      celery_worker:
+      celery_worker_default:
         condition: service_started
     command: celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 

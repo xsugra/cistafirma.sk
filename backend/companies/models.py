@@ -394,6 +394,30 @@ class Company(
         return f"{self.pravna_forma} - {legal_short}"
 
 
+class Watchlist(models.Model):
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='watchlist',
+        db_column='user_id',
+    )
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='watchers',
+        db_column='company_id',
+    )
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'Watchlist'
+        unique_together = [('user', 'company')]
+        ordering = ['-added_at']
+
+    def __str__(self):
+        return f"{self.user} → {self.company.ico}"
+
+
 class CompanyFinancialResult(models.Model):
     """Hospodárske výsledky firmy po rokoch pre grafy vo frontende."""
 
@@ -418,6 +442,37 @@ class CompanyFinancialResult(models.Model):
         blank=True,
         verbose_name='Zisk',
     )
+
+    # Výkaz ziskov a strát — rozšírenie
+    total_revenue = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Celkové výnosy')
+    costs = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Celkové náklady')
+    added_value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Pridaná hodnota')
+    income_tax = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Daň z príjmu')
+    income_tax_paid = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Splatná daň')
+
+    # Súvaha — aktíva
+    assets_total = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Aktíva celkom')
+    assets_intangible = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobý nehmotný majetok')
+    assets_tangible = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobý hmotný majetok')
+    assets_financial = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobý finančný majetok')
+    assets_inventory = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Zásoby')
+    assets_receivables_long = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobé pohľadávky')
+    assets_receivables_short = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Krátkodobé pohľadávky')
+    assets_financial_accounts = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Finančné účty')
+    assets_accruals = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Časové rozlíšenie (aktíva)')
+
+    # Súvaha — pasíva
+    equity = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Vlastný kapitál')
+    equity_basic = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Základné imanie')
+    equity_capital_funds = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Kapitálové fondy')
+    equity_profit_funds = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Fondy zo zisku')
+    equity_retained = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='VH minulých rokov')
+    liabilities_total = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Cudzie zdroje celkom')
+    liabilities_reserves = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Rezervy')
+    liabilities_long = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobé záväzky')
+    liabilities_short = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Krátkodobé záväzky')
+    liabilities_accruals = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Časové rozlíšenie (pasíva)')
+
     source = models.CharField(
         max_length=30,
         blank=True,

@@ -30,6 +30,8 @@ class CustomUserAdmin(UserAdmin, UnfoldModelAdmin if UNFOLD_AVAILABLE else objec
         'is_active'
     )
 
+    readonly_fields = ('created_at', 'last_login')
+
     fieldsets = (
         (
             None,

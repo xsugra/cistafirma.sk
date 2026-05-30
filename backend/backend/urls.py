@@ -5,6 +5,7 @@ from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
+from companies.views import landing_stats, WatchlistViewSet
 import os
 
 
@@ -14,7 +15,7 @@ def frontend_or_api_info(request):
     frontend_index = settings.FRONTEND_DIR / 'dist' / 'index.html'
     if os.path.exists(frontend_index):
         return TemplateView.as_view(template_name='index.html')(request)
-    
+
     # Return API info for backend-only mode
     return JsonResponse({
         'status': 'ok',
@@ -31,13 +32,20 @@ def healthz(request):
     return JsonResponse({'status': 'ok'})
 
 
+watchlist_list = WatchlistViewSet.as_view({'get': 'list', 'post': 'create'})
+watchlist_detail = WatchlistViewSet.as_view({'delete': 'destroy'})
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz/", healthz),
     path('api/auth/', include('users.urls')),
     path('api/registers/', include('registers.urls')),
+    path('api/stats/landing/', landing_stats),
     path('api/companies/', include('companies.urls')),
+    path('api/watchlist/', watchlist_list, name='watchlist-list'),
+    path('api/watchlist/<int:pk>/', watchlist_detail, name='watchlist-detail'),
     path('api/admin/', include('adminapi.urls')),
+    path('api/', include('connections.urls')),
 ]
 
 # Add frontend catch-all only if frontend is built, otherwise just root info

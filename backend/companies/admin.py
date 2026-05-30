@@ -6,17 +6,18 @@ from django.contrib import messages
 from django.http import HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 import csv
-from io import BytesIO
 from .models import Company, CompanyFinancialResult, LEGAL_FORMS_SHORT
 from registers.models import OrsrCompanyProfile
+from core.admin_mixins import AdminDisplayMixin, XlsxExportMixin
 
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
-    from unfold.decorators import action as unfold_action
+    from unfold.decorators import action as unfold_action, display as unfold_display
     UNFOLD_AVAILABLE = True
 except ImportError:
     UnfoldModelAdmin = admin.ModelAdmin
     unfold_action = admin.action
+    unfold_display = admin.display
     UNFOLD_AVAILABLE = False
 
 
@@ -174,7 +175,7 @@ class CompanyFinancialResultInline(admin.TabularInline):
 
 
 @admin.register(Company)
-class CompanyAdmin(UnfoldModelAdmin):
+class CompanyAdmin(AdminDisplayMixin, XlsxExportMixin, UnfoldModelAdmin):
     list_display = [
         'ico', 'nazov_UJ', 'mesto', 'legal_form_display',
         'datum_zalozenia', 'status_display',
@@ -276,23 +277,17 @@ class CompanyAdmin(UnfoldModelAdmin):
 
     # ── Display Methods ──
 
-    @admin.display(description='Stav')
+    @unfold_display(description='Stav')
     def status_display(self, obj):
         if obj.datum_zrusenia:
-            return format_html(
-                '<span class="cf-badge cf-badge--danger">'
-                '<span class="cf-badge__dot"></span>Zrusena</span>'
-            )
-        return format_html(
-            '<span class="cf-badge cf-badge--success">'
-            '<span class="cf-badge__dot"></span>Aktivna</span>'
-        )
+            return self.badge('Zrusena', 'danger')
+        return self.badge('Aktivna', 'success')
 
-    @admin.display(description='DPH', boolean=True)
+    @unfold_display(description='DPH', boolean=True)
     def vat_payer_display(self, obj):
         return obj.vat_payer
 
-    @admin.display(description='Pravna forma')
+    @unfold_display(description='Pravna forma')
     def legal_form_display(self, obj):
         if not obj.pravna_forma:
             return '-'
@@ -302,19 +297,19 @@ class CompanyAdmin(UnfoldModelAdmin):
             f'{obj.pravna_forma}', form_short
         )
 
-    @admin.display(description='Dan. spolahlivost')
+    @unfold_display(description='Dan. spolahlivost')
     def tax_reliability_display(self, obj):
         if not obj.tax_reliability:
-            return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
+            return mark_safe('<span class="cf-risk cf-risk--unknown">-</span>')
         mapping = {
-            'vysoko spoľahlivý': ('cf-badge--success', 'Vysoko'),
-            'spoľahlivý': ('cf-badge--info', 'OK'),
-            'nespoľahlivý': ('cf-badge--danger', 'Nespolahlivy'),
+            'vysoko spoľahlivý': ('success', 'Vysoko'),
+            'spoľahlivý': ('info', 'OK'),
+            'nespoľahlivý': ('danger', 'Nespolahlivy'),
         }
-        css, label = mapping.get(obj.tax_reliability.lower(), ('cf-badge--idle', obj.tax_reliability))
-        return format_html('<span class="cf-badge {}">{}</span>', css, label)
+        variant, label = mapping.get(obj.tax_reliability.lower(), ('idle', obj.tax_reliability))
+        return self.badge(label, variant)
 
-    @admin.display(description='Riziko')
+    @unfold_display(description='Riziko')
     def risk_display(self, obj):
         issues = []
         total_debt = 0
@@ -338,12 +333,12 @@ class CompanyAdmin(UnfoldModelAdmin):
                 f'{total_debt:,.0f}€'
             )
         if obj.last_insurance_debt:
-            return format_html(
+            return mark_safe(
                 '<span class="cf-badge cf-badge--success">OK</span>'
             )
-        return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
+        return mark_safe('<span class="cf-risk cf-risk--unknown">-</span>')
 
-    @admin.display(description='Data')
+    @unfold_display(description='Data')
     def data_quality_display(self, obj):
         parts = []
         has_orsr = hasattr(obj, 'orsr_profile') and obj.orsr_profile is not None
@@ -433,18 +428,10 @@ class CompanyAdmin(UnfoldModelAdmin):
 
     @admin.action(description='Kompletny refresh dat')
     def refresh_all_data(self, request, queryset):
-        from registers.tasks import (
-            sync_single_company_from_ruz,
-            sync_company_financials_from_ruz,
-            sync_company_orsr_data,
-            update_insurance_debt,
-        )
+        from registers.tasks import orchestrate_full_company_sync
         count = 0
         for company in queryset:
-            sync_single_company_from_ruz.delay(company.ico)
-            sync_company_orsr_data.delay(company.id)
-            sync_company_financials_from_ruz.delay(company.id)
-            update_insurance_debt.delay(company.id)
+            orchestrate_full_company_sync.delay(company.id)
             count += 1
         self.message_user(request, f'Naplanovany kompletny refresh pre {count} firiem.', messages.SUCCESS)
 
@@ -472,20 +459,6 @@ class CompanyAdmin(UnfoldModelAdmin):
         ('debt_soc_poist', 'Dlh Socialna poistovna'),
         ('datum_poslednej_upravy', 'Posledna aktualizacia'),
     ]
-
-    def _get_export_data(self, queryset):
-        data = []
-        for company in queryset:
-            row = []
-            for field_name, _ in self.EXPORT_FIELDS:
-                value = getattr(company, field_name, '')
-                if value is None:
-                    value = ''
-                elif isinstance(value, bool):
-                    value = 'Ano' if value else 'Nie'
-                row.append(value)
-            data.append(row)
-        return data
 
     def get_filtered_queryset(self, request):
         queryset = Company.objects.all()
@@ -565,72 +538,14 @@ class CompanyAdmin(UnfoldModelAdmin):
 
     @admin.action(description='Export vybranych do XLSX')
     def export_to_xlsx(self, request, queryset):
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill
-        except ImportError:
-            self.message_user(request, 'Chyba kniznica openpyxl. Nainstalujte: pip install openpyxl', messages.ERROR)
-            return
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'Firmy'
-        header_font = Font(bold=True)
-        header_fill = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')
-        headers = [label for _, label in self.EXPORT_FIELDS]
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col, value=header)
-            cell.font = header_font
-            cell.fill = header_fill
-        for row_idx, row_data in enumerate(self._get_export_data(queryset), 2):
-            for col_idx, value in enumerate(row_data, 1):
-                ws.cell(row=row_idx, column=col_idx, value=str(value) if value else '')
-        for col in ws.columns:
-            max_length = max(len(str(cell.value or '')) for cell in col)
-            ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        response = HttpResponse(
-            output.getvalue(),
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        response['Content-Disposition'] = 'attachment; filename="firmy_export.xlsx"'
+        response = self._build_xlsx_response(queryset, "firmy_export.xlsx")
         self.message_user(request, f'Exportovanych {queryset.count()} firiem do XLSX.', messages.SUCCESS)
         return response
 
     @admin.action(description='Export vsetkych filtrovanych do XLSX')
     def export_filtered_to_xlsx(self, request, queryset):
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill
-        except ImportError:
-            self.message_user(request, 'Chyba kniznica openpyxl. Nainstalujte: pip install openpyxl', messages.ERROR)
-            return
         filtered_queryset = self.get_filtered_queryset(request)
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'Firmy'
-        header_font = Font(bold=True)
-        header_fill = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')
-        headers = [label for _, label in self.EXPORT_FIELDS]
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col, value=header)
-            cell.font = header_font
-            cell.fill = header_fill
-        for row_idx, row_data in enumerate(self._get_export_data(filtered_queryset), 2):
-            for col_idx, value in enumerate(row_data, 1):
-                ws.cell(row=row_idx, column=col_idx, value=str(value) if value else '')
-        for col in ws.columns:
-            max_length = max(len(str(cell.value or '')) for cell in col)
-            ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        response = HttpResponse(
-            output.getvalue(),
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        response['Content-Disposition'] = 'attachment; filename="firmy_filtrovane_export.xlsx"'
+        response = self._build_xlsx_response(filtered_queryset, "firmy_filtrovane_export.xlsx")
         self.message_user(request, f'Exportovanych {filtered_queryset.count()} filtrovanych firiem do XLSX.', messages.SUCCESS)
         return response
 
@@ -703,36 +618,7 @@ class CompanyAdmin(UnfoldModelAdmin):
         return response
 
     def _export_queryset_xlsx(self, queryset):
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill
-        except ImportError:
-            return HttpResponse('Chyba kniznica openpyxl.', status=500)
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'Firmy'
-        header_font = Font(bold=True)
-        header_fill = PatternFill(start_color='DAEEF3', end_color='DAEEF3', fill_type='solid')
-        headers = [label for _, label in self.EXPORT_FIELDS]
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col, value=header)
-            cell.font = header_font
-            cell.fill = header_fill
-        for row_idx, row_data in enumerate(self._get_export_data(queryset), 2):
-            for col_idx, value in enumerate(row_data, 1):
-                ws.cell(row=row_idx, column=col_idx, value=str(value) if value else '')
-        for col in ws.columns:
-            max_length = max(len(str(cell.value or '')) for cell in col)
-            ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 50)
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        response = HttpResponse(
-            output.getvalue(),
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        response['Content-Disposition'] = 'attachment; filename="firmy_export.xlsx"'
-        return response
+        return self._build_xlsx_response(queryset, "firmy_export.xlsx")
 
     def add_company_from_ruz_view(self, request):
         from django.shortcuts import render, redirect

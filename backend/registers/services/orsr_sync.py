@@ -55,6 +55,8 @@ class OrsrSyncService:
                     "last_error": "",
                 },
             )
+
+            self._extract_persons(profile)
             return profile
 
         except OrsrScraperError as exc:
@@ -67,6 +69,14 @@ class OrsrSyncService:
             profile.last_error = str(exc)
             profile.save(update_fields=["fetch_ok", "last_error", "last_synced_at"])
             raise
+
+    def _extract_persons(self, profile):
+        try:
+            from connections.services import PersonExtractionService
+            service = PersonExtractionService()
+            service.extract_from_profile(profile)
+        except Exception as exc:
+            logger.warning("Person extraction failed for profile %s: %s", profile.ico, exc)
 
     def _to_json_safe(self, value):
         if isinstance(value, (date, datetime)):

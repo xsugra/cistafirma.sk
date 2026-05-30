@@ -23,5 +23,10 @@ app = Celery('backend',
 # Load other settings from Django settings, but broker/backend are now fixed.
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
+app.conf.update(
+    worker_lost_wait=120,
+    broker_transport_options={'visibility_timeout': 43200},
+)
+
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
