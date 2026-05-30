@@ -10,11 +10,9 @@ from .services import focus_mode as focus_mode_service
 
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
-    from unfold.decorators import display as unfold_display
     UNFOLD_AVAILABLE = True
 except ImportError:
     UnfoldModelAdmin = admin.ModelAdmin
-    unfold_display = admin.display
     UNFOLD_AVAILABLE = False
 
 
@@ -55,7 +53,7 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
     )
     ordering = ['-created_at']
 
-    @unfold_display(description='Stav')
+    @admin.display(description='Stav')
     def status_display(self, obj):
         css = f'cf-badge cf-badge--{obj.status}'
         labels = {
@@ -73,15 +71,15 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             css, label
         )
 
-    @unfold_display(description='Statistiky')
+    @admin.display(description='Statistiky')
     def stats_display(self, obj):
         return format_html(
             '<span style="font-variant-numeric:tabular-nums">'
-            '<strong>{}</strong> chybajucich v <strong>{}</strong> dierach</span>',
-            f'{obj.total_missing:,}', obj.total_gaps
+            '<strong>{:,}</strong> chybajucich v <strong>{}</strong> dierach</span>',
+            obj.total_missing, obj.total_gaps
         )
 
-    @unfold_display(description='Oprava')
+    @admin.display(description='Oprava')
     def progress_display(self, obj):
         if obj.total_missing == 0:
             return '-'
@@ -95,7 +93,7 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             fill_class, min(percentage, 100), percentage
         )
 
-    @unfold_display(description='Top diery')
+    @admin.display(description='Top diery')
     def top_gaps_display(self, obj):
         if not obj.gap_ranges:
             return 'Ziadne diery'
@@ -118,13 +116,13 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
             mark_safe(''.join(rows))
         )
 
-    @unfold_display(description='Diery (JSON)')
+    @admin.display(description='Diery (JSON)')
     def gap_ranges_display(self, obj):
         if not obj.gap_ranges:
             return '[]'
         return f'{len(obj.gap_ranges)} rozsahov'
 
-    @unfold_display(description='Akcie')
+    @admin.display(description='Akcie')
     def actions_display(self, obj):
         buttons = []
         if obj.status == 'ready':
@@ -244,7 +242,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
     )
     ordering = ['-last_activity']
 
-    @unfold_display(description='Typ')
+    @admin.display(description='Typ')
     def sync_type_display(self, obj):
         type_labels = {
             'full': 'Full sync',
@@ -253,7 +251,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         }
         return type_labels.get(obj.sync_type, obj.sync_type)
 
-    @unfold_display(description='Stav')
+    @admin.display(description='Stav')
     def status_display(self, obj):
         css = f'cf-badge cf-badge--{obj.status}'
         labels = {
@@ -270,7 +268,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             css, label
         )
 
-    @unfold_display(description='Progress')
+    @admin.display(description='Progress')
     def progress_display(self, obj):
         percentage = obj.get_progress_percentage()
         fill_class = 'cf-progress__fill--emerald' if percentage > 80 else 'cf-progress__fill--blue' if percentage > 20 else 'cf-progress__fill--amber'
@@ -281,30 +279,28 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             fill_class, min(percentage, 100), percentage
         )
 
-    @unfold_display(description='Statistiky')
+    @admin.display(description='Statistiky')
     def stats_display(self, obj):
-        created = f'+{obj.total_created:,}'
-        updated = f'~{obj.total_updated:,}'
-        errors = f'!{obj.total_errors}' if obj.total_errors else '-'
         return format_html(
             '<span style="font-size:12px;font-variant-numeric:tabular-nums">'
-            '<span style="color:var(--cf-emerald-600)" title="Vytvorene">{}</span>'
-            ' <span style="color:var(--cf-blue-600)" title="Aktualizovane">{}</span>'
+            '<span style="color:var(--cf-emerald-600)" title="Vytvorene">+{:,}</span>'
+            ' <span style="color:var(--cf-blue-600)" title="Aktualizovane">~{:,}</span>'
             ' <span style="color:var(--cf-rose-500)" title="Chyby">{}</span></span>',
-            created, updated, errors
+            obj.total_created, obj.total_updated,
+            f'!{obj.total_errors}' if obj.total_errors else '-'
         )
 
-    @unfold_display(description='Rychlost')
+    @admin.display(description='Rychlost')
     def rate_display(self, obj):
         rate = obj.get_rate()
         if rate > 0:
             return format_html(
-                '<span style="font-variant-numeric:tabular-nums">{}/hod</span>',
-                f'{int(rate):,}'
+                '<span style="font-variant-numeric:tabular-nums">{:,}/hod</span>',
+                int(rate)
             )
         return '-'
 
-    @unfold_display(description='Akcie')
+    @admin.display(description='Akcie')
     def actions_display(self, obj):
         buttons = []
         if obj.status in ['paused', 'failed']:
@@ -317,18 +313,18 @@ class SyncProgressAdmin(UnfoldModelAdmin):
 
     # ── Readonly field displays ──
 
-    @unfold_display(description='Progress bar')
+    @admin.display(description='Progress bar')
     def progress_bar(self, obj):
         percentage = obj.get_progress_percentage()
         return format_html(
             '<div class="cf-progress" style="width:300px;height:28px">'
             '<div class="cf-progress__fill cf-progress__fill--blue" '
             'style="width:{}%;font-size:13px">'
-            '{}% ({} firiem)</div></div>',
-            min(percentage, 100), percentage, f'{obj.total_processed:,}'
+            '{}% ({:,} firiem)</div></div>',
+            min(percentage, 100), percentage, obj.total_processed
         )
 
-    @unfold_display(description='Odhad dokoncenia')
+    @admin.display(description='Odhad dokoncenia')
     def estimated_completion(self, obj):
         if obj.status != 'running':
             return '-'
@@ -345,19 +341,17 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             return f'~{hours_remaining:.1f} hod'
         return f'~{hours_remaining / 24:.1f} dni'
 
-    @unfold_display(description='Suhrn statistik')
+    @admin.display(description='Suhrn statistik')
     def sync_stats(self, obj):
         duration = obj.get_duration()
         duration_str = str(duration).split('.')[0] if duration else '-'
-        rate = f'{int(obj.get_rate()):,}'
-        ruz_id = f'{(obj.last_processed_ruz_id or 0):,}'
         return format_html(
             '<table class="cf-table" style="max-width:350px">'
             '<tr><td style="padding:6px 10px;font-weight:600">Trvanie</td><td style="padding:6px 10px">{}</td></tr>'
-            '<tr><td style="padding:6px 10px;font-weight:600">Rychlost</td><td style="padding:6px 10px">{} firiem/hod</td></tr>'
-            '<tr><td style="padding:6px 10px;font-weight:600">Posledne RUZ ID</td><td style="padding:6px 10px">{}</td></tr>'
+            '<tr><td style="padding:6px 10px;font-weight:600">Rychlost</td><td style="padding:6px 10px">{:,} firiem/hod</td></tr>'
+            '<tr><td style="padding:6px 10px;font-weight:600">Posledne RUZ ID</td><td style="padding:6px 10px">{:,}</td></tr>'
             '</table>',
-            duration_str, rate, ruz_id
+            duration_str, int(obj.get_rate()), obj.last_processed_ruz_id or 0
         )
 
     # ── Custom URLs ──
@@ -513,19 +507,19 @@ class SyncFocusModeStateAdmin(UnfoldModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-    @unfold_display(description='Stav')
+    @admin.display(description='Stav')
     def state_display(self, obj):
         if obj.active:
-            return mark_safe(
+            return format_html(
                 '<span class="cf-badge cf-badge--danger">'
                 '<span class="cf-badge__dot"></span>Focus mode AKTIVNY</span>'
             )
-        return mark_safe(
+        return format_html(
             '<span class="cf-badge cf-badge--idle">'
             '<span class="cf-badge__dot"></span>Neaktivny</span>'
         )
 
-    @unfold_display(description='Vypnute periodic tasky')
+    @admin.display(description='Vypnute periodic tasky')
     def snapshot_size_display(self, obj):
         count = len(obj.snapshot or [])
         if count > 0:
@@ -560,16 +554,16 @@ class OrsrCompanyProfileAdmin(UnfoldModelAdmin):
     list_filter = ['fetch_ok', 'oddiel']
     readonly_fields = ['last_synced_at', 'raw_sections', 'raw_payload']
 
-    @unfold_display(description='Stav sync')
+    @admin.display(description='Stav sync')
     def sync_status_display(self, obj):
         if obj.fetch_ok:
-            return mark_safe(
+            return format_html(
                 '<span class="cf-badge cf-badge--success">OK</span>'
             )
         if obj.fetch_ok is False:
-            return mark_safe(
+            return format_html(
                 '<span class="cf-badge cf-badge--danger">Chyba</span>'
             )
-        return mark_safe(
+        return format_html(
             '<span class="cf-badge cf-badge--idle">Neoverene</span>'
         )

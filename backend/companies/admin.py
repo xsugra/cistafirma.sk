@@ -12,12 +12,11 @@ from registers.models import OrsrCompanyProfile
 
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
-    from unfold.decorators import action as unfold_action, display as unfold_display
+    from unfold.decorators import action as unfold_action
     UNFOLD_AVAILABLE = True
 except ImportError:
     UnfoldModelAdmin = admin.ModelAdmin
     unfold_action = admin.action
-    unfold_display = admin.display
     UNFOLD_AVAILABLE = False
 
 
@@ -277,23 +276,23 @@ class CompanyAdmin(UnfoldModelAdmin):
 
     # ── Display Methods ──
 
-    @unfold_display(description='Stav')
+    @admin.display(description='Stav')
     def status_display(self, obj):
         if obj.datum_zrusenia:
-            return mark_safe(
+            return format_html(
                 '<span class="cf-badge cf-badge--danger">'
                 '<span class="cf-badge__dot"></span>Zrusena</span>'
             )
-        return mark_safe(
+        return format_html(
             '<span class="cf-badge cf-badge--success">'
             '<span class="cf-badge__dot"></span>Aktivna</span>'
         )
 
-    @unfold_display(description='DPH', boolean=True)
+    @admin.display(description='DPH', boolean=True)
     def vat_payer_display(self, obj):
         return obj.vat_payer
 
-    @unfold_display(description='Pravna forma')
+    @admin.display(description='Pravna forma')
     def legal_form_display(self, obj):
         if not obj.pravna_forma:
             return '-'
@@ -303,10 +302,10 @@ class CompanyAdmin(UnfoldModelAdmin):
             f'{obj.pravna_forma}', form_short
         )
 
-    @unfold_display(description='Dan. spolahlivost')
+    @admin.display(description='Dan. spolahlivost')
     def tax_reliability_display(self, obj):
         if not obj.tax_reliability:
-            return mark_safe('<span class="cf-risk cf-risk--unknown">-</span>')
+            return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
         mapping = {
             'vysoko spoľahlivý': ('cf-badge--success', 'Vysoko'),
             'spoľahlivý': ('cf-badge--info', 'OK'),
@@ -315,7 +314,7 @@ class CompanyAdmin(UnfoldModelAdmin):
         css, label = mapping.get(obj.tax_reliability.lower(), ('cf-badge--idle', obj.tax_reliability))
         return format_html('<span class="cf-badge {}">{}</span>', css, label)
 
-    @unfold_display(description='Riziko')
+    @admin.display(description='Riziko')
     def risk_display(self, obj):
         issues = []
         total_debt = 0
@@ -339,12 +338,12 @@ class CompanyAdmin(UnfoldModelAdmin):
                 f'{total_debt:,.0f}€'
             )
         if obj.last_insurance_debt:
-            return mark_safe(
+            return format_html(
                 '<span class="cf-badge cf-badge--success">OK</span>'
             )
-        return mark_safe('<span class="cf-risk cf-risk--unknown">-</span>')
+        return format_html('<span class="cf-risk cf-risk--unknown">-</span>')
 
-    @unfold_display(description='Data')
+    @admin.display(description='Data')
     def data_quality_display(self, obj):
         parts = []
         has_orsr = hasattr(obj, 'orsr_profile') and obj.orsr_profile is not None
