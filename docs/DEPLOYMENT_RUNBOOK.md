@@ -130,7 +130,7 @@ scripts/k8s/restore_postgres.sh
 
 ## 7. Release matrix
 
-Viac v [DEVOPS_CICD.md](DEVOPS_CICD.md#release-matrix).
+Viac v [DEVOPS_CICD.md](DEVOPS_CICD.md#správanie-release).
 
 | Vetva / Tag | Správanie |
 |---|---|
