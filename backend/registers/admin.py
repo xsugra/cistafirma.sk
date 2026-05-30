@@ -75,8 +75,8 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
     def stats_display(self, obj):
         return format_html(
             '<span style="font-variant-numeric:tabular-nums">'
-            '<strong>{:,}</strong> chybajucich v <strong>{}</strong> dierach</span>',
-            obj.total_missing, obj.total_gaps
+            '<strong>{}</strong> chybajucich v <strong>{}</strong> dierach</span>',
+            f'{obj.total_missing:,}', obj.total_gaps
         )
 
     @admin.display(description='Oprava')
@@ -283,10 +283,10 @@ class SyncProgressAdmin(UnfoldModelAdmin):
     def stats_display(self, obj):
         return format_html(
             '<span style="font-size:12px;font-variant-numeric:tabular-nums">'
-            '<span style="color:var(--cf-emerald-600)" title="Vytvorene">+{:,}</span>'
-            ' <span style="color:var(--cf-blue-600)" title="Aktualizovane">~{:,}</span>'
+            '<span style="color:var(--cf-emerald-600)" title="Vytvorene">+{}</span>'
+            ' <span style="color:var(--cf-blue-600)" title="Aktualizovane">~{}</span>'
             ' <span style="color:var(--cf-rose-500)" title="Chyby">{}</span></span>',
-            obj.total_created, obj.total_updated,
+            f'{obj.total_created:,}', f'{obj.total_updated:,}',
             f'!{obj.total_errors}' if obj.total_errors else '-'
         )
 
@@ -295,8 +295,8 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         rate = obj.get_rate()
         if rate > 0:
             return format_html(
-                '<span style="font-variant-numeric:tabular-nums">{:,}/hod</span>',
-                int(rate)
+                '<span style="font-variant-numeric:tabular-nums">{}/hod</span>',
+                f'{int(rate):,}'
             )
         return '-'
 
@@ -320,8 +320,8 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             '<div class="cf-progress" style="width:300px;height:28px">'
             '<div class="cf-progress__fill cf-progress__fill--blue" '
             'style="width:{}%;font-size:13px">'
-            '{}% ({:,} firiem)</div></div>',
-            min(percentage, 100), percentage, obj.total_processed
+            '{}% ({} firiem)</div></div>',
+            min(percentage, 100), percentage, f'{obj.total_processed:,}'
         )
 
     @admin.display(description='Odhad dokoncenia')
@@ -348,10 +348,10 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         return format_html(
             '<table class="cf-table" style="max-width:350px">'
             '<tr><td style="padding:6px 10px;font-weight:600">Trvanie</td><td style="padding:6px 10px">{}</td></tr>'
-            '<tr><td style="padding:6px 10px;font-weight:600">Rychlost</td><td style="padding:6px 10px">{:,} firiem/hod</td></tr>'
-            '<tr><td style="padding:6px 10px;font-weight:600">Posledne RUZ ID</td><td style="padding:6px 10px">{:,}</td></tr>'
+            '<tr><td style="padding:6px 10px;font-weight:600">Rychlost</td><td style="padding:6px 10px">{} firiem/hod</td></tr>'
+            '<tr><td style="padding:6px 10px;font-weight:600">Posledne RUZ ID</td><td style="padding:6px 10px">{}</td></tr>'
             '</table>',
-            duration_str, int(obj.get_rate()), obj.last_processed_ruz_id or 0
+            duration_str, f'{int(obj.get_rate()):,}', f'{obj.last_processed_ruz_id or 0:,}'
         )
 
     # ── Custom URLs ──
