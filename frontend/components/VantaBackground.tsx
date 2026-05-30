@@ -4,9 +4,9 @@ import { useTheme } from '../context/ThemeContext';
 
 export const VantaBackground: React.FC = () => {
     const vantaRef = useRef<HTMLDivElement>(null);
-    const effectRef = useRef<any>(null); // Use Ref to track the Vanta instance without triggering re-renders
+    const effectRef = useRef<any>(null);
     const { theme } = useTheme();
-    
+
     const [systemIsDark, setSystemIsDark] = useState<boolean>(false);
 
     useEffect(() => {
@@ -22,23 +22,20 @@ export const VantaBackground: React.FC = () => {
     const isDark = theme === 'dark' || (theme === 'system' && systemIsDark);
 
     useEffect(() => {
-        let interval: any = null;
+        let cancelled = false;
 
-        const loadVanta = () => {
-            // Check dependencies: DOM element, Vanta lib, Three lib
+        const initVanta = () => {
             if (!vantaRef.current || !(window as any).VANTA || !(window as any).THREE) {
-                return false;
+                return;
             }
 
-            // Clean up existing effect before creating a new one
             if (effectRef.current) {
                 effectRef.current.destroy();
                 effectRef.current = null;
             }
 
-            // Colors
-            const backgroundColor = isDark ? 0x020617 : 0xffffff; 
-            const color = 0x2563eb; 
+            const backgroundColor = isDark ? 0x020617 : 0xffffff;
+            const color = 0x2563eb;
 
             try {
                 effectRef.current = (window as any).VANTA.NET({
@@ -50,43 +47,102 @@ export const VantaBackground: React.FC = () => {
                     minWidth: 200.00,
                     scale: 1.00,
                     scaleMobile: 1.00,
-                    color: color, 
+                    color: color,
                     backgroundColor: backgroundColor,
                     points: 12.00,
                     maxDistance: 23.00,
                     spacing: 18.00,
                     showDots: true,
-                    backgroundAlpha: 1.0 
+                    backgroundAlpha: 1.0
                 });
-                return true;
             } catch (error) {
                 console.error("Vanta JS init error:", error);
-                return false;
             }
         };
 
-        // Try to load immediately
-        if (!loadVanta()) {
-            // Poll if scripts aren't loaded yet
-            interval = setInterval(() => {
-                if (loadVanta()) {
-                    clearInterval(interval);
+        const scriptsLoaded = () => !!(window as any).VANTA && !!(window as any).THREE;
+
+        // If scripts already cached/loaded, init immediately
+        if (scriptsLoaded()) {
+            initVanta();
+            return () => {
+                if (effectRef.current) {
+                    effectRef.current.destroy();
+                    effectRef.current = null;
                 }
-            }, 100);
+            };
         }
 
+        // Otherwise, listen for script load events (event-driven, no polling)
+        let threeLoaded = false;
+        let vantaLoaded = false;
+
+        const tryInit = () => {
+            if (!cancelled && threeLoaded && vantaLoaded) {
+                initVanta();
+            }
+        };
+
+        const threeScript = document.querySelector('script[src*="three.min.js"]');
+        const vantaScript = document.querySelector('script[src*="vanta.net.min.js"]');
+
+        const onThreeLoad = () => {
+            threeLoaded = true;
+            tryInit();
+        };
+        const onVantaLoad = () => {
+            vantaLoaded = true;
+            tryInit();
+        };
+
+        let threeListenerAttached = false;
+        let vantaListenerAttached = false;
+
+        // Check if scripts already completed loading before we attached listeners
+        if (threeScript) {
+            if ((threeScript as HTMLScriptElement).complete || scriptsLoaded()) {
+                threeLoaded = true;
+            } else {
+                threeScript.addEventListener('load', onThreeLoad, { once: true });
+                threeListenerAttached = true;
+            }
+        } else {
+            threeLoaded = true;
+        }
+
+        if (vantaScript) {
+            if ((vantaScript as HTMLScriptElement).complete || scriptsLoaded()) {
+                vantaLoaded = true;
+            } else {
+                vantaScript.addEventListener('load', onVantaLoad, { once: true });
+                vantaListenerAttached = true;
+            }
+        } else {
+            vantaLoaded = true;
+        }
+
+        tryInit();
+
         return () => {
-            if (interval) clearInterval(interval);
+            cancelled = true;
+            // { once: true } auto-removes listeners after first fire,
+            // but we still detach them here in case they haven't fired yet.
+            if (threeScript && threeListenerAttached) {
+                threeScript.removeEventListener('load', onThreeLoad);
+            }
+            if (vantaScript && vantaListenerAttached) {
+                vantaScript.removeEventListener('load', onVantaLoad);
+            }
             if (effectRef.current) {
                 effectRef.current.destroy();
                 effectRef.current = null;
             }
         };
-    }, [isDark]); 
+    }, [isDark]);
 
     return (
-        <div 
-            ref={vantaRef} 
+        <div
+            ref={vantaRef}
             style={{
                 position: 'fixed',
                 top: 0,
@@ -95,7 +151,6 @@ export const VantaBackground: React.FC = () => {
                 height: '100vh',
                 zIndex: 0,
                 pointerEvents: 'none',
-                // Explicitly set background color to match Vanta to prevent flashing/white filter issues
                 backgroundColor: isDark ? '#020617' : '#ffffff',
                 transition: 'background-color 0.3s ease'
             }}
