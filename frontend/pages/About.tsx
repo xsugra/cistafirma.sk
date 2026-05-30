@@ -45,7 +45,7 @@ export const About: React.FC = () => {
                             <ul className="space-y-3">
                                 <li className="flex items-start gap-3">
                                     <i className="fas fa-check-circle text-green-500 mt-1"></i>
-                                    <span className="text-base text-gray-700 dark:text-gray-300"><strong>Google Gemini AI:</strong> Prekladá zložité finančné výkazy do zrozumiteľnej reči.</span>
+                                    <span className="text-base text-gray-700 dark:text-gray-300"><strong>Automatická kontrola dlhov:</strong> Kontrola zadlženosti voči poisťovniam a daňovým úradom.</span>
                                 </li>
                                 <li className="flex items-start gap-3">
                                     <i className="fas fa-check-circle text-green-500 mt-1"></i>
@@ -58,7 +58,7 @@ export const About: React.FC = () => {
                             </ul>
                         </div>
                          <div className="w-full md:w-1/3 flex justify-center">
-                            <div className="w-32 h-32 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center text-purple-600 dark:text-purple-400">
+                            <div className="w-32 h-32 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-400">
                                 <i className="fas fa-microchip text-5xl"></i>
                             </div>
                         </div>

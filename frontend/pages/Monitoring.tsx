@@ -1,17 +1,16 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { SearchBar } from '../components/SearchBar';
 import { CompanyDetail } from '../components/CompanyDetail';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { api } from '../api';
 import type { Company } from '../types';
 
-interface MonitoringProps {
-    initialSearch?: string;
-}
-
-export const Monitoring: React.FC<MonitoringProps> = ({ initialSearch }) => {
-  const [query, setQuery] = useState<string>(initialSearch || '');
+export const Monitoring: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialSearch = searchParams.get('ico') || '';
+  const [query, setQuery] = useState<string>(initialSearch);
   const [companyData, setCompanyData] = useState<Company | null>(null);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -33,17 +32,16 @@ export const Monitoring: React.FC<MonitoringProps> = ({ initialSearch }) => {
     setQuery(trimmedQuery);
 
     try {
-        // If it looks like an ICO (numeric, 8 digits), try direct fetch
         if (/^\d{8}$/.test(trimmedQuery)) {
             const data = await api.getCompany(trimmedQuery);
             setCompanyData(data);
+            setSearchParams({ ico: trimmedQuery }, { replace: true });
         } else {
-            // Otherwise use search endpoint
             const data = await api.searchCompanies(trimmedQuery);
             if (data.results && data.results.length === 1) {
-                // Single result found, fetch full details
                 const detail = await api.getCompany(data.results[0].ico);
                 setCompanyData(detail);
+                setSearchParams({ ico: data.results[0].ico }, { replace: true });
             } else if (data.results && data.results.length > 1) {
                 setSearchResults(data.results);
             } else {

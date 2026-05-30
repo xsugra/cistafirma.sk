@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { adminApi } from '../api';
+import { useAsyncData } from '../../hooks/useAsyncData';
 import type { DashboardOverview, DashboardSync, DashboardSystem } from '../types';
 
 function KpiCard({ label, value, sub, icon, color }: {
@@ -52,28 +53,27 @@ function ThroughputChart({ succeeded, failed }: { succeeded: number[]; failed: n
   );
 }
 
-export function Dashboard() {
-  const [overview, setOverview] = useState<DashboardOverview | null>(null);
-  const [sync, setSync] = useState<DashboardSync | null>(null);
-  const [system, setSystem] = useState<DashboardSystem | null>(null);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+interface DashboardData {
+  overview: DashboardOverview;
+  sync: DashboardSync;
+  system: DashboardSystem;
+}
 
-  useEffect(() => {
-    Promise.all([
+export function Dashboard() {
+  const { data, isLoading, error } = useAsyncData<DashboardData>(
+    () => Promise.all([
       adminApi.dashboardOverview(),
       adminApi.dashboardSync(),
       adminApi.dashboardSystem(),
-    ])
-      .then(([o, s, sys]) => { setOverview(o); setSync(s); setSystem(sys); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
+    ]).then(([overview, sync, system]) => ({ overview, sync, system })),
+    [],
+  );
 
-  if (loading) return <Loading />;
+  if (isLoading) return <Loading />;
   if (error) return <ErrorMsg msg={error} />;
-  if (!overview) return null;
+  if (!data) return null;
 
+  const { overview, sync, system } = data;
   const c = overview.companies;
   const u = overview.users;
   const sn = overview.sync;

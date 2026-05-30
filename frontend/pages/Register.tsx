@@ -1,13 +1,11 @@
 import React, {useState} from 'react';
+import { useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {AuthLayout} from '../components/AuthLayout';
+import {ROUTES} from '../constants';
 
-interface RegisterProps {
-    onSuccess: () => void;
-    onLoginClick: () => void;
-}
-
-export const Register: React.FC<RegisterProps> = ({onSuccess, onLoginClick}) => {
+export const Register: React.FC = () => {
+    const navigate = useNavigate();
     const [formData, setFormData] = useState({
         firstName: '',
         lastName: '',
@@ -17,13 +15,11 @@ export const Register: React.FC<RegisterProps> = ({onSuccess, onLoginClick}) => 
         confirmPassword: ''
     });
 
-    // UI State
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    // Computed properties for validation
     const passwordsMatch = formData.password && formData.confirmPassword && formData.password === formData.confirmPassword;
     const isTypingConfirm = formData.confirmPassword.length > 0;
 
@@ -41,9 +37,8 @@ export const Register: React.FC<RegisterProps> = ({onSuccess, onLoginClick}) => 
         setError('');
         try {
             await api.register(formData);
-            onSuccess();
+            navigate(ROUTES.HOME);
         } catch (error: any) {
-            // Display the specific error message from api.js (which parses backend validation errors)
             setError(error.message || 'Registrácia zlyhala. Skúste to prosím znova.');
         } finally {
             setLoading(false);
@@ -169,7 +164,6 @@ export const Register: React.FC<RegisterProps> = ({onSuccess, onLoginClick}) => 
                                 <i className={`fas ${showConfirmPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
                             </button>
                         </div>
-                        {/* Real-time Validation Feedback */}
                         {isTypingConfirm && (
                             <div
                                 className={`text-xs mt-1.5 font-medium flex items-center gap-1.5 ${passwordsMatch ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
@@ -202,7 +196,7 @@ export const Register: React.FC<RegisterProps> = ({onSuccess, onLoginClick}) => 
             <div className="mt-6 pt-6 border-t border-gray-100 dark:border-slate-800 text-center">
                 <p className="text-gray-500 dark:text-gray-400 text-sm">
                     Už máte účet?{' '}
-                    <button onClick={onLoginClick}
+                    <button onClick={() => navigate(ROUTES.LOGIN)}
                             className="text-blue-600 dark:text-blue-400 font-bold hover:underline transition-colors">
                         Prihláste sa
                     </button>

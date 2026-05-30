@@ -35,7 +35,7 @@ export function AdminLayout({ activePage, onNavigate, onExit, children, userName
   }, {});
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden relative z-10">
       {/* Sidebar */}
       <aside className={`${sidebarOpen ? 'w-60' : 'w-16'} flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col transition-all duration-200`}>
         {/* Logo */}

@@ -1,28 +1,28 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { adminApi } from '../api';
+import { useAsyncData } from '../../hooks/useAsyncData';
+
+interface SystemData {
+  health: Record<string, any>;
+  info: Record<string, any>;
+  queues: Record<string, number | null>;
+}
 
 export function System() {
-  const [health, setHealth] = useState<Record<string, any> | null>(null);
-  const [info, setInfo] = useState<Record<string, any> | null>(null);
-  const [queues, setQueues] = useState<Record<string, number | null> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const fetchAll = () => {
-    setLoading(true);
-    Promise.all([
+  const { data, isLoading, error, refetch } = useAsyncData<SystemData>(
+    () => Promise.all([
       adminApi.systemHealth(),
       adminApi.systemInfo(),
       adminApi.queueDepths().catch(() => ({ queues: {} })),
-    ])
-      .then(([h, i, q]) => { setHealth(h); setInfo(i); setQueues(q.queues); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  };
+    ]).then(([health, info, q]) => ({ health, info, queues: q.queues })),
+    [],
+  );
 
-  useEffect(() => { fetchAll(); }, []);
+  const health = data?.health ?? null;
+  const info = data?.info ?? null;
+  const queues = data?.queues ?? null;
 
-  if (loading) return (
+  if (isLoading) return (
     <div className="flex items-center justify-center h-64">
       <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
     </div>
@@ -33,7 +33,7 @@ export function System() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Systém</h1>
         <button
-          onClick={fetchAll}
+          onClick={refetch}
           className="px-3 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm transition-colors"
         >
           <i className="fas fa-sync-alt mr-2" />Refresh

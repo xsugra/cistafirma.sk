@@ -1,4 +1,5 @@
 import React, {useState, useEffect} from 'react';
+import { useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {useAuth} from '../context/AuthContext';
 import {StatusBadge} from '../components/StatusBadge';
@@ -8,11 +9,8 @@ import type {WatchlistEntry, HistoryEntry, Company} from '../types';
 
 type Tab = 'dashboard' | 'watchlist' | 'history' | 'settings';
 
-interface ProfileProps {
-    onNavigate: (route: string, params?: any) => void;
-}
-
-export const Profile: React.FC<ProfileProps> = ({onNavigate}) => {
+export const Profile: React.FC = () => {
+    const navigate = useNavigate();
     const {user} = useAuth();
     const [activeTab, setActiveTab] = useState<Tab>('dashboard');
 
@@ -50,18 +48,13 @@ export const Profile: React.FC<ProfileProps> = ({onNavigate}) => {
 
     const refreshLists = async () => {
         setIsLoadingData(true);
-        try {
-            const [wList, hList] = await Promise.all([
-                api.getWatchlist(),
-                api.getHistory()
-            ]);
-            setWatchlist(wList || []);
-            setHistory(hList || []);
-        } catch (e) {
-            console.error("Failed to load user lists", e);
-        } finally {
-            setIsLoadingData(false);
-        }
+        const [wResult, hResult] = await Promise.allSettled([
+            api.getWatchlist(),
+            api.getHistory()
+        ]);
+        if (wResult.status === 'fulfilled') setWatchlist(wResult.value || []);
+        if (hResult.status === 'fulfilled') setHistory(hResult.value || []);
+        setIsLoadingData(false);
     };
 
     useEffect(() => {
@@ -225,7 +218,7 @@ export const Profile: React.FC<ProfileProps> = ({onNavigate}) => {
                         {percentUsed > 80 &&
                             <span className="text-red-500 ml-1 block mt-1">Blížite sa k vyčerpaniu limitu!</span>}
                     </p>
-                    <button onClick={() => onNavigate(ROUTES.PRICING)} className="btn btn-outline w-full mt-6">
+                    <button onClick={() => navigate(ROUTES.PRICING)} className="btn btn-outline w-full mt-6">
                         Navýšiť limit
                     </button>
                 </div>

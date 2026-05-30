@@ -119,7 +119,7 @@ export const Blog: React.FC = () => {
 
             {/* Newsletter CTA */}
             <div className="app-card p-10 text-center relative overflow-hidden mb-12">
-                 <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 to-purple-600/10 z-0"></div>
+                 <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 to-blue-400/10 z-0"></div>
                  <div className="relative z-10 max-w-2xl mx-auto">
                      <i className="fas fa-envelope-open-text text-4xl text-blue-600 mb-4"></i>
                      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Nezmeškajte žiadne novinky</h2>

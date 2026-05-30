@@ -1,30 +1,20 @@
-import React, {useEffect, useState} from 'react';
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import {AnimatedSubtitle} from '../components/AnimatedSubtitle';
 import {SearchBar} from '../components/SearchBar';
 import {ROUTES} from '../constants';
 import {api} from '../api';
+import {useAsyncData} from '../hooks/useAsyncData';
 
-interface HomeProps {
-    onNavigate: (route: string, params?: any) => void;
-}
+const DEFAULT_STATS = {companiesIndexed: 0, dailyChecks: 0, riskyCompaniesDetected: 0};
 
-export const Home: React.FC<HomeProps> = ({onNavigate}) => {
-    const [stats, setStats] = useState({companiesIndexed: 0, dailyChecks: 0, riskyCompaniesDetected: 0});
-
-    useEffect(() => {
-        const loadStats = async () => {
-            try {
-                const data: any = await api.getLandingStats();
-                setStats(data);
-            } catch (e) {
-                console.error("Failed to load landing stats", e);
-            }
-        };
-        loadStats();
-    }, []);
+export const Home: React.FC = () => {
+    const navigate = useNavigate();
+    const { data } = useAsyncData(() => api.getLandingStats(), []);
+    const stats = data ?? DEFAULT_STATS;
 
     const handleSearch = (query: string) => {
-        onNavigate(ROUTES.MONITORING, { ico: query });
+        navigate(`${ROUTES.MONITORING}?ico=${encodeURIComponent(query)}`);
     };
 
     const FeatureCard = ({icon, title, text}: { icon: string, title: string, text: string }) => (
@@ -43,12 +33,11 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
         <div className="animate-fade-in">
             {/* HERO SECTION */}
             <section className="relative text-center py-20 md:py-32 max-w-5xl mx-auto px-4 overflow-hidden">
-                {/* Background Glows */}
-                <div
-                    className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-blue-500/10 rounded-full blur-[100px] -z-10 pointer-events-none"></div>
+                {/* Soft radial backdrop for text readability over animated background */}
+                <div className="hero-backdrop absolute inset-0 -z-10 pointer-events-none"></div>
 
                 <div
-                    className="mb-8 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/50 dark:bg-slate-800/50 border border-blue-100 dark:border-blue-900 backdrop-blur-md shadow-sm">
+                    className="mb-8 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/70 dark:bg-slate-800/70 border border-blue-100 dark:border-blue-900 backdrop-blur-md shadow-sm">
                     <span className="flex h-2 w-2 relative">
                         <span
                             className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -59,10 +48,10 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
                     </span>
                 </div>
 
-                <h1 className="text-5xl sm:text-6xl md:text-8xl font-bold text-gray-900 dark:text-white mb-8 tracking-tight leading-none">
+                <h1 className="hero-text text-5xl sm:text-6xl md:text-8xl font-bold text-gray-900 dark:text-white mb-8 tracking-tight leading-none">
                     Transparentné podnikanie <br/>
                     <span
-                        className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 animate-gradient-x">bez rizika</span>
+                        className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-blue-400">bez rizika</span>
                 </h1>
 
                 <div className="mb-12 h-12">
@@ -76,13 +65,13 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
                 <div
                     className="flex flex-col sm:flex-row gap-5 justify-center items-center w-full max-w-md mx-auto sm:max-w-none relative z-10">
                     <button
-                        onClick={() => onNavigate(ROUTES.MONITORING)}
+                        onClick={() => navigate(ROUTES.MONITORING)}
                         className="btn btn-primary text-lg px-10 py-4 rounded-full shadow-lg shadow-blue-600/30 hover:shadow-blue-600/40 w-full sm:w-auto transform hover:scale-105 transition-all duration-300"
                     >
                         Spustiť Monitoring <i className="fas fa-arrow-right ml-2"></i>
                     </button>
                     <button
-                        onClick={() => onNavigate(ROUTES.PRICING)}
+                        onClick={() => navigate(ROUTES.PRICING)}
                         className="btn bg-white dark:bg-slate-900 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800 text-lg px-10 py-4 rounded-full shadow-md hover:shadow-lg w-full sm:w-auto transition-all duration-300"
                     >
                         Pozrieť Cenník
@@ -164,12 +153,12 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
                     <div className="flex justify-between items-end mb-8">
                         <div>
                             <div
-                                className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-bold uppercase tracking-wide mb-4">
+                                className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-bold uppercase tracking-wide mb-4">
                                 Blog & Novinky
                             </div>
                             <h3 className="text-3xl font-bold text-gray-900 dark:text-white">Najnovšie z blogu</h3>
                         </div>
-                        <button onClick={() => onNavigate(ROUTES.BLOG)}
+                        <button onClick={() => navigate(ROUTES.BLOG)}
                                 className="btn btn-ghost text-sm hidden sm:flex">
                             Všetky články <i className="fas fa-arrow-right ml-1"></i>
                         </button>
@@ -178,7 +167,7 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
                     <div className="space-y-6 flex-grow">
                         <div
                             className="group cursor-pointer bg-white dark:bg-slate-900 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-all"
-                            onClick={() => onNavigate(ROUTES.BLOG)}>
+                            onClick={() => navigate(ROUTES.BLOG)}>
                             <div className="flex justify-between items-start mb-2">
                                 <span
                                     className="text-xs font-bold text-blue-600 uppercase tracking-wider">Legislatíva</span>
@@ -190,14 +179,14 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
                         </div>
 
                         <div
-                            className="group cursor-pointer bg-white dark:bg-slate-900 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 hover:border-purple-300 dark:hover:border-purple-700 transition-all"
-                            onClick={() => onNavigate(ROUTES.BLOG)}>
+                            className="group cursor-pointer bg-white dark:bg-slate-900 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-all"
+                            onClick={() => navigate(ROUTES.BLOG)}>
                             <div className="flex justify-between items-start mb-2">
                                 <span
-                                    className="text-xs font-bold text-purple-600 uppercase tracking-wider">Technológie</span>
+                                    className="text-xs font-bold text-blue-600 uppercase tracking-wider">Technológie</span>
                                 <span className="text-xs text-gray-400">10. Feb</span>
                             </div>
-                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-purple-500 transition-colors">
+                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                                 Ako AI odhaľuje biele kone vo firmách
                             </h4>
                         </div>
@@ -208,9 +197,9 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
             {/* FEATURES GRID */}
             <section className="mb-24 px-4 container mx-auto">
                 <div className="text-center mb-16 max-w-3xl mx-auto">
-                    <h2 className="text-3xl md:text-5xl font-bold text-gray-900 dark:text-white mb-6">Prečo
+                    <h2 className="hero-text text-3xl md:text-5xl font-bold text-gray-900 dark:text-white mb-6">Prečo
                         cistafirma.sk?</h2>
-                    <p className="text-xl text-gray-600 dark:text-gray-400">
+                    <p className="hero-text-muted text-xl text-gray-600 dark:text-gray-400">
                         Komplexný nástroj, ktorý šetrí váš čas, chráni vaše peniaze a dáva vám konkurenčnú výhodu.
                     </p>
                 </div>
@@ -221,9 +210,9 @@ export const Home: React.FC<HomeProps> = ({onNavigate}) => {
                         text="Optimalizovaná infraštruktúra zabezpečuje výsledky vyhľadávania a analýzy v milisekundách."
                     />
                     <FeatureCard
-                        icon="fa-brain"
-                        title="AI Insight"
-                        text="Využívame Google Gemini AI na generovanie zrozumiteľných zhrnutí rizík v ľudskej reči."
+                        icon="fa-search-dollar"
+                        title="Kontrola dlhov"
+                        text="Automatická kontrola zadlženosti voči Sociálnej poisťovni, zdravotnej poisťovni a daňovým úradom."
                     />
                     <FeatureCard
                         icon="fa-history"
