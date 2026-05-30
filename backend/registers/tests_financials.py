@@ -29,11 +29,11 @@ class RuzFinancialsSyncServiceTests(SimpleTestCase):
             ]
         }
 
-        revenue, cost, profit = self.service._extract_with_template(table, template)
+        result = self.service._extract_with_template(table, template)
 
-        self.assertEqual(revenue, Decimal("150000"))
-        self.assertEqual(cost, Decimal("90000"))
-        self.assertEqual(profit, Decimal("60000"))
+        self.assertEqual(result.get("revenue"), Decimal("150000"))
+        self.assertEqual(result.get("costs"), Decimal("90000"))
+        self.assertEqual(result.get("profit"), Decimal("60000"))
 
     def test_extract_with_template_calculates_profit_when_missing(self):
         table = {
@@ -49,13 +49,12 @@ class RuzFinancialsSyncServiceTests(SimpleTestCase):
             ]
         }
 
-        revenue, cost, profit = self.service._extract_with_template(table, template)
+        result = self.service._extract_with_template(table, template)
 
-        self.assertEqual(revenue, Decimal("200000"))
-        self.assertEqual(cost, Decimal("150000"))
-        self.assertEqual(profit, Decimal("50000"))
+        self.assertEqual(result.get("revenue"), Decimal("200000"))
+        self.assertEqual(result.get("costs"), Decimal("150000"))
+        self.assertEqual(result.get("profit"), Decimal("50000"))
 
     def test_extract_table_total_uses_last_numeric_value(self):
         table = {"data": ["abc", "1", "2.50"]}
         self.assertEqual(self.service._extract_table_total(table), Decimal("2.50"))
-
