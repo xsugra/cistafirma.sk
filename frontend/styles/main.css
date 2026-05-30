@@ -24,6 +24,14 @@
 body {
     background-color: var(--bg-light);
     color: var(--text-main-light);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'IBM Plex Sans', 'Inter', system-ui, sans-serif;
+    letter-spacing: -0.025em;
 }
 
 html.dark body {
@@ -41,6 +49,31 @@ html.dark body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* --- TEXT OVER ANIMATED BACKGROUND --- */
+.hero-text {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+html.dark .hero-text {
+    text-shadow: 0 0 30px rgba(2, 6, 23, 0.9), 0 0 60px rgba(2, 6, 23, 0.6);
+}
+
+.hero-text-muted {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+html.dark .hero-text-muted {
+    text-shadow: 0 0 20px rgba(2, 6, 23, 0.9), 0 0 40px rgba(2, 6, 23, 0.5);
+}
+
+.hero-backdrop {
+    background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 70%);
+}
+
+html.dark .hero-backdrop {
+    background: radial-gradient(ellipse at center, rgba(2, 6, 23, 0.65) 0%, rgba(2, 6, 23, 0) 70%);
+}
+
 /* --- COMPONENTS: BUTTONS --- */
 .btn {
     display: inline-flex;
@@ -49,7 +82,8 @@ html.dark body {
     gap: 0.5rem;
     padding: 0.5rem 1rem;
     border-radius: 0.5rem;
-    font-weight: 600;
+    font-weight: 500;
+    letter-spacing: -0.01em;
     transition: all 0.2s ease;
     cursor: pointer;
 }
@@ -103,20 +137,20 @@ html.dark .btn-ghost {
 }
 
 /* --- COMPONENTS: CARDS --- */
-/* Increased opacity for better readability against Vanta background */
+/* Increased opacity for better readability against animated background */
 .app-card {
-    background-color: rgba(255, 255, 255, 0.95); 
-    border: 1px solid var(--border-light);
+    background-color: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(226, 232, 240, 0.6);
     border-radius: 1rem;
     overflow: hidden;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-    transition: background-color 0.3s, border-color 0.3s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
+    transition: background-color 0.3s, border-color 0.3s, box-shadow 0.3s;
     backdrop-filter: blur(8px);
 }
 
 html.dark .app-card {
     background-color: rgba(15, 23, 42, 0.95);
-    border-color: var(--border-dark);
+    border-color: rgba(30, 41, 59, 0.5);
     box-shadow: none;
 }
 
@@ -233,25 +267,31 @@ html.dark .nav-link {
 .tab-nav {
     display: flex;
     overflow-x: auto;
-    gap: 0.5rem;
-    border-bottom: 1px solid var(--border-light);
+    gap: 0.25rem;
+    padding: 0.375rem;
     margin-bottom: 2rem;
+    border-radius: 0.75rem;
+    background-color: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(226, 232, 240, 0.6);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 html.dark .tab-nav {
-    border-color: var(--border-dark);
+    background-color: rgba(15, 23, 42, 0.92);
+    border-color: rgba(30, 41, 59, 0.5);
+    box-shadow: none;
 }
 
 .tab-btn {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    border-radius: 0.5rem 0.5rem 0 0;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
     font-weight: 500;
     white-space: nowrap;
     transition: all 0.2s;
-    border-bottom: 2px solid transparent;
     color: var(--text-muted-light);
 }
 
@@ -260,21 +300,24 @@ html.dark .tab-btn {
 }
 
 .tab-btn:hover {
-    background-color: rgba(0,0,0,0.05);
+    background-color: rgba(0, 0, 0, 0.05);
+    color: var(--text-main-light);
 }
 
 html.dark .tab-btn:hover {
-    background-color: rgba(255,255,255,0.05);
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-main-dark);
 }
 
 .tab-btn.active {
-    background-color: rgba(255, 255, 255, 0.9);
-    color: var(--color-brand);
-    border-bottom-color: var(--color-brand);
+    background-color: var(--color-brand);
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
 }
 
 html.dark .tab-btn.active {
-    background-color: rgba(15, 23, 42, 0.9);
+    background-color: var(--color-brand);
+    color: #ffffff;
 }
 
 /* --- LISTS & ITEMS --- */
