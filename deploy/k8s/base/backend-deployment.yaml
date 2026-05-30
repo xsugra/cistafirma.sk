@@ -12,6 +12,29 @@ spec:
       labels:
         app: cistafirma-backend
     spec:
+      initContainers:
+        - name: wait-for-migrations
+          image: __BACKEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: cistafirma-config
+            - secretRef:
+                name: cistafirma-secrets
+          command:
+            - sh
+            - -c
+            - |
+              until python -c "import urllib.parse as u, socket, os; url=u.urlparse(os.environ['DATABASE_URL']); s=socket.socket(); s.settimeout(3); s.connect((url.hostname, url.port or 5432)); s.close()" 2>/dev/null; do
+                echo "Waiting for Postgres..."
+                sleep 2
+              done
+              echo "Postgres reachable, waiting for migrations..."
+              until python manage.py migrate --check --settings=backend.settings 2>/dev/null; do
+                echo "Migrations pending, waiting..."
+                sleep 3
+              done
+              echo "Migrations up-to-date."
       containers:
         - name: backend
           image: __BACKEND_IMAGE__
@@ -25,13 +48,13 @@ spec:
                 name: cistafirma-secrets
           livenessProbe:
             httpGet:
-              path: /api/
+              path: /healthz/
               port: 8000
             initialDelaySeconds: 30
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /api/
+              path: /healthz/
               port: 8000
             initialDelaySeconds: 15
             periodSeconds: 10
@@ -42,4 +65,3 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
-
