@@ -13,13 +13,92 @@ ingress:
 
 backend:
   replicaCount: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
 
 frontend:
   replicaCount: 3
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
 
 celery:
-  worker:
-    replicaCount: 2
   beat:
     replicaCount: 1
-
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  workers:
+    ruz:
+      enabled: true
+      queue: ruz_full
+      replicaCount: 1
+      concurrency: 1
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+    orsr:
+      enabled: true
+      queue: orsr
+      replicaCount: 2
+      concurrency: 2
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    financials:
+      enabled: true
+      queue: financials
+      replicaCount: 2
+      concurrency: 4
+      resources:
+        requests:
+          cpu: 100m
+          memory: 192Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    insurance:
+      enabled: true
+      queue: insurance
+      replicaCount: 1
+      concurrency: 2
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    default:
+      enabled: true
+      queue: celery
+      replicaCount: 1
+      concurrency: 2
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi

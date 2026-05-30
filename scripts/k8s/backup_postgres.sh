@@ -13,7 +13,14 @@ BACKUP_FILE="$BACKUP_DIR/${DB_NAME}_${TIMESTAMP}.dump"
 
 mkdir -p "$BACKUP_DIR"
 
-export PGPASSWORD="$DB_PASSWORD"
+# Use a temporary .pgpass file instead of PGPASSWORD env var
+# to avoid exposing the password in the process environment.
+PGPASSFILE=$(mktemp)
+chmod 600 "$PGPASSFILE"
+printf '%s:%s:%s:%s:%s\n' "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASSWORD" > "$PGPASSFILE"
+trap 'rm -f "$PGPASSFILE"' EXIT
+
+export PGPASSFILE
 pg_dump \
   --format=custom \
   --no-owner \
@@ -24,7 +31,4 @@ pg_dump \
   --dbname "$DB_NAME" \
   --file "$BACKUP_FILE"
 
-unset PGPASSWORD
-
 echo "Backup created: $BACKUP_FILE"
-

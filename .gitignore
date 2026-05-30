@@ -104,3 +104,4 @@ graphify-out/
 # AI generated files and folders
 .claude
 .github/copilot-instructions.md
+code-reviews.md
