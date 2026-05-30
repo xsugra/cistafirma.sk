@@ -1,15 +1,13 @@
 import React, {useState, useEffect} from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {BrandLogo} from './BrandLogo';
 import {ROUTES} from '../constants';
 import {ThemeToggle} from './ThemeToggle';
 import {useAuth} from '../context/AuthContext';
 
-interface HeaderProps {
-    activeRoute: string;
-    onNavigate: (route: string) => void;
-}
-
-export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
+export const Header: React.FC = () => {
+    const navigate = useNavigate();
+    const location = useLocation();
     const {isAuthenticated, user, logout} = useAuth();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [scrolled, setScrolled] = useState(false);
@@ -24,16 +22,16 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
 
     const handleNav = (route: string) => {
         setIsMobileMenuOpen(false);
-        onNavigate(route);
+        navigate(route);
     };
 
     const handleLogout = () => {
         setIsMobileMenuOpen(false);
         logout();
-        onNavigate(ROUTES.HOME);
+        navigate(ROUTES.HOME);
     };
 
-    // Safe Accessor for Display Name
+    const activeRoute = location.pathname;
     const displayName = user?.firstName || user?.username || user?.email?.split('@')[0] || 'User';
 
     return (
@@ -59,8 +57,8 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
                             <button onClick={() => handleNav(ROUTES.PRICING)}
                                     className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.PRICING ? 'active' : ''}`}>CENNÍK
                             </button>
-                            <button onClick={() => alert('API Dokumentácia (Pripravuje sa)')}
-                                    className="nav-link bg-transparent border-0">API
+                            <button onClick={() => handleNav(ROUTES.API_DOCS)}
+                                    className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.API_DOCS ? 'active' : ''}`}>API
                             </button>
                         </nav>
 
@@ -88,7 +86,7 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
                                         {user?.isStaff && (
                                             <button
                                                 onClick={() => handleNav(ROUTES.ADMIN)}
-                                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors border bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800 text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/40 text-sm font-medium"
+                                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-colors border bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-sm font-medium"
                                                 title="Admin panel"
                                             >
                                                 <i className="fas fa-shield-alt text-xs"></i>
@@ -151,6 +149,9 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
                     <button onClick={() => handleNav(ROUTES.PRICING)}
                             className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.PRICING ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>CENNÍK
                     </button>
+                    <button onClick={() => handleNav(ROUTES.API_DOCS)}
+                            className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.API_DOCS ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>API
+                    </button>
 
                     {!isAuthenticated ? (
                         <div className="flex flex-col gap-4 mt-8">
@@ -183,7 +184,7 @@ export const Header: React.FC<HeaderProps> = ({activeRoute, onNavigate}) => {
                             {user?.isStaff && (
                                 <button
                                     onClick={() => handleNav(ROUTES.ADMIN)}
-                                    className="btn w-full bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-800"
+                                    className="btn w-full bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800"
                                 >
                                     <i className="fas fa-shield-alt mr-2"></i>Admin Panel
                                 </button>

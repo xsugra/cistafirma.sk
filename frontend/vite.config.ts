@@ -28,7 +28,7 @@ export default defineConfig(({mode}) => {
                 '@': path.resolve(__dirname, '.'),
             }
         },
-        base: '/static/',
+        base: '/',
         build: {
             // Priečinok, kam sa uloží build
             outDir: 'dist',
@@ -42,7 +42,7 @@ export default defineConfig(({mode}) => {
             // Proxy API requests to backend (configured from root .env)
             // This allows frontend to make requests to /api which get proxied to backend
             proxy: {
-                '/api': {
+                '/api/': {
                     target: backendUrl,
                     changeOrigin: true,
                 }

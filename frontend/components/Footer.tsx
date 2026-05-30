@@ -1,20 +1,8 @@
 import React from 'react';
-import {ROUTES} from '../constants';
+import { Link } from 'react-router-dom';
+import { ROUTES } from '../constants';
 
-interface FooterProps {
-    onNavigate?: (route: string) => void;
-}
-
-export const Footer: React.FC<FooterProps> = ({onNavigate}) => {
-    // Helper to handle navigation if available, otherwise fallback (though in this app it should always be available)
-    const handleNav = (route: string, e?: React.MouseEvent) => {
-        if (e) e.preventDefault();
-        if (onNavigate) {
-            onNavigate(route);
-            window.scrollTo(0, 0);
-        }
-    };
-
+export const Footer: React.FC = () => {
     return (
         <footer
             className="mt-auto py-8 bg-white dark:bg-slate-950 border-t border-gray-200 dark:border-slate-900 transition-colors duration-300 relative z-20">
@@ -27,16 +15,16 @@ export const Footer: React.FC<FooterProps> = ({onNavigate}) => {
                         </div>
                     </div>
                     <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-500 dark:text-gray-400">
-                        <a href="#" onClick={(e) => handleNav(ROUTES.ABOUT, e)}
-                           className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">O Nás</a>
-                        <a href="#" onClick={(e) => handleNav(ROUTES.PRIVACY, e)}
+                        <Link to={ROUTES.ABOUT}
+                           className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">O Nás</Link>
+                        <Link to={ROUTES.PRIVACY}
                            className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Ochrana
-                            súkromia</a>
-                        <a href="#" onClick={(e) => handleNav(ROUTES.TERMS, e)}
+                            súkromia</Link>
+                        <Link to={ROUTES.TERMS}
                            className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Podmienky
-                            používania</a>
-                        <a href="#" onClick={(e) => handleNav(ROUTES.CONTACT, e)}
-                           className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Kontakt</a>
+                            používania</Link>
+                        <Link to={ROUTES.CONTACT}
+                           className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Kontakt</Link>
                     </div>
                 </div>
             </div>

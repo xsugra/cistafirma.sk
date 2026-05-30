@@ -30,10 +30,10 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({ onClick }) => {
             aria-label="cistafirma.sk Domov"
         >
             <div className={`transition-transform duration-300 ${animate ? 'logo-animate' : ''}`}>
-                 <img src="logo/logo_cistafirma-ikona.png" alt="Logo" className="h-10 w-auto" />
+                 <img src="/logo/cistafirma-logo.png" alt="Logo" className="h-10 w-auto" />
             </div>
             <span 
-                className={`text-2xl font-bold text-gray-900 dark:text-white tracking-tight group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors ${animate ? 'logo-animate' : ''}`}
+                className={`text-2xl font-bold font-heading text-gray-900 dark:text-white tracking-tight group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors ${animate ? 'logo-animate' : ''}`}
                 style={{ animationDelay: '0.1s' }}
             >
                 cistafirma.sk

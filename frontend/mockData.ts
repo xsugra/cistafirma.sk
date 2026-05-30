@@ -32,9 +32,9 @@ export const mockCompanyData: Company = {
     calculationDate: new Date().toISOString(),
   },
   financials: [
-    { year: 2021, revenue: 1250000, profit: 85000 },
-    { year: 2022, revenue: 1420000, profit: 110000 },
-    { year: 2023, revenue: 1380000, profit: 95000 },
+    { year: 2021, revenue: 1250000, profit: 85000, totalRevenue: 1300000, costs: 1165000, incomeTax: 18000, incomeTaxPaid: 18000, assetsTotal: 2100000, assetsIntangible: 50000, assetsTangible: 800000, assetsFinancial: 100000, assetsInventory: 200000, assetsReceivablesLong: 50000, assetsReceivablesShort: 600000, assetsFinancialAccounts: 250000, assetsAccruals: 50000, equity: 900000, equityBasic: 200000, equityCapitalFunds: 0, equityProfitFunds: 100000, equityRetained: 515000, liabilitiesTotal: 1150000, liabilitiesReserves: 50000, liabilitiesLong: 400000, liabilitiesShort: 700000, liabilitiesAccruals: 50000, debtRatio: 57.14, grossMargin: 10.8 },
+    { year: 2022, revenue: 1420000, profit: 110000, totalRevenue: 1480000, costs: 1310000, incomeTax: 23000, incomeTaxPaid: 23000, assetsTotal: 2300000, assetsIntangible: 45000, assetsTangible: 850000, assetsFinancial: 120000, assetsInventory: 220000, assetsReceivablesLong: 40000, assetsReceivablesShort: 650000, assetsFinancialAccounts: 320000, assetsAccruals: 55000, equity: 1010000, equityBasic: 200000, equityCapitalFunds: 0, equityProfitFunds: 120000, equityRetained: 580000, liabilitiesTotal: 1230000, liabilitiesReserves: 60000, liabilitiesLong: 380000, liabilitiesShort: 790000, liabilitiesAccruals: 60000, debtRatio: 56.09, grossMargin: 11.27 },
+    { year: 2023, revenue: 1380000, profit: 95000, totalRevenue: 1440000, costs: 1285000, incomeTax: 20000, incomeTaxPaid: 20000, assetsTotal: 2250000, assetsIntangible: 40000, assetsTangible: 820000, assetsFinancial: 130000, assetsInventory: 210000, assetsReceivablesLong: 35000, assetsReceivablesShort: 630000, assetsFinancialAccounts: 330000, assetsAccruals: 55000, equity: 1050000, equityBasic: 200000, equityCapitalFunds: 0, equityProfitFunds: 130000, equityRetained: 625000, liabilitiesTotal: 1140000, liabilitiesReserves: 55000, liabilitiesLong: 350000, liabilitiesShort: 735000, liabilitiesAccruals: 60000, debtRatio: 53.33, grossMargin: 11.23 },
   ],
    executives: [
        { name: 'Ing. Ján Vážny', role: 'Konateľ' },
