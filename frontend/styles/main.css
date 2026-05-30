@@ -1,4 +1,24 @@
 
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-brand: #2563eb;
+  --color-brand-hover: #1d4ed8;
+  --color-brand-light: #eff6ff;
+  --color-dark-bg: #020617;
+  --color-dark-card: #0f172a;
+  --color-dark-border: #1e293b;
+  --color-dark-text: #f8fafc;
+  --color-dark-muted: #94a3b8;
+  --color-light-bg: #ffffff;
+  --color-light-card: #ffffff;
+  --color-light-border: #e2e8f0;
+  --color-light-text: #0f172a;
+  --color-light-muted: #64748b;
+  --font-sans: 'Outfit', sans-serif;
+}
+
 /* GLOBAL VARIABLES & RESET */
 :root {
     --color-brand: #2563eb;
