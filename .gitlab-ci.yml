@@ -182,16 +182,14 @@ build_frontend_image:
 .deploy_template:
   stage: deploy
   image:
-    name: alpine/helm:3.17.2
+    name: bitnami/kubectl:1.30
     entrypoint: [""]
   before_script:
     - mkdir -p ~/.kube
     - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
-    - apk add --no-cache kubectl
     - kubectl version --client
-    - helm version
   script:
-    - sh scripts/k8s/helm-deploy.sh
+    - sh scripts/k8s/deploy.sh
 
 # DEV deploy on dev branch (auto)
 deploy_dev:
