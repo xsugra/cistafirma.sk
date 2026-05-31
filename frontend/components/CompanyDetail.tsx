@@ -12,6 +12,8 @@ import { CompanyCapital } from './company/CompanyCapital';
 import { CompanyBusiness } from './company/CompanyBusiness';
 import { CompanySummaryStrip } from './company/CompanySummaryStrip';
 import { FinancialIndicators } from './company/FinancialIndicators';
+import { FinancialRatiosTable } from './company/FinancialRatiosTable';
+import { BenchmarkComparison } from './company/BenchmarkComparison';
 import { AssetsPieChart } from './company/AssetsPieChart';
 import { LiabilitiesPieChart } from './company/LiabilitiesPieChart';
 
@@ -19,6 +21,7 @@ const ConnectionGraph = lazy(() => import('./graph/ConnectionGraph').then(m => (
 
 const TABS = [
     { id: 'overview', label: 'Prehľad', icon: 'fa-chart-pie' },
+    { id: 'financials', label: 'Finančná analýza', icon: 'fa-calculator' },
     { id: 'people', label: 'Osoby', icon: 'fa-users' },
     { id: 'registers', label: 'Registre', icon: 'fa-briefcase' },
     { id: 'connections', label: 'Prepojenia', icon: 'fa-project-diagram' },
@@ -88,7 +91,7 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
                         <CompanyDebts debts={company.debts} />
 
                         {company.financials.length > 0 ? (
-                            <FinancialIndicators data={company.financials} />
+                            <FinancialIndicators data={company.financials} analysis={company.analysis?.latest} />
                         ) : (
                             <InfoCard title="Finančné údaje" icon="fa-chart-bar">
                                 <div className="text-center py-4 text-gray-500 dark:text-gray-400">
@@ -123,6 +126,90 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
                         {showKonanie && (
                             <InfoCard title="Konanie menom spoločnosti" icon="fa-signature">
                                 <p className="text-gray-700 dark:text-gray-300 whitespace-pre-line leading-relaxed">{konanie}</p>
+                            </InfoCard>
+                        )}
+                    </div>
+                );
+            })()}
+
+            {activeTab === 'financials' && (() => {
+                const analysis = company.analysis;
+                if (!analysis) {
+                    return (
+                        <InfoCard title="Finančná analýza" icon="fa-calculator">
+                            <div className="text-center py-4 text-gray-500 dark:text-gray-400">
+                                <i className="fas fa-info-circle mr-2"></i>
+                                Pre finančnú analýzu nie sú k dispozícii dostatočné údaje.
+                            </div>
+                        </InfoCard>
+                    );
+                }
+
+                const history = analysis.history || [];
+                const prevAnalysis = history.length > 1 ? history[history.length - 2] : undefined;
+
+                return (
+                    <div className="space-y-6">
+                        <FinancialRatiosTable analysis={analysis.latest} prevAnalysis={prevAnalysis} />
+
+                        {company.benchmark && (
+                            <BenchmarkComparison benchmark={company.benchmark} analysis={analysis.latest} />
+                        )}
+
+                        {/* Year-over-year comparison */}
+                        {history.length > 1 && (
+                            <InfoCard title="Medziročné porovnanie" icon="fa-arrows-left-right">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-gray-100 dark:border-slate-800">
+                                                <th className="text-left px-3 py-2 text-xs font-medium text-gray-500 uppercase">Ukazovateľ</th>
+                                                {history.slice(-5).map((y: any) => (
+                                                    <th key={y.year} className="text-right px-3 py-2 text-xs font-medium text-gray-500 uppercase">
+                                                        {y.year}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-50 dark:divide-slate-800/50">
+                                            {[
+                                                { key: 'roa', label: 'ROA', unit: '%' },
+                                                { key: 'roe', label: 'ROE', unit: '%' },
+                                                { key: 'ros', label: 'ROS', unit: '%' },
+                                                { key: 'currentRatio', label: 'L3 likvidita', unit: '×' },
+                                                { key: 'quickRatio', label: 'L2 likvidita', unit: '×' },
+                                                { key: 'selfFinancingRatio', label: 'Samofinancovanie', unit: '%' },
+                                                { key: 'zScore', label: 'Z-score', unit: '' },
+                                            ].map((metric) => (
+                                                <tr key={metric.key} className="hover:bg-gray-50/50 dark:hover:bg-slate-900/30">
+                                                    <td className="px-3 py-2 text-gray-700 dark:text-gray-300 font-medium">
+                                                        {metric.label}
+                                                    </td>
+                                                    {history.slice(-5).map((y: any) => {
+                                                        let value: number | null = null;
+                                                        if (metric.key === 'zScore') {
+                                                            value = y.zScore;
+                                                        } else {
+                                                            const ratios = y.ratios as Record<string, number | null>;
+                                                            value = ratios[metric.key];
+                                                        }
+                                                        return (
+                                                            <td key={y.year} className="text-right px-3 py-2 font-mono text-gray-900 dark:text-white">
+                                                                {value != null
+                                                                    ? metric.unit === '%'
+                                                                        ? `${value.toFixed(1)}%`
+                                                                        : metric.unit === '×'
+                                                                          ? value.toFixed(2)
+                                                                          : value.toFixed(2)
+                                                                    : '—'}
+                                                            </td>
+                                                        );
+                                                    })}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </InfoCard>
                         )}
                     </div>

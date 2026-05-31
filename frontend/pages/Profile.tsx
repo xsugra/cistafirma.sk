@@ -5,9 +5,11 @@ import {useAuth} from '../context/AuthContext';
 import {StatusBadge} from '../components/StatusBadge';
 import {ROUTES} from '../constants';
 import {CompanyDetail} from '../components/CompanyDetail';
-import type {WatchlistEntry, HistoryEntry, Company} from '../types';
+import type {WatchlistEntry, HistoryEntry, Company, NotificationEvent, NotificationPreferences} from '../types';
+import {NotificationCenter} from '../components/NotificationCenter';
+import {NotificationPreferences as NotifPrefsComponent} from '../components/NotificationPreferences';
 
-type Tab = 'dashboard' | 'watchlist' | 'history' | 'settings';
+type Tab = 'dashboard' | 'watchlist' | 'history' | 'settings' | 'notifications';
 
 export const Profile: React.FC = () => {
     const navigate = useNavigate();
@@ -370,6 +372,13 @@ export const Profile: React.FC = () => {
         </div>
     );
 
+    const renderNotifications = () => (
+        <div className="space-y-6 animate-fade-in">
+            <NotificationCenter />
+            <NotifPrefsComponent />
+        </div>
+    );
+
     return (
         <div className="profile-container animate-fade-in py-6 md:py-10">
             <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-4 text-center md:text-left">
@@ -389,6 +398,7 @@ export const Profile: React.FC = () => {
                         {id: 'watchlist', label: 'Sledované', icon: 'fa-eye'},
                         {id: 'history', label: 'História', icon: 'fa-history'},
                         {id: 'settings', label: 'Nastavenia', icon: 'fa-cog'},
+                        {id: 'notifications', label: 'Notifikácie', icon: 'fa-bell'},
                     ].map((tab) => (
                         <button
                             key={tab.id}
@@ -414,6 +424,7 @@ export const Profile: React.FC = () => {
                         {activeTab === 'watchlist' && renderWatchlist()}
                         {activeTab === 'history' && renderHistory()}
                         {activeTab === 'settings' && renderSettings()}
+                        {activeTab === 'notifications' && renderNotifications()}
                     </>
                 )}
             </div>

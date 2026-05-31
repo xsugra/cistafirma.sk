@@ -15,6 +15,8 @@ export interface Company {
   executives: Executive[];
   connections: Connection[];
   orsr_profile?: OrsrProfile;
+  analysis?: FinancialAnalysis;
+  benchmark?: CompanyBenchmark;
 }
 
 export interface Address {
@@ -51,6 +53,7 @@ export interface Financials {
   profit: number;
   totalRevenue: number;
   costs: number;
+  addedValue?: number;
   incomeTax: number;
   incomeTaxPaid: number;
   assetsTotal: number;
@@ -74,6 +77,60 @@ export interface Financials {
   liabilitiesAccruals: number;
   debtRatio: number | null;
   grossMargin: number | null;
+}
+
+// --- FINANCIAL ANALYSIS ---
+
+export interface RatioSet {
+  roa: number | null;
+  roe: number | null;
+  ros: number | null;
+  currentRatio: number | null;
+  quickRatio: number | null;
+  cashRatio: number | null;
+  assetTurnover: number | null;
+  receivablesCollection: number | null;
+  debtToEquity: number | null;
+  selfFinancingRatio: number | null;
+}
+
+export interface YearAnalysis {
+  year: number;
+  ratios: RatioSet;
+  interpretation: Record<string, 'good' | 'warning' | 'bad'>;
+  zScore: number | null;
+  zScoreLabel: string | null;
+}
+
+export interface FinancialAnalysis {
+  latest: YearAnalysis;
+  history: YearAnalysis[];
+}
+
+// --- BENCHMARKING ---
+
+export interface BenchmarkMedians {
+  revenue: number | null;
+  profit: number | null;
+  assetsTotal: number | null;
+  equity: number | null;
+  roa: number | null;
+  roe: number | null;
+  ros: number | null;
+  debtRatio: number | null;
+  grossMargin: number | null;
+  currentRatio: number | null;
+  selfFinancingRatio: number | null;
+}
+
+export interface CompanyBenchmark {
+  section: string;
+  sectionName: string | null;
+  divisionName: string | null;
+  naceCode: string;
+  year: number;
+  companyCount: number;
+  medians: BenchmarkMedians;
 }
 
 export interface Executive {
@@ -204,4 +261,25 @@ export interface HistoryEntry {
     ico: string;
     name: string;
     searchedAt: string;
+}
+
+// --- NOTIFICATIONS ---
+
+export interface NotificationEvent {
+    id: number;
+    companyIco: string;
+    companyName: string;
+    eventType: 'debt_change' | 'status_change' | 'executive_change';
+    eventTypeDisplay: string;
+    title: string;
+    details: Record<string, any>;
+    sentEmail: boolean;
+    createdAt: string;
+}
+
+export interface NotificationPreferences {
+    emailEnabled: boolean;
+    onDebtChange: boolean;
+    onStatusChange: boolean;
+    onExecutiveChange: boolean;
 }

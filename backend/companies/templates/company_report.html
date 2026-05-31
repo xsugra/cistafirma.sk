@@ -1,0 +1,369 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="utf-8">
+    <title>{{ company.name }} — Firemný report</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm 2.2cm;
+            @top-center {
+                content: "CistaFirma.sk — Firemný report";
+                font-size: 8pt;
+                color: #999;
+                font-family: 'DejaVu Sans', sans-serif;
+            }
+            @bottom-center {
+                content: "Strana " counter(page) " z " counter(pages);
+                font-size: 8pt;
+                color: #999;
+                font-family: 'DejaVu Sans', sans-serif;
+            }
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DejaVu Sans', sans-serif;
+            font-size: 10pt;
+            color: #1a1a2e;
+            line-height: 1.55;
+        }
+
+        /* ── Header ── */
+        .header {
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            font-size: 20pt;
+            color: #1e3a5f;
+            margin-bottom: 4px;
+        }
+        .header .ico {
+            font-size: 11pt;
+            color: #666;
+        }
+        .header .meta {
+            display: flex;
+            gap: 24px;
+            margin-top: 8px;
+            font-size: 9pt;
+            color: #777;
+        }
+
+        /* ── Status badges ── */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 8pt;
+            font-weight: bold;
+            color: white;
+        }
+        .badge-green { background: #16a34a; }
+        .badge-red { background: #dc2626; }
+        .badge-yellow { background: #d97706; }
+
+        /* ── Sections ── */
+        .section {
+            margin-bottom: 22px;
+            page-break-inside: avoid;
+        }
+        .section h2 {
+            font-size: 13pt;
+            color: #2563eb;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 4px;
+            margin-bottom: 10px;
+        }
+
+        /* ── Info grid ── */
+        .info-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 0;
+        }
+        .info-grid .row {
+            display: flex;
+            width: 100%;
+            padding: 4px 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .info-grid .label {
+            width: 35%;
+            font-size: 9pt;
+            color: #6b7280;
+        }
+        .info-grid .value {
+            width: 65%;
+            font-size: 9pt;
+            font-weight: 600;
+        }
+
+        /* ── Tables ── */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 9pt;
+        }
+        table th {
+            background: #f8fafc;
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 2px solid #e5e7eb;
+            font-weight: 600;
+            color: #374151;
+            font-size: 8pt;
+            text-transform: uppercase;
+        }
+        table td {
+            padding: 5px 8px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        table .num {
+            text-align: right;
+            font-family: 'DejaVu Sans Mono', monospace;
+        }
+        table .good { color: #16a34a; }
+        table .warn { color: #d97706; }
+        table .bad { color: #dc2626; }
+
+        /* ── Z-score card ── */
+        .zscore {
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 11pt;
+            margin-bottom: 12px;
+        }
+        .zscore-good { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+        .zscore-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+        .zscore-bad { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+
+        .zscore .score { font-size: 18pt; font-weight: bold; }
+        .zscore .label { font-size: 10pt; margin-left: 8px; }
+
+        /* ── Footer disclaimer ── */
+        .footer-disclaimer {
+            margin-top: 32px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 7pt;
+            color: #9ca3af;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ====== HEADER ====== -->
+<div class="header">
+    <h1>{{ company.name }}</h1>
+    <div class="ico">IČO: {{ company.ico }}</div>
+    <div class="meta">
+        <span>{{ company.legal_form }}</span>
+        <span>{% if company.status == 'Aktívna' %}<span class="badge badge-green">Aktívna</span>{% else %}<span class="badge badge-red">{{ company.status }}</span>{% endif %}</span>
+        <span>Založená: {{ company.registration_date|default:"—" }}</span>
+    </div>
+</div>
+
+<!-- ====== ZÁKLADNÉ INFO ====== -->
+<div class="section">
+    <h2>Základné informácie</h2>
+    <div class="info-grid">
+        <div class="row">
+            <span class="label">Sídlo</span>
+            <span class="value">{{ company.address.street }}, {{ company.address.city }} {{ company.address.zip_code }}</span>
+        </div>
+        <div class="row">
+            <span class="label">Právna forma</span>
+            <span class="value">{{ company.legal_form }}</span>
+        </div>
+        {% if company.orsr_profile %}
+        <div class="row">
+            <span class="label">ORSR</span>
+            <span class="value">{{ company.orsr_profile.oddiel }} / {{ company.orsr_profile.vlozka_cislo }}</span>
+        </div>
+        {% endif %}
+        {% if nace_info %}
+        <div class="row">
+            <span class="label">SK NACE</span>
+            <span class="value">{{ nace_info.code }} — {{ nace_info.division_name|default:"—" }}</span>
+        </div>
+        {% endif %}
+        <div class="row">
+            <span class="label">IČ DPH</span>
+            <span class="value">{% if company.vat_status.is_vat_payer %}{{ company.vat_status.ic_dph|default:"—" }} ({{ company.vat_status.tax_reliability_index }}){% else %}Nie je platiteľ DPH{% endif %}</span>
+        </div>
+    </div>
+</div>
+
+<!-- ====== RIZIKOVÉ SKÓRE ====== -->
+<div class="section">
+    <h2>Rizikové hodnotenie</h2>
+    <div style="display:flex;align-items:center;gap:16px;">
+        <div style="font-size:28pt;font-weight:bold;color:{% if risk_score.score >= 70 %}#16a34a{% elif risk_score.score >= 40 %}#d97706{% else %}#dc2626{% endif %};">
+            {{ risk_score.score }}/100
+        </div>
+        <div style="font-size:9pt;color:#666;">{{ risk_score.summary }}</div>
+    </div>
+</div>
+
+<!-- ====== DLHY ====== -->
+{% if debts %}
+<div class="section">
+    <h2>Evidované nedoplatky</h2>
+    <table>
+        <thead>
+            <tr><th>Inštitúcia</th><th class="num">Suma</th></tr>
+        </thead>
+        <tbody>
+            {% for debt in debts %}
+            <tr>
+                <td>{{ debt.source }}</td>
+                <td class="num">{{ debt.amount_eur|floatformat:2 }} €</td>
+            </tr>
+            {% endfor %}
+            <tr style="font-weight:bold;background:#f9fafb;">
+                <td>Spolu</td>
+                <td class="num">{{ total_debt|floatformat:2 }} €</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="section">
+    <h2>Evidované nedoplatky</h2>
+    <p style="color:#16a34a;font-size:9pt;">✓ Spoločnosť nemá evidované nedoplatky voči VšZP, Sociálnej poisťovni ani Finančnej správe.</p>
+</div>
+{% endif %}
+
+<!-- ====== FINANČNÉ UKAZOVATELE ====== -->
+{% if analysis %}
+<div class="section">
+    <h2>Finančná analýza — {{ analysis.latest.year }}</h2>
+
+    {% if analysis.latest.z_score != None %}
+    <div class="zscore {% if analysis.latest.z_score > 2.90 %}zscore-good{% elif analysis.latest.z_score > 1.23 %}zscore-warn{% else %}zscore-bad{% endif %}">
+        <span class="score">{{ analysis.latest.z_score|floatformat:2 }}</span>
+        <span class="label">Altman Z-score — {{ analysis.latest.z_score_label }}</span>
+        <span style="font-size:8pt;color:inherit;margin-left:16px;">
+            {% if analysis.latest.z_score > 2.90 %}Nízke riziko bankrotu{% elif analysis.latest.z_score > 1.23 %}Nejednoznačná situácia{% else %}Zvýšené riziko bankrotu{% endif %}
+        </span>
+    </div>
+    {% endif %}
+
+    <table>
+        <thead>
+            <tr>
+                <th>Ukazovateľ</th>
+                <th class="num">Hodnota</th>
+                <th class="num">Stav</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in ratio_rows %}
+            <tr>
+                <td>{{ row.label }}</td>
+                <td class="num">{{ row.display }}</td>
+                <td class="num">
+                    <span class="{% if row.interpretation == 'good' %}good{% elif row.interpretation == 'warning' %}warn{% else %}bad{% endif %}">
+                        {% if row.interpretation == 'good' %}Priaznivá{% elif row.interpretation == 'warning' %}Uspokojivá{% else %}Riziková{% endif %}
+                    </span>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- ====== FINANČNÉ VÝSLEDKY ====== -->
+{% if financial_history %}
+<div class="section">
+    <h2>Prehľad hospodárskych výsledkov</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Rok</th>
+                <th class="num">Tržby</th>
+                <th class="num">Zisk</th>
+                <th class="num">Aktíva</th>
+                <th class="num">Vlastný kapitál</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in financial_history %}
+            <tr>
+                <td>{{ row.year }}</td>
+                <td class="num">{{ row.revenue }} €</td>
+                <td class="num" style="color:{% if row.profit >= 0 %}#16a34a{% else %}#dc2626{% endif %};">{{ row.profit }} €</td>
+                <td class="num">{{ row.assets }} €</td>
+                <td class="num">{{ row.equity }} €</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- ====== ŠTATUTÁRI ====== -->
+{% if executives %}
+<div class="section">
+    <h2>Štatutári a kľúčové osoby</h2>
+    <table>
+        <thead>
+            <tr><th>Meno</th><th>Rola</th></tr>
+        </thead>
+        <tbody>
+            {% for person in executives %}
+            <tr>
+                <td>{{ person.name }}</td>
+                <td>{{ person.role }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- ====== BENCHMARK ====== -->
+{% if benchmark %}
+<div class="section">
+    <h2>Sektorové porovnanie — {{ benchmark.section_name|default:benchmark.section }}</h2>
+    <p style="font-size:8pt;color:#9ca3af;margin-bottom:8px;">
+        Medián z {{ benchmark.company_count }} firiem v sektore za rok {{ benchmark.year }}
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>Ukazovateľ</th>
+                <th class="num">Firma</th>
+                <th class="num">Sektor (medián)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in benchmark_rows %}
+            <tr>
+                <td>{{ row.label }}</td>
+                <td class="num">{{ row.company_val }}</td>
+                <td class="num">{{ row.sector_val }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<!-- ====== DISCLAIMER ====== -->
+<div class="footer-disclaimer">
+    Tento report bol vygenerovaný automaticky systémom CistaFirma.sk dňa {{ generated_at|date:"d.m.Y H:i" }}.
+    Údaje pochádzajú z verejne dostupných registrov (RUZ, ORSR, VšZP, Sociálna poisťovňa, Finančná správa).
+    CistaFirma nenesie zodpovednosť za aktuálnosť ani úplnosť zobrazených údajov.
+    Pred obchodným rozhodnutím odporúčame overiť údaje z oficiálnych zdrojov.
+</div>
+
+</body>
+</html>

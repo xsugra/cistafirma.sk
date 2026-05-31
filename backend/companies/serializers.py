@@ -4,7 +4,9 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
 from core.constants import PERSON_SKIP_PREFIXES
-from .models import Company, Watchlist
+from .models import Company, Watchlist, SectorBenchmark, SearchHistory
+from .services.financial_analysis import FinancialAnalysisService
+from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
 
 
 class CompanyListSerializer(serializers.ModelSerializer):
@@ -44,6 +46,8 @@ class WatchlistSerializer(serializers.ModelSerializer):
 class CompanyDetailSerializer(serializers.ModelSerializer):
     legal_form = serializers.CharField(source='get_legal_form_display', read_only=True)
     financials = serializers.SerializerMethodField()
+    analysis = serializers.SerializerMethodField()
+    benchmark = serializers.SerializerMethodField()
     executives = serializers.SerializerMethodField()
     connections = serializers.SerializerMethodField()
     orsr_profile = serializers.SerializerMethodField()
@@ -97,10 +101,58 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 'liabilitiesLong': float(r.liabilities_long or 0),
                 'liabilitiesShort': float(r.liabilities_short or 0),
                 'liabilitiesAccruals': liabilities_accruals,
+                'addedValue': float(r.added_value or 0),
                 'debtRatio': debt_ratio,
                 'grossMargin': gross_margin,
             })
         return out
+
+    def get_analysis(self, obj):
+        results = list(obj.financial_results.all().order_by('year'))
+        if not results:
+            return None
+        analysis = FinancialAnalysisService.analyze(results)
+        return FinancialAnalysisService.to_dict(analysis)
+
+    def get_benchmark(self, obj):
+        """Return sector benchmark for the company's NACE section."""
+        nace = obj.sk_NACE
+        section = get_nace_section(nace)
+        if not section:
+            return None
+
+        # Find the latest year with financial data for this company
+        latest_fr = obj.financial_results.order_by('-year').first()
+        target_year = latest_fr.year if latest_fr else None
+        if target_year is None:
+            return None
+
+        try:
+            bm = SectorBenchmark.objects.get(nace_section=section, year=target_year)
+        except SectorBenchmark.DoesNotExist:
+            return None
+
+        return {
+            'section': section,
+            'sectionName': get_nace_section_name(nace),
+            'divisionName': get_nace_division_name(nace),
+            'naceCode': nace,
+            'year': bm.year,
+            'companyCount': bm.company_count,
+            'medians': {
+                'revenue': float(bm.median_revenue) if bm.median_revenue else None,
+                'profit': float(bm.median_profit) if bm.median_profit else None,
+                'assetsTotal': float(bm.median_assets_total) if bm.median_assets_total else None,
+                'equity': float(bm.median_equity) if bm.median_equity else None,
+                'roa': float(bm.median_roa) if bm.median_roa else None,
+                'roe': float(bm.median_roe) if bm.median_roe else None,
+                'ros': float(bm.median_ros) if bm.median_ros else None,
+                'debtRatio': float(bm.median_debt_ratio) if bm.median_debt_ratio else None,
+                'grossMargin': float(bm.median_gross_margin) if bm.median_gross_margin else None,
+                'currentRatio': float(bm.median_current_ratio) if bm.median_current_ratio else None,
+                'selfFinancingRatio': float(bm.median_self_financing_ratio) if bm.median_self_financing_ratio else None,
+            },
+        }
 
     def _get_orsr_profile(self, obj):
         try:
@@ -141,6 +193,18 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             add(person, 'Konateľ')
         for person in structured.get('predstavenstvo', []):
             add(person, 'Člen predstavenstva')
+        for person in structured.get('spravcovia', []):
+            add(person, 'Správca')
+        for person in structured.get('likvidatori', []):
+            add(person, 'Likvidátor')
+        for person in structured.get('starostovia', []):
+            add(person, 'Starosta')
+        for person in structured.get('primatori', []):
+            add(person, 'Primátor')
+        for person in structured.get('riaditelia', []):
+            add(person, 'Riaditeľ')
+        for person in structured.get('cirkevni_hodnostari', []):
+            add(person, 'Cirkevný hodnostár')
         for person in structured.get('prokura', []):
             add(person, 'Prokurista')
         for person in structured.get('spolocnici', []):
@@ -267,3 +331,12 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 names.append(candidate)
 
         return names
+
+
+class SearchHistorySerializer(serializers.ModelSerializer):
+    searchedAt = serializers.DateTimeField(source='searched_at', read_only=True)
+
+    class Meta:
+        model = SearchHistory
+        fields = ['id', 'ico', 'name', 'searchedAt']
+        read_only_fields = fields

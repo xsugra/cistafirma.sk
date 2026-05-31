@@ -5,7 +5,7 @@ from django.views.generic import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
-from companies.views import landing_stats, WatchlistViewSet
+from companies.views import landing_stats, WatchlistViewSet, SearchHistoryViewSet
 import os
 
 
@@ -34,6 +34,7 @@ def healthz(request):
 
 watchlist_list = WatchlistViewSet.as_view({'get': 'list', 'post': 'create'})
 watchlist_detail = WatchlistViewSet.as_view({'delete': 'destroy'})
+history_list = SearchHistoryViewSet.as_view({'get': 'list'})
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -44,8 +45,10 @@ urlpatterns = [
     path('api/companies/', include('companies.urls')),
     path('api/watchlist/', watchlist_list, name='watchlist-list'),
     path('api/watchlist/<int:pk>/', watchlist_detail, name='watchlist-detail'),
+    path('api/history/', history_list, name='history-list'),
     path('api/admin/', include('adminapi.urls')),
     path('api/', include('connections.urls')),
+    path('api/notifications/', include('notifications.urls')),
 ]
 
 # Add frontend catch-all only if frontend is built, otherwise just root info

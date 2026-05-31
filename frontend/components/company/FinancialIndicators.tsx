@@ -1,10 +1,11 @@
 import React from 'react';
-import type { Financials } from '../../types';
+import type { Financials, YearAnalysis } from '../../types';
 import { InfoCard } from '../InfoCard';
 import { formatCurrency } from '../../utils/format';
 
 interface FinancialIndicatorsProps {
     data: Financials[];
+    analysis?: YearAnalysis;
 }
 
 const TrendArrow: React.FC<{ current: number; previous: number; inverse?: boolean }> = ({ current, previous, inverse }) => {
@@ -20,7 +21,7 @@ const TrendArrow: React.FC<{ current: number; previous: number; inverse?: boolea
     );
 };
 
-export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data }) => {
+export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, analysis }) => {
     const sorted = [...data].sort((a, b) => a.year - b.year);
     const latest = sorted.at(-1);
     const prev = sorted.at(-2);
@@ -31,6 +32,8 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data }
 
     const valueColor = (value: number) =>
         value >= 0 ? 'text-gray-900 dark:text-white' : 'text-red-600 dark:text-red-400';
+
+    const analysisRatios = analysis?.ratios;
 
     const indicators = [
         {
@@ -78,6 +81,33 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data }
                 icon: 'fa-chart-bar',
             },
         ] : []),
+        // Additional KPIs from analysis
+        ...(analysisRatios ? [
+            {
+                label: 'ROA',
+                value: analysisRatios.roa,
+                prevValue: 0,
+                format: 'percent' as const,
+                icon: 'fa-chart-line',
+                inverse: false,
+            },
+            {
+                label: 'ROE',
+                value: analysisRatios.roe,
+                prevValue: 0,
+                format: 'percent' as const,
+                icon: 'fa-chart-pie',
+                inverse: false,
+            },
+            {
+                label: 'L3 Likvidita',
+                value: analysisRatios.currentRatio,
+                prevValue: 0,
+                format: 'ratio' as const,
+                icon: 'fa-droplet',
+                inverse: false,
+            },
+        ].filter(ind => ind.value != null) : []),
     ];
 
     return (
@@ -88,7 +118,9 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data }
                         ? '—'
                         : ind.format === 'percent'
                             ? `${ind.value.toFixed(2)}%`
-                            : formatCurrency(ind.value);
+                            : ind.format === 'ratio'
+                                ? ind.value.toFixed(2)
+                                : formatCurrency(ind.value);
 
                     return (
                         <div

@@ -48,6 +48,10 @@ def fetch_ruz_data_task():
 def update_insurance_debt(company_id: int):
     company = Company.objects.get(id=company_id)
 
+    # Capture old values for change detection
+    old_vszp = float(company.debt_vszp or 0)
+    old_soc = float(company.debt_soc_poist or 0)
+
     debt_vszp = check_vszp_debt_get(company.ico)
     debt_soc_poist = check_socpoist_debt(company.ico)
 
@@ -65,6 +69,26 @@ def update_insurance_debt(company_id: int):
     if update_fields:
         company.save(update_fields=update_fields)
         logger.info("Insurance debts updated for %s (ICO: %s)", company.nazov_UJ, company.ico)
+
+        # Detect and notify about debt changes
+        new_vszp = float(company.debt_vszp or 0)
+        new_soc = float(company.debt_soc_poist or 0)
+        changes = {}
+        if old_vszp != new_vszp:
+            changes['vszp'] = {'old': old_vszp, 'new': new_vszp}
+        if old_soc != new_soc:
+            changes['soc_poist'] = {'old': old_soc, 'new': new_soc}
+        if changes:
+            try:
+                from notifications.services import create_debt_change_event
+                create_debt_change_event(
+                    company_id=company.id,
+                    company_ico=company.ico,
+                    company_name=company.nazov_UJ,
+                    changes=changes,
+                )
+            except Exception as e:
+                logger.warning('Failed to create debt change notifications for %s: %s', company.ico, e)
 
 @shared_task(queue='insurance')
 def schedule_insurance_debt_checks():
@@ -404,9 +428,36 @@ def sync_company_orsr_data(company_id: int):
         logger.info("ORSR sync skipped for company_id=%s ico=%s", company_id, company.ico)
         return f"ORSR sync skipped for {company.ico}"
 
+    # Capture old executive names for change detection
+    old_names: list[str] = []
+    try:
+        old_profile = company.orsr_profile
+    except Exception:
+        old_profile = None
+    if old_profile:
+        from notifications.services import _extract_orsr_person_names
+        old_names = _extract_orsr_person_names(old_profile)
+
     service = RpoSyncService()
     profile = service.sync_company(company)
     logger.info("RPO sync OK for company_id=%s ico=%s", company_id, company.ico)
+
+    # Detect executive changes after sync
+    try:
+        from notifications.services import _extract_orsr_person_names, detect_executive_changes
+        new_names = _extract_orsr_person_names(profile)
+        if old_names or new_names:
+            created = detect_executive_changes(
+                company_ico=company.ico,
+                company_name=company.nazov_UJ,
+                old_names=old_names,
+                new_names=new_names,
+            )
+            if created:
+                logger.info("Created %d executive change notifications for %s", created, company.ico)
+    except Exception as e:
+        logger.warning("Failed to detect executive changes for %s: %s", company.ico, e)
+
     return f"RPO sync OK for {company.ico}"
 
 
@@ -487,5 +538,16 @@ def sync_company_now(company_id: int):
     """Backward-compatible wrapper — delegates to orchestrator."""
     orchestrate_full_company_sync.delay(company_id)
     return f"Delegated to orchestrator for company {company_id}"
+
+
+@shared_task(queue='celery')
+def compute_sector_benchmarks(year: int | None = None):
+    """Compute sector benchmarks for financial indicators.
+
+    Runs once daily via Celery Beat.
+    """
+    from companies.services.benchmarking import compute_sector_benchmarks as _compute
+    result = _compute(year)
+    return f"Sector benchmarks done: {result}"
 
 

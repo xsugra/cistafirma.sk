@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { Company } from '../../types';
 import { StatusBadge } from '../StatusBadge';
 import { api } from '../../api';
@@ -14,6 +14,7 @@ interface CompanyHeaderProps {
 export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }) => {
     const [isWatching, setIsWatching] = useState(false);
     const [watchLoading, setWatchLoading] = useState(false);
+    const [copied, setCopied] = useState(false);
     const orsrProfile = company.orsr_profile;
 
     useEffect(() => {
@@ -24,6 +25,13 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
             }
         }).catch(() => {});
         return () => { cancelled = true; };
+    }, [company.ico]);
+
+    const handleCopyIco = useCallback(() => {
+        navigator.clipboard.writeText(company.ico).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }).catch(() => {});
     }, [company.ico]);
 
     const handleWatchToggle = async () => {
@@ -44,6 +52,11 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
         }
     };
 
+    const handleExportPDF = () => {
+        const url = `/api/companies/${company.ico}/report/`;
+        window.open(url, '_blank');
+    };
+
     return (
         <div className="app-card p-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -61,6 +74,13 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                 <div className="flex items-center gap-4">
                     <StatusBadge status={company.status} />
                     <button
+                        onClick={handleExportPDF}
+                        className="btn bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300"
+                        title="Stiahnuť PDF report"
+                    >
+                        <i className="fas fa-file-pdf"></i> PDF
+                    </button>
+                    <button
                         onClick={handleWatchToggle}
                         disabled={watchLoading}
                         className={`btn ${isWatching ? 'bg-green-600 hover:bg-green-700 text-white' : 'btn-primary'}`}
@@ -75,7 +95,22 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                 </div>
             </div>
             <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 border-t border-gray-200 dark:border-slate-800 pt-6">
-                <DetailItem label="IČO" value={company.ico} icon="fa-hashtag" />
+                <div className="flex items-start space-x-3">
+                    <i className="fas fa-hashtag text-blue-500 dark:text-blue-400 mt-1 w-4 text-center"></i>
+                    <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">IČO</p>
+                        <div className="flex items-center gap-1.5">
+                            <span className="font-semibold text-gray-900 dark:text-white">{company.ico}</span>
+                            <button
+                                onClick={handleCopyIco}
+                                className="text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 transition-colors p-0.5"
+                                title="Kopírovať IČO"
+                            >
+                                <i className={`fas ${copied ? 'fa-check text-green-500' : 'fa-copy'} text-xs`}></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <DetailItem label="Adresa"
                     value={orsrProfile?.sidlo || `${company.address.street}, ${company.address.city}`}
                     icon="fa-map-marker-alt" />

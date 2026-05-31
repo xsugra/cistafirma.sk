@@ -7,6 +7,8 @@ import type {
   WatchlistEntry,
   HistoryEntry,
   OrsrProfile,
+  NotificationEvent,
+  NotificationPreferences,
 } from './types';
 
 interface RawUser {
@@ -133,6 +135,7 @@ function mapCompanyResponse(data: any): Company {
           profit: toAmount(item.profit),
           totalRevenue: toAmount(item.totalRevenue),
           costs: toAmount(item.costs),
+          addedValue: toAmount(item.addedValue),
           incomeTax: toAmount(item.incomeTax),
           incomeTaxPaid: toAmount(item.incomeTaxPaid),
           assetsTotal: toAmount(item.assetsTotal),
@@ -177,7 +180,30 @@ function mapCompanyResponse(data: any): Company {
       }))
     : [];
 
-  const riskScore = hasDebt ? Math.max(5, 70 - Math.min(totalDebt / 5000, 50)) : 100;
+  // Enhanced risk score: debt-based + financial health adjustments
+  let riskScore = hasDebt ? Math.max(5, 70 - Math.min(totalDebt / 5000, 50)) : 100;
+  let riskSummary = hasDebt
+    ? 'Spoločnosť vykazuje riziko z dôvodu existujúcich nedoplatkov.'
+    : 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.';
+
+  if (data.analysis?.latest) {
+    const { zScore, ratios } = data.analysis.latest;
+    if (zScore != null) {
+      if (zScore < 1.23) {
+        riskScore = Math.max(5, riskScore - 20);
+        riskSummary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.';
+      } else if (zScore < 2.90) {
+        riskScore = Math.max(5, riskScore - 10);
+        if (!hasDebt) riskSummary = 'Zvýšená opatrnosť — Z-score v šedej zóne.';
+      } else {
+        if (!hasDebt) riskSummary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).';
+      }
+    }
+    if (ratios?.roa != null && ratios.roa < 0) {
+      riskScore = Math.max(5, riskScore - 10);
+      riskSummary = riskSummary.replace('.', '') + ' + záporná rentabilita aktív.';
+    }
+  }
 
   return {
     id: data.id,
@@ -203,15 +229,15 @@ function mapCompanyResponse(data: any): Company {
     },
     riskScore: {
       score: Math.round(riskScore),
-      summary: hasDebt
-        ? 'Spoločnosť vykazuje riziko z dôvodu existujúcich nedoplatkov.'
-        : 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.',
+      summary: riskSummary,
       calculationDate: new Date().toISOString(),
     },
     financials,
     executives,
     connections,
     orsr_profile: mapOrsrProfileResponse(data.orsr_profile),
+    analysis: data.analysis || undefined,
+    benchmark: data.benchmark || undefined,
   };
 }
 
@@ -420,5 +446,22 @@ export const api = {
       );
     }
     return apiRequest<HistoryEntry[]>('/history/');
+  },
+
+  // ── Notifications ──
+
+  getNotifications: async (): Promise<NotificationEvent[]> => {
+    return apiRequest<NotificationEvent[]>('/notifications/events/');
+  },
+
+  getNotificationPreferences: async (): Promise<NotificationPreferences> => {
+    return apiRequest<NotificationPreferences>('/notifications/preferences/');
+  },
+
+  updateNotificationPreferences: async (data: Partial<NotificationPreferences>): Promise<NotificationPreferences> => {
+    return apiRequest<NotificationPreferences>('/notifications/preferences/update_preferences/', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
   },
 };

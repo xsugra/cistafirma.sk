@@ -4,8 +4,10 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from django.db.models import Q
 from django.utils import timezone
-from .models import Company, Watchlist
-from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer
+from django.http import HttpResponse
+from .models import Company, Watchlist, SearchHistory
+from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer, SearchHistorySerializer
+from .services.pdf_report import generate_company_report
 
 import logging
 logger = logging.getLogger(__name__)
@@ -55,6 +57,32 @@ class WatchlistViewSet(viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class SearchHistoryViewSet(viewsets.GenericViewSet, viewsets.mixins.ListModelMixin):
+    """User's search history (read-only list)."""
+
+    serializer_class = SearchHistorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return SearchHistory.objects.filter(user=self.request.user).order_by('-searched_at')[:50]
+
+
+def _save_search_history(user, ico: str, name: str):
+    """Save a search history entry, deduplicating recent same-ICO entries."""
+    if not user or not user.is_authenticated:
+        return
+    # Update timestamp if same ICO was searched in last 5 minutes (dedup)
+    recent = SearchHistory.objects.filter(
+        user=user, ico=ico,
+        searched_at__gte=timezone.now() - timezone.timedelta(minutes=5),
+    ).first()
+    if recent:
+        recent.name = name
+        recent.save(update_fields=['name', 'searched_at'])
+    else:
+        SearchHistory.objects.create(user=user, ico=ico, name=name)
+
+
 class CompanyListPagination(PageNumberPagination):
     page_size = 25
     page_size_query_param = 'page_size'
@@ -83,6 +111,7 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
         logger.info(f"Retrieving company with ICO: {ico}")
         try:
             company = Company.objects.select_related('orsr_profile').prefetch_related('financial_results').get(ico=ico)
+            _save_search_history(request.user, ico, company.nazov_UJ)
             logger.info(f"Found company: {company.nazov_UJ}, starting serialization...")
             serializer = CompanyDetailSerializer(company)
             data = serializer.data
@@ -109,6 +138,7 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             if query.isdigit():
                 company = Company.objects.filter(ico=query).first()
                 if company:
+                    _save_search_history(request.user, query, company.nazov_UJ)
                     logger.info(f"Found exact ICO match: {company.nazov_UJ}")
                     return Response({"results": [CompanyListSerializer(company).data]})
             
@@ -122,3 +152,29 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logger.error(f"Error in search: {str(e)}", exc_info=True)
             return Response({"detail": str(e)}, status=500)
+
+    @action(detail=True, methods=['get'], url_path='report')
+    def report(self, request, ico=None):
+        """Generate and download a PDF company report."""
+        logger.info(f"Generating PDF report for company with ICO: {ico}")
+        try:
+            company = Company.objects.select_related('orsr_profile').prefetch_related('financial_results').get(ico=ico)
+        except Company.DoesNotExist:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            pdf_bytes = generate_company_report(company)
+        except Exception as e:
+            logger.error(f"PDF generation error for ICO {ico}: {e}", exc_info=True)
+            return Response(
+                {"detail": f"Nepodarilo sa vygenerovať PDF: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        filename = f"{company.ico}_{company.nazov_UJ[:40].replace(' ', '_')}.pdf"
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response

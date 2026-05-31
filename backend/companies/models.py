@@ -24,6 +24,7 @@ LEGAL_FORMS = {
     '122': 'Európske zoskupenie hospodárskych záujmov',
     '123': 'Európska spoločnosť',
     '124': 'Európske družstvo',
+    '125': 'Jednoduchá spoločnosť na akcie (nový kód RÚZ)',
     '205': 'Družstvo',
     '271': 'Spoločenstvá vlastníkov pozemkov, bytov a pod.',
     '272': 'Pozemkové spoločenstvo s právnou subjektivitou',
@@ -418,6 +419,31 @@ class Watchlist(models.Model):
         return f"{self.user} → {self.company.ico}"
 
 
+class SearchHistory(models.Model):
+    """História vyhľadávaní používateľa."""
+
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='search_history',
+    )
+    ico = models.CharField(max_length=20, verbose_name='IČO')
+    name = models.CharField(max_length=255, verbose_name='Názov firmy')
+    searched_at = models.DateTimeField(auto_now_add=True, verbose_name='Vyhľadané')
+
+    class Meta:
+        db_table = 'Search History'
+        verbose_name = 'História vyhľadávania'
+        verbose_name_plural = 'História vyhľadávania'
+        ordering = ['-searched_at']
+        indexes = [
+            models.Index(fields=['user', '-searched_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user} → {self.ico} @ {self.searched_at}"
+
+
 class CompanyFinancialResult(models.Model):
     """Hospodárske výsledky firmy po rokoch pre grafy vo frontende."""
 
@@ -491,3 +517,45 @@ class CompanyFinancialResult(models.Model):
     def __str__(self):
         return f"{self.company.ico} - {self.year}"
 
+
+class SectorBenchmark(models.Model):
+    """Predpočítané sektorové benchmarky (mediány) pre finančné ukazovatele.
+
+    Počítané periodicky cez Celery Beat (raz denne).
+    """
+
+    nace_section = models.CharField(
+        max_length=5,
+        verbose_name='NACE sekcia',
+        help_text='Písmeno sekcie A-U',
+    )
+    year = models.PositiveIntegerField(verbose_name='Rok')
+    company_count = models.PositiveIntegerField(
+        verbose_name='Počet firiem',
+        help_text='Koľko firiem bolo použitých na výpočet',
+    )
+
+    # Mediány kľúčových metrík (všetky nullable — niektoré sekcie nemusia mať dáta)
+    median_revenue = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    median_profit = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    median_assets_total = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    median_equity = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    median_roa = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    median_roe = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    median_ros = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    median_debt_ratio = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    median_gross_margin = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    median_current_ratio = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    median_self_financing_ratio = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+
+    computed_at = models.DateTimeField(auto_now=True, verbose_name='Vypočítané')
+
+    class Meta:
+        db_table = 'Sector Benchmarks'
+        verbose_name = 'Sektorový benchmark'
+        verbose_name_plural = 'Sektorové benchmarky'
+        unique_together = [('nace_section', 'year')]
+        ordering = ['nace_section', '-year']
+
+    def __str__(self):
+        return f"NACE {self.nace_section} — {self.year} ({self.company_count} firiem)"

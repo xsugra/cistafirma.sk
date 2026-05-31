@@ -7,7 +7,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 import csv
 from io import BytesIO
-from .models import Company, CompanyFinancialResult, LEGAL_FORMS_SHORT
+from .models import Company, CompanyFinancialResult, SectorBenchmark, LEGAL_FORMS_SHORT
 from registers.models import OrsrCompanyProfile
 
 try:
@@ -814,3 +814,26 @@ class CompanyAdmin(UnfoldModelAdmin):
         }
 
         return super().changelist_view(request, extra_context=extra_context)
+
+
+@admin.register(SectorBenchmark)
+class SectorBenchmarkAdmin(UnfoldModelAdmin):
+    list_display = [
+        'nace_section', 'year', 'company_count',
+        'median_revenue', 'median_roa', 'median_roe',
+        'computed_at',
+    ]
+    list_filter = ['nace_section', 'year']
+    ordering = ['-year', 'nace_section']
+    readonly_fields = [
+        f.name for f in SectorBenchmark._meta.fields
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

@@ -81,6 +81,22 @@ class RpoSyncService:
     # statutoryBodies codelist CL010113
     STATUTORY_CODE_KONATEL = "3"
     STATUTORY_CODE_PREDSTAVENSTVO = "99"
+    STATUTORY_CODE_SPRAVCA = "16"
+    STATUTORY_CODE_LIKVIDATOR = "17"
+
+    # Verejnoprávne štatutárne orgány (CL010113)
+    STATUTORY_CODE_PRIMATOR = "15"
+    STATUTORY_CODE_STAROSTA = "14"
+    STATUTORY_CODE_PREDNOSTA = "13"
+    STATUTORY_CODE_RIADITEL = "11"
+    STATUTORY_CODE_STATUTAR = "12"
+    STATUTORY_CODE_VEDUCI = "30"
+    STATUTORY_CODE_DEKAN = "35"
+    STATUTORY_CODE_ARCIBISKUP = "36"
+
+    # Cirkevné
+    STATUTORY_CODE_BISKUP = "37"
+    STATUTORY_CODE_FARAR = "38"
 
     # stakeholders codelist CL010109
     STAKEHOLDER_CODE_SPOLOCNIK = "99"
@@ -93,17 +109,41 @@ class RpoSyncService:
         current_statutory = [p for p in entity.statutory_bodies if p.is_current]
         current_stakeholders = [p for p in entity.stakeholders if p.is_current]
 
+        # Obchodné spoločnosti
         konatelia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_KONATEL]
         predstavenstvo = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_PREDSTAVENSTVO]
+        spravcovia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_SPRAVCA]
+        likvidatori = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_LIKVIDATOR]
+
+        # Verejná správa
+        starostovia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_STAROSTA]
+        primatori = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_PRIMATOR]
+        prednostovia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_PREDNOSTA]
+        riaditelia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_RIADITEL]
+        statutari = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_STATUTAR]
+        veduci = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_VEDUCI]
+
+        # Cirkevné a akademické
+        dekani = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_DEKAN]
+        arcibiskupi = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_ARCIBISKUP]
+        biskupi = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_BISKUP]
+        farari = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_FARAR]
+
+        # All categorized
+        categorized = konatelia + predstavenstvo + spravcovia + likvidatori + \
+                      starostovia + primatori + prednostovia + riaditelia + \
+                      statutari + veduci + dekani + arcibiskupi + biskupi + farari
+
+        # Fallback: any statutory bodies we couldn't categorize (unknown codes)
+        others = [p for p in current_statutory if p not in categorized]
+        if not categorized:
+            # No codes matched at all — use all as fallback "štatutári"
+            others = current_statutory
 
         spolocnici = [p for p in current_stakeholders if p.stakeholder_type_code == self.STAKEHOLDER_CODE_SPOLOCNIK]
         prokuristi = [p for p in current_stakeholders if p.stakeholder_type_code == self.STAKEHOLDER_CODE_PROKURISTA]
         akcionari = [p for p in current_stakeholders if p.stakeholder_type_code == self.STAKEHOLDER_CODE_AKCIONAR]
         dozorna_rada = [p for p in current_stakeholders if p.stakeholder_type_code == self.STAKEHOLDER_CODE_DOZORNY]
-
-        # Fallback: if no specific type matched, treat all statutory bodies as konatelia
-        if not konatelia and not predstavenstvo:
-            konatelia = current_statutory
 
         current_auth = next((a for a in entity.authorizations if a.is_current), None)
         current_activities = [a for a in entity.activities if a.is_current]
@@ -123,9 +163,15 @@ class RpoSyncService:
         current_deposits = [d for d in entity.deposits if d.is_current]
 
         return {
-            "statutarny_organ": [self._person_to_structured(p) for p in konatelia],
-            "statutarny_organ_typ": konatelia[0].stakeholder_type if konatelia else "",
+            "statutarny_organ": [self._person_to_structured(p) for p in (konatelia + others)],
+            "statutarny_organ_typ": (konatelia[0].stakeholder_type if konatelia else (others[0].stakeholder_type if others else "")),
             "predstavenstvo": [self._person_to_structured(p) for p in predstavenstvo],
+            "spravcovia": [self._person_to_structured(p) for p in spravcovia],
+            "likvidatori": [self._person_to_structured(p) for p in likvidatori],
+            "starostovia": [self._person_to_structured(p) for p in starostovia],
+            "primatori": [self._person_to_structured(p) for p in primatori],
+            "riaditelia": [self._person_to_structured(p) for p in (prednostovia + riaditelia + statutari + veduci)],
+            "cirkevni_hodnostari": [self._person_to_structured(p) for p in (dekani + arcibiskupi + biskupi + farari)],
             "spolocnici": [self._person_to_structured(p) for p in spolocnici],
             "prokura": [self._person_to_structured(p) for p in prokuristi],
             "prokura_oprávnenie": [],
@@ -159,11 +205,28 @@ class RpoSyncService:
 
         konatelia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_KONATEL]
         predstavenstvo = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_PREDSTAVENSTVO]
+        spravcovia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_SPRAVCA]
+        likvidatori = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_LIKVIDATOR]
+        starostovia = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_STAROSTA]
+        primatori = [p for p in current_statutory if p.stakeholder_type_code == self.STATUTORY_CODE_PRIMATOR]
+        others = [p for p in current_statutory if p.stakeholder_type_code not in {
+            self.STATUTORY_CODE_KONATEL, self.STATUTORY_CODE_PREDSTAVENSTVO,
+            self.STATUTORY_CODE_SPRAVCA, self.STATUTORY_CODE_LIKVIDATOR,
+            self.STATUTORY_CODE_STAROSTA, self.STATUTORY_CODE_PRIMATOR,
+        }]
+        if not konatelia and not predstavenstvo and not spravcovia and not likvidatori and not starostovia and not primatori:
+            others = current_statutory
+
+        # Build statutory display: group by role
+        def _role_name(p):
+            return p.stakeholder_type or "Štatutár"
+        statutory_flat = []
+        for p in konatelia + spravcovia + likvidatori + predstavenstvo + starostovia + primatori + others:
+            label = f"{p.display_name} ({_role_name(p)})" if p.stakeholder_type else p.display_name
+            statutory_flat.append(label)
+
         spolocnici = [p for p in current_stakeholders if p.stakeholder_type_code == self.STAKEHOLDER_CODE_SPOLOCNIK]
         prokuristi = [p for p in current_stakeholders if p.stakeholder_type_code == self.STAKEHOLDER_CODE_PROKURISTA]
-
-        if not konatelia and not predstavenstvo:
-            konatelia = current_statutory
 
         equity_val = next((e for e in current_equities if e.value is not None), None)
         equity_paid = next((e for e in current_equities if e.value_paid is not None), None)
@@ -176,7 +239,7 @@ class RpoSyncService:
 
         return {
             "predmet_podnikania": [a.description for a in current_activities],
-            "statutarny_organ": [p.display_name for p in konatelia],
+            "statutarny_organ": statutory_flat,
             "spolocnici": [p.display_name or p.full_name for p in spolocnici],
             "prokura": [p.display_name for p in prokuristi],
             "predstavenstvo": [p.display_name for p in predstavenstvo],
@@ -220,7 +283,8 @@ class RpoSyncService:
         parts = num.split("/")
         if len(parts) >= 2:
             return parts[0]
-        return ""
+        # Non-standard format (municipalities etc.) — return whole number as-is
+        return num
 
     @staticmethod
     def _extract_oddiel_type(entity: RpoEntity) -> str:
@@ -241,6 +305,7 @@ class RpoSyncService:
                 return "psp"
             elif prefix.startswith("nsp"):
                 return "nsp"
+            # Non-standard — leave empty (municipalities etc.)
         return ""
 
     @staticmethod
@@ -252,6 +317,7 @@ class RpoSyncService:
         parts = num.split("/")
         if len(parts) >= 2:
             return parts[1]
+        # Non-standard format — empty vlozka
         return ""
 
     @staticmethod

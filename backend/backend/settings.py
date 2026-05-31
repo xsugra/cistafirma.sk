@@ -78,6 +78,7 @@ CUSTOM_APPS = [
     'analyses',
     'api',
     'adminapi',
+    'notifications',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + CUSTOM_APPS
@@ -432,3 +433,7 @@ UNFOLD = {
         },
     },
 }
+
+# Email configuration (for notifications)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'  # Print to console in dev
+DEFAULT_FROM_EMAIL = 'CistaFirma <noreply@cistafirma.sk>'
