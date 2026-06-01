@@ -403,7 +403,7 @@ function EndpointCard({ endpoint }: { endpoint: Endpoint }) {
   const hasDetails = endpoint.request || endpoint.response || endpoint.params;
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700/50 rounded-lg overflow-hidden transition-colors hover:border-gray-300 dark:hover:border-gray-600">
+    <div className="bg-white dark:bg-slate-900 shadow-sm border border-gray-200 dark:border-gray-700/50 rounded-lg overflow-hidden transition-colors hover:border-gray-300 dark:hover:border-gray-600">
       <button
         onClick={() => hasDetails && setExpanded(!expanded)}
         className={`w-full flex items-center gap-3 px-4 py-3 text-left ${hasDetails ? 'cursor-pointer' : 'cursor-default'}`}
@@ -620,10 +620,10 @@ export const ApiDocs: React.FC = () => {
                 Chybové stavy
               </h2>
             </div>
-            <div className="border border-gray-200 dark:border-gray-700/50 rounded-lg overflow-hidden">
+            <div className="bg-white dark:bg-slate-900 shadow-sm border border-gray-200 dark:border-gray-700/50 rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+                  <tr className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                     <th className="text-left px-4 py-2.5 font-medium text-gray-500 dark:text-gray-400">Kód</th>
                     <th className="text-left px-4 py-2.5 font-medium text-gray-500 dark:text-gray-400">Význam</th>
                   </tr>
