@@ -1,11 +1,10 @@
 import logging
 import re
 from decimal import Decimal, InvalidOperation
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from companies.models import Company, CompanyFinancialResult
 from registers.integrations.ruz_api import RuzApi
-from registers.services.pdf_financial_parser import extract_financials_from_attachments
 
 
 logger = logging.getLogger(__name__)
@@ -125,17 +124,11 @@ class RuzFinancialsSyncService:
 
     def _extract_financials_from_reports(self, report_ids: List[int]) -> Dict[str, Optional[Decimal]]:
         result: Dict[str, Optional[Decimal]] = {}
-        pdf_attachments: List[Dict] = []
 
         for report_id in report_ids:
             report = self.api.get_financial_report_details(report_id)
             if not report:
                 continue
-
-            # Collect PDF attachments for fallback parsing
-            for attachment in (report.get("prilohy") or []):
-                if (attachment.get("mimeType") or "").startswith("application/pdf"):
-                    pdf_attachments.append(attachment)
 
             tables = ((report.get("obsah") or {}).get("tabulky") or [])
             template_tables = self._get_template_tables(report.get("idSablony"))
@@ -162,14 +155,6 @@ class RuzFinancialsSyncService:
                     result["costs"] = self._pick_better(result.get("costs"), total)
                 elif any(k in name for k in self.PROFIT_KEYS):
                     result["profit"] = self._pick_better(result.get("profit"), total)
-
-        # Fallback: if structured obsah yielded nothing, try PDF attachments
-        if result.get("revenue") is None and result.get("profit") is None and pdf_attachments:
-            logger.info("No structured financial data found, attempting PDF extraction from %d attachments", len(pdf_attachments))
-            pdf_result = extract_financials_from_attachments(pdf_attachments, session=self.api.session)
-            for key, value in pdf_result.items():
-                if value is not None:
-                    result[key] = self._pick_better(result.get(key), value)
 
         if result.get("profit") is None and result.get("revenue") is not None and result.get("costs") is not None:
             result["profit"] = result["revenue"] - result["costs"]

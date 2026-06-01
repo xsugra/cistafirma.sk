@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
+import { forceCollide } from 'd3-force-3d';
 import { useTheme } from '../../context/ThemeContext';
 import { GRAPH_COLORS, GRAPH_COLORS_DARK, NODE_SIZES, FORCE_CONFIG } from './graphConfig';
 import type { GraphData, GraphNode } from './graphTypes';
@@ -8,6 +9,7 @@ export interface GraphCanvasHandle {
   zoomIn: () => void;
   zoomOut: () => void;
   zoomToFit: () => void;
+  exportPng: () => void;
 }
 
 interface GraphCanvasProps {
@@ -17,6 +19,22 @@ interface GraphCanvasProps {
   onNodeHover: (node: GraphNode | null) => void;
   width: number;
   height: number;
+}
+
+interface LabelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function rectsOverlap(a: LabelRect, b: LabelRect, padding: number): boolean {
+  return !(
+    a.x + a.w + padding < b.x ||
+    b.x + b.w + padding < a.x ||
+    a.y + a.h + padding < b.y ||
+    b.y + b.h + padding < a.y
+  );
 }
 
 function drawBuildingIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
@@ -115,16 +133,17 @@ function drawLabelWithBg(
   bgColor: string,
   globalScale: number,
   bold: boolean,
-) {
+): LabelRect {
   ctx.font = `${bold ? 'bold ' : '500 '}${fontSize}px 'Inter', sans-serif`;
   const tw = ctx.measureText(text).width;
   const padX = 3 / globalScale;
   const padY = 1.5 / globalScale;
 
-  ctx.fillStyle = bgColor;
-  ctx.beginPath();
   const pillW = tw + padX * 2;
   const pillH = fontSize + padY * 2;
+
+  ctx.fillStyle = bgColor;
+  ctx.beginPath();
   ctx.roundRect(x - pillW / 2, y - padY, pillW, pillH, 3 / globalScale);
   ctx.fill();
 
@@ -132,6 +151,22 @@ function drawLabelWithBg(
   ctx.textBaseline = 'top';
   ctx.fillStyle = textColor;
   ctx.fillText(text, x, y);
+
+  return { x: x - pillW / 2, y: y - padY, w: pillW, h: pillH };
+}
+
+function measureLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  fontSize: number,
+  globalScale: number,
+  bold: boolean,
+): { w: number; h: number } {
+  ctx.font = `${bold ? 'bold ' : '500 '}${fontSize}px 'Inter', sans-serif`;
+  const tw = ctx.measureText(text).width;
+  const padX = 3 / globalScale;
+  const padY = 1.5 / globalScale;
+  return { w: tw + padX * 2, h: fontSize + padY * 2 };
 }
 
 function getRoleAbbrev(role: string): string {
@@ -151,26 +186,39 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   { data, centerNode, onNodeClick, onNodeHover, width, height }, ref
 ) {
   const fgRef = useRef<any>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const { isDark } = useTheme();
   const colors = isDark ? GRAPH_COLORS_DARK : GRAPH_COLORS;
   const labelBg = isDark ? 'rgba(2, 6, 23, 0.85)' : 'rgba(255, 255, 255, 0.88)';
 
+  const drawnLabelsRef = useRef<LabelRect[]>([]);
+  const lastClearTimeRef = useRef(0);
+
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
       const fg = fgRef.current;
-      if (fg) {
-        const currentZoom = fg.zoom();
-        fg.zoom(currentZoom * 1.4, 300);
-      }
+      if (fg) fg.zoom(fg.zoom() * 1.4, 300);
     },
     zoomOut: () => {
       const fg = fgRef.current;
-      if (fg) {
-        const currentZoom = fg.zoom();
-        fg.zoom(currentZoom / 1.4, 300);
-      }
+      if (fg) fg.zoom(fg.zoom() / 1.4, 300);
     },
     zoomToFit: () => fgRef.current?.zoomToFit(400, 60),
+    exportPng: () => {
+      const canvas = wrapperRef.current?.querySelector('canvas');
+      if (!canvas) return;
+      const tmp = document.createElement('canvas');
+      tmp.width = canvas.width;
+      tmp.height = canvas.height;
+      const ctx = tmp.getContext('2d')!;
+      ctx.fillStyle = isDark ? '#020617' : '#ffffff';
+      ctx.fillRect(0, 0, tmp.width, tmp.height);
+      ctx.drawImage(canvas, 0, 0);
+      const link = document.createElement('a');
+      link.download = 'graf-prepojeni.png';
+      link.href = tmp.toDataURL('image/png');
+      link.click();
+    },
   }));
 
   useEffect(() => {
@@ -181,11 +229,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     if (fg.d3Force('center')) {
       fg.d3Force('center').strength(FORCE_CONFIG.centerStrength);
     }
-    fg.d3Force('collide', null);
-    const d3 = (window as any).d3;
-    if (d3?.forceCollide) {
-      fg.d3Force('collide', d3.forceCollide(FORCE_CONFIG.collideRadius));
-    }
+
+    const labelCollide = forceCollide((node: any) => {
+      const gn = node as GraphNode;
+      const baseRadius = gn.type === 'company' ? NODE_SIZES.company.radius : NODE_SIZES.person.radius;
+      const labelEstimate = gn.label.length * 3.2 + 10;
+      return Math.max(baseRadius + 8, labelEstimate);
+    }).iterations(2);
+    fg.d3Force('collide', labelCollide);
   }, [data]);
 
   useEffect(() => {
@@ -199,6 +250,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const isCenter = gn.id === centerNode;
     const fontSize = Math.max(13 / globalScale, 4);
 
+    // Detect new frame and clear label tracking
+    const now = performance.now();
+    if (now - lastClearTimeRef.current > 8) {
+      drawnLabelsRef.current = [];
+      lastClearTimeRef.current = now;
+    }
+
     if (gn.type === 'company') {
       const r = NODE_SIZES.company.radius;
       drawCircleNode(
@@ -209,11 +267,19 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       );
       drawBuildingIcon(ctx, node.x, node.y, r * 1.3, colors.company.icon);
 
-      drawLabelWithBg(
-        ctx, gn.label, node.x, node.y + r + 5 / globalScale,
-        fontSize, isDark ? '#93C5FD' : '#1E40AF', labelBg,
-        globalScale, isCenter,
-      );
+      const labelX = node.x;
+      const labelY = node.y + r + 5 / globalScale;
+      const textColor = isDark ? '#93C5FD' : '#1E40AF';
+      const size = measureLabel(ctx, gn.label, fontSize, globalScale, isCenter);
+
+      const proposed: LabelRect = { x: labelX - size.w / 2, y: labelY, w: size.w, h: size.h };
+      const pad = 2 / globalScale;
+      const hasOverlap = drawnLabelsRef.current.some(r => rectsOverlap(proposed, r, pad));
+
+      if (!hasOverlap || isCenter) {
+        const rect = drawLabelWithBg(ctx, gn.label, labelX, labelY, fontSize, textColor, labelBg, globalScale, isCenter);
+        drawnLabelsRef.current.push(rect);
+      }
     } else {
       const r = NODE_SIZES.person.radius;
       drawCircleNode(
@@ -224,11 +290,19 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       );
       drawPersonIcon(ctx, node.x, node.y, r * 1.2, colors.person.icon);
 
-      drawLabelWithBg(
-        ctx, gn.label, node.x, node.y + r + 4 / globalScale,
-        fontSize, isDark ? '#D1D5DB' : '#374151', labelBg,
-        globalScale, false,
-      );
+      const labelX = node.x;
+      const labelY = node.y + r + 4 / globalScale;
+      const textColor = isDark ? '#D1D5DB' : '#374151';
+      const size = measureLabel(ctx, gn.label, fontSize, globalScale, false);
+
+      const proposed: LabelRect = { x: labelX - size.w / 2, y: labelY, w: size.w, h: size.h };
+      const pad = 2 / globalScale;
+      const hasOverlap = drawnLabelsRef.current.some(r => rectsOverlap(proposed, r, pad));
+
+      if (!hasOverlap) {
+        const rect = drawLabelWithBg(ctx, gn.label, labelX, labelY, fontSize, textColor, labelBg, globalScale, false);
+        drawnLabelsRef.current.push(rect);
+      }
     }
   }, [centerNode, colors, isDark, labelBg]);
 
@@ -320,25 +394,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   }, []);
 
   return (
-    <ForceGraph2D
-      ref={fgRef}
-      graphData={data}
-      width={width}
-      height={height}
-      nodeCanvasObject={paintNode}
-      nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
-        const r = (node as GraphNode).type === 'company' ? NODE_SIZES.company.radius : NODE_SIZES.person.radius;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-        ctx.fillStyle = color;
-        ctx.fill();
-      }}
-      linkCanvasObject={paintLink}
-      onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
-      onNodeHover={(node: any) => onNodeHover(node ? (node as GraphNode) : null)}
-      nodeVal={getNodeArea}
-      cooldownTicks={100}
-      backgroundColor="transparent"
-    />
+    <div ref={wrapperRef}>
+      <ForceGraph2D
+        ref={fgRef}
+        graphData={data}
+        width={width}
+        height={height}
+        nodeCanvasObject={paintNode}
+        nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
+          const r = (node as GraphNode).type === 'company' ? NODE_SIZES.company.radius : NODE_SIZES.person.radius;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
+          ctx.fillStyle = color;
+          ctx.fill();
+        }}
+        linkCanvasObject={paintLink}
+        onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
+        onNodeHover={(node: any) => onNodeHover(node ? (node as GraphNode) : null)}
+        nodeVal={getNodeArea}
+        cooldownTicks={100}
+        backgroundColor="transparent"
+      />
+    </div>
   );
 });

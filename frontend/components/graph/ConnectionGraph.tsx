@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas';
 import { GraphControls } from './GraphControls';
@@ -19,6 +20,7 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
   const [dimensions, setDimensions] = useState({ width: 1100, height: 1000 });
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const { graphData, loading, error, fetchGraph, expandNode, expandPerson, centerNode, truncated } = useGraphData();
 
@@ -27,23 +29,45 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
   }, [ico, fetchGraph]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const el = containerRef.current;
+    if (!el) return;
 
     const measure = () => {
-      const rect = container.getBoundingClientRect();
-      setDimensions({
-        width: rect.width,
-        height: Math.max(rect.height, 400),
-      });
+      if (isFullscreen) {
+        setDimensions({ width: window.innerWidth, height: window.innerHeight });
+      } else {
+        const rect = el.getBoundingClientRect();
+        setDimensions({ width: rect.width, height: Math.max(rect.height, 400) });
+      }
     };
-
     measure();
 
-    const observer = new ResizeObserver(() => measure());
-    observer.observe(container);
+    if (isFullscreen) {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [isFullscreen]);
+
+  // Re-fit graph after fullscreen toggle
+  useEffect(() => {
+    if (canvasRef.current && graphData && graphData.nodes.length > 0) {
+      const timer = setTimeout(() => canvasRef.current?.zoomToFit(), 150);
+      return () => clearTimeout(timer);
+    }
+  }, [isFullscreen, graphData]);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsFullscreen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isFullscreen]);
 
   const handleNodeClick = useCallback((node: GraphNode) => {
     if (node.type === 'company' && node.ico && node.ico !== ico) {
@@ -59,10 +83,10 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    }
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
   }, []);
 
   const handleNodeDoubleClick = useCallback((node: GraphNode) => {
@@ -106,12 +130,12 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
     );
   }
 
-  return (
+  const graphContent = (
     <div
       ref={containerRef}
-      className="relative h-[75vh] min-h-[500px]"
+      className={`relative w-full ${isFullscreen ? 'h-screen' : 'h-[75vh] min-h-[500px]'}`}
       onMouseMove={handleMouseMove}
-      onDoubleClick={(e) => {
+      onDoubleClick={() => {
         if (hoveredNode) handleNodeDoubleClick(hoveredNode);
       }}
     >
@@ -135,13 +159,27 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
           onZoomIn={() => canvasRef.current?.zoomIn()}
           onZoomOut={() => canvasRef.current?.zoomOut()}
           onReset={() => canvasRef.current?.zoomToFit()}
+          onExportPng={() => canvasRef.current?.exportPng()}
+          onToggleFullscreen={() => setIsFullscreen(prev => !prev)}
+          isFullscreen={isFullscreen}
           nodeCount={graphData.nodes.length}
           truncated={truncated}
         />
       </div>
       <p className="absolute bottom-2 left-3 text-xs text-gray-400 dark:text-gray-500 pointer-events-none">
-        Klikni na firmu pre rozbalenie prepojení. Dvojklik pre otvorenie detailu.
+        {isFullscreen ? 'Esc pre zatvorenie. ' : ''}Klikni na firmu pre rozbalenie prepojení. Dvojklik pre otvorenie detailu.
       </p>
     </div>
   );
+
+  if (isFullscreen) {
+    return createPortal(
+      <div className="fixed inset-0 z-[9999] bg-white dark:bg-slate-950 animate-fade-in">
+        {graphContent}
+      </div>,
+      document.body
+    );
+  }
+
+  return graphContent;
 }

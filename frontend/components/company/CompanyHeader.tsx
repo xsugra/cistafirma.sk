@@ -4,6 +4,7 @@ import { StatusBadge } from '../StatusBadge';
 import { api } from '../../api';
 import { DetailItem } from './DetailItem';
 import { formatDate } from './helpers';
+import { exportCompanyPDF } from '../../utils/pdfExport';
 import type { LegalFormProfile } from '../../utils/legalFormProfile';
 
 interface CompanyHeaderProps {
@@ -14,6 +15,7 @@ interface CompanyHeaderProps {
 export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }) => {
     const [isWatching, setIsWatching] = useState(false);
     const [watchLoading, setWatchLoading] = useState(false);
+    const [pdfLoading, setPdfLoading] = useState(false);
     const [copied, setCopied] = useState(false);
     const orsrProfile = company.orsr_profile;
 
@@ -52,9 +54,15 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
         }
     };
 
-    const handleExportPDF = () => {
-        const url = `/api/companies/${company.ico}/report/`;
-        window.open(url, '_blank');
+    const handleExportPDF = async () => {
+        setPdfLoading(true);
+        try {
+            await exportCompanyPDF(company);
+        } catch (e) {
+            console.error("PDF export failed", e);
+        } finally {
+            setPdfLoading(false);
+        }
     };
 
     return (
@@ -75,10 +83,16 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                     <StatusBadge status={company.status} />
                     <button
                         onClick={handleExportPDF}
+                        disabled={pdfLoading}
                         className="btn bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300"
                         title="Stiahnuť PDF report"
                     >
-                        <i className="fas fa-file-pdf"></i> PDF
+                        {pdfLoading ? (
+                            <i className="fas fa-spinner animate-spin"></i>
+                        ) : (
+                            <i className="fas fa-file-pdf"></i>
+                        )}
+                        {' '}PDF
                     </button>
                     <button
                         onClick={handleWatchToggle}

@@ -76,8 +76,8 @@ export const NODE_SIZES = {
 } as const;
 
 export const FORCE_CONFIG = {
-  chargeStrength: -550,
-  linkDistance: 180,
+  chargeStrength: -700,
+  linkDistance: 220,
   centerStrength: 0.03,
   collideRadius: 65,
 } as const;
