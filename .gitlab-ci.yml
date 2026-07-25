@@ -7,6 +7,7 @@ stages:
 variables:
   DOCKER_TLS_CERTDIR: "/certs"
   DOCKER_DRIVER: overlay2
+  GIT_STRATEGY: clone
   BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
   FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
   IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
