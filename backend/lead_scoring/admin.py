@@ -131,7 +131,7 @@ class CompanyScoreAdmin(ModelAdmin):
     def debt_penalty_display(self, obj):
         """Display debt penalty."""
         if obj.debt_penalty == 0:
-            return format_html('<span style="color: green;">✓ None</span>')
+            return format_html('<span style="color: green;">{}</span>', '✓ None')
         else:
             return format_html('<span style="color: red;">{}</span>', obj.debt_penalty)
 
@@ -252,7 +252,7 @@ class CompanyEnrichmentAdmin(ModelAdmin):
     def sources_count(self, obj):
         """Display number of sources used."""
         count = len(obj.sources_used) if obj.sources_used else 0
-        return format_html(f'{count} sources')
+        return f'{count} sources'
 
     sources_count.short_description = 'Sources'
 
