@@ -1,21 +1,21 @@
-import React, { lazy, Suspense, useState } from 'react';
-import type { Company, OrsrStructured } from '../types';
-import { InfoCard } from './InfoCard';
-import { FinancialChart } from './FinancialChart';
+import React, {lazy, Suspense, useState} from 'react';
+import type {Company, OrsrStructured} from '../types';
+import {InfoCard} from './InfoCard';
+import {FinancialChart} from './FinancialChart';
 
-import { getLegalFormProfile } from '../utils/legalFormProfile';
-import { normalizePeople } from './company/helpers';
-import { PeopleSection } from './company/PersonCard';
-import { CompanyHeader } from './company/CompanyHeader';
-import { CompanyDebts } from './company/CompanyDebts';
-import { CompanyCapital } from './company/CompanyCapital';
-import { CompanyBusiness } from './company/CompanyBusiness';
-import { CompanySummaryStrip } from './company/CompanySummaryStrip';
-import { FinancialIndicators } from './company/FinancialIndicators';
-import { FinancialRatiosTable } from './company/FinancialRatiosTable';
-import { BenchmarkComparison } from './company/BenchmarkComparison';
-import { AssetsPieChart } from './company/AssetsPieChart';
-import { LiabilitiesPieChart } from './company/LiabilitiesPieChart';
+import {getLegalFormProfile} from '../utils/legalFormProfile';
+import {normalizePeople} from './company/helpers';
+import {PeopleSection} from './company/PersonCard';
+import {CompanyHeader} from './company/CompanyHeader';
+import {CompanyDebts} from './company/CompanyDebts';
+import {CompanyCapital} from './company/CompanyCapital';
+import {CompanyBusiness} from './company/CompanyBusiness';
+import {CompanySummaryStrip} from './company/CompanySummaryStrip';
+import {FinancialIndicators} from './company/FinancialIndicators';
+import {FinancialRatiosTable} from './company/FinancialRatiosTable';
+import {BenchmarkComparison} from './company/BenchmarkComparison';
+import {AssetsPieChart} from './company/AssetsPieChart';
+import {LiabilitiesPieChart} from './company/LiabilitiesPieChart';
 
 const ConnectionGraph = lazy(() => import('./graph/ConnectionGraph').then(m => ({ default: m.ConnectionGraph })));
 
@@ -92,6 +92,23 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
 
                         {company.financials.length > 0 ? (
                             <FinancialIndicators data={company.financials} analysis={company.analysis?.latest} />
+                        ) : company.usesIfrs ? (
+                            <InfoCard title="Finančné údaje" icon="fa-chart-bar">
+                                <div className="text-center py-6 text-gray-600 dark:text-gray-300">
+                                    <i className="fas fa-file-pdf text-2xl mb-3 text-red-400"></i>
+                                    <p className="mb-1 font-medium">Táto spoločnosť účtuje podľa medzinárodných
+                                        štandardov (IFRS).</p>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Finančné výkazy sú v
+                                        Registri účtovných závierok dostupné len v PDF forme.</p>
+                                    {company.ruzPortalUrl && (
+                                        <a href={company.ruzPortalUrl} target="_blank" rel="noopener noreferrer"
+                                           className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors">
+                                            <i className="fas fa-external-link-alt"></i>
+                                            Zobraziť na RUZ portáli
+                                        </a>
+                                    )}
+                                </div>
+                            </InfoCard>
                         ) : (
                             <InfoCard title="Finančné údaje" icon="fa-chart-bar">
                                 <div className="text-center py-4 text-gray-500 dark:text-gray-400">
@@ -105,6 +122,20 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
                             {company.financials.length > 0 ? (
                                 <div className="min-h-[350px]">
                                     <FinancialChart data={company.financials} />
+                                </div>
+                            ) : company.usesIfrs ? (
+                                <div className="text-center py-6 text-gray-600 dark:text-gray-300">
+                                    <i className="fas fa-file-pdf text-2xl mb-3 text-red-400"></i>
+                                    <p className="mb-1 font-medium">Hospodárske výsledky sú súčasťou IFRS závierky.</p>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Údaje sú dostupné v PDF
+                                        výkazoch na portáli Registra účtovných závierok.</p>
+                                    {company.ruzPortalUrl && (
+                                        <a href={company.ruzPortalUrl} target="_blank" rel="noopener noreferrer"
+                                           className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors">
+                                            <i className="fas fa-external-link-alt"></i>
+                                            Zobraziť na RUZ portáli
+                                        </a>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="text-center py-4 text-gray-500 dark:text-gray-400">

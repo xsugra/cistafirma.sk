@@ -1,14 +1,14 @@
-import { mockCompanyData } from './mockData';
-import { ENABLE_MOCK_DATA } from './constants';
-import { apiRequest } from './lib/apiClient';
+import {mockCompanyData} from './mockData';
+import {ENABLE_MOCK_DATA} from './constants';
+import {apiRequest} from './lib/apiClient';
 import type {
   Company,
-  User,
-  WatchlistEntry,
   HistoryEntry,
-  OrsrProfile,
   NotificationEvent,
   NotificationPreferences,
+  OrsrProfile,
+  User,
+  WatchlistEntry,
 } from './types';
 
 interface RawUser {
@@ -238,6 +238,8 @@ function mapCompanyResponse(data: any): Company {
     orsr_profile: mapOrsrProfileResponse(data.orsr_profile),
     analysis: data.analysis || undefined,
     benchmark: data.benchmark || undefined,
+    usesIfrs: data.uses_ifrs || false,
+    ruzPortalUrl: data.ruz_portal_url || null,
   };
 }
 

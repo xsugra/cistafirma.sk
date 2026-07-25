@@ -240,6 +240,11 @@ class Company(
         help_text="Príznak, či jednotka obsahuje aspoň jednu konsolidovanú účtovnú závierku",
         db_column="Konsolidovaná",
     )
+    uses_ifrs = models.BooleanField(
+        default=False,
+        help_text="Firma účtuje podľa IFRS — finančné výkazy sú v RUZ len ako PDF",
+        db_column="Používa IFRS",
+    )
     id_uctovnych_zavierok = models.JSONField(
         default=list,
         help_text="Zoznam identifikátorov všetkých súvisiacich účtovných závierok",

@@ -17,6 +17,8 @@ export interface Company {
   orsr_profile?: OrsrProfile;
   analysis?: FinancialAnalysis;
   benchmark?: CompanyBenchmark;
+    usesIfrs: boolean;
+    ruzPortalUrl: string | null;
 }
 
 export interface Address {

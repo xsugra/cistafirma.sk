@@ -6,7 +6,6 @@ from typing import Dict, List, Optional
 from companies.models import Company, CompanyFinancialResult
 from registers.integrations.ruz_api import RuzApi
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -67,6 +66,8 @@ class RuzFinancialsSyncService:
     def __init__(self, api: Optional[RuzApi] = None):
         self.api = api or RuzApi()
 
+    IFRS_TEMPLATE_ID = 709
+
     def sync_company(self, company: Company, max_statements: int = 30) -> int:
         """Fetch and upsert yearly financial data for one company. Returns number of upserts."""
         if not company.ruz_id:
@@ -83,6 +84,7 @@ class RuzFinancialsSyncService:
             return 0
 
         upserts = 0
+        found_ifrs = False
         for statement_id in statement_ids[:max_statements]:
             statement = self.api.get_financial_statement_details(statement_id)
             if not statement:
@@ -96,7 +98,9 @@ class RuzFinancialsSyncService:
             if not report_ids:
                 continue
 
-            financials = self._extract_financials_from_reports(report_ids)
+            financials, is_ifrs = self._extract_financials_from_reports(report_ids)
+            if is_ifrs:
+                found_ifrs = True
             if financials.get("revenue") is None and financials.get("profit") is None:
                 continue
 
@@ -110,6 +114,10 @@ class RuzFinancialsSyncService:
             )
             upserts += 1
 
+        if found_ifrs != company.uses_ifrs:
+            company.uses_ifrs = found_ifrs
+            company.save(update_fields=["uses_ifrs"])
+
         return upserts
 
     def _extract_year(self, statement: Dict) -> Optional[int]:
@@ -122,13 +130,18 @@ class RuzFinancialsSyncService:
                 return int(match.group(1))
         return None
 
-    def _extract_financials_from_reports(self, report_ids: List[int]) -> Dict[str, Optional[Decimal]]:
+    def _extract_financials_from_reports(self, report_ids: List[int]) -> tuple:
+        """Returns (financials_dict, is_ifrs)."""
         result: Dict[str, Optional[Decimal]] = {}
+        is_ifrs = False
 
         for report_id in report_ids:
             report = self.api.get_financial_report_details(report_id)
             if not report:
                 continue
+
+            if report.get("idSablony") == self.IFRS_TEMPLATE_ID:
+                is_ifrs = True
 
             tables = ((report.get("obsah") or {}).get("tabulky") or [])
             template_tables = self._get_template_tables(report.get("idSablony"))
@@ -159,7 +172,7 @@ class RuzFinancialsSyncService:
         if result.get("profit") is None and result.get("revenue") is not None and result.get("costs") is not None:
             result["profit"] = result["revenue"] - result["costs"]
 
-        return result
+        return result, is_ifrs
 
     def _get_template_tables(self, template_id: Optional[int]) -> List[Dict]:
         if not template_id:

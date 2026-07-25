@@ -51,6 +51,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     executives = serializers.SerializerMethodField()
     connections = serializers.SerializerMethodField()
     orsr_profile = serializers.SerializerMethodField()
+    ruz_portal_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
@@ -153,6 +154,11 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 'selfFinancingRatio': float(bm.median_self_financing_ratio) if bm.median_self_financing_ratio else None,
             },
         }
+
+    def get_ruz_portal_url(self, obj):
+        if obj.ruz_id:
+            return f"https://www.registeruz.sk/cruz-public/home/uctovna-jednotka?id={obj.ruz_id}"
+        return None
 
     def _get_orsr_profile(self, obj):
         try:

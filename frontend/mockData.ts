@@ -1,5 +1,4 @@
-
-import type { Company } from './types';
+import type {Company} from './types';
 
 export const mockCompanyData: Company = {
   id: 'a1b2c3d4-e5f6-7890-1234-567890abcdef',
@@ -71,5 +70,7 @@ export const mockCompanyData: Company = {
      orsr_datum_vypisu: '2024-07-20',
      fetch_ok: true,
      last_error: '',
-   }
+   },
+    usesIfrs: false,
+    ruzPortalUrl: null,
 };
