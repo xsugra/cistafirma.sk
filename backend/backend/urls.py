@@ -1,12 +1,14 @@
 # pri settings.py v priecinku backend/urls.py
-from django.contrib import admin
-from django.urls import path, include, re_path
-from django.views.generic import TemplateView
+import os
+
 from django.conf import settings
 from django.conf.urls.static import static
+from django.contrib import admin
 from django.http import JsonResponse
+from django.urls import path, include, re_path
+from django.views.generic import TemplateView
+
 from companies.views import landing_stats, WatchlistViewSet, SearchHistoryViewSet
-import os
 
 
 def frontend_or_api_info(request):
@@ -47,6 +49,7 @@ urlpatterns = [
     path('api/watchlist/<int:pk>/', watchlist_detail, name='watchlist-detail'),
     path('api/history/', history_list, name='history-list'),
     path('api/admin/', include('adminapi.urls')),
+    path('api/lead-scoring/', include('lead_scoring.urls')),
     path('api/', include('connections.urls')),
     path('api/notifications/', include('notifications.urls')),
 ]
