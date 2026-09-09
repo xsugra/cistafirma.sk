@@ -220,8 +220,13 @@ docker-fetch-ruz-full:
 	@echo "Running full RUZ resync in Docker..."
 	@docker compose exec backend python manage.py fetch_ruz_data --full-resync --settings=backend.settings
 
+# docker-reset permanently deletes ALL volumes, including the PostgreSQL data
+# volume cistafirma_postgres_data. It is an emergency-only recovery tool, not a
+# routine command. Token-gated like celery-purge so an accidental or scripted
+# run fails closed. Never use it while your only backup is unverified.
 docker-reset:
-	@echo "DANGER: Resetting Docker environment permanently removes volumes, including PostgreSQL data."
+	@test "$(CONFIRM_DOCKER_RESET)" = "DESTROY_VOLUMES_AND_REBUILD" || (echo "ERROR: docker-reset permanently removes ALL Docker volumes, including PostgreSQL data (cistafirma_postgres_data). This is emergency-only. Re-run only after a verified backup (make db-backup && make db-backup-verify) with CONFIRM_DOCKER_RESET=DESTROY_VOLUMES_AND_REBUILD." >&2; exit 2)
+	@echo "DANGER: Destroying all Docker volumes, including PostgreSQL data. This is final."
 	@docker compose down -v
 	@docker compose build --no-cache
 	@docker compose up -d

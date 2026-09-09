@@ -13,7 +13,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"  # localhost only; DB never exposed to LAN
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cistafirma}"]
       interval: 10s
@@ -25,7 +25,7 @@ services:
     container_name: cistafirma_redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6380}:6379"  # Use 6380 externally to avoid conflict with local Redis
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"  # localhost only; broker never exposed to LAN
     volumes:
       - redis_data:/data
     healthcheck:

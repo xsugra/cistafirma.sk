@@ -31,7 +31,44 @@ def frontend_or_api_info(request):
 
 
 def healthz(request):
-    return JsonResponse({'status': 'ok'})
+    """Readiness probe: verifies the DB and Redis, not just the WSGI process.
+
+    Returns HTTP 503 when a critical dependency is unreachable so that
+    orchestrators (Docker healthchecks, K8s probes) treat a degraded app as
+    unhealthy instead of reporting a healthy process against a dead datastore.
+    """
+    import time
+
+    from django.core.cache import cache
+
+    status_code = 200
+    health = {"status": "ok", "db": "unknown", "redis": "unknown"}
+
+    try:
+        from django.db import connection
+
+        with connection.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        health["db"] = "ok"
+    except Exception as exc:
+        health["db"] = f"error: {exc}"
+        status_code = 503
+
+    try:
+        start = time.monotonic()
+        # Round-trip through the configured Django Redis cache backend.
+        cache.set("__healthz__", "1", timeout=5)
+        cache.get("__healthz__")
+        health["redis"] = f"ok ({time.monotonic() - start:.0f}ms)"
+    except Exception as exc:
+        health["redis"] = f"error: {exc}"
+        status_code = 503
+
+    if status_code != 200:
+        health["status"] = "degraded"
+
+    return JsonResponse(health, status=status_code)
 
 
 watchlist_list = WatchlistViewSet.as_view({'get': 'list', 'post': 'create'})
