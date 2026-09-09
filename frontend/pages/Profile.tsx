@@ -358,9 +358,7 @@ export const Profile: React.FC = () => {
                         <input name="confirmPassword" type="password" value={security.confirmPassword}
                                onChange={handleSecurityChange} className="app-input"/>
                     </div>
-                    <button type="submit" className="btn btn-primary bg-slate-800 hover:bg-slate-700 w-full">Zmeniť
-                        heslo
-                    </button>
+                    <button type="submit" className="btn btn-primary w-full">Zmeniť heslo</button>
                 </form>
             </div>
         </div>

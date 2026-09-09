@@ -2,6 +2,10 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Class-based dark mode: the `dark` class on <html> (set by ThemeProvider)
+   drives all `dark:` utilities instead of the OS prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-brand: #2563eb;
   --color-brand-hover: #1d4ed8;
@@ -39,6 +43,12 @@
     
     --text-muted-light: #64748b;
     --text-muted-dark: #94a3b8;
+
+    color-scheme: light;
+}
+
+html.dark {
+    color-scheme: dark;
 }
 
 body {
