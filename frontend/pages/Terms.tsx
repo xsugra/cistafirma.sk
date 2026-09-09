@@ -28,9 +28,9 @@ export const Terms: React.FC = () => {
                     <li>Prevádzkovateľ si vyhradzuje právo zrušiť účet pri porušení podmienok.</li>
                 </ul>
 
-                <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-3">4. Platené služby a API</h3>
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-3">4. Licencia a API</h3>
                 <p className="text-base text-gray-600 dark:text-gray-400 mb-4">
-                    Niektoré funkcie (napr. neobmedzené vyhľadávanie, API prístup) sú spoplatnené podľa aktuálneho <a href="#" className="text-blue-600 hover:underline">Cenníka</a>. Predplatné sa obnovuje automaticky, pokiaľ nie je zrušené pred koncom fakturačného obdobia.
+                    Rozšírené funkcie (napr. vyššie vyhľadávacie limity alebo API prístup) sú sprístupnené na základe jednorazovej licencie, ktorej rozsah a cena sa dohodnú individuálne s prevádzkovateľom. Licencia sa neobnovuje automaticky.
                 </p>
 
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-3">5. Zmena podmienok</h3>

@@ -71,12 +71,6 @@ export const Home: React.FC = () => {
                     >
                         Spustiť Monitoring <i className="fas fa-arrow-right ml-2"></i>
                     </button>
-                    <button
-                        onClick={() => navigate(ROUTES.PRICING)}
-                        className="btn bg-white dark:bg-slate-900 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800 text-lg px-10 py-4 rounded-full shadow-md hover:shadow-lg w-full sm:w-auto transition-all duration-300"
-                    >
-                        Pozrieť Cenník
-                    </button>
                 </div>
             </section>
 

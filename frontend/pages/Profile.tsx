@@ -1,9 +1,7 @@
 import React, {useState, useEffect} from 'react';
-import { useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {useAuth} from '../context/AuthContext';
 import {StatusBadge} from '../components/StatusBadge';
-import {ROUTES} from '../constants';
 import {CompanyDetail} from '../components/CompanyDetail';
 import type {WatchlistEntry, HistoryEntry, Company, NotificationEvent, NotificationPreferences} from '../types';
 import {NotificationCenter} from '../components/NotificationCenter';
@@ -12,7 +10,6 @@ import {NotificationPreferences as NotifPrefsComponent} from '../components/Noti
 type Tab = 'dashboard' | 'watchlist' | 'history' | 'settings' | 'notifications';
 
 export const Profile: React.FC = () => {
-    const navigate = useNavigate();
     const {user} = useAuth();
     const [activeTab, setActiveTab] = useState<Tab>('dashboard');
 
@@ -220,9 +217,6 @@ export const Profile: React.FC = () => {
                         {percentUsed > 80 &&
                             <span className="text-red-500 ml-1 block mt-1">Blížite sa k vyčerpaniu limitu!</span>}
                     </p>
-                    <button onClick={() => navigate(ROUTES.PRICING)} className="btn btn-outline w-full mt-6">
-                        Navýšiť limit
-                    </button>
                 </div>
             </div>
         );

@@ -8,7 +8,6 @@ import { VantaBackground } from './components/VantaBackground';
 import { Home } from './pages/Home';
 import { Monitoring } from './pages/Monitoring';
 import { Blog } from './pages/Blog';
-import { Pricing } from './pages/Pricing';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Profile } from './pages/Profile';
@@ -123,7 +122,6 @@ const AppContent: React.FC = () => {
               <Route path={ROUTES.HOME} element={<Home />} />
               <Route path={ROUTES.MONITORING} element={<Monitoring />} />
               <Route path={ROUTES.BLOG} element={<Blog />} />
-              <Route path={ROUTES.PRICING} element={<Pricing />} />
               <Route path={ROUTES.ABOUT} element={<About />} />
               <Route path={ROUTES.PRIVACY} element={<Privacy />} />
               <Route path={ROUTES.TERMS} element={<Terms />} />
