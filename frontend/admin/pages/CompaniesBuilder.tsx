@@ -592,7 +592,7 @@ function parseUrlState(): URLState {
   const presetKey = params.get('preset') || '';
   const savedFilterId = params.get('saved_filter') || '';
   const builderRaw = params.get('filter_builder');
-  const builder = builderRaw ? parseBuilder(builderRaw) : { id: uid(), type: 'group', logic: 'and' as FilterLogic, children: [] };
+  const builder = builderRaw ? parseBuilder(builderRaw) : ({ id: uid(), type: 'group', logic: 'and' as FilterLogic, children: [] } as FilterBuilderGroup);
   return { builder, presetKey, savedFilterId, hasBuilder: Boolean(builderRaw) };
 }
 
@@ -761,4 +761,3 @@ function removeChild(group: FilterBuilderGroup, id: string): FilterBuilderGroup 
 function removeGroup(_onChange: (group: FilterBuilderGroup) => void) {
   return undefined as never;
 }
-*** End Patch
