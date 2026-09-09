@@ -362,6 +362,11 @@ CELERY_BEAT_SCHEDULE = {
         'args': [500],
         'options': {'expires': 43000.0, 'queue': 'financials'},
     },
+    'send-pending-notifications-every-15-min': {
+        'task': 'notifications.tasks.send_pending_notifications',
+        'schedule': 900.0,
+        'options': {'expires': 800.0, 'queue': 'celery'},
+    },
 }
 
 # =============================================================================
@@ -482,5 +487,14 @@ UNFOLD = {
 }
 
 # Email configuration (for notifications)
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'  # Print to console in dev
-DEFAULT_FROM_EMAIL = 'CistaFirma <noreply@cistafirma.sk>'
+# Defaults to the console backend (prints emails to the backend logs in dev).
+# For real SMTP, set EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+# and the EMAIL_* vars in the environment (.env).
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = os.getenv('EMAIL_HOST', '')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'False').lower() in ('true', '1', 'yes')
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False').lower() in ('true', '1', 'yes')
+DEFAULT_FROM_EMAIL = os.getenv('EMAIL_FROM', 'CistaFirma <noreply@cistafirma.sk>')

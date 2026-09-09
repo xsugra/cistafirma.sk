@@ -43,6 +43,12 @@ class NotificationPreference(models.Model):
 class NotificationEvent(models.Model):
     """A notification event for a user about a watched company."""
 
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Čaká'
+        SENDING = 'sending', 'Odosiela sa'
+        SENT = 'sent', 'Odoslané'
+        FAILED = 'failed', 'Zlyhalo'
+
     class EventType(models.TextChoices):
         DEBT_CHANGE = 'debt_change', 'Zmena dlhu'
         STATUS_CHANGE = 'status_change', 'Zmena statusu'
@@ -76,9 +82,32 @@ class NotificationEvent(models.Model):
         blank=True,
         verbose_name='Detaily',
     )
-    sent_email = models.BooleanField(
-        default=False,
-        verbose_name='Email odoslaný',
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+        verbose_name='Stav odoslania',
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='Odoslané',
+    )
+    attempts = models.PositiveSmallIntegerField(
+        default=0,
+        verbose_name='Pokusy',
+    )
+    last_error = models.TextField(
+        blank=True,
+        default='',
+        verbose_name='Posledná chyba',
+    )
+    claimed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='Rezervované workerom',
+        help_text='Kedy si worker event vyhradil; staršie ako lease sa automaticky re-claimujú.',
     )
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -92,7 +121,7 @@ class NotificationEvent(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['user', '-created_at']),
-            models.Index(fields=['sent_email', '-created_at']),
+            models.Index(fields=['status', '-created_at']),
         ]
 
     def __str__(self):

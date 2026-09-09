@@ -5,17 +5,25 @@ Notification service — creates events when watched companies change.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
-from django.db.models import QuerySet
+from django.db import transaction
+from django.db.models import F, Q, QuerySet
+from django.utils import timezone
 
 from .models import NotificationEvent, NotificationPreference
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# Outbox claim / retry policy for outbound notification emails.
+BATCH = 200
+MAX_ATTEMPTS = 5
+CLAIM_LEASE = timedelta(minutes=30)
 
 
 def _extract_orsr_person_names(profile) -> list[str]:
@@ -220,15 +228,65 @@ def create_executive_change_event(
     return len(events)
 
 
+def _claim_pending_events(now) -> list[int]:
+    """Atomically claim up to BATCH events for sending; a single worker wins.
+
+    Mirrors the repo's `claim_ruz_job` pattern (registers/services/sync_engine.py):
+    each row is claimed by a conditional UPDATE — only the first caller can flip a
+    pending / retryable-failed / stale-sending row to `sending`, so duplicate
+    deliveries are impossible even across concurrent workers, and no row locks are
+    held while the email is being sent. (Chosen over SELECT ... FOR UPDATE SKIP
+    LOCKED because that raises NotSupportedError on SQLite, the documented local
+    fallback for `make test`.)
+    """
+    eligible = Q(
+        Q(status=NotificationEvent.Status.PENDING)
+        | Q(status=NotificationEvent.Status.FAILED, attempts__lt=MAX_ATTEMPTS)
+        | Q(status=NotificationEvent.Status.SENDING, claimed_at__lt=now - CLAIM_LEASE)
+    )
+
+    candidate_ids = list(
+        NotificationEvent.objects.filter(eligible).order_by('pk')[:BATCH].values_list('pk', flat=True)
+    )
+    claimed: list[int] = []
+    with transaction.atomic():
+        for pk in candidate_ids:
+            if len(claimed) >= BATCH:
+                break
+            won = NotificationEvent.objects.filter(Q(pk=pk) & eligible).update(
+                status=NotificationEvent.Status.SENDING,
+                claimed_at=now,
+                attempts=F('attempts') + 1,
+            )
+            if won:
+                claimed.append(pk)
+    return claimed
+
+
 def send_pending_email_notifications() -> int:
-    """Send pending email notifications.
+    """Send pending email notifications via an atomic outbox claim.
+
+    Each run atomically claims up to BATCH events (pending, retryable `failed`,
+    or stale `sending` past the claim lease) and marks them `sending` under a
+    row lock. The email itself is sent *outside* the lock; an event flips to
+    `sent` only after `send_mail` succeeds, otherwise to `failed` (re-attempted
+    on later runs up to MAX_ATTEMPTS). Concurrent workers never double-send: a
+    freshly claimed `sending` row is invisible to other runs.
 
     Returns:
         Number of emails sent.
     """
-    events = NotificationEvent.objects.filter(sent_email=False).select_related('user')[:200]
-    sent = 0
+    now = timezone.now()
+    claimed_ids = _claim_pending_events(now)
+    if not claimed_ids:
+        return 0
 
+    events = (
+        NotificationEvent.objects.filter(pk__in=claimed_ids, status=NotificationEvent.Status.SENDING)
+        .select_related('user')
+        .order_by('pk')
+    )
+    sent = 0
     for event in events:
         try:
             send_mail(
@@ -236,13 +294,28 @@ def send_pending_email_notifications() -> int:
                 message=_build_email_body(event),
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[event.user.email],
-                fail_silently=True,
+                fail_silently=False,
             )
-            event.sent_email = True
-            event.save(update_fields=['sent_email'])
-            sent += 1
-        except Exception as e:
-            logger.warning('Failed to send notification email %d: %s', event.id, e)
+        except Exception as exc:  # noqa: BLE001 — a failed send must not kill the batch
+            logger.warning(
+                'Notification email %d failed (attempt %d): %s', event.pk, event.attempts, exc
+            )
+            NotificationEvent.objects.filter(
+                pk=event.pk, status=NotificationEvent.Status.SENDING
+            ).update(
+                status=NotificationEvent.Status.FAILED,
+                last_error=str(exc)[:500],
+            )
+            continue
+
+        NotificationEvent.objects.filter(
+            pk=event.pk, status=NotificationEvent.Status.SENDING
+        ).update(
+            status=NotificationEvent.Status.SENT,
+            sent_at=timezone.now(),
+            last_error='',
+        )
+        sent += 1
 
     return sent
 
