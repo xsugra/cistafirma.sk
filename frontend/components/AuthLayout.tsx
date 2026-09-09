@@ -53,7 +53,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({children, title, subtitle
                     {/* Glass Cards Feature List */}
                     <div className="relative z-10 mt-12 space-y-4">
                         {[
-                            {icon: 'fa-robot', text: 'AI Analýza rizík'},
+                            {icon: 'fa-shield-virus', text: 'Analýza rizík'},
                             {icon: 'fa-search-dollar', text: 'Monitoring dlhov a DPH'},
                             {icon: 'fa-project-diagram', text: 'Grafické prepojenia'}
                         ].map((item, idx) => (

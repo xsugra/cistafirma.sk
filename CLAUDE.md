@@ -169,8 +169,10 @@ live directly under `frontend/`:
 - `frontend/types.ts` – types shared with the backend contract
 - `frontend/utils/` – format, legal-form profiles, PDF export
 - `frontend/components/`, `frontend/context/`, `frontend/hooks/`, `frontend/styles/`
-- `frontend/services/geminiService.ts` – the only AI call (currently direct from
-  browser — flagged for a backend gateway migration)
+- No browser-side AI calls: risk summaries (`frontend/api.ts` `riskSummary`) are
+  deterministic, computed from public-register data (Altman Z-score, debt
+  states). A former Gemini integration (`geminiService.ts`, `AiSummary.tsx`) was
+  removed.
 
 Frontend calls the backend through Vite's `/api/` proxy to the host configured
 in `.env` (`BACKEND_HOST`/`BACKEND_PORT`).

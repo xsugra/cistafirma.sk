@@ -133,13 +133,13 @@ export const Home: React.FC = () => {
                                 radikálnu transparentnosť do slovenského ekosystému.
                             </p>
                             <p>
-                                Náš systém využíva pokročilé algoritmy a AI na krížovú kontrolu údajov z viac ako 15
+                                Náš systém využíva pokročilé algoritmy na krížovú kontrolu údajov z viac ako 15
                                 verejných zdrojov v reálnom čase.
                             </p>
                         </div>
 
                         <div className="pt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {['Real-time dáta', 'AI Analýza', 'Notifikácie', 'API Integrácia'].map((item, i) => (
+                            {['Real-time dáta', 'Analýza rizík', 'Notifikácie', 'API Integrácia'].map((item, i) => (
                                 <div key={i}
                                      className="flex items-center gap-3 text-gray-800 dark:text-gray-200 font-medium">
                                     <i className="fas fa-check-circle text-blue-500"></i> {item}

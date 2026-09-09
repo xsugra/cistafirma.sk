@@ -54,7 +54,7 @@ export const PRICING_PLANS: PricingPlan[] = [
     id: 'pro',
     name: 'Pro',
     price: 49,
-    features: ['Všetko z Pro', 'Neobmedzené vyhľadávanie', 'AI Analýza rizík', 'Prepojenia osôb', 'Prioritná podpora', 'API prístup (100 volaní)'],
+    features: ['Všetko z Pro', 'Neobmedzené vyhľadávanie', 'Analýza rizík', 'Prepojenia osôb', 'Prioritná podpora', 'API prístup (100 volaní)'],
     isPopular: false,
     buttonText: 'Vybrať Pro',
   },
