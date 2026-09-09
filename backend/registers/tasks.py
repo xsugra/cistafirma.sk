@@ -1,5 +1,6 @@
 from celery import shared_task, chain, chord, group
 from django.db.models import Q
+from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -12,83 +13,169 @@ from .integrations.ruz_api import RuzApi
 from .services.rpo_sync import RpoSyncService
 from .services.ruz_financials_sync import RuzFinancialsSyncService
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
-from companies.models import Company
+from companies.models import Company, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
+from .services.sync_engine import (
+    claim_ruz_job,
+    complete_job,
+    enqueue_ruz_job,
+    fail_job,
+    update_company_status,
+)
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(queue='ruz_full')
-def fetch_ruz_data_task():
+def _run_ruz_command(
+    *,
+    sync_job_id: int | None,
+    job_type: str,
+    command_args: list[str],
+    celery_task_id: str = "",
+):
+    """Claim the global RUZ job before any command can write company data."""
+    if sync_job_id is None:
+        job, created = enqueue_ruz_job(
+            job_type=job_type,
+            parameters={"command_args": command_args},
+            triggered_via="beat_schedule",
+        )
+        if not created and job.status == "running":
+            logger.info("RUZ job #%s is already running; duplicate trigger ignored.", job.pk)
+            return f"RUZ job #{job.pk} already running"
+        sync_job_id = job.pk
+
+    job = claim_ruz_job(sync_job_id, celery_task_id=celery_task_id)
+    if job is None:
+        logger.info("RUZ job #%s was already claimed or is no longer runnable.", sync_job_id)
+        return f"RUZ job #{sync_job_id} not runnable"
+
+    try:
+        call_command("fetch_ruz_data", *command_args, sync_job_id=job.pk)
+    except Exception as exc:
+        fail_job(job, error=f"{type(exc).__name__}: {exc}")
+        raise
+    else:
+        complete_job(job)
+        return f"RUZ job #{job.pk} completed"
+
+
+@shared_task(bind=True, queue='ruz_full')
+def fetch_ruz_data_task(self, sync_job_id: int | None = None):
     """
     Celery task to fetch company data from the RUZ API.
     Runs on ruz_full/celery queue in its own worker deployment.
     Automatically resumes from last position if sync was interrupted.
     """
-    from registers.models import SyncProgress
-    
     logger.info("Starting RUZ data fetch...")
-    
-    # Skontrolujeme či existuje pozastavená synchronizácia
-    progress = SyncProgress.objects.filter(
-        sync_type='full',
-        status__in=['paused', 'failed']
-    ).first()
-    
-    if progress:
-        logger.info(f"Found paused sync at RUZ ID {progress.last_processed_ruz_id}, resuming...")
-        call_command('fetch_ruz_data', '--resume')
-    else:
-        call_command('fetch_ruz_data')
-    
+    result = _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_incremental",
+        command_args=[],
+        celery_task_id=self.request.id,
+    )
     logger.info("RUZ data fetch completed.")
+    return result
+
+
+@shared_task(bind=True, queue='ruz_full')
+def fetch_ruz_data_firmy_only(self, sync_job_id: int | None = None):
+    """
+    Celery task to fetch ONLY company (Firmy) data from the RUZ API.
+    Filters out SZCO (self-employed, legal forms 100-110).
+    Runs on ruz_full queue.
+    """
+    logger.info("Starting RUZ data fetch for Firmy only (excluding SZCO)...")
+    result = _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_full_firmy",
+        command_args=["--full-resync", "--entity-type", "companies"],
+        celery_task_id=self.request.id,
+    )
+    logger.info("RUZ data fetch for Firmy completed.")
+    return result
+
+
+@shared_task(bind=True, queue='ruz_full')
+def fetch_ruz_data_szco_only(self, sync_job_id: int | None = None):
+    """
+    Celery task to fetch ONLY SZCO (self-employed) data from the RUZ API.
+    Only processes legal forms 100-110.
+    Runs on ruz_full queue.
+    """
+    logger.info("Starting RUZ data fetch for SZCO only...")
+    result = _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_full_szco",
+        command_args=["--full-resync", "--entity-type", "individuals"],
+        celery_task_id=self.request.id,
+    )
+    logger.info("RUZ data fetch for SZCO completed.")
+    return result
 
 
 @shared_task(base=BaseSyncTask, queue='insurance', rate_limit='20/m')
 def update_insurance_debt(company_id: int):
     company = Company.objects.get(id=company_id)
 
-    # Capture old values for change detection
-    old_vszp = float(company.debt_vszp or 0)
-    old_soc = float(company.debt_soc_poist or 0)
+    vszp_result = check_vszp_debt_get(company.ico)
+    social_result = check_socpoist_debt(company.ico)
 
-    debt_vszp = check_vszp_debt_get(company.ico)
-    debt_soc_poist = check_socpoist_debt(company.ico)
+    with transaction.atomic():
+        company = Company.objects.select_for_update().get(id=company_id)
+        old_vszp = float(company.debt_vszp or 0)
+        old_soc = float(company.debt_soc_poist or 0)
 
-    update_fields = []
-    if debt_vszp is not None:
-        company.debt_vszp = debt_vszp
-        update_fields.append('debt_vszp')
-    if debt_soc_poist is not None:
-        company.debt_soc_poist = debt_soc_poist
-        update_fields.append('debt_soc_poist')
+        results = {
+            "vszp": ("debt_vszp", vszp_result),
+            "social": ("debt_soc_poist", social_result),
+        }
+        update_fields = []
+        for source, (field_name, result) in results.items():
+            update_company_status(
+                company_id=company.id,
+                source=source,
+                success=result.is_authoritative,
+                error=result.error,
+                error_type=result.error_type,
+            )
+            if result.is_authoritative:
+                setattr(company, field_name, result.amount)
+                update_fields.append(field_name)
 
-    company.last_insurance_debt = timezone.now()
-    update_fields.append('last_insurance_debt')
+        if vszp_result.is_authoritative and social_result.is_authoritative:
+            company.last_insurance_debt = timezone.now()
+            update_fields.append("last_insurance_debt")
 
-    if update_fields:
-        company.save(update_fields=update_fields)
-        logger.info("Insurance debts updated for %s (ICO: %s)", company.nazov_UJ, company.ico)
+        if update_fields:
+            company.save(update_fields=update_fields)
 
-        # Detect and notify about debt changes
-        new_vszp = float(company.debt_vszp or 0)
-        new_soc = float(company.debt_soc_poist or 0)
-        changes = {}
-        if old_vszp != new_vszp:
-            changes['vszp'] = {'old': old_vszp, 'new': new_vszp}
-        if old_soc != new_soc:
-            changes['soc_poist'] = {'old': old_soc, 'new': new_soc}
-        if changes:
-            try:
-                from notifications.services import create_debt_change_event
-                create_debt_change_event(
-                    company_id=company.id,
-                    company_ico=company.ico,
-                    company_name=company.nazov_UJ,
-                    changes=changes,
-                )
-            except Exception as e:
-                logger.warning('Failed to create debt change notifications for %s: %s', company.ico, e)
+    new_vszp = float(company.debt_vszp or 0)
+    new_soc = float(company.debt_soc_poist or 0)
+    changes = {}
+    if old_vszp != new_vszp:
+        changes["vszp"] = {"old": old_vszp, "new": new_vszp}
+    if old_soc != new_soc:
+        changes["soc_poist"] = {"old": old_soc, "new": new_soc}
+    if changes:
+        try:
+            from notifications.services import create_debt_change_event
+            create_debt_change_event(
+                company_id=company.id,
+                company_ico=company.ico,
+                company_name=company.nazov_UJ,
+                changes=changes,
+            )
+        except Exception as e:
+            logger.warning("Failed to create debt change notifications for %s: %s", company.ico, e)
+
+    logger.info(
+        "Insurance debt check finished for %s (ICO: %s, VSZP=%s, social=%s)",
+        company.nazov_UJ,
+        company.ico,
+        vszp_result.state,
+        social_result.state,
+    )
 
 @shared_task(queue='insurance')
 def schedule_insurance_debt_checks():
@@ -194,7 +281,7 @@ def _update_company_from_ruz_data(data: dict):
         'psc': data.get('psc'),
         'datum_zalozenia': parse_date(data.get('datumZalozenia', '')),
         'datum_zrusenia': parse_date(data.get('datumZrusenia', '')),
-        'pravna_forma': data.get('pravnaForma'),
+        'pravna_forma': normalize_legal_form_code(data.get('pravnaForma')),
         'sk_NACE': data.get('skNace'),
         'velkost_organizacie': data.get('velkostOrganizacie'),
         'druh_vlastnictva': data.get('druhVlastnictva'),
@@ -250,22 +337,23 @@ def resume_full_ruz_sync():
     return f"Resumed sync from RUZ ID {progress.last_processed_ruz_id}"
 
 
-@shared_task(queue='ruz_full')
-def start_full_ruz_sync(reset=False):
+@shared_task(bind=True, queue='ruz_full')
+def start_full_ruz_sync(self, reset=False, sync_job_id: int | None = None):
     """
     Celery task to start a new full RUZ sync.
     
     Args:
         reset: If True, resets progress and starts from beginning.
     """
-    logger.info("Starting new full RUZ sync...")
-    
+    args = ["--full-resync"]
     if reset:
-        call_command('fetch_ruz_data', '--full-resync', '--reset')
-    else:
-        call_command('fetch_ruz_data', '--full-resync')
-    
-    return "Full sync started"
+        args.append("--reset")
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_full",
+        command_args=args,
+        celery_task_id=self.request.id,
+    )
 
 
 @shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
@@ -298,15 +386,18 @@ def start_full_ruz_sync_from_id(start_id: int):
     return f"Full sync from ID {start_id} started"
 
 
-@shared_task(queue='ruz_full')
-def start_incremental_sync():
+@shared_task(bind=True, queue='ruz_full')
+def start_incremental_sync(self, sync_job_id: int | None = None):
     """
     Celery task na spustenie inkrementálnej synchronizácie.
     Stiahne len firmy zmenené od posledného syncu.
     """
-    logger.info("Starting incremental RUZ sync...")
-    call_command('fetch_ruz_data')
-    return "Incremental sync completed"
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_incremental",
+        command_args=[],
+        celery_task_id=self.request.id,
+    )
 
 
 @shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
@@ -440,7 +531,7 @@ def sync_company_orsr_data(company_id: int):
 
     service = RpoSyncService()
     profile = service.sync_company(company)
-    logger.info("RPO sync OK for company_id=%s ico=%s", company_id, company.ico)
+    logger.info("Company profile sync OK for company_id=%s ico=%s", company_id, company.ico)
 
     # Detect executive changes after sync
     try:
@@ -458,7 +549,7 @@ def sync_company_orsr_data(company_id: int):
     except Exception as e:
         logger.warning("Failed to detect executive changes for %s: %s", company.ico, e)
 
-    return f"RPO sync OK for {company.ico}"
+    return f"Company profile sync OK for {company.ico}"
 
 
 @shared_task(queue='orsr')
@@ -549,5 +640,3 @@ def compute_sector_benchmarks(year: int | None = None):
     from companies.services.benchmarking import compute_sector_benchmarks as _compute
     result = _compute(year)
     return f"Sector benchmarks done: {result}"
-
-

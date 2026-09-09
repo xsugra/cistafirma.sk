@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from typing import Iterable
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from registers.models import (
@@ -35,6 +35,11 @@ from registers.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+RUZ_JOB_TYPES = frozenset(
+    {"ruz_full", "ruz_full_firmy", "ruz_full_szco", "ruz_incremental", "ruz_repair"}
+)
+RUZ_CONCURRENCY_KEY = "ruz:global"
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +162,70 @@ def enqueue_job(
         payload={"job_type": job_type, "parameters": parameters or {}, "via": triggered_via},
     )
     return job
+
+
+def enqueue_ruz_job(
+    *,
+    job_type: str,
+    parameters: dict | None = None,
+    triggered_by_id: int | None = None,
+    triggered_via: str = "system",
+    notes: str = "",
+) -> tuple[SyncJob, bool]:
+    """Create one globally exclusive RUZ job, or return the active one."""
+    if job_type not in RUZ_JOB_TYPES:
+        raise ValueError(f"{job_type} is not a RUZ job type")
+
+    try:
+        with transaction.atomic():
+            job = SyncJob.objects.create(
+                job_type=job_type,
+                status="queued",
+                triggered_by_id=triggered_by_id,
+                triggered_via=triggered_via,
+                parameters=parameters or {},
+                notes=notes,
+                concurrency_key=RUZ_CONCURRENCY_KEY,
+            )
+            AuditLog.objects.create(
+                actor_id=triggered_by_id,
+                action="sync.enqueue",
+                target_type="syncjob",
+                target_id=str(job.pk),
+                payload={"job_type": job_type, "parameters": parameters or {}, "via": triggered_via},
+            )
+            return job, True
+    except IntegrityError:
+        job = (
+            SyncJob.objects.filter(
+                concurrency_key=RUZ_CONCURRENCY_KEY,
+                status__in=["queued", "running"],
+            )
+            .order_by("-queued_at")
+            .first()
+        )
+        if job is None:
+            raise
+        return job, False
+
+
+def claim_ruz_job(job_id: int, *, celery_task_id: str = "") -> SyncJob | None:
+    """Atomically claim a queued RUZ job; duplicate deliveries are ignored."""
+    now = timezone.now()
+    claimed = SyncJob.objects.filter(
+        pk=job_id,
+        job_type__in=RUZ_JOB_TYPES,
+        concurrency_key=RUZ_CONCURRENCY_KEY,
+        status="queued",
+    ).update(
+        status="running",
+        started_at=now,
+        last_heartbeat=now,
+        celery_task_id=celery_task_id,
+    )
+    if not claimed:
+        return None
+    return SyncJob.objects.get(pk=job_id)
 
 
 def start_job(job: SyncJob, *, total_items: int | None = None, celery_task_id: str = "") -> None:

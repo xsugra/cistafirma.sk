@@ -108,7 +108,11 @@ def create_debt_change_event(
             source_name = {'vszp': 'VšZP', 'soc_poist': 'Sociálna poisťovňa', 'tax': 'Finančná správa'}.get(source, source)
             diff = float(ch.get('new', 0)) - float(ch.get('old', 0))
             sign = '+' if diff > 0 else ''
-            parts.append(f'{source_name}: {sign}{diff:,.0f} €')
+            try:
+                from core.formatting import format_currency_eur
+                parts.append(f'{source_name}: {sign}{format_currency_eur(abs(diff))}')
+            except Exception:
+                parts.append(f'{source_name}: {sign}{diff:,.0f} €')
 
     if not parts:
         return 0
@@ -258,7 +262,11 @@ def _build_email_body(event: NotificationEvent) -> str:
         for source, ch in details.get('changes', {}).items():
             old = ch.get('old', 0)
             new = ch.get('new', 0)
-            lines.append(f'  {source}: {old:,.0f} € → {new:,.0f} €')
+            try:
+                from core.formatting import format_currency_eur
+                lines.append(f'  {source}: {format_currency_eur(old)} → {format_currency_eur(new)}')
+            except Exception:
+                lines.append(f'  {source}: {old:,.0f} € → {new:,.0f} €')
     elif event.event_type == NotificationEvent.EventType.STATUS_CHANGE:
         lines.append(f'  {details.get("old_status", "?")} → {details.get("new_status", "?")}')
     elif event.event_type == NotificationEvent.EventType.EXECUTIVE_CHANGE:

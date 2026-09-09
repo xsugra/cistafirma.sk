@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 
@@ -145,6 +146,14 @@ class SyncProgress(models.Model):
     """
     
     SYNC_TYPES = [
+        # New entity-specific types
+        ('full_companies', 'Full Sync - Firmy (LPO)'),
+        ('full_individuals', 'Full Sync - Fyzické osoby (SZCO)'),
+        ('incremental_companies', 'Incremental - Firmy (LPO)'),
+        ('incremental_individuals', 'Incremental - Fyzické osoby (SZCO)'),
+        ('repair_companies', 'Repair - Firmy (LPO)'),
+        ('repair_individuals', 'Repair - Fyzické osoby (SZCO)'),
+        # Legacy types (for backward compatibility)
         ('full', 'Full Sync'),
         ('incremental', 'Incremental Sync'),
         ('repair', 'Repair Sync'),
@@ -159,7 +168,7 @@ class SyncProgress(models.Model):
     ]
     
     sync_type = models.CharField(
-        max_length=20,
+        max_length=50,
         choices=SYNC_TYPES,
         default='full',
         verbose_name='Typ synchronizácie',
@@ -571,6 +580,8 @@ class SyncJob(models.Model):
 
     JOB_TYPE_CHOICES = [
         ("ruz_full", "RUZ Full Sync"),
+        ("ruz_full_firmy", "RUZ Full Sync - Firmy only"),
+        ("ruz_full_szco", "RUZ Full Sync - SZCO only"),
         ("ruz_incremental", "RUZ Incremental"),
         ("ruz_repair", "RUZ Repair (gap fill)"),
         ("orsr_batch", "ORSR Batch"),
@@ -630,6 +641,13 @@ class SyncJob(models.Model):
     last_error = models.TextField(blank=True, default="", verbose_name="Posledná chyba")
     notes = models.TextField(blank=True, default="", verbose_name="Poznámky")
     celery_task_id = models.CharField(max_length=255, blank=True, default="", verbose_name="Celery task ID")
+    concurrency_key = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Kľúč súbežnosti",
+    )
 
     class Meta:
         verbose_name = "Sync úloha"
@@ -639,6 +657,16 @@ class SyncJob(models.Model):
             models.Index(fields=["status", "job_type"], name="reg_sj_status_type_idx"),
             models.Index(fields=["-queued_at"], name="reg_sj_queued_idx"),
             models.Index(fields=["-started_at"], name="reg_sj_started_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["concurrency_key"],
+                condition=Q(
+                    concurrency_key="ruz:global",
+                    status__in=["queued", "running"],
+                ),
+                name="reg_one_active_ruz_job",
+            ),
         ]
 
     def __str__(self):
@@ -713,6 +741,284 @@ class SyncJobItem(models.Model):
 
     def __str__(self):
         return f"{self.job_id}/{self.item_key} [{self.status}]"
+
+
+# ============================================================================
+# INDIVIDUAL ENTITY MODEL - Natural persons and SZCO (without ORSR profile)
+# ============================================================================
+
+class IndividualEntity(models.Model):
+    """
+    Represents a natural person or SZCO (individual business activity) from RUZ API.
+    Mirror of Company model, but without ORSR profile (natural persons have no business register).
+
+    Legal forms for SZCO:
+      100-110: Natural persons (entrepreneurs, free professions, independent farmers...)
+      422: Foreign natural person
+    """
+    ruz_id = models.IntegerField(
+        unique=True,
+        help_text="Identifikátor účtovnej jednotky z RUZ API",
+        db_column="RUZ ID",
+    )
+    ico = models.CharField(
+        max_length=8,
+        unique=True,
+        help_text="IČO fyzickej osoby",
+        db_column="ICO",
+    )
+    dic = models.CharField(
+        max_length=10,
+        blank=True,
+        null=True,
+        help_text="DIČ fyzickej osoby",
+        db_column="DIC",
+    )
+    sid = models.CharField(
+        max_length=5,
+        blank=True,
+        null=True,
+        help_text="SID fyzickej osoby",
+        db_column="SID",
+    )
+    nazov_UJ = models.CharField(
+        max_length=500,
+        help_text="Názov/meno fyzickej osoby",
+        db_column="Názov UJ",
+    )
+    mesto = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Adresa, mesto",
+        db_column="Mesto",
+    )
+    ulica = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Adresa, ulica s číslom",
+        db_column="Ulica",
+    )
+    psc = models.CharField(
+        max_length=10,
+        blank=True,
+        null=True,
+        help_text="Adresa, PSČ",
+        db_column="PSČ",
+    )
+    datum_zalozenia = models.DateField(
+        blank=True,
+        null=True,
+        help_text="Dátum založenia podnikania",
+        db_column="Dátum založenia UJ",
+    )
+    datum_zrusenia = models.DateField(
+        blank=True,
+        null=True,
+        help_text="Dátum zrušenia podnikania",
+        db_column="Dátum zrušenia UJ",
+    )
+    pravna_forma = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód právnej formy (100-110, 422)",
+        db_column="Právna forma",
+    )
+    sk_NACE = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód SK NACE klasifikácie",
+        db_column="NACE",
+    )
+    velkost_organizacie = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód kategórie veľkosti",
+        db_column="Veľkosť",
+    )
+    druh_vlastnictva = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Kód druhu vlastníctva",
+        db_column="Vlastníctvo",
+    )
+    kraj = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Sídlo, kód kraja",
+        db_column="Kraj",
+    )
+    okres = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Sídlo, kód okresu",
+        db_column="Okres",
+    )
+    sidlo = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Sídlo, kód obce alebo mesta",
+        db_column="Sídlo",
+    )
+    konsolidovana = models.BooleanField(
+        default=False,
+        help_text="Príznak konsolidovanej účtovnej závierky",
+        db_column="Konsolidovaná",
+    )
+    uses_ifrs = models.BooleanField(
+        default=False,
+        help_text="Fyzická osoba účtuje podľa IFRS",
+        db_column="Používa IFRS",
+    )
+    id_uctovnych_zavierok = models.JSONField(
+        default=list,
+        help_text="Zoznam ID účtovných závierok",
+        db_column="ID UZ",
+    )
+    id_vyrocnych_sprav = models.JSONField(
+        default=list,
+        help_text="Zoznam ID výročných správ",
+        db_column="ID VS",
+    )
+    zdroj_dat = models.CharField(
+        max_length=30,
+        blank=True,
+        null=True,
+        help_text="Kód zdroja dát",
+        db_column="Kód zdroja",
+    )
+    datum_poslednej_upravy = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Dátum poslednej úpravy",
+        db_column="Dátum a čas kontroly RUZ",
+    )
+
+    # Debt fields
+    debt_vszp = models.DecimalField(
+        verbose_name="Dlh vo VSZP",
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Dlh vo Všeobecnej zdravotnej poisťovni",
+        db_column="Dlh vo VSZP"
+    )
+    debt_soc_poist = models.DecimalField(
+        verbose_name="Dlh v SP",
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Dlh v Sociálnej poisťovni",
+        db_column="Dlh v SP"
+    )
+    last_insurance_debt = models.DateTimeField(
+        verbose_name="Posledná kontrola dlhov",
+        null=True,
+        blank=True,
+        help_text="Dátum poslednej kontroly dlhov v poisťovniach",
+        db_column="Dátum a čas kontroly VSZP/SP"
+    )
+
+    # Tax fields (FS - Financna sprava)
+    tax_debt = models.DecimalField(
+        verbose_name="Daňový dlh",
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Dlh na daniach z FS",
+        db_column="Daňový dlh",
+    )
+    vat_payer = models.BooleanField(
+        verbose_name="Platiteľ DPH",
+        null=True,
+        blank=True,
+        help_text="Je platiteľ DPH?",
+        db_column="Platiteľ DPH",
+    )
+    ic_dph = models.CharField(
+        verbose_name="IČ DPH",
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text="Identifikačné číslo pre DPH",
+        db_column="IČ DPH",
+    )
+    datum_reg_dph = models.DateField(
+        verbose_name="Dátum registrácie DPH",
+        null=True,
+        blank=True,
+        help_text="Dátum registrácie pre DPH",
+        db_column="Dátum registrácie DPH",
+    )
+    bank_accounts = models.JSONField(
+        verbose_name="Bankové účty",
+        default=list,
+        blank=True,
+        help_text="Zoznam bankových účtov",
+        db_column="IBANs",
+    )
+    vat_deleted_date = models.DateField(
+        verbose_name="Dátum výmazu z DPH",
+        null=True,
+        blank=True,
+        help_text="Dátum výmazu zo zoznamu DPH",
+        db_column="Dátum výmazu DPH",
+    )
+    vat_deleted_reason = models.CharField(
+        verbose_name="Dôvod výmazu z DPH",
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Dôvod výmazu",
+        db_column="Dôvod výmazu DPH",
+    )
+    tax_reliability = models.CharField(
+        verbose_name="Index daňovej spoľahlivosti",
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Index spoľahlivosti z FS",
+        db_column="Index daňovej spoľahlivosti",
+    )
+    fs_update_date = models.DateTimeField(
+        verbose_name="Posledná aktualizácia z FS",
+        null=True,
+        blank=True,
+        help_text="Dátum aktualizácie z FS",
+        db_column="Dátum kontroly FS",
+    )
+
+    class Meta:
+        db_table = "Individual Entities"
+        verbose_name = "Fyzická osoba/SZCO"
+        verbose_name_plural = "Fyzické osoby/SZCO"
+        ordering = ['-datum_poslednej_upravy', 'nazov_UJ']
+        indexes = [
+            models.Index(fields=['mesto'], name='individual_mesto_idx'),
+            models.Index(fields=['psc'], name='individual_psc_idx'),
+            models.Index(fields=['kraj'], name='individual_kraj_idx'),
+            models.Index(fields=['sk_NACE'], name='individual_nace_idx'),
+            models.Index(fields=['pravna_forma'], name='individual_pravna_forma_idx'),
+            models.Index(fields=['velkost_organizacie'], name='individual_velkost_idx'),
+            models.Index(fields=['datum_zalozenia'], name='individual_datum_zaloz_idx'),
+            models.Index(fields=['debt_vszp'], name='individual_debt_vszp_idx'),
+            models.Index(fields=['debt_soc_poist'], name='individual_debt_sp_idx'),
+            models.Index(fields=['tax_debt'], name='individual_tax_debt_idx'),
+        ]
+
+    def __str__(self):
+        return self.nazov_UJ
 
 
 class AuditLog(models.Model):

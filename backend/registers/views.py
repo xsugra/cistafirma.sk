@@ -22,8 +22,22 @@ from .tasks import (
 @require_http_methods(["POST"])
 def trigger_fetch_ruz_data(request):
     """Legacy endpoint — prefer POST /api/admin/sync/jobs/ {"job_type":"ruz_full"}."""
-    fetch_ruz_data_task.delay()
-    return JsonResponse({"message": "RUZ data fetching task has been triggered."})
+    from registers.services.sync_engine import enqueue_ruz_job
+
+    job, created = enqueue_ruz_job(
+        job_type="ruz_incremental",
+        triggered_by_id=request.user.id,
+        triggered_via="admin_ui",
+    )
+    if created:
+        result = fetch_ruz_data_task.apply_async(kwargs={"sync_job_id": job.pk})
+        job.celery_task_id = result.id or ""
+        job.save(update_fields=["celery_task_id"])
+    return JsonResponse({
+        "message": "RUZ data fetching task has been triggered." if created else "RUZ sync is already active.",
+        "job_id": job.pk,
+        "created": created,
+    })
 
 
 @staff_member_required
@@ -77,18 +91,10 @@ def sync_dashboard(request):
             messages.success(request, f"Spustené: Financials sync pre dávku {limit} firiem.")
         elif action == "enter_focus_mode":
             state = focus_mode_service.enter_focus_mode(request.user)
-            # Queue purge vymazala aj prípadné ORSR/financials tasky — znovu spustíme.
-            schedule_missing_orsr_sync.delay(limit=limit)
-            schedule_ruz_financials_sync.delay(
-                limit=limit,
-                eligible_only=False,
-                missing_only=True,
-            )
             messages.success(
                 request,
                 f"Focus mode aktivovaný: vypnutých {len(state.snapshot or [])} periodic taskov, "
-                f"revoknutých {len(state.last_revoked or [])} bežiacich. "
-                f"Queue purge hotový, znovu spustené ORSR + Financials (batch {limit}).",
+                "existujúce synchronizačné úlohy zostali zachované a dobehnú.",
             )
         elif action == "exit_focus_mode":
             focus_mode_service.exit_focus_mode(request.user)
@@ -121,3 +127,50 @@ def sync_dashboard(request):
     }
     return render(request, "registers/sync_dashboard.html", context)
 
+
+# ============================================================================
+# REST API ViewSets for SZCO/Individual Entities
+# ============================================================================
+from rest_framework import viewsets, filters
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+
+from .models import IndividualEntity
+from .serializers import IndividualEntityListSerializer, IndividualEntityDetailSerializer
+
+
+class IndividualEntityViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API ViewSet for IndividualEntity (SZCO/natural persons).
+
+    Endpoints:
+    - GET /api/individuals/ - List all individuals with filtering
+    - GET /api/individuals/{id}/ - Get individual details
+
+    Filtering:
+    - Search by ICO, name: ?search=...
+    - Filter by legal form: ?pravna_forma=100
+    - Filter by city: ?mesto=...
+    - Filter by debt status: ?debt_status__isnull=False
+    """
+
+    queryset = IndividualEntity.objects.all().order_by('-datum_poslednej_upravy')
+    permission_classes = [IsAuthenticated]
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter
+    ]
+    filterset_fields = [
+        'pravna_forma', 'velkost_organizacie', 'kraj',
+        'vat_payer', 'debt_vszp', 'debt_soc_poist', 'tax_debt'
+    ]
+    search_fields = ['ico', 'nazov_UJ', 'mesto', 'sk_NACE']
+    ordering_fields = ['ico', 'nazov_UJ', 'datum_poslednej_upravy', 'debt_vszp']
+    ordering = ['-datum_poslednej_upravy']
+
+    def get_serializer_class(self):
+        """Use detail serializer only for retrieve action."""
+        if self.action == 'retrieve':
+            return IndividualEntityDetailSerializer
+        return IndividualEntityListSerializer

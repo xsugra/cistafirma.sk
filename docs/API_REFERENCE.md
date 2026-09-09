@@ -384,8 +384,19 @@ Prístup obmedzený na `is_staff` používateľov. Vyžaduje JWT.
 | Endpoint | Metóda | Popis |
 |---|---|---|
 | `/api/admin/companies/` | GET | Zoznam firiem (paginovaný) |
+| `/api/admin/companies/presets/` | GET | Dostupné preset filtre |
+| `/api/admin/companies/report/` | GET | Súhrn nad filtrovaným querysetom |
+| `/api/admin/companies/report/?export=csv` | GET | Export reportu do CSV |
+| `/api/admin/companies/report/?export=xlsx` | GET | Export reportu do XLSX |
+| `/api/admin/company-filters/` | GET/POST | Uložené filtre používateľa |
+| `/api/admin/company-filters/<id>/` | PATCH/DELETE | Úprava alebo zmazanie filtra |
 
-**Query parametre:** Štandardné DRF filtrovanie a pagination.
+**Query parametre:** Štandardné DRF filtrovanie a pagination + `preset`, `filter_builder`, `saved_filter`.
+
+**Report režimy:**
+
+- `mode=full` (default): plný report vrátane súm (`revenue_sum`, `profit_sum`, debt sums), priemerov a `top_companies`.
+- `mode=light` alebo `light=1`: rýchly report bez ťažkých agregácií; vracia základné počty a ostatné sumy/priemery sú `0`.
 
 ### Používatelia
 

@@ -71,6 +71,8 @@ helm_render_validate:
     - helm lint deploy/helm/cistafirma
     - helm template cistafirma-dev deploy/helm/cistafirma -f deploy/helm/cistafirma/values.yaml -f deploy/helm/cistafirma/values-dev.yaml --namespace cistafirma-dev > deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
     - helm template cistafirma-prod deploy/helm/cistafirma -f deploy/helm/cistafirma/values.yaml -f deploy/helm/cistafirma/values-prod.yaml --namespace cistafirma > deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+    - python3 scripts/k8s/validate_helm_runtime.py deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+    - python3 scripts/k8s/validate_helm_runtime.py deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
   artifacts:
     paths:
       - deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml

@@ -73,6 +73,7 @@ dump.rdb
 tmp/
 worktrees/
 old/
+backups/
 
 # Sensitive env files
 .env

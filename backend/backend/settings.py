@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -120,6 +121,51 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'backend.wsgi.application'
+
+# Cache
+#
+# Keep cache entries in a Redis database separate from Celery's broker/result
+# database. CACHE_REDIS_URL takes precedence for deployments that provision a
+# dedicated Redis instance or database. Otherwise, use the next Redis database
+# after the configured Celery broker database.
+def _default_cache_redis_url(broker_url: str) -> str:
+    parsed = urlparse(broker_url)
+    if parsed.scheme not in {'redis', 'rediss'}:
+        raise ImproperlyConfigured(
+            'CACHE_REDIS_URL must be set when CELERY_BROKER_URL is not a Redis URL.'
+        )
+
+    try:
+        broker_db = int(parsed.path.lstrip('/') or '0')
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            'The Redis database in CELERY_BROKER_URL must be an integer.'
+        ) from exc
+
+    return urlunparse(parsed._replace(path=f'/{broker_db + 1}'))
+
+
+_celery_broker_url = os.getenv('CELERY_BROKER_URL') or os.getenv(
+    'REDIS_URL', 'redis://localhost:6379/0'
+)
+_cache_source_url = _celery_broker_url
+if urlparse(_cache_source_url).scheme not in {'redis', 'rediss'}:
+    _cache_source_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+CACHE_REDIS_URL = os.getenv('CACHE_REDIS_URL') or _default_cache_redis_url(
+    _cache_source_url
+)
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': CACHE_REDIS_URL,
+        'TIMEOUT': 300,
+        'OPTIONS': {
+            'socket_connect_timeout': 1,
+            'socket_timeout': 5,
+        },
+    },
+}
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases

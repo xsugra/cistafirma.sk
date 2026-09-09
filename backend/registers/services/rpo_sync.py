@@ -13,14 +13,12 @@ from typing import Optional
 
 from companies.models import Company
 from registers.integrations.rpo_client import (
-    RpoActivity,
     RpoClient,
-    RpoDeposit,
     RpoEntity,
-    RpoEquity,
     RpoPerson,
 )
 from registers.models import OrsrCompanyProfile
+from registers.services.orsr_sync import OrsrSyncService
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +30,11 @@ class RpoSyncService:
         self.client = client or RpoClient()
 
     def sync_company(self, company: Company) -> OrsrCompanyProfile:
-        """Fetch RPO data and upsert into OrsrCompanyProfile."""
+        """Fetch RPO data and upsert into OrsrCompanyProfile, with ORSR fallback."""
         entity = self.client.get_entity_by_ico(company.ico)
         if entity is None:
-            logger.info("RPO: no result for ICO %s, skipping.", company.ico)
-            raise RpoEntityNotFoundForCompany(company.ico)
+            logger.info("RPO: no usable entity for ICO %s, falling back to ORSR.", company.ico)
+            return OrsrSyncService().sync_company(company)
 
         structured = self._build_structured(entity)
         flat = self._build_flat_fields(entity)
@@ -154,11 +152,11 @@ class RpoSyncService:
         equity_paid = next((e for e in current_equities if e.value_paid is not None), None)
         if equity_val:
             capital = {
-                "imanie": f"{equity_val.value:,.2f}".replace(",", " "),
+                "imanie": self._format_amount(equity_val.value),
                 "currency": equity_val.currency,
             }
             if equity_paid:
-                capital["rozsah_splatenia"] = f"{equity_paid.value_paid:,.2f}".replace(",", " ")
+                capital["rozsah_splatenia"] = self._format_amount(equity_paid.value_paid)
 
         current_deposits = [d for d in entity.deposits if d.is_current]
 
@@ -233,9 +231,9 @@ class RpoSyncService:
 
         imanie_str = ""
         if equity_val:
-            imanie_str = f"{equity_val.value:,.2f} {equity_val.currency}".replace(",", " ")
+            imanie_str = f"{self._format_amount(equity_val.value)} {equity_val.currency}".strip()
             if equity_paid:
-                imanie_str += f" (Rozsah splatenia: {equity_paid.value_paid:,.2f} {equity_paid.currency})".replace(",", " ")
+                imanie_str += f" (Rozsah splatenia: {self._format_amount(equity_paid.value_paid)} {equity_paid.currency})".replace(",", " ")
 
         return {
             "predmet_podnikania": [a.description for a in current_activities],
@@ -330,6 +328,12 @@ class RpoSyncService:
             return None
 
     @staticmethod
+    def _format_amount(value: Optional[float]) -> str:
+        if value is None:
+            return ""
+        return f"{float(value):,.2f}".replace(",", " ")
+
+    @staticmethod
     def _extract_persons(profile: OrsrCompanyProfile) -> None:
         try:
             from connections.services import PersonExtractionService
@@ -338,7 +342,3 @@ class RpoSyncService:
             logger.warning("Person extraction failed for RPO profile %s: %s", profile.ico, exc)
 
 
-class RpoEntityNotFoundForCompany(Exception):
-    def __init__(self, ico: str):
-        self.ico = ico
-        super().__init__(f"No RPO entity found for ICO {ico}")

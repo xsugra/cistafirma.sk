@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatNumber } from '../utils/format';
 import { useNavigate } from 'react-router-dom';
 import {AnimatedSubtitle} from '../components/AnimatedSubtitle';
 import {SearchBar} from '../components/SearchBar';
@@ -97,7 +98,7 @@ export const Home: React.FC = () => {
                             <div>
                                 <div
                                     className="text-4xl font-bold text-gray-900 dark:text-white mb-2 font-mono tracking-tight group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                    {stat.val.toLocaleString('sk-SK')}{stat.plus ? '+' : ''}
+                                    {formatNumber(stat.val)}{stat.plus ? '+' : ''}
                                 </div>
                                 <div
                                     className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{stat.label}</div>

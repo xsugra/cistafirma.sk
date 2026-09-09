@@ -1,11 +1,14 @@
 import type {
   AdminCompany,
+  CompanyPreset,
+  CompanyReport,
   AdminUser,
   AuditLogEntry,
   CompanySyncStatus,
   DashboardOverview,
   DashboardSync,
   DashboardSystem,
+  SavedCompanyFilter,
   ScheduledTask,
   SyncJob,
 } from './types';
@@ -14,7 +17,26 @@ import { apiRequest } from '../lib/apiClient';
 const API_BASE = '/api/admin';
 
 function adminRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  console.log('[adminApi] Fetching:', endpoint);
   return apiRequest<T>(endpoint, options, API_BASE);
+}
+
+async function adminDownload(endpoint: string, params?: Record<string, string | number | boolean | undefined | null>): Promise<Blob> {
+  const token = localStorage.getItem('token');
+  const filtered = Object.fromEntries(
+    Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+  ) as Record<string, string>;
+  const qs = Object.keys(filtered).length ? `?${new URLSearchParams(filtered).toString()}` : '';
+  const response = await fetch(`${API_BASE}${endpoint}${qs}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP Error: ${response.status}`);
+  }
+  return response.blob();
 }
 
 export const adminApi = {
@@ -24,10 +46,45 @@ export const adminApi = {
   dashboardSystem: () => adminRequest<DashboardSystem>('/metrics/system/'),
 
   // Companies
-  listCompanies: (params?: Record<string, string>) => {
-    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
-    return adminRequest<{ results: AdminCompany[]; count: number }>(`/companies/${qs}`);
+  listCompanies: (
+    params?: Record<string, string | number | boolean | undefined | null>,
+    options: RequestInit = {},
+  ) => {
+    const filtered = Object.fromEntries(
+      Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+    ) as Record<string, string>;
+    const qs = Object.keys(filtered).length ? '?' + new URLSearchParams(filtered).toString() : '';
+    return adminRequest<{ results: AdminCompany[]; count: number }>(`/companies/${qs}`, options);
   },
+  companyReport: (
+    params?: Record<string, string | number | boolean | undefined | null>,
+    options: RequestInit = {},
+  ) => {
+    const filtered = Object.fromEntries(
+      Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+    ) as Record<string, string>;
+    if (filtered.mode === undefined && filtered.light === undefined) {
+      filtered.light = '1';
+    }
+    const qs = Object.keys(filtered).length ? '?' + new URLSearchParams(filtered).toString() : '';
+    return adminRequest<CompanyReport>(`/companies/report/${qs}`, options);
+  },
+  downloadCompanyReport: (format: 'csv' | 'xlsx', params?: Record<string, string | number | boolean | undefined | null>) =>
+    adminDownload('/companies/report/', { ...(params || {}), export: format }),
+  companyPresets: () => adminRequest<CompanyPreset[]>('/companies/presets/'),
+  listCompanyFilters: () => adminRequest<{ results: SavedCompanyFilter[]; count: number }>('/company-filters/'),
+  saveCompanyFilter: (data: Pick<SavedCompanyFilter, 'name' | 'description' | 'filters' | 'is_favorite'>) =>
+    adminRequest<SavedCompanyFilter>('/company-filters/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateCompanyFilter: (id: number, data: Partial<SavedCompanyFilter>) =>
+    adminRequest<SavedCompanyFilter>(`/company-filters/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteCompanyFilter: (id: number) =>
+    adminRequest<void>(`/company-filters/${id}/`, { method: 'DELETE' }),
 
   // Users
   listUsers: (params?: Record<string, string>) => {

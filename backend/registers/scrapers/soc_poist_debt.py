@@ -1,11 +1,11 @@
 import logging
-from typing import Optional
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from ..utils import parse_money, is_money
+from .debt_result import DebtCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,10 @@ def get_session_with_retry() -> requests.Session:
     return session
 
 
-def check_socpoist_debt(ico: str) -> Optional[float]:
+def check_socpoist_debt(ico: str) -> DebtCheckResult:
     """
     Overí dlh v Sociálnej poisťovni pre zadané IČO.
-    Vracia sumu v EUR (float).
+    Vracia overený výsledok. Nulu smie vrátiť iba explicitný no-record signál.
     """
     # 1. Endpoint a Parametre (Presne podľa tvojho zistenia)
     base_url = "https://www.socpoist.sk/nastroje-sluzby/zoznam-dlznikov"
@@ -57,7 +57,7 @@ def check_socpoist_debt(ico: str) -> Optional[float]:
         # Ak nenájde nič, vypíše "Zadaným kritériám nevyhovuje žiaden záznam".
 
         if "nevyhovuje žiaden záznam" in response.text:
-            return 0.0
+            return DebtCheckResult.not_found()
 
         # Hľadanie sumy:
         # Na novom webe SP sú výsledky často v divoch s triedami ako 'result-item' alebo v tabuľke.
@@ -75,16 +75,12 @@ def check_socpoist_debt(ico: str) -> Optional[float]:
                 # Ešte jedna kontrola: Je tento element blízko nášho IČO?
                 # (Aby sme nenašli nejakú reklamu alebo pätu stránky)
                 # Ale pri filtrovaní podľa IČO by tam mala byť len jedna firma.
-                return parse_money(text)
+                return DebtCheckResult.found(parse_money(text))
 
-        # Ak sme nenašli sumu, ale ani hlášku "nič sa nenašlo", je to podozrivé.
-        # Možno zmenili dizajn. Pre istotu vrátime 0, ale zalogujeme warning.
-        logger.warning(f"SP: Stránka načítaná, ale DLH nenájdený pre IČO {ico}")
-        return 0.0
+        message = f"SP response did not contain a recognized result for ICO {ico}."
+        logger.warning(message)
+        return DebtCheckResult.unknown(message, "parse_error")
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error pri SP {ico}: {e}")
-        return None  # Alebo raise, podľa toho ako máš nastavený retry mechanizmus
-    except Exception as e:
-        logger.error(f"Chyba parsovania SP {ico}: {e}")
-        return 0.0
+        return DebtCheckResult.unknown(str(e), "network")

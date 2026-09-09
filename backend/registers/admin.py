@@ -2,10 +2,13 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.contrib import messages
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseRedirect, HttpResponse
 from django.urls import reverse, path
 from django.template.response import TemplateResponse
-from .models import SyncProgress, SyncGapAnalysis, OrsrCompanyProfile, SyncFocusModeState
+from django.db.models import Count, Q
+from datetime import datetime, timedelta
+import json
+from .models import SyncProgress, SyncGapAnalysis, OrsrCompanyProfile, SyncFocusModeState, IndividualEntity
 from .services import focus_mode as focus_mode_service
 
 try:
@@ -14,6 +17,32 @@ try:
 except ImportError:
     UnfoldModelAdmin = admin.ModelAdmin
     UNFOLD_AVAILABLE = False
+
+
+# Custom simple list filter to expose entity-type (companies / individuals / mixed)
+class SyncEntityTypeFilter(admin.SimpleListFilter):
+    title = 'Entity type'
+    parameter_name = 'entity_type'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('companies', 'Právnické osoby (LPO)'),
+            ('individuals', 'Fyzické osoby (SZCO)'),
+            ('mixed', 'Zmiešané'),
+        )
+
+    def queryset(self, request, queryset):
+        val = self.value()
+        if not val:
+            return queryset
+        if val == 'companies':
+            return queryset.filter(sync_type__icontains='companies')
+        if val == 'individuals':
+            return queryset.filter(sync_type__icontains='individuals')
+        if val == 'mixed':
+            # mixed refers to legacy 'full'/'incremental' types that cover both
+            return queryset.filter(sync_type__in=['full', 'incremental', 'repair'])
+        return queryset
 
 
 @admin.register(SyncGapAnalysis)
@@ -211,31 +240,35 @@ class SyncProgressAdmin(UnfoldModelAdmin):
     change_list_template = 'admin/registers/syncprogress/change_list.html'
 
     list_display = [
-        'sync_type_display', 'status_display', 'progress_display',
+        'sync_type_display', 'entity_badge', 'status_display', 'progress_display',
         'stats_display', 'rate_display', 'last_activity', 'actions_display'
     ]
-    list_filter = ['sync_type', 'status']
+    list_filter = [
+        'sync_type', 'status',
+        SyncEntityTypeFilter,
+    ]
     readonly_fields = [
         'sync_type', 'status', 'last_processed_ruz_id', 'zmenene_od',
         'total_processed', 'total_created', 'total_updated', 'total_skipped',
         'total_errors', 'started_at', 'last_activity', 'completed_at',
-        'last_error', 'progress_bar', 'estimated_completion', 'sync_stats'
+        'last_error', 'progress_bar', 'estimated_completion', 'sync_stats',
+        'entity_type_info', 'detailed_summary'
     ]
     fieldsets = (
-        ('Stav synchronizacie', {
-            'fields': ('sync_type', 'status', 'progress_bar', 'estimated_completion'),
+        ('Stav synchronizácie', {
+            'fields': ('sync_type', 'status', 'progress_bar', 'estimated_completion', 'entity_type_info'),
         }),
-        ('Pozicia', {
+        ('Pozícia v spracovaní', {
             'fields': ('last_processed_ruz_id', 'zmenene_od'),
         }),
-        ('Statistiky', {
-            'fields': ('sync_stats', 'total_processed', 'total_created',
+        ('Detailné štatistiky', {
+            'fields': ('detailed_summary', 'sync_stats', 'total_processed', 'total_created',
                        'total_updated', 'total_skipped', 'total_errors'),
         }),
-        ('Casove zaznamy', {
+        ('Časové záznamy', {
             'fields': ('started_at', 'last_activity', 'completed_at'),
         }),
-        ('Chyby a poznamky', {
+        ('Chyby a poznámky', {
             'fields': ('last_error', 'notes'),
             'classes': ('collapse',),
         }),
@@ -352,6 +385,86 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             '<tr><td style="padding:6px 10px;font-weight:600">Posledne RUZ ID</td><td style="padding:6px 10px">{}</td></tr>'
             '</table>',
             duration_str, f'{int(obj.get_rate()):,}', f'{obj.last_processed_ruz_id or 0:,}'
+        )
+
+    @admin.display(description='Entita')
+    def entity_badge(self, obj):
+        """Show entity type badge"""
+        if 'companies' in obj.sync_type:
+            return format_html(
+                '<span class="cf-badge cf-badge--info">'
+                '<span class="cf-badge__dot"></span>LPO</span>'
+            )
+        elif 'individuals' in obj.sync_type:
+            return format_html(
+                '<span class="cf-badge cf-badge--warning">'
+                '<span class="cf-badge__dot"></span>SZCO</span>'
+            )
+        else:
+            return format_html(
+                '<span class="cf-badge cf-badge--secondary">'
+                '<span class="cf-badge__dot"></span>Zmiešané</span>'
+            )
+
+    @admin.display(description='Typ entity')
+    def entity_type_info(self, obj):
+        """Show which entity type is being synced"""
+        if 'companies' in obj.sync_type:
+            entity_type = 'Iba Právnické osoby (LPO) - firmy, s.r.o., a.s., atď.'
+            icon = '🏢'
+        elif 'individuals' in obj.sync_type:
+            entity_type = 'Iba Fyzické osoby (SZCO) - podnikatelia, samostatne osobe'
+            icon = '👤'
+        else:
+            entity_type = 'Zmiešané (LPO + SZCO) - obidva typy do svojich tabuliek'
+            icon = '🔄'
+
+        return format_html(
+            '<div style="padding:12px;background:var(--cf-slate-50);border-radius:4px;'
+            'border-left:4px solid var(--cf-blue-500);font-size:14px">'
+            '<strong>{} Typ entít:</strong> {}</div>',
+            icon, entity_type
+        )
+
+    @admin.display(description='Detaily')
+    def detailed_summary(self, obj):
+        """Show detailed statistics summary"""
+        duration = obj.get_duration()
+        duration_str = str(duration).split('.')[0] if duration else '-'
+
+        return format_html(
+            '<table style="font-size:13px;width:100%">'
+            '<tr style="border-bottom:1px solid var(--cf-slate-200)">'
+            '<td style="padding:8px;font-weight:600;width:30%">Spracovaných</td>'
+            '<td style="padding:8px;text-align:right;font-weight:600">{:,}</td>'
+            '</tr>'
+            '<tr style="border-bottom:1px solid var(--cf-slate-200)">'
+            '<td style="padding:8px">Vytvorených</td>'
+            '<td style="padding:8px;text-align:right;color:var(--cf-emerald-600)">+{:,}</td>'
+            '</tr>'
+            '<tr style="border-bottom:1px solid var(--cf-slate-200)">'
+            '<td style="padding:8px">Aktualizovaných</td>'
+            '<td style="padding:8px;text-align:right;color:var(--cf-blue-600)">~{:,}</td>'
+            '</tr>'
+            '<tr style="border-bottom:1px solid var(--cf-slate-200)">'
+            '<td style="padding:8px">Preskočených</td>'
+            '<td style="padding:8px;text-align:right">⊘ {:,}</td>'
+            '</tr>'
+            '<tr style="border-bottom:2px solid var(--cf-slate-300)">'
+            '<td style="padding:8px;color:var(--cf-rose-600);font-weight:600">Chýb</td>'
+            '<td style="padding:8px;text-align:right;color:var(--cf-rose-600);font-weight:600">✗ {:,}</td>'
+            '</tr>'
+            '<tr>'
+            '<td style="padding:8px;font-weight:600">Trvanie</td>'
+            '<td style="padding:8px;text-align:right;font-weight:600">{}</td>'
+            '</tr>'
+            '</table>',
+            obj.total_processed,
+            obj.total_created,
+            obj.total_updated,
+            obj.total_skipped,
+            obj.total_errors,
+            duration_str
         )
 
     # ── Custom URLs ──
@@ -567,3 +680,114 @@ class OrsrCompanyProfileAdmin(UnfoldModelAdmin):
         return mark_safe(
             '<span class="cf-badge cf-badge--idle">Neoverene</span>'
         )
+
+
+@admin.register(IndividualEntity)
+class IndividualEntityAdmin(UnfoldModelAdmin):
+    """Admin interface for natural persons and SZCO entities from RUZ."""
+
+    list_display = [
+        'ico', 'nazov_UJ', 'pravna_forma', 'mesto',
+        'debt_status_display', 'vat_status_display', 'datum_poslednej_upravy'
+    ]
+    list_filter = [
+        'pravna_forma', 'velkost_organizacie', 'kraj',
+        ('debt_vszp', admin.EmptyFieldListFilter),
+        ('debt_soc_poist', admin.EmptyFieldListFilter),
+        ('tax_debt', admin.EmptyFieldListFilter),
+        ('vat_payer', admin.EmptyFieldListFilter),
+    ]
+    search_fields = ['ico', 'nazov_UJ', 'mesto', 'sk_NACE']
+    readonly_fields = [
+        'ruz_id', 'last_insurance_debt', 'fs_update_date',
+        'datum_poslednej_upravy',
+        'debt_display', 'tax_display'
+    ]
+
+    fieldsets = (
+        ('Základné údaje', {
+            'fields': ('ruz_id', 'ico', 'dic', 'sid', 'nazov_UJ')
+        }),
+        ('Adresa', {
+            'fields': ('ulica', 'mesto', 'psc', 'kraj', 'okres', 'sidlo'),
+            'classes': ('collapse',)
+        }),
+        ('Podnikateľské údaje', {
+            'fields': (
+                'pravna_forma', 'sk_NACE', 'velkost_organizacie',
+                'druh_vlastnictva', 'datum_zalozenia', 'datum_zrusenia'
+            ),
+            'classes': ('collapse',)
+        }),
+        ('Finančné vykazy', {
+            'fields': ('id_uctovnych_zavierok', 'id_vyrocnych_sprav', 'uses_ifrs', 'konsolidovana'),
+            'classes': ('collapse',)
+        }),
+        ('Dlhy - Poisťovne', {
+            'fields': (
+                'debt_display',
+                'debt_vszp', 'debt_soc_poist',
+                'last_insurance_debt'
+            )
+        }),
+        ('DPH - Finančná správa', {
+            'fields': (
+                'tax_display',
+                'vat_payer', 'ic_dph', 'datum_reg_dph',
+                'vat_deleted_date', 'vat_deleted_reason',
+                'tax_reliability', 'fs_update_date', 'tax_debt', 'bank_accounts'
+            ),
+            'classes': ('collapse',)
+        }),
+        ('Zdroj dát', {
+            'fields': ('zdroj_dat', 'datum_poslednej_upravy'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    @admin.display(description='Dlhy (VSZP/SP)')
+    def debt_display(self, obj):
+        """Show formatted debt information."""
+        parts = []
+        if obj.debt_vszp:
+            parts.append(f'VSZP: {obj.debt_vszp:,.2f} €')
+        if obj.debt_soc_poist:
+            parts.append(f'SP: {obj.debt_soc_poist:,.2f} €')
+        if not parts:
+            return mark_safe('<span style="color: #999;">—</span>')
+        return mark_safe('<br/>'.join(parts))
+
+    @admin.display(description='Daňový dlh')
+    def tax_display(self, obj):
+        """Show tax debt."""
+        if obj.tax_debt:
+            return f'{obj.tax_debt:,.2f} €'
+        return mark_safe('<span style="color: #999;">—</span>')
+
+    @admin.display(description='Dlhy', ordering='debt_vszp')
+    def debt_status_display(self, obj):
+        """Show debt status badge."""
+        if obj.debt_vszp or obj.debt_soc_poist:
+            total = (obj.debt_vszp or 0) + (obj.debt_soc_poist or 0)
+            return mark_safe(
+                f'<span class="cf-badge cf-badge--danger">{total:,.0f} €</span>'
+            )
+        return mark_safe(
+            '<span class="cf-badge cf-badge--success">OK</span>'
+        )
+
+    @admin.display(description='DPH', ordering='vat_payer')
+    def vat_status_display(self, obj):
+        """Show VAT payer status."""
+        if obj.vat_payer is True:
+            return mark_safe(
+                '<span class="cf-badge cf-badge--info">Plat.</span>'
+            )
+        elif obj.vat_payer is False:
+            return mark_safe(
+                '<span class="cf-badge cf-badge--idle">—</span>'
+            )
+        return mark_safe(
+            '<span class="cf-badge cf-badge--muted">?</span>'
+        )
+

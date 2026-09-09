@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { AdminLayout } from './AdminLayout';
 import { Dashboard } from './pages/Dashboard';
-import { Companies } from './pages/Companies';
+import { Data } from './pages/Data';
+import { CompaniesBuilderPage } from './pages/CompaniesBuilderPage';
 import { Users } from './pages/Users';
 import { SyncJobs } from './pages/SyncJobs';
 import { ScheduledTasks } from './pages/ScheduledTasks';
@@ -20,7 +21,8 @@ export function AdminApp({ onExit, userName }: Props) {
   const renderPage = () => {
     switch (page) {
       case 'dashboard': return <Dashboard />;
-      case 'companies': return <Companies />;
+      case 'data': return <Data />;
+      case 'companies': return <CompaniesBuilderPage />;
       case 'users': return <Users />;
       case 'sync-jobs': return <SyncJobs />;
       case 'scheduled-tasks': return <ScheduledTasks />;

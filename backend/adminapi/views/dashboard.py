@@ -63,6 +63,8 @@ def dashboard_overview(request):
         "companies": {
             "total": total_companies,
             "active": active_companies,
+            "firmy_count": Company.objects.exclude(pravna_forma__in=['100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110']).count(),
+            "szco_count": Company.objects.filter(pravna_forma__in=['100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110']).count(),
             "with_orsr": with_orsr,
             "with_financials": with_financials,
             "orsr_coverage_pct": round((with_orsr / total_companies * 100) if total_companies else 0, 1),

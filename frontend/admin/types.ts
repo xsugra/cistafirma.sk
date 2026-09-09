@@ -3,6 +3,8 @@ export interface DashboardOverview {
   companies: {
     total: number;
     active: number;
+    firmy_count?: number;
+    szco_count?: number;
     with_orsr: number;
     with_financials: number;
     orsr_coverage_pct: number;
@@ -80,10 +82,91 @@ export interface AdminCompany {
   ruz_id: string | null;
   nazov_UJ: string;
   pravna_forma: string | null;
+  mesto: string | null;
+  ulica: string | null;
+  psc: string | null;
+  kraj: string | null;
+  okres: string | null;
+  sk_NACE: string | null;
+  velkost_organizacie: string | null;
   sidlo: string | null;
   datum_zalozenia: string | null;
   datum_zrusenia: string | null;
+  vat_payer: boolean | null;
+  tax_reliability: string | null;
+  tax_debt: string | null;
+  debt_vszp: string | null;
+  debt_soc_poist: string | null;
   last_insurance_debt: string | null;
+  has_orsr: boolean;
+  has_financials: boolean;
+  debt_state: 'debt_free' | 'has_debt';
+  latest_financial_year: number | null;
+  latest_revenue: string | null;
+  latest_profit: string | null;
+  lead_score: number | null;
+  lead_confidence: number | null;
+  sync_failures: number;
+  is_blocked: boolean;
+}
+
+export type FilterLogic = 'and' | 'or';
+
+export interface FilterBuilderCondition {
+  id: string;
+  type: 'condition';
+  field: string;
+  operator: string;
+  value: string;
+}
+
+export interface FilterBuilderGroup {
+  id: string;
+  type: 'group';
+  logic: FilterLogic;
+  children: FilterBuilderNode[];
+}
+
+export type FilterBuilderNode = FilterBuilderCondition | FilterBuilderGroup;
+
+export interface CompanyPreset {
+  key: string;
+  name: string;
+  description: string;
+  filters: Record<string, any>;
+}
+
+export interface SavedCompanyFilter {
+  id: number;
+  user: number;
+  user_email: string | null;
+  name: string;
+  description: string;
+  filters: Record<string, any>;
+  is_favorite: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompanyReport {
+  count: number;
+  active_count: number;
+  inactive_count: number;
+  debt_free_count: number;
+  has_orsr_count: number;
+  has_financials_count: number;
+  blocked_count: number;
+  avg_lead_score: number;
+  avg_confidence: number;
+  revenue_sum: string;
+  profit_sum: string;
+  tax_debt_sum: string;
+  debt_vszp_sum: string;
+  debt_soc_poist_sum: string;
+  lead_score_sum: string;
+  filters_applied: Record<string, any>;
+  presets: CompanyPreset[];
+  top_companies: AdminCompany[];
 }
 
 export interface AdminUser {
@@ -150,6 +233,7 @@ export interface CompanySyncStatus {
 
 export type AdminPage =
   | 'dashboard'
+  | 'data'
   | 'companies'
   | 'users'
   | 'sync-jobs'

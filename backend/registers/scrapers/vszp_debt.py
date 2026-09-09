@@ -1,11 +1,11 @@
 import logging
-from typing import Optional
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from ..utils import parse_money, is_money
+from .debt_result import DebtCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,10 @@ def get_session_with_retry() -> requests.Session:
     return session
 
 
-def check_vszp_debt_get(ico: str) -> Optional[float]:
+def check_vszp_debt_get(ico: str) -> DebtCheckResult:
     """
     Stiahne dlh z VšZP pomocou GET requestu (simuluje vyhľadávanie v URL).
-    Vracia sumu v EUR. Ak dlh nie je nájdený alebo je nula, vracia 0.0.
+    Vracia overený výsledok. Nulu smie vrátiť iba explicitný no-record signál.
     """
 
     # 1. Konstrukcia s URL parametrami
@@ -54,39 +54,27 @@ def check_vszp_debt_get(ico: str) -> Optional[float]:
     except requests.exceptions.RequestException as e:
         # This catches ConnectionError, Timeout, HTTPError, etc.
         logger.warning(f"Network error pri VSZP pre ICO {ico}: {e}")
-        return None  # Return None to signify a network-level failure
+        return DebtCheckResult.unknown(str(e), "network")
 
-    try:
-        # 4. Parsing HTML
-        soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(response.text, "html.parser")
+    rows = soup.find_all("tr")
 
-        # Štruktúra tabuľky VšZP:
-        # Stĺpce: Obchodné meno (obsahuje IČO), Obec, Ulica, PSČ, Pohľadávka, Typ platiteľa, Rozsah ZS
-        # IČO je vnorené v prvej bunke ako "NAZOV FIRMY IČO: 12345678"
+    for row in rows:
+        cells = row.find_all("td")
+        if not cells or len(cells) < 5:
+            continue
 
-        rows = soup.find_all("tr")
+        if ico not in cells[0].get_text(strip=True):
+            continue
 
-        for row in rows:
-            cells = row.find_all("td")
-            if not cells or len(cells) < 5:
-                continue
+        debt_text = cells[4].get_text(strip=True)
+        if debt_text and is_money(debt_text):
+            return DebtCheckResult.found(parse_money(debt_text))
 
-            # Prvá bunka obsahuje názov firmy + IČO
-            first_cell_text = cells[0].get_text(strip=True)
+        message = f"VSZP result row for ICO {ico} did not contain a valid debt amount."
+        logger.warning(message)
+        return DebtCheckResult.unknown(message, "parse_error")
 
-            # Kontrola, či riadok obsahuje hľadané IČO
-            if ico in first_cell_text:
-                # Pohľadávka je v 5. stĺpci (index 4)
-                debt_text = cells[4].get_text(strip=True)
-                if debt_text and is_money(debt_text):
-                    return parse_money(debt_text)
-
-        # If we get here, the page was loaded, but the company wasn't on the list.
-        # This is a valid "zero debt" scenario for our purpose.
-        logger.info(f"VSZP: Firma s ICO {ico} nebola najdena v zozname dlznikov.")
-        return 0.0
-
-    except Exception as e:
-        # This will now only catch parsing errors, not network errors
-        logger.error(f"Chyba parsovania VSZP pre ICO {ico}: {e}")
-        return 0.0 # Return 0.0 as a fallback if parsing fails.
+    message = f"VSZP response did not contain a recognized result row for ICO {ico}."
+    logger.warning(message)
+    return DebtCheckResult.unknown(message, "parse_error")

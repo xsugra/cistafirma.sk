@@ -253,13 +253,13 @@ export const api = {
     return apiRequest<LandingStats>('/stats/landing/');
   },
 
-  searchCompanies: async (query: string): Promise<SearchResult> => {
+  searchCompanies: async (query: string, options: RequestInit = {}): Promise<SearchResult> => {
     if (ENABLE_MOCK_DATA) {
       return new Promise((resolve) =>
         setTimeout(() => resolve({ results: [mockCompanyData] }), 500),
       );
     }
-    return apiRequest<SearchResult>(`/companies/search/?q=${encodeURIComponent(query)}`);
+    return apiRequest<SearchResult>(`/companies/search/?q=${encodeURIComponent(query)}`, options);
   },
 
   getCompany: async (ico: string): Promise<Company> => {

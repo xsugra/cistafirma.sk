@@ -26,3 +26,4 @@ django-celery-beat
 openpyxl==3.1.5
 django-unfold>=0.40.0
 weasyprint>=63.0
+django-filter

@@ -15,6 +15,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initi
   const [isSearching, setIsSearching] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const isFocused = useRef(false);
+  const autocompleteRequestRef = useRef<{ query: string; controller: AbortController } | null>(null);
+  const autocompleteCacheRef = useRef(new Map<string, any[]>());
 
   useEffect(() => {
     setQuery(initialIco);
@@ -33,28 +35,63 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initi
 
   // Autocomplete logic with debounce
   useEffect(() => {
-    const fetchSuggestions = async () => {
-      const trimmedQuery = query.trim();
-      if (trimmedQuery.length < 2) {
-        setSuggestions([]);
-        return;
-      }
+    const trimmedQuery = query.trim();
+    const normalizedQuery = trimmedQuery.toLocaleLowerCase();
+    const activeRequest = autocompleteRequestRef.current;
 
+    if (activeRequest && activeRequest.query !== normalizedQuery) {
+      activeRequest.controller.abort();
+      autocompleteRequestRef.current = null;
+    }
+
+    if (trimmedQuery.length < 2) {
+      setSuggestions([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const cachedSuggestions = autocompleteCacheRef.current.get(normalizedQuery);
+    if (cachedSuggestions) {
+      setSuggestions(cachedSuggestions);
+      if (isFocused.current) setShowSuggestions(true);
+      setIsSearching(false);
+      return;
+    }
+
+    if (autocompleteRequestRef.current?.query === normalizedQuery) {
+      return;
+    }
+
+    const fetchSuggestions = async () => {
+      const controller = new AbortController();
+      autocompleteRequestRef.current = { query: normalizedQuery, controller };
       setIsSearching(true);
       try {
-        const data = await api.searchCompanies(trimmedQuery);
-        setSuggestions(data.results || []);
+        const data = await api.searchCompanies(trimmedQuery, { signal: controller.signal });
+        if (controller.signal.aborted || autocompleteRequestRef.current?.controller !== controller) return;
+        const results = data.results || [];
+        autocompleteCacheRef.current.set(normalizedQuery, results);
+        setSuggestions(results);
         if (isFocused.current) setShowSuggestions(true);
       } catch (e) {
+        if (controller.signal.aborted || (e as Error)?.name === 'AbortError') return;
         console.error("Autocomplete error", e);
       } finally {
-        setIsSearching(false);
+        if (autocompleteRequestRef.current?.controller === controller) {
+          autocompleteRequestRef.current = null;
+          setIsSearching(false);
+        }
       }
     };
 
     const timer = setTimeout(fetchSuggestions, 300);
     return () => clearTimeout(timer);
   }, [query]);
+
+  useEffect(() => () => {
+    autocompleteRequestRef.current?.controller.abort();
+    autocompleteRequestRef.current = null;
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

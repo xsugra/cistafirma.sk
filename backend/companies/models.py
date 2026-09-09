@@ -1,10 +1,12 @@
 from django.db import models
+from django.db.models.functions import Upper
+from django.utils.translation import gettext_lazy as _
 
 
-# Číselník právnych foriem
+# Číselník právnych foriem s gettext markermi pre i18n
 LEGAL_FORMS = {
-    '100': 'Fyzická osoba-príležitostne činná-zapísaná v registri daňového informačného systému',
-    '101': 'Podnikateľ-fyzická osoba-nezapísaný v obchodnom registri',
+    '100': _('Physical person - casual activity - registered in tax system'),
+    '101': _('Entrepreneur - physical person - not registered in commercial register'),
     '102': 'Podnikateľ-fyzická osoba-zapísaný v obchodnom registri',
     '103': 'Samostatne hospodáriaci roľník nezapísaný v obchodnom registri',
     '104': 'Samostatne hospodáriaci roľník zapísaný v obchodnom registri',
@@ -115,6 +117,136 @@ LEGAL_FORMS_SHORT = {
     '951': 'miestna jednotka',
     '995': 'nešpecifikovaná',
 }
+
+# Choices (helper for admin / UI). Keep as a separate constant — we do NOT bind
+# this to the model field (Option A). Sorted by code for stable presentation.
+LEGAL_FORMS_CHOICES = sorted(
+    [(code, f"{code} - {name}") for code, name in LEGAL_FORMS.items()], key=lambda t: t[0]
+)
+
+
+import logging
+_logger = logging.getLogger(__name__)
+
+# Keep track of unknown codes we've already logged to avoid log spam
+_logged_unknown_legal_form_codes: set[str] = set()
+
+# Metrics counters (will be initialized if Prometheus is available)
+try:
+	from prometheus_client import Counter
+	UNKNOWN_LEGAL_FORM_CODE_COUNT = Counter(
+		'unknown_legal_form_codes_total',
+		'Total count of unknown legal form codes encountered',
+		['code', 'source']
+	)
+	PROMETHEUS_AVAILABLE = True
+except ImportError:
+	PROMETHEUS_AVAILABLE = False
+
+# Sentry client (will be initialized if sentry-sdk is available)
+try:
+	import sentry_sdk
+	SENTRY_AVAILABLE = True
+except ImportError:
+	SENTRY_AVAILABLE = False
+
+
+def normalize_legal_form_code(value) -> str:
+	"""
+	Normalize incoming legal form value into a canonical string code.
+
+	Rules:
+	- None / empty -> return '995' (Nešpecifikovaná)
+	- Strip whitespace, convert to string
+	- If resulting code is not present in LEGAL_FORMS keys, log it once and
+	  return '995'
+
+	Metrics:
+	- Increments prometheus counter for unknown codes (if available)
+	- Sends to Sentry for unknown codes (if available)
+	"""
+	if value is None:
+		return '995'
+	try:
+		code = str(value).strip()
+	except Exception:
+		return '995'
+	if not code:
+		return '995'
+
+	# Build candidate variants to try matching (handle leading zeros and numeric values)
+	candidates = [code]
+	if code.isdigit():
+		candidates.insert(0, str(int(code)))
+		# also try stripping leading zeros (if any)
+		stripped = code.lstrip('0')
+		if stripped:
+			candidates.append(stripped)
+
+	for cand in candidates:
+		if cand in LEGAL_FORMS:
+			return cand
+
+	# Not recognized — log once and fall back to '995'
+	if code not in _logged_unknown_legal_form_codes:
+		_logger.info("Unknown legal form code encountered during normalization: %s", code)
+		_logged_unknown_legal_form_codes.add(code)
+
+		# Report to Prometheus if available
+		if PROMETHEUS_AVAILABLE:
+			try:
+				UNKNOWN_LEGAL_FORM_CODE_COUNT.labels(code=code, source='normalize_legal_form_code').inc()
+			except Exception as e:
+				_logger.warning("Failed to increment Prometheus counter for unknown code %s: %s", code, e)
+
+		# Report to Sentry if available
+		if SENTRY_AVAILABLE:
+			try:
+				sentry_sdk.capture_message(
+					f"Unknown legal form code: {code}",
+					level='warning',
+					tags={
+						'event_type': 'unknown_legal_form',
+						'code': code,
+					}
+				)
+			except Exception as e:
+				_logger.warning("Failed to send Sentry report for unknown code %s: %s", code, e)
+
+	return '995'
+
+
+# Definícia SZCO (self-employed/samostatne zárobkovo činné osoby)
+# Kódy: 100-110 sú individuálne osoby (fyzické osoby podnikajúce rôznymi formami)
+SZCO_LEGAL_FORMS = {'100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110'}
+
+
+def is_szco_company(legal_form_code: str) -> bool:
+	"""
+	Zisťuje, či je subjekt SZCO (samozaměstnaný/fyzická osoba s podnikateľskou činnosťou).
+	SZCO sú právne formy s kódmi 100-110.
+
+	Args:
+		legal_form_code: Normalizovaný kód právnej formy (napr. '101', '112')
+
+	Returns:
+		True ak je SZCO, False ak je Firma (PO - právnická osoba)
+	"""
+	return str(legal_form_code).strip() in SZCO_LEGAL_FORMS
+
+
+def is_company_company(legal_form_code: str) -> bool:
+	"""
+	Zisťuje, či je subjekt Firma (právnická osoba).
+	Opak is_szco_company.
+
+	Args:
+		legal_form_code: Normalizovaný kód právnej formy (napr. '112', '121')
+
+	Returns:
+		True ak je Firma, False ak je SZCO
+	"""
+	return not is_szco_company(legal_form_code)
 
 
 class Company(
@@ -376,6 +508,25 @@ class Company(
         verbose_name = "Firma"
         verbose_name_plural = "Firmy"
         ordering = ['-datum_poslednej_upravy', 'nazov_UJ']
+        indexes = [
+            models.Index(fields=['mesto'], name='company_mesto_idx'),
+            models.Index(fields=['psc'], name='company_psc_idx'),
+            models.Index(fields=['kraj'], name='company_kraj_idx'),
+            models.Index(fields=['sk_NACE'], name='company_nace_idx'),
+            models.Index(fields=['sk_NACE', 'datum_zrusenia'], name='company_nace_active_idx'),
+            models.Index(Upper('mesto'), name='company_mesto_ci_idx'),
+            models.Index(Upper('sk_NACE'), name='company_nace_ci_idx'),
+            models.Index(fields=['pravna_forma'], name='company_pravna_forma_idx'),
+            models.Index(fields=['velkost_organizacie'], name='company_velkost_org_idx'),
+            models.Index(fields=['datum_zalozenia'], name='company_datum_zaloz_idx'),
+            models.Index(fields=['debt_vszp'], name='company_debt_vszp_idx'),
+            models.Index(fields=['debt_soc_poist'], name='company_debt_sp_idx'),
+            models.Index(fields=['tax_debt'], name='company_tax_debt_idx'),
+            models.Index(fields=['kraj', 'datum_zrusenia'], name='company_kraj_active_idx'),
+            models.Index(fields=['pravna_forma', 'datum_zrusenia'], name='company_form_active_idx'),
+            models.Index(fields=['mesto', 'datum_zrusenia'], name='company_mesto_active_idx'),
+            models.Index(fields=['velkost_organizacie', 'datum_zrusenia'], name='company_size_active_idx'),
+        ]
 
     def __str__(self):
         return self.nazov_UJ
@@ -518,6 +669,12 @@ class CompanyFinancialResult(models.Model):
         verbose_name_plural = 'Hospodárske výsledky'
         ordering = ['-year']
         unique_together = [('company', 'year')]
+        indexes = [
+            models.Index(fields=['company'], name='cfr_company_idx'),
+            models.Index(fields=['company', '-year'], name='cfr_company_year_idx'),
+            models.Index(fields=['year'], name='cfr_year_idx'),
+            models.Index(fields=['company', 'year'], name='cfr_company_year_unique_idx'),
+        ]
 
     def __str__(self):
         return f"{self.company.ico} - {self.year}"

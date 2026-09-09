@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-restore-drill run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
 
 # ====================================================================================
 # HELP
@@ -113,12 +113,29 @@ docs-audit:
 	@echo "Running Markdown link audit..."
 	@python3 scripts/docs/check_markdown_links.py
 
+db-backup:
+	@scripts/local/backup_postgres.sh
+
+db-backup-verify:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
+	@scripts/local/verify_postgres_backup.sh "$(BACKUP_FILE)"
+
+db-backup-replicate:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
+	@test -n "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" || (echo "ERROR: CISTAFIRMA_OFFSITE_BACKUP_DIR is required" >&2; exit 2)
+	@CISTAFIRMA_OFFSITE_BACKUP_DIR="$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP="$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" scripts/local/replicate_postgres_backup.sh "$(BACKUP_FILE)"
+
+db-restore-drill:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
+	@scripts/local/restore_postgres_drill.sh "$(BACKUP_FILE)"
+
 celery-down: venv
 	@echo "Turning off all backend Celery tasks..."
 	@pkill -f "celery -A backend" || true
 
 celery-purge: venv
-	@echo "Purging all pending Celery tasks from Redis..."
+	@test "$(CONFIRM_CELERY_PURGE)" = "DELETE_PENDING_MESSAGES" || (echo "ERROR: celery-purge permanently removes queued work. Re-run only with CONFIRM_CELERY_PURGE=DELETE_PENDING_MESSAGES." >&2; exit 2)
+	@echo "DANGER: Purging all pending Celery tasks from Redis..."
 	@cd $(BACKEND_DIR) && $(PYTHON) -c "from backend.celery import app; app.control.purge(); print('All pending tasks purged!')"
 
 run-celery-worker: venv
@@ -204,7 +221,7 @@ docker-fetch-ruz-full:
 	@docker compose exec backend python manage.py fetch_ruz_data --full-resync --settings=backend.settings
 
 docker-reset:
-	@echo "Resetting Docker environment (removes volumes)..."
+	@echo "DANGER: Resetting Docker environment permanently removes volumes, including PostgreSQL data."
 	@docker compose down -v
 	@docker compose build --no-cache
 	@docker compose up -d

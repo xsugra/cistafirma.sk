@@ -1,14 +1,20 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from companies.models import Company
+from registers.models import IndividualEntity, SyncProgress
 from registers.integrations.ruz_api import RuzApi
-from registers.models import SyncProgress
 import time
+
+# Legal form codes for SZCO (individual entities)
+SZCO_LEGAL_FORMS = {
+    '100', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110',  # Natural persons
+    '422'  # Foreign natural person
+}
 
 
 class Command(BaseCommand):
-    help = 'Fetches and updates company data from the RUZ API with progress tracking.'
+    help = 'Fetches and updates company data from the RUZ API with progress tracking. Separates companies from SZCO/individuals.'
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -26,23 +32,74 @@ class Command(BaseCommand):
             action='store_true',
             help='Reset sync progress and start fresh.',
         )
+        parser.add_argument(
+            '--entity-type',
+            choices=['companies', 'individuals', 'both'],
+            default='both',
+            help='Sync specific entity types: companies (LPO), individuals (SZCO), or both. Default: both',
+        )
+        parser.add_argument(
+            '--sync-job-id',
+            type=int,
+            help='Internal durable SyncJob correlation ID for a Celery-dispatched RUZ run.',
+        )
 
     def handle(self, *args, **options):
         api = RuzApi()
-        
+        entity_type = options.get('entity_type', 'both')
+        owns_job_lifecycle = False
+
+        # Determine sync_type based on entity_type and full_resync flag
+        if entity_type == 'companies':
+            sync_type = 'full_companies' if options['full_resync'] else 'incremental_companies'
+        elif entity_type == 'individuals':
+            sync_type = 'full_individuals' if options['full_resync'] else 'incremental_individuals'
+        else:  # both
+            sync_type = 'full' if options['full_resync'] else 'incremental'
+
+        sync_job_id = options.get("sync_job_id")
+        if sync_job_id is None:
+            from registers.services.sync_engine import claim_ruz_job, enqueue_ruz_job
+
+            job_type = {
+                "full": "ruz_full",
+                "full_companies": "ruz_full_firmy",
+                "full_individuals": "ruz_full_szco",
+            }.get(sync_type, "ruz_incremental")
+            job, created = enqueue_ruz_job(
+                job_type=job_type,
+                parameters={"sync_type": sync_type, "entity_type": entity_type},
+                triggered_via="cli",
+            )
+            if not created:
+                raise CommandError(
+                    f"RUZ sync job #{job.pk} is already active; refusing concurrent import."
+                )
+            if claim_ruz_job(job.pk) is None:
+                raise CommandError(f"Unable to claim RUZ sync job #{job.pk}.")
+            sync_job_id = job.pk
+            owns_job_lifecycle = True
+
         # Pri resume najprv nájdeme existujúci pozastavený sync
         if options['resume']:
-            # Najprv hľadáme podľa špecifikovaného typu, potom akýkoľvek
-            if options['full_resync']:
+            # Hľadáme sync s kompatibilnými typmi (pre backward compatibility)
+            progress = SyncProgress.objects.filter(
+                sync_type=sync_type,
+                status__in=['paused', 'failed', 'running']
+            ).first()
+
+            # Ak nenajdeme presný typ, skúsime hľadať podľa starých typov
+            if not progress and sync_type in ['full_companies', 'full_individuals']:
                 progress = SyncProgress.objects.filter(
                     sync_type='full',
                     status__in=['paused', 'failed', 'running']
                 ).first()
-            else:
+            elif not progress and sync_type in ['incremental_companies', 'incremental_individuals']:
                 progress = SyncProgress.objects.filter(
+                    sync_type='incremental',
                     status__in=['paused', 'failed', 'running']
-                ).order_by('-last_activity').first()
-            
+                ).first()
+
             if progress:
                 sync_type = progress.sync_type
                 self.stdout.write(self.style.SUCCESS(
@@ -54,7 +111,12 @@ class Command(BaseCommand):
                 return
         else:
             # Určíme typ synchronizácie
-            sync_type = 'full' if options['full_resync'] else 'incremental'
+            if entity_type == 'companies':
+                sync_type = 'full_companies' if options['full_resync'] else 'incremental_companies'
+            elif entity_type == 'individuals':
+                sync_type = 'full_individuals' if options['full_resync'] else 'incremental_individuals'
+            else:  # both
+                sync_type = 'full' if options['full_resync'] else 'incremental'
             progress = None
         
         # Získame alebo vytvoríme záznam o synchronizácii
@@ -131,7 +193,7 @@ class Command(BaseCommand):
                     try:
                         details = api.get_company_details(company_id)
                         if details:
-                            created_new, updated_existing = self.update_or_create_company(details)
+                            created_new, updated_existing = self.update_or_create_company(details, entity_type)
                             progress.record_progress(
                                 ruz_id=company_id,
                                 created=created_new,
@@ -162,6 +224,9 @@ class Command(BaseCommand):
             
             # Synchronizácia dokončená
             progress.complete()
+            if owns_job_lifecycle:
+                from registers.services.sync_engine import complete_job
+                complete_job(job)
             self.stdout.write(self.style.SUCCESS(
                 f'Successfully finished RUZ sync.\n'
                 f'  Processed: {progress.total_processed}\n'
@@ -178,22 +243,48 @@ class Command(BaseCommand):
                 f'\nSynchronizácia pozastavená. Spracovaných: {progress.total_processed}. '
                 f'Pokračujte s: python manage.py fetch_ruz_data --resume'
             ))
+            if owns_job_lifecycle:
+                from registers.services.sync_engine import pause_job
+                pause_job(job, reason="Interrupted by operator")
             
         except Exception as e:
             # Neočakávaná chyba
             progress.fail(str(e))
+            if owns_job_lifecycle:
+                from registers.services.sync_engine import fail_job
+                fail_job(job, error=f"{type(e).__name__}: {e}")
             self.stderr.write(self.style.ERROR(f'Synchronizácia zlyhala: {e}'))
             raise
 
-    def update_or_create_company(self, data: dict):
-        """Maps API data and saves it to the Company model. Returns (created, updated) tuple."""
-        
+    def update_or_create_company(self, data: dict, entity_type: str = 'both'):
+        """
+        Maps API data and saves it to Company or IndividualEntity model depending on legal form.
+        Returns (created, updated) tuple.
+
+        - SZCO/Natural persons (legal forms 100-110, 422) → IndividualEntity
+        - Companies (LPO, s.r.o., a.s., etc.) → Company
+
+        Args:
+            data: Dictionary with company/individual data from RUZ API
+            entity_type: Filter by entity type: 'companies', 'individuals', or 'both' (default)
+        """
+
         if 'ico' not in data:
             self.stderr.write(f"Skipping record with RUZ ID {data.get('id')} because it has no ICO.")
             return False, False
 
-        # Map API fields (camelCase) to model fields (snake_case)
-        defaults = {
+        # Determine if this is a SZCO/individual or a company
+        pravna_forma = str(data.get('pravnaForma', '')).strip()
+        is_szco = pravna_forma in SZCO_LEGAL_FORMS
+
+        # Filter by entity_type if specified
+        if entity_type == 'companies' and is_szco:
+            return False, False  # Skip individuals when syncing companies only
+        elif entity_type == 'individuals' and not is_szco:
+            return False, False  # Skip companies when syncing individuals only
+
+        # Common fields for both models
+        common_defaults = {
             'ruz_id': data.get('id'),
             'dic': data.get('dic'),
             'sid': data.get('sid'),
@@ -217,15 +308,29 @@ class Command(BaseCommand):
             'datum_poslednej_upravy': parse_date(data.get('datumPoslednejUpravy', '')),
         }
 
-        # Use ICO as the unique identifier for finding existing records
-        company, created = Company.objects.update_or_create(
-            ico=data['ico'],
-            defaults=defaults
-        )
 
-        if created:
-            self.stdout.write(f"Created new company: {company.nazov_UJ}, IČO: {company.ico}")
+        if is_szco:
+            # Save to IndividualEntity
+            entity, created = IndividualEntity.objects.update_or_create(
+                ico=data['ico'],
+                defaults=common_defaults
+            )
+
+            if created:
+                self.stdout.write(f"Created new SZCO/individual: {entity.nazov_UJ}, IČO: {entity.ico}")
+            else:
+                self.stdout.write(f"Updated SZCO/individual: {entity.nazov_UJ}, IČO: {entity.ico}")
         else:
-            self.stdout.write(f"Updated company: {company.nazov_UJ}, IČO: {company.ico}")
-        
+            # Save to Company (LPO - legal entities)
+            # Add company-specific fields if needed
+            company, created = Company.objects.update_or_create(
+                ico=data['ico'],
+                defaults=common_defaults
+            )
+
+            if created:
+                self.stdout.write(f"Created new company: {company.nazov_UJ}, IČO: {company.ico}")
+            else:
+                self.stdout.write(f"Updated company: {company.nazov_UJ}, IČO: {company.ico}")
+
         return created, not created

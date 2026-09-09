@@ -116,6 +116,52 @@ docker compose up -d
 
 ## 8. Troubleshooting
 
+### Profiling checklist (DB load v companies admin/report)
+
+1. Reprodukuj problém (otvor `companies/company` v Django admin a `Firmy` v React admin).
+2. Zmeraj SQL plán cez `EXPLAIN ANALYZE` pre konkrétny query.
+3. Zapni krátkodobo slow-query log v PostgreSQL a zachyť najpomalšie dotazy.
+4. Až potom dolaď indexy, cache TTL alebo payload reportu.
+
+Pre opakovateľné profilovanie admin filtrácie použi aj dedicated command:
+
+```bash
+cd backend
+python manage.py profile_company_filters --case trnava_nace_62 --mode both --analyze
+python manage.py profile_company_filters --case heavy_debt_filter --mode both --analyze
+python manage.py profile_company_filters --case full_builder_or --mode both --analyze --verbose-sql
+```
+
+Command ukáže osobitne:
+
+- list query plán,
+- count/report base query plán,
+- cache key pre report,
+- a SQL text pre reálne reprodukovateľné kombinované filtre.
+
+```bash
+# 1) Rýchly SQL plán pre Company filtre (inside backend container)
+docker compose exec backend python manage.py shell -c "from companies.models import Company; print(Company.objects.filter(mesto__icontains='trnava', datum_zrusenia__isnull=True).explain(analyze=True, verbose=True))"
+
+# 2) SQL plán pre dlhové filtre
+docker compose exec backend python manage.py shell -c "from django.db.models import Q; from companies.models import Company; q=Q(debt_vszp__gt=0)|Q(debt_soc_poist__gt=0)|Q(tax_debt__gt=0); print(Company.objects.filter(q).explain(analyze=True, verbose=True))"
+
+# 3) Zapnutie slow-query logu na 500 ms (dočasné)
+docker compose exec db psql -U "${POSTGRES_USER:-cistafirma}" -d "${POSTGRES_DB:-cistafirma}" -c "ALTER SYSTEM SET log_min_duration_statement = 500;"
+docker compose exec db psql -U "${POSTGRES_USER:-cistafirma}" -d "${POSTGRES_DB:-cistafirma}" -c "SELECT pg_reload_conf();"
+
+# 4) Sledovanie logov počas reprodukcie
+docker compose logs -f db
+
+# 5) Vrátenie nastavenia po meraní
+docker compose exec db psql -U "${POSTGRES_USER:-cistafirma}" -d "${POSTGRES_DB:-cistafirma}" -c "ALTER SYSTEM RESET log_min_duration_statement;"
+docker compose exec db psql -U "${POSTGRES_USER:-cistafirma}" -d "${POSTGRES_DB:-cistafirma}" -c "SELECT pg_reload_conf();"
+```
+
+Tip: pri porovnávaní sa zameraj na `Seq Scan`, `Rows Removed by Filter`, `Execution Time` a to, či planner použil nové indexy (`Index Scan`/`Bitmap Index Scan`).
+
+Ak query stále padá na `Seq Scan`, ďalší krok je zmeniť semantiku filtra z `icontains` na presnejší `istartswith`/`iexact` tam, kde to dáva biznisovo zmysel (najmä `sk_NACE`, `psc`, `kraj`, `pravna_forma`).
+
 ### Frontend nevie volať backend
 
 - Skontroluj, či backend beží: `docker compose ps`.

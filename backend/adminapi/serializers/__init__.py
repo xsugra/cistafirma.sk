@@ -8,6 +8,7 @@ from .sync import (
 )
 from .users import AdminUserSerializer, AdminUserCreateSerializer
 from .companies import AdminCompanyListSerializer, AdminCompanyDetailSerializer
+from .filters import SavedCompanyFilterSerializer
 from .subscriptions import AdminSubscriptionPlanSerializer
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "AdminUserCreateSerializer",
     "AdminCompanyListSerializer",
     "AdminCompanyDetailSerializer",
+    "SavedCompanyFilterSerializer",
     "AdminSubscriptionPlanSerializer",
 ]

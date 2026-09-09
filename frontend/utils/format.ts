@@ -1,8 +1,21 @@
-export const formatCurrency = (value: number): string => {
-    if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M €`;
-    if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(0)}k €`;
-    return `${value.toLocaleString('sk-SK')} €`;
+const NBSP = '\u00A0'
+
+export const formatNumber = (value: number | null | undefined): string => {
+    if (value === null || value === undefined) return '';
+    try {
+        // Use Intl.NumberFormat for locale-aware grouping, then replace normal spaces with NBSP
+        const s = new Intl.NumberFormat('sk-SK', { maximumFractionDigits: 0 }).format(Math.round(value));
+        return s.replace(/\u00A0| /g, NBSP);
+    } catch (e) {
+        return String(value);
+    }
 };
 
-export const formatFullCurrency = (value: number): string =>
-    value.toLocaleString('sk-SK', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+export const formatCurrency = (value: number | null | undefined): string => {
+    if (value === null || value === undefined) return '';
+    return `${formatNumber(value)}${NBSP}€`;
+};
+
+export const formatFullCurrency = (value: number | null | undefined): string => {
+    return formatCurrency(value);
+};

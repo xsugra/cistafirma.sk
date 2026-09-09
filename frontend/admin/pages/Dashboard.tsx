@@ -2,6 +2,7 @@ import React from 'react';
 import { adminApi } from '../api';
 import { useAsyncData } from '../../hooks/useAsyncData';
 import type { DashboardOverview, DashboardSync, DashboardSystem } from '../types';
+import { formatNumber } from '../../utils/format';
 
 function KpiCard({ label, value, sub, icon, color }: {
   label: string; value: string | number; sub?: string; icon: string; color: string;
@@ -84,9 +85,9 @@ export function Dashboard() {
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Firmy celkom" value={c.total.toLocaleString('sk')} sub={`${c.active.toLocaleString('sk')} aktívnych`} icon="fa-building" color="bg-blue-600" />
-        <KpiCard label="ORSR pokrytie" value={`${c.orsr_coverage_pct}%`} sub={`${c.with_orsr.toLocaleString('sk')} profilov`} icon="fa-landmark" color="bg-indigo-600" />
-        <KpiCard label="Financie pokrytie" value={`${c.financials_coverage_pct}%`} sub={`${c.with_financials.toLocaleString('sk')} firiem`} icon="fa-chart-line" color="bg-emerald-600" />
+        <KpiCard label="Firmy celkom" value={formatNumber(c.total)} sub={`${formatNumber(c.active)} aktívnych`} icon="fa-building" color="bg-blue-600" />
+        <KpiCard label="ORSR pokrytie" value={`${c.orsr_coverage_pct}%`} sub={`${formatNumber(c.with_orsr)} profilov`} icon="fa-landmark" color="bg-indigo-600" />
+        <KpiCard label="Financie pokrytie" value={`${c.financials_coverage_pct}%`} sub={`${formatNumber(c.with_financials)} firiem`} icon="fa-chart-line" color="bg-emerald-600" />
         <KpiCard label="Používatelia" value={u.total} sub={`${u.active_7d} aktívnych za 7d`} icon="fa-users" color="bg-violet-600" />
       </div>
 

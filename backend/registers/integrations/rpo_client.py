@@ -207,7 +207,11 @@ class RpoClient:
         entity_id = self.search_by_ico(ico)
         if entity_id is None:
             return None
-        return self.get_entity(entity_id)
+        try:
+            return self.get_entity(entity_id)
+        except RpoEntityNotFound:
+            logger.info("RPO entity detail missing for ICO %s (entity_id=%s)", ico, entity_id)
+            return None
 
     def _parse_entity(self, data: dict[str, Any]) -> RpoEntity:
         entity = RpoEntity(raw=data)

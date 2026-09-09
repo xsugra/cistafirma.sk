@@ -6,11 +6,15 @@ Uses weasyprint to render an HTML template into a PDF document.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from datetime import datetime
 from io import BytesIO
 from typing import Any
 
+from django.core.cache import cache
+from django.core.exceptions import ObjectDoesNotExist
 from django.template.loader import render_to_string
 from django.utils import timezone
 
@@ -19,6 +23,10 @@ from .financial_analysis import FinancialAnalysisService
 from .nace import get_nace_info
 
 logger = logging.getLogger(__name__)
+
+REPORT_CACHE_TIMEOUT = 300
+REPORT_CACHE_LOCK_TIMEOUT = 120
+REPORT_CACHE_POLL_INTERVAL = 0.1
 
 # Ratio display configuration for PDF
 RATIO_ROWS = [
@@ -33,6 +41,112 @@ RATIO_ROWS = [
     {'key': 'debt_to_equity', 'label': 'Zadĺženosť (D/E)', 'unit': '×'},
     {'key': 'self_financing_ratio', 'label': 'Miera samofinancovania', 'unit': '%'},
 ]
+
+
+def _report_cache_key(company: Company) -> str:
+    """Return an opaque, data-versioned cache key for a company report."""
+    financial_versions = sorted(
+        (
+            result.pk,
+            result.updated_at.isoformat() if result.updated_at else '',
+        )
+        for result in company.financial_results.all()
+    )
+    try:
+        profile = company.orsr_profile
+    except ObjectDoesNotExist:
+        profile = None
+
+    fingerprint = repr(
+        (
+            company.pk,
+            company.datum_poslednej_upravy.isoformat()
+            if company.datum_poslednej_upravy
+            else '',
+            financial_versions,
+            profile.pk if profile else None,
+            profile.last_synced_at.isoformat()
+            if profile and profile.last_synced_at
+            else '',
+        )
+    )
+    digest = hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()
+    return f'company-report:v1:{digest}'
+
+
+def _get_cached_report(cache_key: str) -> bytes | None:
+    """Return a valid cached PDF, or None for a miss."""
+    cached_report = cache.get(cache_key)
+    if cached_report is None:
+        return None
+    if isinstance(cached_report, bytes):
+        return cached_report
+
+    logger.warning('Ignoring a malformed cached company report.')
+    return None
+
+
+def get_company_report(company: Company) -> bytes:
+    """Return a cached PDF report or generate one under a cache-miss lock.
+
+    ``cache.add()`` is atomic for Django's Redis cache backend, so only one
+    Gunicorn worker normally renders a report for the same cache key. Cache
+    failures deliberately fall back to direct generation; they are logged, but
+    never turn an otherwise successful report into a cache error.
+    """
+    cache_key = _report_cache_key(company)
+    lock_key = f'{cache_key}:lock'
+
+    try:
+        cached_report = _get_cached_report(cache_key)
+        if cached_report is not None:
+            return cached_report
+        has_generation_lock = cache.add(
+            lock_key,
+            True,
+            timeout=REPORT_CACHE_LOCK_TIMEOUT,
+        )
+    except Exception:
+        logger.warning(
+            'Company report cache is unavailable; generating report without caching.',
+            exc_info=True,
+        )
+        return generate_company_report(company)
+
+    if has_generation_lock:
+        report = generate_company_report(company)
+        try:
+            cache.set(cache_key, report, timeout=REPORT_CACHE_TIMEOUT)
+        except Exception:
+            logger.warning(
+                'Company report was generated but could not be cached.',
+                exc_info=True,
+            )
+        return report
+
+    # Another worker owns the atomic Redis lock. Wait for its result instead of
+    # rendering a duplicate PDF. The lock expiry bounds this wait if that worker
+    # exits before filling the cache.
+    deadline = time.monotonic() + REPORT_CACHE_LOCK_TIMEOUT
+    while time.monotonic() < deadline:
+        time.sleep(REPORT_CACHE_POLL_INTERVAL)
+        try:
+            cached_report = _get_cached_report(cache_key)
+        except Exception:
+            logger.warning(
+                'Company report cache became unavailable while waiting for a report.',
+                exc_info=True,
+            )
+            return generate_company_report(company)
+        if cached_report is not None:
+            return cached_report
+
+    # The lock has expired without a result. Generate the response so a failed
+    # worker cannot make the report endpoint unavailable indefinitely.
+    logger.warning(
+        'Timed out waiting for a cached company report; generating it directly.'
+    )
+    return generate_company_report(company)
 
 
 def _fmt(value: float | None, unit: str) -> str:
@@ -50,7 +164,11 @@ def _fmt_eur(value: float | None) -> str:
     """Format a euro amount with thousands separator."""
     if value is None:
         return '—'
-    return f'{value:,.0f}'
+    try:
+        from core.formatting import format_currency_eur
+        return format_currency_eur(value)
+    except Exception:
+        return f'{value:,.0f}'
 
 
 def generate_company_report(company: Company) -> bytes:

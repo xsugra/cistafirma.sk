@@ -3,6 +3,7 @@ import type { GraphNode, GraphEdge } from '../components/graph/graphTypes';
 import { API_BASE_URL } from '../constants';
 import { getLegalFormProfile } from './legalFormProfile';
 import { normalizePeople, formatDate, normalizeAmountText } from '../components/company/helpers';
+import { formatNumber } from './format';
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -11,13 +12,13 @@ function esc(text: string): string {
 }
 
 function eur(amount: number): string {
-  return amount.toLocaleString('sk-SK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+  return `${formatNumber(amount)} €`;
 }
 
 function eurCompact(amount: number): string {
   if (Math.abs(amount) >= 1_000_000) return (amount / 1_000_000).toFixed(1) + 'M €';
   if (Math.abs(amount) >= 1_000) return Math.round(amount / 1_000) + 'k €';
-  return amount.toLocaleString('sk-SK') + ' €';
+  return `${formatNumber(amount)} €`;
 }
 
 function pct(value: number | null): string {

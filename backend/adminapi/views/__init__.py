@@ -11,6 +11,7 @@ from .sync import (
     toggle_scheduled_task_view,
 )
 from .companies import AdminCompanyViewSet
+from .filters import SavedCompanyFilterViewSet
 from .users import AdminUserViewSet, impersonate_user_view
 from .subscriptions import AdminSubscriptionPlanViewSet
 from .audit import AuditLogViewSet

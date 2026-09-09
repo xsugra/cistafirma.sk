@@ -41,6 +41,12 @@
     --cf-shadow-md: 0 4px 6px -1px rgba(0,0,0,.1), 0 2px 4px -2px rgba(0,0,0,.1);
     --cf-shadow-lg: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
     --cf-transition: 180ms ease;
+    /* Light mode colors for filter panel */
+    --cf-surface: #fff;
+    --cf-surface-secondary: #f8fafc;
+    --cf-border: #d8dde3;
+    --cf-text: #334155;
+    --cf-text-secondary: #64748b;
 }
 
 /* ── SVG Icon System ── */
@@ -534,6 +540,14 @@
 }
 
 /* ── Dark mode (Unfold) ── */
+.dark {
+    /* Dark mode CSS variables override */
+    --cf-surface: var(--cf-slate-800);
+    --cf-surface-secondary: var(--cf-slate-900);
+    --cf-border: var(--cf-slate-700);
+    --cf-text: var(--cf-slate-100);
+    --cf-text-secondary: var(--cf-slate-300);
+}
 .dark .cf-metric {
     background: var(--cf-slate-800);
     border-color: var(--cf-slate-700);
@@ -605,7 +619,75 @@
     border-color: rgba(244,63,94,.2);
 }
 .dark .cf-alert--success {
-    background: rgba(16,185,129,.1);
-    border-color: rgba(16,185,129,.2);
-}
-</style>
+     background: rgba(16,185,129,.1);
+     border-color: rgba(16,185,129,.2);
+ }
+
+ /* ── Filter Panel Styling (Light + Dark) ── */
+ .cf-filter-panel {
+     background: var(--cf-surface);
+     border-color: var(--cf-border);
+ }
+ .cf-filter-panel h3 {
+     color: var(--cf-text);
+ }
+ .cf-filter-panel label {
+     color: var(--cf-text-secondary);
+     font-size: 12px;
+     font-weight: 600;
+ }
+ .cf-filter-panel span {
+     color: var(--cf-text-secondary);
+ }
+ .cf-filter-panel input[type='text'],
+ .cf-filter-panel select {
+     background: var(--cf-surface-secondary);
+     border-color: var(--cf-border);
+     color: var(--cf-text);
+ }
+ .cf-filter-panel input[type='text']:focus,
+ .cf-filter-panel select:focus {
+     outline: none;
+     border-color: var(--cf-blue-500);
+     box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+ }
+ .cf-filter-panel .vTextField {
+     background: var(--cf-surface-secondary);
+     border-color: var(--cf-border);
+     color: var(--cf-text);
+ }
+ .cf-filter-panel button[type='submit'] {
+     background: var(--cf-blue-600);
+     color: #fff;
+     border-color: var(--cf-blue-700);
+     cursor: pointer;
+     padding: 0.55rem 1rem;
+     border-radius: 6px;
+     border: 1px solid;
+     font-weight: 600;
+ }
+ .cf-filter-panel button[type='submit']:hover {
+     background: var(--cf-blue-700);
+ }
+ .cf-filter-panel a.button {
+     background: var(--cf-slate-100);
+     color: var(--cf-text);
+     border-color: var(--cf-border);
+     text-decoration: none;
+     display: inline-block;
+     padding: 0.55rem 1rem;
+     border-radius: 6px;
+     border: 1px solid;
+     font-weight: 600;
+ }
+ .cf-filter-panel a.button:hover {
+     background: var(--cf-slate-200);
+ }
+ .dark .cf-filter-panel a.button {
+     background: var(--cf-slate-700);
+     color: var(--cf-text);
+ }
+ .dark .cf-filter-panel a.button:hover {
+     background: var(--cf-slate-600);
+ }
+ </style>

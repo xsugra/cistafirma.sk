@@ -130,6 +130,8 @@ kubectl apply --dry-run=server -f /tmp/cistafirma-prod-render.yaml
 - **`helm_render_validate`**
   - Spustí `helm lint`.
   - Vyrenderuje dev/prod manifesty.
+  - Overí, že Helm release obsahuje backend, frontend, presne jeden Celery Beat
+    a consumera pre každú povinnú queue.
   - Uloží render artefakty pre nasledujúci job.
 - **`helm_k8s_validate`**
   - Použije render artefakty.
@@ -146,6 +148,12 @@ kubectl apply --dry-run=server -f /tmp/cistafirma-prod-render.yaml
 | `vX.Y.Z` tag | Manuálny gate pre produkčný deploy. |
 
 ## Ďalšie odporúčané hardening kroky
+
+Pred zmenou produkčného deployu z Kustomize na Helm musí byť splnený
+[`DEPLOYMENT_CONTRACT.md`](DEPLOYMENT_CONTRACT.md). Helm je zvolený cieľový
+kompletný runtime kontrakt; Kustomize nesmie byť odstránený ani Helm nesmie byť
+zapnutý pre živý deploy bez kontroly Secretov, backing služieb a existujúcich
+perzistentných dát.
 
 - Doplniť SAST/dependency scanning.
 - Doplniť smoke testy po deployi.

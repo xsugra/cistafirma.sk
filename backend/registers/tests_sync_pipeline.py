@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, override_settings
 from companies.models import Company
+from registers.scrapers.debt_result import DebtCheckResult
 
 
 @override_settings(
@@ -70,8 +71,8 @@ class SyncPipelineTests(TestCase):
             sync_company_now(self.company.id)
             mock_orch.delay.assert_called_once_with(self.company.id)
 
-    @patch("registers.tasks.check_vszp_debt_get", return_value=100.0)
-    @patch("registers.tasks.check_socpoist_debt", return_value=50.0)
+    @patch("registers.tasks.check_vszp_debt_get", return_value=DebtCheckResult.found(100.0))
+    @patch("registers.tasks.check_socpoist_debt", return_value=DebtCheckResult.found(50.0))
     def test_update_insurance_debt_saves_values(self, mock_soc, mock_vszp):
         from registers.tasks import update_insurance_debt
         update_insurance_debt(self.company.id)
@@ -79,6 +80,29 @@ class SyncPipelineTests(TestCase):
         self.assertEqual(self.company.debt_vszp, 100.0)
         self.assertEqual(self.company.debt_soc_poist, 50.0)
         self.assertIsNotNone(self.company.last_insurance_debt)
+
+    @patch("registers.tasks.check_vszp_debt_get", return_value=DebtCheckResult.unknown("response changed", "parse_error"))
+    @patch("registers.tasks.check_socpoist_debt", return_value=DebtCheckResult.found(50.0))
+    def test_update_insurance_debt_preserves_last_known_value_when_source_is_unknown(self, mock_soc, mock_vszp):
+        self.company.debt_vszp = 125.0
+        self.company.debt_soc_poist = 25.0
+        self.company.save(update_fields=["debt_vszp", "debt_soc_poist"])
+
+        from registers.tasks import update_insurance_debt
+
+        update_insurance_debt(self.company.id)
+        self.company.refresh_from_db()
+
+        self.assertEqual(self.company.debt_vszp, 125.0)
+        self.assertEqual(self.company.debt_soc_poist, 50.0)
+        self.assertIsNone(self.company.last_insurance_debt)
+        self.assertTrue(
+            self.company.sync_statuses.filter(
+                source="vszp",
+                last_error_type="parse_error",
+                last_succeeded_at__isnull=True,
+            ).exists()
+        )
 
     def test_update_insurance_debt_raises_for_missing_company(self):
         from registers.tasks import update_insurance_debt

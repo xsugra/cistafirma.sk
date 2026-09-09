@@ -228,9 +228,10 @@ class LeadScoringService:
         ])
 
         if total_debt > 0:
+            from core.formatting import format_currency_eur
             breakdown['has_debt'] = True
-            breakdown['debt_details'] = f'Total debt: €{total_debt:,.0f}'
-            breakdown['details'].append(f'Company has debts: €{total_debt:,.0f}')
+            breakdown['debt_details'] = f'Total debt: {format_currency_eur(total_debt)}'
+            breakdown['details'].append(f'Company has debts: {format_currency_eur(total_debt)}')
         else:
             points += 20
             breakdown['details'].append('No debts detected')
@@ -301,7 +302,8 @@ class LeadScoringService:
 
         if total_debt > 0:
             breakdown['penalty'] = self.DEBT_PENALTY
-            breakdown['details'].append(f'Debt penalty: {self.DEBT_PENALTY} (total debt: €{total_debt:,.0f})')
+            from core.formatting import format_currency_eur
+            breakdown['details'].append(f'Debt penalty: {self.DEBT_PENALTY} (total debt: {format_currency_eur(total_debt)})')
         else:
             breakdown['details'].append('No debt penalty (clean financial status)')
 

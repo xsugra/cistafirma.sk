@@ -58,21 +58,21 @@
         <div class="cf-metric__header">
             <span class="cf-metric__label">Celkom firiem</span>
         </div>
-        <div class="cf-metric__value">{{ dashboard_stats.total|default:0 }}</div>
+        <div class="cf-metric__value">{{ dashboard_stats.total_display|default:dashboard_stats.total|default:0 }}</div>
     </div>
     <div class="cf-metric">
         <div class="cf-metric__accent cf-metric__accent--emerald"></div>
         <div class="cf-metric__header">
             <span class="cf-metric__label">Aktivne firmy</span>
         </div>
-        <div class="cf-metric__value">{{ dashboard_stats.active|default:0 }}</div>
+        <div class="cf-metric__value">{{ dashboard_stats.active_display|default:dashboard_stats.active|default:0 }}</div>
     </div>
     <div class="cf-metric">
         <div class="cf-metric__accent cf-metric__accent--amber"></div>
         <div class="cf-metric__header">
             <span class="cf-metric__label">S dlzobami</span>
         </div>
-        <div class="cf-metric__value">{{ dashboard_stats.with_debts|default:0 }}</div>
+        <div class="cf-metric__value">{{ dashboard_stats.with_debts_display|default:dashboard_stats.with_debts|default:0 }}</div>
     </div>
     <div class="cf-metric">
         <div class="cf-metric__accent cf-metric__accent--violet"></div>
@@ -85,6 +85,133 @@
     </div>
 </div>
 {% endif %}
+
+<div class="cf-filter-panel" style="margin: 1rem 0 1.25rem; padding: 1rem; border: 1px solid var(--cf-border, #d8dde3); border-radius: 14px; background: var(--cf-surface, #fff); color: var(--cf-text, #334155);">
+    <h3 style="margin: 0 0 0.75rem; font-size: 16px; font-weight: 700; color: var(--cf-text, #334155);">Kombinované filtre</h3>
+    <form method="get" style="display:grid; gap:0.75rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items:end;">
+        <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Hľadať</span>
+             <input type="text" name="q" value="{{ request.GET.q }}" class="vTextField" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);" />
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Mesto</span>
+             <input type="text" name="mesto" value="{{ request.GET.mesto }}" class="vTextField" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);" />
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">PSČ</span>
+             <input type="text" name="psc" value="{{ request.GET.psc }}" class="vTextField" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);" />
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Kraj</span>
+             <select name="kraj" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for kraj in combined_filter_options.kraje %}
+                     <option value="{{ kraj }}" {% if request.GET.kraj == kraj %}selected{% endif %}>{{ kraj }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+              <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Právna forma</span>
+              <select name="legal_form" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                  <option value="">Všetky</option>
+                  {% for code, label in combined_filter_options.legal_forms %}
+                      <option value="{{ code }}" {% if request.GET.legal_form == code %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+              </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">SK NACE</span>
+             <select name="sk_NACE" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for code in combined_filter_options.nace_codes %}
+                     <option value="{{ code }}" {% if request.GET.sk_NACE == code %}selected{% endif %}>{{ code }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Rok založenia</span>
+             <select name="founded_year" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for year in combined_filter_options.founded_years %}
+                     <option value="{{ year }}" {% if request.GET.founded_year == year|stringformat:'s' %}selected{% endif %}>{{ year }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Veľkosť firmy</span>
+             <select name="velkost_organizacie" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for value in combined_filter_options.velkosti %}
+                     <option value="{{ value }}" {% if request.GET.velkost_organizacie == value %}selected{% endif %}>{{ value }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">VAT</span>
+             <select name="vat_payer" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for value, label in combined_filter_options.vat_payer %}
+                     <option value="{{ value }}" {% if request.GET.vat_payer == value %}selected{% endif %}>{{ label }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Daňová spoľahlivosť</span>
+             <select name="tax_reliability" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for value in combined_filter_options.tax_reliability %}
+                     <option value="{{ value }}" {% if request.GET.tax_reliability == value %}selected{% endif %}>{{ value }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Stav firmy</span>
+             <select name="active" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 <option value="1" {% if request.GET.active == '1' %}selected{% endif %}>Aktívne</option>
+                 <option value="0" {% if request.GET.active == '0' %}selected{% endif %}>Zrušené</option>
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Dlhy</span>
+             <select name="debt_state" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for value, label in combined_filter_options.debt_state %}
+                     <option value="{{ value }}" {% if request.GET.debt_state == value %}selected{% endif %}>{{ label }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Dáta</span>
+             <select name="data_state" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 {% for value, label in combined_filter_options.data_state %}
+                     <option value="{{ value }}" {% if request.GET.data_state == value %}selected{% endif %}>{{ label }}</option>
+                 {% endfor %}
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">ORSR profil</span>
+             <select name="has_orsr" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 <option value="1" {% if request.GET.has_orsr == '1' %}selected{% endif %}>Áno</option>
+                 <option value="0" {% if request.GET.has_orsr == '0' %}selected{% endif %}>Nie</option>
+             </select>
+         </label>
+         <label>
+             <span style="display:block; font-size:12px; margin-bottom:0.25rem; color: var(--cf-text-secondary, #64748b);">Financie</span>
+             <select name="has_financials" style="width:100%; background: var(--cf-surface-secondary, #f8fafc); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; padding: 8px 12px; color: var(--cf-text, #334155);">
+                 <option value="">Všetky</option>
+                 <option value="1" {% if request.GET.has_financials == '1' %}selected{% endif %}>Áno</option>
+                 <option value="0" {% if request.GET.has_financials == '0' %}selected{% endif %}>Nie</option>
+             </select>
+         </label>
+         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+             <button type="submit" class="default" style="padding:0.55rem 1rem; background: var(--cf-blue-600, #2563eb); color: #fff; border: 1px solid var(--cf-blue-700, #1d4ed8); border-radius: 6px; font-weight: 600; cursor: pointer;">Filtrovať</button>
+             <a href="?" class="button" style="padding:0.55rem 1rem; background: var(--cf-slate-100, #f1f5f9); color: var(--cf-text, #334155); border: 1px solid var(--cf-border, #d8dde3); border-radius: 6px; font-weight: 600; text-decoration: none; display: inline-block;">Reset</a>
+         </div>
+    </form>
+</div>
 
 {{ block.super }}
 </div>

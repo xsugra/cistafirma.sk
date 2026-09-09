@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.http import HttpResponse
 from .models import Company, Watchlist, SearchHistory
 from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer, SearchHistorySerializer
-from .services.pdf_report import generate_company_report
+from .services.pdf_report import get_company_report
 
 import logging
 logger = logging.getLogger(__name__)
@@ -166,7 +166,7 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         try:
-            pdf_bytes = generate_company_report(company)
+            pdf_bytes = get_company_report(company)
         except Exception as e:
             logger.error(f"PDF generation error for ICO {ico}: {e}", exc_info=True)
             return Response(

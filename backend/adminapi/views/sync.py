@@ -57,13 +57,24 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
         params = ser.validated_data.get("parameters", {}) or {}
         notes = ser.validated_data.get("notes", "")
 
-        job = sync_engine.enqueue_job(
-            job_type=job_type,
-            parameters=params,
-            triggered_by_id=request.user.id,
-            triggered_via="admin_ui",
-            notes=notes,
-        )
+        if job_type in sync_engine.RUZ_JOB_TYPES:
+            job, created = sync_engine.enqueue_ruz_job(
+                job_type=job_type,
+                parameters=params,
+                triggered_by_id=request.user.id,
+                triggered_via="admin_ui",
+                notes=notes,
+            )
+            if not created:
+                return Response(SyncJobSerializer(job).data, status=status.HTTP_200_OK)
+        else:
+            job = sync_engine.enqueue_job(
+                job_type=job_type,
+                parameters=params,
+                triggered_by_id=request.user.id,
+                triggered_via="admin_ui",
+                notes=notes,
+            )
         # Dispatch the underlying Celery task. Many job types map onto existing tasks;
         # we stay defensive — if a dispatcher isn't wired yet, the job stays queued
         # and the operator sees it in the UI.
@@ -82,6 +93,11 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def resume(self, request, pk=None):
         job = self.get_object()
+        if job.job_type in sync_engine.RUZ_JOB_TYPES:
+            return Response(
+                {"detail": "RUZ jobs cannot be resumed by redispatch. Start a new tracked run after reviewing its saved cursor."},
+                status=status.HTTP_409_CONFLICT,
+            )
         SyncJob.objects.filter(pk=job.pk).update(status="running")
         try:
             _dispatch_job(SyncJob.objects.get(pk=job.pk))
@@ -92,6 +108,11 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         job = self.get_object()
+        if job.job_type in sync_engine.RUZ_JOB_TYPES:
+            return Response(
+                {"detail": "RUZ jobs cannot be terminated because that can interrupt persisted imports."},
+                status=status.HTTP_409_CONFLICT,
+            )
         sync_engine.cancel_job(job, reason=request.data.get("reason", ""))
         if job.celery_task_id:
             try:
@@ -272,8 +293,10 @@ def _dispatch_job(job: SyncJob) -> None:
     from registers import tasks
 
     task_map = {
-        "ruz_full": (tasks.start_full_ruz_sync, {"reset": params.get("reset", False)}),
-        "ruz_incremental": (tasks.start_incremental_sync, {}),
+        "ruz_full": (tasks.start_full_ruz_sync, {"reset": params.get("reset", False), "sync_job_id": job.pk}),
+        "ruz_full_firmy": (tasks.fetch_ruz_data_firmy_only, {"sync_job_id": job.pk}),
+        "ruz_full_szco": (tasks.fetch_ruz_data_szco_only, {"sync_job_id": job.pk}),
+        "ruz_incremental": (tasks.start_incremental_sync, {"sync_job_id": job.pk}),
         "ruz_repair": (tasks.start_repair_sync, {
             "start_id": params.get("start_id", 0),
             "workers": params.get("workers", 3),
@@ -291,9 +314,11 @@ def _dispatch_job(job: SyncJob) -> None:
         raise ValueError(f"Unknown job_type: {job_type}")
 
     func, kwargs = task_map[job_type]
-    sync_engine.start_job(job, total_items=params.get("total_items"))
     async_result = func.apply_async(kwargs=kwargs)
-    SyncJob.objects.filter(pk=job.pk).update(celery_task_id=async_result.id or "")
+    if job_type in sync_engine.RUZ_JOB_TYPES:
+        SyncJob.objects.filter(pk=job.pk, status="queued").update(celery_task_id=async_result.id or "")
+    else:
+        sync_engine.start_job(job, total_items=params.get("total_items"), celery_task_id=async_result.id or "")
 
 
 def _dispatch_single_company(source: str, company_id: int) -> None:

@@ -1,14 +1,34 @@
 from django.contrib import admin
+from django.core.cache import cache
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils import timezone
 from django.contrib import messages
-from django.http import HttpResponse, HttpResponseRedirect
+from django.db.models import Count, Exists, OuterRef, Q
+from django.http import HttpResponse, HttpResponseRedirect, StreamingHttpResponse
 from django.urls import reverse
 import csv
 from io import BytesIO
-from .models import Company, CompanyFinancialResult, SectorBenchmark, LEGAL_FORMS_SHORT
+from .models import (
+    Company,
+    CompanyFinancialResult,
+    SectorBenchmark,
+    LEGAL_FORMS_SHORT,
+    LEGAL_FORMS_CHOICES,
+    LEGAL_FORMS,
+)
 from registers.models import OrsrCompanyProfile
+from core.formatting import format_currency_eur, format_int_space
+
+MAX_SYNC_EXPORT_ROWS = 5_000
+
+
+class _CSVBuffer:
+    """Minimal csv.writer target that returns each generated row for streaming."""
+
+    def write(self, value):
+        return value
+
 
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
@@ -183,8 +203,11 @@ class CompanyAdmin(UnfoldModelAdmin):
         'datum_poslednej_upravy',
     ]
 
+    list_filter = (LegalFormFilter, RokZalozeniaFilter, HasDebtFilter, DataCompletenessFilter)
+
     list_display_links = ['ico', 'nazov_UJ']
     inlines = [OrsrCompanyProfileInline, CompanyFinancialResultInline]
+    change_list_template = 'admin/companies/company/change_list.html'
     change_form_template = 'admin/companies/company/change_form.html'
 
     search_fields = [
@@ -192,18 +215,6 @@ class CompanyAdmin(UnfoldModelAdmin):
     ]
     search_help_text = "Hladanie: ICO, nazov, DIC, IC DPH, mesto, ulica, RUZ ID"
 
-    list_filter = [
-        LegalFormFilter,
-        RokZalozeniaFilter,
-        HasDebtFilter,
-        DataCompletenessFilter,
-        'kraj',
-        'velkost_organizacie',
-        'vat_payer',
-        'tax_reliability',
-        'konsolidovana',
-        ('datum_zrusenia', admin.EmptyFieldListFilter),
-    ]
 
     ordering = ['-datum_poslednej_upravy', 'nazov_UJ']
     list_per_page = 50
@@ -319,13 +330,13 @@ class CompanyAdmin(UnfoldModelAdmin):
         issues = []
         total_debt = 0
         if obj.debt_vszp and obj.debt_vszp > 0:
-            issues.append(f'VSZP {obj.debt_vszp:,.0f}&euro;')
+            issues.append(f'VSZP {format_currency_eur(obj.debt_vszp)}')
             total_debt += obj.debt_vszp
         if obj.debt_soc_poist and obj.debt_soc_poist > 0:
-            issues.append(f'SP {obj.debt_soc_poist:,.0f}&euro;')
+            issues.append(f'SP {format_currency_eur(obj.debt_soc_poist)}')
             total_debt += obj.debt_soc_poist
         if obj.tax_debt and obj.tax_debt > 0:
-            issues.append(f'Dan {obj.tax_debt:,.0f}&euro;')
+            issues.append(f'Dan {format_currency_eur(obj.tax_debt)}')
             total_debt += obj.tax_debt
 
         if issues:
@@ -335,7 +346,7 @@ class CompanyAdmin(UnfoldModelAdmin):
                 '<span class="cf-badge__dot"></span>{}</span>',
                 f'cf-badge {level}',
                 ', '.join(issues).replace('&euro;', '€'),
-                f'{total_debt:,.0f}€'
+                format_currency_eur(total_debt)
             )
         if obj.last_insurance_debt:
             return mark_safe(
@@ -346,13 +357,8 @@ class CompanyAdmin(UnfoldModelAdmin):
     @admin.display(description='Data')
     def data_quality_display(self, obj):
         parts = []
-        has_orsr = hasattr(obj, 'orsr_profile') and obj.orsr_profile is not None
-        try:
-            has_orsr = obj.orsr_profile is not None
-        except OrsrCompanyProfile.DoesNotExist:
-            has_orsr = False
-
-        has_financials = obj.financial_results.exists() if hasattr(obj, 'financial_results') else False
+        has_orsr = bool(getattr(obj, '_has_orsr', False))
+        has_financials = bool(getattr(obj, '_has_financials', False))
 
         if has_orsr:
             parts.append('<span title="ORSR profil" style="color:var(--cf-emerald-500)">OR</span>')
@@ -474,8 +480,7 @@ class CompanyAdmin(UnfoldModelAdmin):
     ]
 
     def _get_export_data(self, queryset):
-        data = []
-        for company in queryset:
+        for company in queryset[:MAX_SYNC_EXPORT_ROWS].iterator(chunk_size=500):
             row = []
             for field_name, _ in self.EXPORT_FIELDS:
                 value = getattr(company, field_name, '')
@@ -484,11 +489,28 @@ class CompanyAdmin(UnfoldModelAdmin):
                 elif isinstance(value, bool):
                     value = 'Ano' if value else 'Nie'
                 row.append(value)
-            data.append(row)
-        return data
+            yield row
 
-    def get_filtered_queryset(self, request):
-        queryset = Company.objects.all()
+    def _export_count(self, request, queryset):
+        count = queryset.count()
+        if count <= MAX_SYNC_EXPORT_ROWS:
+            return count
+        self.message_user(
+            request,
+            f'Export je obmedzený na {MAX_SYNC_EXPORT_ROWS} riadkov. Zúžte filtre a skúste znova.',
+            messages.ERROR,
+        )
+        return None
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request).annotate(
+            _has_orsr=Exists(OrsrCompanyProfile.objects.filter(company_id=OuterRef('pk'))),
+            _has_financials=Exists(CompanyFinancialResult.objects.filter(company_id=OuterRef('pk'))),
+        )
+        return self.get_filtered_queryset(request, queryset)
+
+    def get_filtered_queryset(self, request, queryset=None):
+        queryset = queryset or Company.objects.all()
         search_query = request.GET.get('q', '')
         if search_query:
             from django.db.models import Q
@@ -501,13 +523,14 @@ class CompanyAdmin(UnfoldModelAdmin):
                 Q(ulica__icontains=search_query) |
                 Q(ruz_id__icontains=search_query)
             )
-        filter_mappings = {
-            'pravna_forma__exact': 'pravna_forma',
-            'kraj__exact': 'kraj',
-            'velkost_organizacie__exact': 'velkost_organizacie',
-            'vat_payer__exact': 'vat_payer',
-            'tax_reliability__exact': 'tax_reliability',
-            'konsolidovana__exact': 'konsolidovana',
+        text_filters = {
+            'mesto': 'mesto__icontains',
+            'psc': 'psc__icontains',
+            'sk_NACE': 'sk_NACE__icontains',
+            'sidlo': 'sidlo__icontains',
+            'okres': 'okres__icontains',
+        }
+        exact_filters = {
             'pravna_forma': 'pravna_forma',
             'kraj': 'kraj',
             'velkost_organizacie': 'velkost_organizacie',
@@ -515,15 +538,85 @@ class CompanyAdmin(UnfoldModelAdmin):
             'tax_reliability': 'tax_reliability',
             'konsolidovana': 'konsolidovana',
         }
-        for param, field in filter_mappings.items():
+        for param, field in text_filters.items():
+            value = request.GET.get(param)
+            if value:
+                queryset = queryset.filter(**{field: value})
+        for param, field in exact_filters.items():
             value = request.GET.get(param)
             if value and value != 'all':
-                if value in ('True', 'true', '1'):
-                    queryset = queryset.filter(**{field: True})
-                elif value in ('False', 'false', '0'):
-                    queryset = queryset.filter(**{field: False})
+                if field == 'vat_payer':
+                    if value in ('1', 'true', 'True'):
+                        queryset = queryset.filter(vat_payer=True)
+                    elif value in ('0', 'false', 'False'):
+                        queryset = queryset.filter(vat_payer=False)
+                    else:
+                        queryset = queryset.filter(vat_payer=value)
+                elif field == 'konsolidovana':
+                    if value in ('1', 'true', 'True'):
+                        queryset = queryset.filter(konsolidovana=True)
+                    elif value in ('0', 'false', 'False'):
+                        queryset = queryset.filter(konsolidovana=False)
+                    else:
+                        queryset = queryset.filter(konsolidovana=value)
                 else:
                     queryset = queryset.filter(**{field: value})
+        active = request.GET.get('active')
+        if active == '1':
+            queryset = queryset.filter(datum_zrusenia__isnull=True)
+        elif active == '0':
+            queryset = queryset.filter(datum_zrusenia__isnull=False)
+
+        has_debt = request.GET.get('has_debt')
+        if has_debt == 'yes':
+            queryset = queryset.filter(
+                Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
+            )
+        elif has_debt == 'no':
+            queryset = queryset.exclude(
+                Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
+            )
+
+        has_orsr = request.GET.get('has_orsr')
+        if has_orsr == '1':
+            queryset = queryset.filter(orsr_profile__isnull=False)
+        elif has_orsr == '0':
+            queryset = queryset.filter(orsr_profile__isnull=True)
+
+        has_financials = request.GET.get('has_financials')
+        if has_financials == '1':
+            queryset = queryset.filter(financial_results__isnull=False).distinct()
+        elif has_financials == '0':
+            queryset = queryset.filter(financial_results__isnull=True)
+
+        legal_form = request.GET.get('legal_form')
+        if legal_form and legal_form != 'all':
+            queryset = queryset.filter(pravna_forma=legal_form)
+
+        founded_year = request.GET.get('founded_year')
+        if founded_year and founded_year != 'all':
+            queryset = queryset.filter(datum_zalozenia__year=int(founded_year))
+
+        debt_state = request.GET.get('debt_state')
+        if debt_state == 'debt_free':
+            queryset = queryset.exclude(Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0))
+        elif debt_state == 'has_debt':
+            queryset = queryset.filter(Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0))
+
+        data_state = request.GET.get('data_state')
+        if data_state == 'complete':
+            queryset = queryset.filter(orsr_profile__isnull=False, financial_results__isnull=False).distinct()
+        elif data_state == 'missing_orsr':
+            queryset = queryset.filter(orsr_profile__isnull=True)
+        elif data_state == 'missing_financials':
+            queryset = queryset.filter(financial_results__isnull=True)
+
+        debt_empty = request.GET.get('debt_empty')
+        if debt_empty == '1':
+            queryset = queryset.filter(debt_vszp__isnull=True, debt_soc_poist__isnull=True, tax_debt__isnull=True)
+        elif debt_empty == '0':
+            queryset = queryset.exclude(debt_vszp__isnull=True, debt_soc_poist__isnull=True, tax_debt__isnull=True)
+
         isnull_mappings = {
             'datum_zrusenia__isempty': 'datum_zrusenia__isnull',
             'debt_vszp__isempty': 'debt_vszp__isnull',
@@ -540,31 +633,28 @@ class CompanyAdmin(UnfoldModelAdmin):
 
     @admin.action(description='Export vybranych do CSV')
     def export_to_csv(self, request, queryset):
-        response = HttpResponse(content_type='text/csv; charset=utf-8')
-        response['Content-Disposition'] = 'attachment; filename="firmy_export.csv"'
-        response.write('﻿')
-        writer = csv.writer(response, delimiter=';')
-        writer.writerow([label for _, label in self.EXPORT_FIELDS])
-        for row in self._get_export_data(queryset):
-            writer.writerow(row)
-        self.message_user(request, f'Exportovanych {queryset.count()} firiem do CSV.', messages.SUCCESS)
+        count = self._export_count(request, queryset)
+        if count is None:
+            return None
+        response = self._export_queryset_csv(queryset)
+        self.message_user(request, f'Exportovanych {count} firiem do CSV.', messages.SUCCESS)
         return response
 
     @admin.action(description='Export vsetkych filtrovanych do CSV')
     def export_filtered_to_csv(self, request, queryset):
         filtered_queryset = self.get_filtered_queryset(request)
-        response = HttpResponse(content_type='text/csv; charset=utf-8')
-        response['Content-Disposition'] = 'attachment; filename="firmy_filtrovane_export.csv"'
-        response.write('﻿')
-        writer = csv.writer(response, delimiter=';')
-        writer.writerow([label for _, label in self.EXPORT_FIELDS])
-        for row in self._get_export_data(filtered_queryset):
-            writer.writerow(row)
-        self.message_user(request, f'Exportovanych {filtered_queryset.count()} filtrovanych firiem do CSV.', messages.SUCCESS)
+        count = self._export_count(request, filtered_queryset)
+        if count is None:
+            return None
+        response = self._export_queryset_csv(filtered_queryset)
+        self.message_user(request, f'Exportovanych {count} filtrovanych firiem do CSV.', messages.SUCCESS)
         return response
 
     @admin.action(description='Export vybranych do XLSX')
     def export_to_xlsx(self, request, queryset):
+        count = self._export_count(request, queryset)
+        if count is None:
+            return None
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill
@@ -595,18 +685,21 @@ class CompanyAdmin(UnfoldModelAdmin):
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = 'attachment; filename="firmy_export.xlsx"'
-        self.message_user(request, f'Exportovanych {queryset.count()} firiem do XLSX.', messages.SUCCESS)
+        self.message_user(request, f'Exportovanych {count} firiem do XLSX.', messages.SUCCESS)
         return response
 
     @admin.action(description='Export vsetkych filtrovanych do XLSX')
     def export_filtered_to_xlsx(self, request, queryset):
+        filtered_queryset = self.get_filtered_queryset(request)
+        count = self._export_count(request, filtered_queryset)
+        if count is None:
+            return None
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill
         except ImportError:
             self.message_user(request, 'Chyba kniznica openpyxl. Nainstalujte: pip install openpyxl', messages.ERROR)
             return
-        filtered_queryset = self.get_filtered_queryset(request)
         wb = Workbook()
         ws = wb.active
         ws.title = 'Firmy'
@@ -631,7 +724,7 @@ class CompanyAdmin(UnfoldModelAdmin):
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = 'attachment; filename="firmy_filtrovane_export.xlsx"'
-        self.message_user(request, f'Exportovanych {filtered_queryset.count()} filtrovanych firiem do XLSX.', messages.SUCCESS)
+        self.message_user(request, f'Exportovanych {count} filtrovanych firiem do XLSX.', messages.SUCCESS)
         return response
 
     # ── Custom Admin Views ──
@@ -688,18 +781,27 @@ class CompanyAdmin(UnfoldModelAdmin):
     def export_filtered_view(self, request):
         export_format = request.GET.get('format', 'csv')
         queryset = self.get_filtered_queryset(request)
+        count = self._export_count(request, queryset)
+        if count is None:
+            return HttpResponse(
+                f'Export je obmedzený na {MAX_SYNC_EXPORT_ROWS} riadkov. Zúžte filtre a skúste znova.',
+                status=400,
+                content_type='text/plain; charset=utf-8',
+            )
         if export_format == 'xlsx':
             return self._export_queryset_xlsx(queryset)
         return self._export_queryset_csv(queryset)
 
     def _export_queryset_csv(self, queryset):
-        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        def stream_rows():
+            writer = csv.writer(_CSVBuffer(), delimiter=';')
+            yield '\ufeff'
+            yield writer.writerow([label for _, label in self.EXPORT_FIELDS])
+            for row in self._get_export_data(queryset):
+                yield writer.writerow(row)
+
+        response = StreamingHttpResponse(stream_rows(), content_type='text/csv; charset=utf-8')
         response['Content-Disposition'] = 'attachment; filename="firmy_export.csv"'
-        response.write('﻿')
-        writer = csv.writer(response, delimiter=';')
-        writer.writerow([label for _, label in self.EXPORT_FIELDS])
-        for row in self._get_export_data(queryset):
-            writer.writerow(row)
         return response
 
     def _export_queryset_xlsx(self, queryset):
@@ -784,34 +886,104 @@ class CompanyAdmin(UnfoldModelAdmin):
 
     def changelist_view(self, request, extra_context=None):
         from registers.models import SyncProgress
-        from django.db.models import Count, Q
 
         extra_context = extra_context or {}
         extra_context['show_ruz_buttons'] = True
 
-        total_companies = Company.objects.count()
-        active_companies = Company.objects.filter(datum_zrusenia__isnull=True).count()
-        companies_with_debts = Company.objects.filter(
-            Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
-        ).count()
-        companies_with_orsr = OrsrCompanyProfile.objects.count()
-        companies_with_financials = CompanyFinancialResult.objects.values('company_id').distinct().count()
+        stats_cache_key = 'companies_admin_dashboard_stats_v2'
+        options_cache_key = 'companies_admin_combined_filter_options_v2'
 
-        sync_progress = SyncProgress.objects.filter(sync_type='full').first()
+        dashboard_stats = cache.get(stats_cache_key)
+        if dashboard_stats is None:
+            debt_q = Q(debt_vszp__gt=0) | Q(debt_soc_poist__gt=0) | Q(tax_debt__gt=0)
+            counts = Company.objects.aggregate(
+                total=Count('id'),
+                active=Count('id', filter=Q(datum_zrusenia__isnull=True)),
+                with_debts=Count('id', filter=debt_q),
+            )
+            total_companies = counts.get('total') or 0
+            active_companies = counts.get('active') or 0
+            companies_with_debts = counts.get('with_debts') or 0
+            companies_with_orsr = OrsrCompanyProfile.objects.count()
+            companies_with_financials = CompanyFinancialResult.objects.values('company_id').distinct().count()
+            sync_progress = SyncProgress.objects.filter(sync_type='full').first()
 
-        extra_context['dashboard_stats'] = {
-            'total': total_companies,
-            'active': active_companies,
-            'inactive': total_companies - active_companies,
-            'with_debts': companies_with_debts,
-            'with_orsr': companies_with_orsr,
-            'without_orsr': max(total_companies - companies_with_orsr, 0),
-            'with_financials': companies_with_financials,
-            'without_financials': max(total_companies - companies_with_financials, 0),
-            'sync_progress': sync_progress,
-            'orsr_pct': round(companies_with_orsr / total_companies * 100, 1) if total_companies else 0,
-            'fin_pct': round(companies_with_financials / total_companies * 100, 1) if total_companies else 0,
-        }
+            dashboard_stats = {
+                'total': total_companies,
+                'active': active_companies,
+                'inactive': total_companies - active_companies,
+                'with_debts': companies_with_debts,
+                'with_orsr': companies_with_orsr,
+                'without_orsr': max(total_companies - companies_with_orsr, 0),
+                'with_financials': companies_with_financials,
+                'without_financials': max(total_companies - companies_with_financials, 0),
+                'sync_progress': sync_progress,
+                'orsr_pct': round(companies_with_orsr / total_companies * 100, 1) if total_companies else 0,
+                'fin_pct': round(companies_with_financials / total_companies * 100, 1) if total_companies else 0,
+                'total_display': format_int_space(total_companies),
+                'active_display': format_int_space(active_companies),
+                'with_debts_display': format_int_space(companies_with_debts),
+            }
+            cache.set(stats_cache_key, dashboard_stats, 120)
+
+        combined_filter_options = cache.get(options_cache_key)
+        if combined_filter_options is None:
+            tax_reliability_values = list(
+                Company.objects.exclude(tax_reliability__isnull=True)
+                .exclude(tax_reliability__exact='')
+                .values_list('tax_reliability', flat=True)
+                .distinct()
+                .order_by('tax_reliability')
+            )
+            kraj_values = list(
+                Company.objects.exclude(kraj__isnull=True)
+                .exclude(kraj__exact='')
+                .values_list('kraj', flat=True)
+                .distinct()
+                .order_by('kraj')
+            )
+            size_values = list(
+                Company.objects.exclude(velkost_organizacie__isnull=True)
+                .exclude(velkost_organizacie__exact='')
+                .values_list('velkost_organizacie', flat=True)
+                .distinct()
+                .order_by('velkost_organizacie')
+            )
+            nace_values = list(
+                Company.objects.exclude(sk_NACE__isnull=True)
+                .exclude(sk_NACE__exact='')
+                .values_list('sk_NACE', flat=True)
+                .distinct()
+                .order_by('sk_NACE')
+            )
+            founding_years = [
+                d.year
+                for d in Company.objects.exclude(datum_zalozenia__isnull=True).dates(
+                    'datum_zalozenia',
+                    'year',
+                    order='DESC',
+                )
+            ]
+            combined_filter_options = {
+                # Use canonical choices prepared in models.py
+                'legal_forms': LEGAL_FORMS_CHOICES,
+                'kraje': kraj_values,
+                'velkosti': size_values,
+                'nace_codes': nace_values,
+                'tax_reliability': tax_reliability_values,
+                'founded_years': founding_years,
+                'vat_payer': [('1', 'Áno'), ('0', 'Nie')],
+                'debt_state': [('has_debt', 'S dlhmi'), ('debt_free', 'Bez dlhov')],
+                'data_state': [
+                    ('complete', 'ORSR + financie'),
+                    ('missing_orsr', 'Chýba ORSR'),
+                    ('missing_financials', 'Chýbajú financie'),
+                ],
+            }
+            cache.set(options_cache_key, combined_filter_options, 300)
+
+        extra_context['dashboard_stats'] = dashboard_stats
+        extra_context['combined_filter_options'] = combined_filter_options
 
         return super().changelist_view(request, extra_context=extra_context)
 
