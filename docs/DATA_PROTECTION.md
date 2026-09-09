@@ -103,6 +103,24 @@ or removes the running Compose database or its named volume.
 5. Run application and data-integrity checks after recovery; do not resume
    Celery ingestion until the result is accepted.
 
+## Objectives (RPO / RTO) and ownership
+
+- **Owner:** repository maintainer (Samuel Šugra). Backup creation, verification
+  and drills are the owner's responsibility; AI agents and contributors must not
+  bypass these controls.
+- **RPO (Recovery Point Objective):** backups are taken manually today, so RPO
+  equals the age of the newest verified dump. Run `make db-backup` before any
+  schema/data-changing work and at least after each meaningful sync milestone.
+  Until an off-host replica exists, treat RPO as unbounded across hardware loss.
+- **RTO (Recovery Time Objective):** an isolated restore drill restores 38+
+  tables in roughly a minute. A production-target restore additionally requires
+  a pre-restore backup, maintenance mode and post-restore integrity checks, so
+  plan for tens of minutes, not seconds.
+- **Minimum cadence:** a fresh verified backup before any migration or data
+  change; a verified backup at least weekly; an isolated restore drill after
+  each initial backup and at least monthly (from the external copy when it
+  exists).
+
 ## Remaining required control
 
 Configure an encrypted off-host replication destination and test retrieval from

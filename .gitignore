@@ -99,10 +99,12 @@ backend/data/fs_data/**/*.xsd
 backend/data/fs_data/**/*.zip
 
 # Keep docs and source files by default (no blanket excludes below)
-CLAUDE.md
 graphify-out/
 
-# AI generated files and folders
-.claude
+# AI tooling: commit shared guidance, ignore machine-local state
+# CLAUDE.md and AGENTS.md are intentionally tracked (AI onboarding).
+# .claude/settings.json is tracked (project guardrails); settings.local.json is per-machine.
+.claude/*
+!.claude/settings.json
 .github/copilot-instructions.md
 code-reviews.md
