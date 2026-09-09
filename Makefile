@@ -193,8 +193,8 @@ docker-logs-backend:
 	@docker compose logs -f backend
 
 docker-logs-celery:
-	@echo "Showing Celery worker logs..."
-	@docker compose logs -f celery_worker celery_beat
+	@echo "Showing Celery worker + beat logs..."
+	@docker compose logs -f --tail=200 celery_worker_ruz celery_worker_orsr celery_worker_financials celery_worker_insurance celery_worker_default celery_beat
 
 docker-shell:
 	@echo "Opening shell in backend container..."

@@ -27,6 +27,19 @@ elif BACKEND_ENV_PATH.exists():
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
+# --- Structured logging (Phase 3) ---
+# LOG_LEVEL governs the root level (independent of DEBUG); LOG_FORMAT selects
+# the console formatter. Fail fast: an invalid value is a config bug.
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').strip().upper()
+if LOG_LEVEL not in {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}:
+    raise ImproperlyConfigured(
+        f'LOG_LEVEL must be one of DEBUG/INFO/WARNING/ERROR/CRITICAL, got {LOG_LEVEL!r}'
+    )
+
+LOG_FORMAT = os.getenv('LOG_FORMAT', 'json').strip().lower()
+if LOG_FORMAT not in {'json', 'text'}:
+    raise ImproperlyConfigured(f'LOG_FORMAT must be "json" or "text", got {LOG_FORMAT!r}')
+
 # SECURITY WARNING: keep the secret key used in production secret!
 _default_secret = 'django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma'
 SECRET_KEY = os.getenv('SECRET_KEY', default=_default_secret if DEBUG else '')
@@ -86,6 +99,7 @@ CUSTOM_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + CUSTOM_APPS
 
 MIDDLEWARE = [
+    'core.middleware.RequestLogMiddleware',  # structured request access-log (first)
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # DÔLEŽITÉ PRE PRODUKCIU
@@ -498,3 +512,54 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'False').lower() in ('true', '1', 'yes')
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False').lower() in ('true', '1', 'yes')
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_FROM', 'CistaFirma <noreply@cistafirma.sk>')
+
+# =============================================================================
+# LOGGING — structured (JSON) console logging, stdlib only.
+#
+# Django applies its DEFAULT_LOGGING before settings.LOGGING, so the django*
+# loggers are named explicitly below to replace the default text handlers and
+# avoid duplicate lines. disable_existing_loggers=False is required: in Celery
+# workers the backend.celery loggers are imported before django.setup() runs
+# dictConfig, and re-enabling the default would silence them.
+# =============================================================================
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'json': {
+            '()': 'core.logging.JsonFormatter',  # lazy-imported by dictConfig
+        },
+        'text': {
+            'format': '%(asctime)s %(levelname)s %(name)s %(message)s',
+            'datefmt': '%Y-%m-%dT%H:%M:%S%z',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'stream': 'ext://sys.stdout',  # structured logs to stdout, not stderr
+            'formatter': LOG_FORMAT,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': LOG_LEVEL,
+    },
+    'loggers': {
+        # Django internals
+        'django': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
+        # runserver logs every request at INFO — suppressed; the middleware is
+        # the single request-log source. Broken-pipe etc. (WARNING+) remain.
+        'django.server': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+        # 5xx (with traceback -> JSON exc_info) stays; 4xx is covered by the
+        # request-log middleware only, so there is a single source.
+        'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+        'django.security': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+        # Celery
+        'celery': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
+        'celery.task': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
+        'celery.redirected': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
+        # App request access-log (structured, single source)
+        'cistafirma.request': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
