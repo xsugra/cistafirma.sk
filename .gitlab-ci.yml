@@ -31,12 +31,9 @@ backend_validate:
   script:
     - python -m compileall backend
 
-frontend_validate:
-  stage: validate
+# Shared frontend CI setup (node + deps from the committed lockfile).
+.frontend_ci:
   image: node:20-alpine
-  rules:
-    - if: '$CI_COMMIT_BRANCH'
-    - if: '$CI_COMMIT_TAG'
   before_script:
     - cd frontend
     - |
@@ -45,6 +42,13 @@ frontend_validate:
       else
         npm install
       fi
+
+frontend_validate:
+  extends: .frontend_ci
+  stage: validate
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
   script:
     - npm run build
 
@@ -110,6 +114,16 @@ helm_k8s_validate:
       else
         echo "Skipping kubectl --dry-run=server (no KUBE_CONFIG/cluster context)."
       fi
+
+frontend_tests:
+  extends: .frontend_ci
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - npm test
+    - npm run typecheck
 
 backend_tests:
   stage: test
