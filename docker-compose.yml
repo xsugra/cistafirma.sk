@@ -24,12 +24,20 @@ services:
     image: redis:7-alpine
     container_name: cistafirma_redis
     restart: unless-stopped
+    # Auth is required (defence in depth even though the port is localhost-only).
+    # REDIS_PASSWORD must be URL-safe (A-Za-z0-9 _ - .); percent-encode specials.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-cistafirma_redis_secret}"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-cistafirma_redis_secret}
+      - REDISCLI_AUTH=${REDIS_PASSWORD:-cistafirma_redis_secret}
     ports:
       - "127.0.0.1:${REDIS_PORT:-6380}:6379"  # localhost only; broker never exposed to LAN
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # redis-cli in redis:7 reads REDISCLI_AUTH from the container env, so the
+      # probe stays secret-free.
+      test: ["CMD", "redis-cli", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -44,9 +52,9 @@ services:
       - ./.env  # Load from root .env (centralized config)
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -57,9 +65,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Migrations are NOT auto-run here anymore — apply them via the one-shot
+    # `migrate` service (make docker-migrate). collectstatic stays (dev uses a
+    # bind mount, so this is cheap); celery_beat waits for migrations via
+    # `migrate --check`.
     command: >
-      sh -c "python manage.py migrate --settings=backend.settings &&
-             python manage.py collectstatic --noinput --settings=backend.settings &&
+      sh -c "python manage.py collectstatic --noinput --settings=backend.settings &&
              gunicorn --bind 0.0.0.0:8000 --workers ${BACKEND_WORKERS:-2} --threads ${BACKEND_THREADS:-4} --timeout 120 --worker-class gthread --worker-tmp-dir /dev/shm backend.wsgi:application"
 
   frontend:
@@ -93,9 +104,9 @@ services:
       - ./.env
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
     volumes:
       - ./backend:/app
     depends_on:
@@ -103,6 +114,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # The backend image carries a gunicorn HEALTHCHECK; workers/beat don't run
+    # gunicorn, so disable it here (inherited by every *celery-worker + beat).
+    healthcheck:
+      disable: true
 
   celery_worker_ruz:
     <<: *celery-worker
@@ -146,6 +161,30 @@ services:
              done &&
              echo 'Migrations ready, starting beat...' &&
              celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+
+  # One-shot migration runner — NOT part of plain `docker compose up`
+  # (profile keeps it out). Run via `make docker-migrate` (docker compose run).
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles: ["migrate"]
+    restart: "no"
+    env_file:
+      - ./.env  # Load from root .env (centralized config)
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["python", "manage.py", "migrate", "--settings=backend.settings"]
 
 volumes:
   postgres_data:

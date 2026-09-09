@@ -54,10 +54,14 @@ cd frontend && npm run build  # Production build into frontend/dist/
 ```bash
 make docker-up          # Start all services (backend, frontend, postgres, redis, workers)
 make docker-down        # Stop services (keeps volumes — do NOT add -v)
-make docker-migrate     # Run migrations in container
+make docker-migrate     # Apply migrations via one-shot `migrate` service (NOT auto-run)
 make docker-shell       # bash shell into backend container
 make docker-logs        # Tail all container logs
 ```
+
+`docker compose up` no longer auto-runs `migrate`. Run `make docker-migrate`
+once after a fresh clone and whenever a branch adds migrations; `celery_beat`
+waits until migrations are applied.
 
 `docker-reset` exists but is volume-destructive and now token-gated; treat it as
 an emergency-only tool. See Data safety rules.

@@ -15,6 +15,7 @@ types-PyYAML==6.0.12.20250915
 types-requests==2.32.4.20260107
 typing_extensions==4.15.0
 urllib3==2.6.3
+gunicorn==26.2.0
 whitenoise
 beautifulsoup4
 celery

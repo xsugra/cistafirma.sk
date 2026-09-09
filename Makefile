@@ -201,8 +201,8 @@ docker-shell:
 	@docker compose exec backend bash
 
 docker-migrate:
-	@echo "Running migrations in Docker..."
-	@docker compose exec backend python manage.py migrate --settings=backend.settings
+	@echo "Running migrations in Docker (one-shot migrate service)..."
+	@docker compose run --rm -T --build migrate
 
 docker-superuser:
 	@echo "Creating superuser in Docker..."
