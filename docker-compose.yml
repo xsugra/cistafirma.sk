@@ -11,6 +11,37 @@ x-logging: &logging-default
     max-size: "20m"
     max-file: "5"
 
+# Shared Celery template for every worker + beat. Lives at the TOP level so the
+# `x-` key is an extension field = anchor ONLY, not a runnable service. (An `x-`
+# key *inside* `services:` is an ordinary service name — before this fix that
+# silently spawned a stray duplicate gunicorn container,
+# cistafirma-x-celery-worker-1.)
+x-celery-worker: &celery-worker
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  # Log rotation inherited by every *celery-worker service + beat.
+  logging: *logging-default
+  env_file:
+    - ./.env
+  environment:
+    - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+    - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+  volumes:
+    - ./backend:/app
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  # The backend image carries a gunicorn HEALTHCHECK; workers/beat don't run
+  # gunicorn, so disable it here (inherited by every *celery-worker + beat).
+  healthcheck:
+    disable: true
+
 services:
   db:
     image: postgres:16-alpine
@@ -108,32 +139,6 @@ services:
       backend:
         condition: service_started
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
-
-  x-celery-worker: &celery-worker
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    # Log rotation inherited by every *celery-worker service + beat.
-    logging: *logging-default
-    env_file:
-      - ./.env
-    environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
-    volumes:
-      - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # The backend image carries a gunicorn HEALTHCHECK; workers/beat don't run
-    # gunicorn, so disable it here (inherited by every *celery-worker + beat).
-    healthcheck:
-      disable: true
 
   celery_worker_ruz:
     <<: *celery-worker
