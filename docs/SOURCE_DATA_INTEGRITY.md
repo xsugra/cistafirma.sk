@@ -166,6 +166,17 @@ and a run that finds nothing new exits in milliseconds. That is what the
 six-hourly beat normally does, and it is why five runs a day can "succeed"
 having processed nothing at all.
 
+**But the tail is not a steady stream — it arrives in batches, so a run is either
+instantaneous or a real import.** Measured on 2026-09-10: the 12:22 beat run
+reached the end of the list in **4 s** with the cursor at 2,617,490, on a valid
+empty page. The next run, dispatched by hand at 18:27 after a worker fix, walked
+**6 817** IDs from that same cursor to 2,624,307 and processed 6 850 records over
+**25 minutes**. Re-probed at 19:05, nothing exists above 2,624,307 and the run's
+own end-of-list line said `Errors: 0`. So those 6 850 records were **not** a
+backlog the beat had been failing to collect — they are entities RUZ gave IDs to
+between 12:22 and 18:27. The cursor was never behind; the registry's tail simply
+moved, and it moved by thousands at once.
+
 Known limitation, undecided. Fixing it means first choosing how changes are to
 be found at all — dropping the cursor to use the date window would ask the API
 for the registry's entire changed subset, from ID 66 upward — so it is a load
