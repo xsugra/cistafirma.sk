@@ -109,11 +109,19 @@ start under the `monitoring` profile; they bind to loopback.
 make db-backup                                  # Fresh timestamped dump
 make db-backup-verify BACKUP_FILE="<abs path>"  # Checksum + archive read check
 make db-restore-drill BACKUP_FILE="<abs path>"  # Isolated restore (never live DB)
-make db-backup-replicate BACKUP_FILE="<abs>" CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"
+make db-backup-replicate BACKUP_FILE="<abs path>"  # Uses the recorded off-site dir
 make db-offsite-status                          # Read-only off-site readiness gate
+make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"  # Record it, once
 make db-backup-prune                            # Dry-run retention (newest 7 kept)
 make db-backup-schedule-install                 # Weekly launchd backup job
 ```
+
+The off-site path is machine-specific and lives outside the repo, in
+`~/.config/cistafirma/backup.env` (mode 600), written by `db-offsite-configure`.
+Every backup script reads it through `scripts/local/lib/backup_env.sh` — which
+is what lets the **launchd job** replicate, since launchd starts agents with
+almost no environment. An exported variable of the same name overrides the file,
+so `make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=/tmp/x` still works.
 
 ### Testing
 
