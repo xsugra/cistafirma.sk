@@ -576,6 +576,15 @@ LOGGING = {
         'celery': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
         'celery.task': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
         'celery.redirected': {'handlers': ['console'], 'level': LOG_LEVEL, 'propagate': False},
+        # Peers emit "missed heartbeat from worker_insurance" every ~100s for as
+        # long as a worker is busy, because the gossip thread shares the event
+        # loop with the task. The insurance queue is deliberately rate-limited
+        # (20/m) over 441k companies, so it is saturated more or less
+        # permanently -- the message fires forever by design and is not
+        # actionable. Measured at 1094 of ~1750 lines (63%) of all worker
+        # output, which buried every real message. Genuine gossip problems log
+        # at WARNING and above, so those still come through.
+        'celery.worker.consumer.gossip': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
         # App request access-log (structured, single source)
         'cistafirma.request': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
