@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from io import StringIO
 
 from django.core.management import call_command
@@ -8,6 +9,8 @@ from django.utils import timezone
 from companies.models import Company
 from registers.models import CompanySyncStatus
 
+DEBT_FIELDS = {"vszp": "debt_vszp", "social": "debt_soc_poist"}
+
 
 class SourceHealthCommandTests(TestCase):
     """The control that would have caught the VSZP parser going silent.
@@ -16,10 +19,17 @@ class SourceHealthCommandTests(TestCase):
     configured rate the whole time the scraper returned nothing usable.
     """
 
-    def _seed(self, source, attempts, successes, *, succeeded_ago_hours=1):
+    def _seed(self, source, attempts, successes, *, succeeded_ago_hours=1, with_debt=0):
+        """Seed `attempts` rows, of which `successes` succeeded and `with_debt` report a debt.
+
+        `with_debt` applies to the successful rows, which are the first ones --
+        a check that reported a debt is exactly a success whose stored amount
+        is non-zero.
+        """
         now = timezone.now()
         attempted_at = now - timedelta(hours=1)
         succeeded_at = now - timedelta(hours=succeeded_ago_hours)
+        debt_field = DEBT_FIELDS[source]
 
         companies = Company.objects.bulk_create([
             Company(
@@ -27,6 +37,7 @@ class SourceHealthCommandTests(TestCase):
                 ico=f"{90000000 + i}",
                 nazov_UJ=f"Test {source} {i}",
                 pravna_forma="112",
+                **{debt_field: Decimal("100.00") if i < with_debt else Decimal("0.00")},
             )
             for i in range(attempts)
         ])
@@ -85,3 +96,46 @@ class SourceHealthCommandTests(TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("Source health: 1 unmet", output)
+
+    def test_a_source_that_never_reports_no_record_is_unmet(self):
+        """The shape the SP scraper was found in.
+
+        Debtors are still found, so the source is plainly alive and a zero
+        success count would never fire -- but every company that owes nothing
+        comes back `unknown`, is never marked checked, and stays due forever.
+        """
+        self._seed("social", attempts=250, successes=60, with_debt=60)
+
+        output, code = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertIn("Source health: 1 unmet", output)
+        self.assertIn("stays due forever", output)
+
+    def test_a_source_that_never_reports_a_debt_is_unmet(self):
+        """The dangerous direction: every real debtor written as debt-free."""
+        self._seed("vszp", attempts=250, successes=60, with_debt=0)
+
+        output, code = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertIn("Source health: 1 unmet", output)
+        self.assertIn("recorded as debt-free", output)
+
+    def test_a_source_reporting_both_outcomes_is_healthy(self):
+        self._seed("social", attempts=250, successes=60, with_debt=12)
+
+        output, code = self._run()
+
+        self.assertEqual(code, 0)
+        self.assertIn("Source health: 0 unmet", output)
+        self.assertIn("12", output)
+
+    def test_the_split_is_not_judged_on_too_few_successes(self):
+        """Eight successes with no no-record answer is luck, not a dead branch."""
+        self._seed("social", attempts=250, successes=8, with_debt=8)
+
+        output, code = self._run()
+
+        self.assertEqual(code, 0)
+        self.assertIn("Source health: 0 unmet", output)

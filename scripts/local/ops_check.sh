@@ -29,6 +29,7 @@ QUEUE_WARN_DEPTH="${CISTAFIRMA_QUEUE_WARN_DEPTH:-50000}"
 QUEUES="${CISTAFIRMA_QUEUES:-celery ruz_full orsr financials insurance}"
 SOURCE_WINDOW_HOURS="${CISTAFIRMA_SOURCE_WINDOW_HOURS:-24}"
 SOURCE_MIN_ATTEMPTS="${CISTAFIRMA_SOURCE_MIN_ATTEMPTS:-200}"
+SOURCE_MIN_SUCCESSES="${CISTAFIRMA_SOURCE_MIN_SUCCESSES:-20}"
 
 LABEL="sk.cistafirma.backup"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -129,6 +130,7 @@ if docker compose ps --status running --services 2>/dev/null | grep -qx 'backend
     source_output=$(docker compose exec -T \
         -e "CISTAFIRMA_SOURCE_WINDOW_HOURS=$SOURCE_WINDOW_HOURS" \
         -e "CISTAFIRMA_SOURCE_MIN_ATTEMPTS=$SOURCE_MIN_ATTEMPTS" \
+        -e "CISTAFIRMA_SOURCE_MIN_SUCCESSES=$SOURCE_MIN_SUCCESSES" \
         backend python manage.py source_health --skip-checks 2>&1)
     source_rc=$?
     set -e

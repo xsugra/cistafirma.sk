@@ -51,6 +51,64 @@ VSZP_DEBTOR_ROW_PAGE = """
 </body></html>
 """
 
+# Both Socialna poistovna responses render the same `view-id-debitors`
+# container -- that is the anchor. What separates them is the result count:
+# only the response that has a debtor carries it. The page for a company that
+# owes nothing states that by *omitting* the line, not by publishing a
+# message, which is why looking for a "no records" sentence found nothing.
+SP_GLOSSARY = """
+      <ul class="links links--glossary">
+        <li><a href="?glossary=%2A" class="govuk-link">INÉ</a></li>
+        <li><a href="?glossary=a" class="govuk-link">A</a></li>
+      </ul>"""
+
+SP_NO_RECORD_PAGE = f"""
+<html><body>
+<div class="govuk-grid-column-full">
+  <div class="view view-debitors view-id-debitors view-display-id-embed js-view-dom-id-439025d5">
+    <div class="view-header">
+      {SP_GLOSSARY}
+    </div>
+  </div>
+</div>
+</body></html>
+"""
+
+SP_DEBTOR_ROW_PAGE = f"""
+<html><body>
+<div class="govuk-grid-column-full">
+  <div class="view view-debitors view-id-debitors view-display-id-embed js-view-dom-id-8f53fabc">
+    <div class="view-header">
+      Dlžníci podľa zadaných kritérií: <strong>1</strong>
+      {SP_GLOSSARY}
+    </div>
+    <table class="cols-6">
+      <thead>
+        <tr>
+          <th id="view-name-table-column--2" scope="col"><span class="th-span">Názov / Meno</span></th>
+          <th id="view-ico-table-column--2" scope="col"><span class="th-span">IČO</span></th>
+          <th id="view-address-table-column--2" scope="col"><span class="th-span">Adresa</span></th>
+          <th id="view-city-table-column--2" scope="col"><span class="th-span">Mesto</span></th>
+          <th id="view-price-table-column--2" scope="col"><span class="th-span">Dlžná suma</span></th>
+          <th id="view-period-value-table-column--2" scope="col"><span class="th-span">Chýbajúce podklady za obdobie</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td headers="view-name-table-column--2" class="views-field views-field-name">MMBOXX, s.r.o.</td>
+          <td headers="view-ico-table-column--2" class="views-field views-field-ico">36439151</td>
+          <td headers="view-address-table-column--2" class="views-field views-field-address">Družstevná 4,</td>
+          <td headers="view-city-table-column--2" class="views-field views-field-city">Liptovský Mikuláš</td>
+          <td headers="view-price-table-column--2" class="views-field views-field-price views-align-right">731,46 €</td>
+          <td headers="view-period-value-table-column--2" class="views-field views-field-period__value"><p>-</p></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</body></html>
+"""
+
 
 class InsuranceDebtScraperTests(SimpleTestCase):
     def test_vszp_missing_result_row_is_unknown_not_zero(self):
@@ -130,6 +188,75 @@ class InsuranceDebtScraperTests(SimpleTestCase):
 
         self.assertEqual(result.state, DebtCheckState.NOT_FOUND)
         self.assertEqual(result.amount, 0.0)
+
+    def test_social_absent_result_count_is_an_authoritative_zero(self):
+        """SP answers "no record" by leaving the result count out entirely.
+
+        Without this branch the scraper found every debtor and misread every
+        non-debtor as `unknown` -- so roughly two thirds of the table could
+        never be marked checked, and the insurance queue refilled itself for
+        ever while looking perfectly healthy.
+        """
+        session = Mock()
+        session.get.return_value = Mock(text=SP_NO_RECORD_PAGE)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("31721737")
+
+        self.assertEqual(result.state, DebtCheckState.NOT_FOUND)
+        self.assertEqual(result.amount, 0.0)
+        self.assertTrue(result.is_authoritative)
+
+    def test_social_debtor_row_is_found_with_its_own_amount(self):
+        session = Mock()
+        session.get.return_value = Mock(text=SP_DEBTOR_ROW_PAGE)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36439151")
+
+        self.assertEqual(result.state, DebtCheckState.FOUND)
+        self.assertAlmostEqual(result.amount, 731.46, places=2)
+
+    def test_social_row_for_another_ico_is_not_attributed(self):
+        """The old scan took the first "€" anywhere on the page.
+
+        A company nobody searched for must never be handed a figure that
+        belongs to someone else.
+        """
+        session = Mock()
+        session.get.return_value = Mock(text=SP_DEBTOR_ROW_PAGE)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("99999999")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+
+    def test_social_page_without_the_results_view_is_unknown_not_zero(self):
+        """An error or interstitial page is not an answer about the company."""
+        session = Mock()
+        session.get.return_value = Mock(
+            text="<html><body><h1>Stránka je dočasne nedostupná</h1></body></html>",
+        )
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("31721737")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+        self.assertEqual(result.error_type, "parse_error")
+
+    def test_social_unparseable_amount_is_unknown_not_zero(self):
+        page = SP_DEBTOR_ROW_PAGE.replace("731,46 €", "neuvedené")
+        session = Mock()
+        session.get.return_value = Mock(text=page)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36439151")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+        self.assertEqual(result.error_type, "parse_error")
 
     def _patch_session(self, target, session):
         from unittest.mock import patch

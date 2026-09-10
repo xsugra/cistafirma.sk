@@ -232,16 +232,32 @@ section above reported it as `OK` the whole time.
 `make ops-check` therefore also chains
 `python manage.py source_health` (`backend/registers/management/commands/`),
 which owns what "a source is healthy" means. It reports, per source and over a
-window, how many companies were attempted and how many succeeded, and it fails
-when a source with at least `CISTAFIRMA_SOURCE_MIN_ATTEMPTS` attempts (default
-200) succeeded for **no one** within `CISTAFIRMA_SOURCE_WINDOW_HOURS` (default
-24).
+window, how many companies were attempted, how many succeeded, and — for
+sources whose answer carries an amount — how those successes split between a
+reported debt and a reported absence.
 
-The failing condition is deliberately zero rather than a low rate: a low rate is
-normal — only a few percent of companies owe the Socialná poisťovňa anything —
-while zero means the parser no longer matches the page. A source with too few
-attempts to judge is reported as *not judged* rather than as healthy, so silence
-is never mistaken for a pass.
+A check carries only two useful answers, so a source is unmet when it loses
+either one. With at least `CISTAFIRMA_SOURCE_MIN_ATTEMPTS` attempts (default
+200) and `CISTAFIRMA_SOURCE_MIN_SUCCESSES` successes (default 20) inside
+`CISTAFIRMA_SOURCE_WINDOW_HOURS` (default 24), that means:
+
+- nothing succeeded at all — the parser recognises nothing;
+- nothing reported a debt — every real debtor would be written as debt-free;
+- nothing reported an absence — a company that owes nothing can never be marked
+  checked, so it stays due for ever.
+
+The last case is why a zero-success rule is not enough on its own. The Socialná
+poisťovňa scraper was found on 2026-09-10 with 605 successes in the window and
+**not one** of them an absence: it found every debtor and misread every
+non-debtor as `unknown`, so most of the table stayed due and the `insurance`
+queue held 30 000 messages while draining at exactly its configured rate. A
+zero-success rule called that healthy.
+
+The thresholds are counts rather than rates because only a few percent of
+companies owe the Socialná poisťovňa anything: a low rate is normal, and a rate
+threshold would have to be tuned per source and would drift. A source with too
+few attempts, or too few successes for its split to mean anything, is reported
+as *not judged* rather than as healthy, so silence is never mistaken for a pass.
 
 ## Recovery incident procedure
 

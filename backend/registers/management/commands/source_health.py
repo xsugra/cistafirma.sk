@@ -6,14 +6,29 @@ source that has stopped producing usable answers, and look identical to a busy
 one -- which is how the VSZP scraper went a day returning `unknown` for every
 company while `make ops-check` reported OK.
 
-This command answers the other question, from data the stack already records:
-across all companies, did this source succeed for *anyone* recently?
+This command answers the other question, from data the stack already records.
 
 A source is judged only once it has made enough attempts for silence to mean
-something, and the failing condition is deliberately **zero** successes rather
-than a low rate: a low rate is normal (only a few percent of companies owe
-Socialna poistovna anything), while zero means the parser no longer matches the
-page. Anything between those two is a judgement call, not a control.
+something. Three conditions fail it, and each is a way a parser dies without
+the queue noticing:
+
+- no successful check at all -- the parser recognises nothing;
+- successes, but not one of them reported a debt -- the "found" branch is gone,
+  and every real debtor would be recorded as debt-free;
+- successes, but not one of them reported *no* debt -- the "no record" branch
+  is gone, so a company that owes nothing is never marked checked and stays due
+  forever, which is how the insurance queue refills itself indefinitely.
+
+The last two are measurable without recording anything new. For a check that
+succeeded inside the window the amount the source reported is already stored on
+the company, and `not_found` is authoritative with an amount of exactly zero --
+so a stored zero on a recently-succeeded row *is* that source's "no record"
+answer. Only sources whose answer carries an amount can be read this way; the
+rest are reported with their counts and left unjudged on the split.
+
+The counts are deliberately the signal rather than a rate. Only a few percent
+of companies owe Socialna poistovna anything, so a low rate is normal; what is
+never normal is a whole branch of a parser going quiet.
 
 Read-only: it issues SELECTs and writes nothing.
 """
@@ -32,6 +47,15 @@ from registers.models import CompanySyncStatus
 
 DEFAULT_WINDOW_HOURS = 24
 DEFAULT_MIN_ATTEMPTS = 200
+DEFAULT_MIN_SUCCESSES = 20
+
+# Sources whose answer carries an amount, mapped to the company field that
+# stores it. tasks.update_insurance_debt writes the source's amount there for
+# every authoritative answer, zero included.
+AMOUNT_FIELDS = {
+    CompanySyncStatus.SOURCE_VSZP: "debt_vszp",
+    CompanySyncStatus.SOURCE_SOCIAL: "debt_soc_poist",
+}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -47,7 +71,8 @@ def _env_int(name: str, default: int) -> int:
 class Command(BaseCommand):
     help = (
         "Report per-source sync success over a window and fail when a source "
-        "with enough attempts has produced no successful result at all."
+        "with enough attempts has produced no successful result at all, or has "
+        "lost one of the two answers a check can carry."
     )
 
     def add_arguments(self, parser):
@@ -66,10 +91,20 @@ class Command(BaseCommand):
                 "(default: CISTAFIRMA_SOURCE_MIN_ATTEMPTS or 200)."
             ),
         )
+        parser.add_argument(
+            "--min-successes",
+            type=int,
+            default=_env_int("CISTAFIRMA_SOURCE_MIN_SUCCESSES", DEFAULT_MIN_SUCCESSES),
+            help=(
+                "Successful checks a source needs before the found / no-record "
+                "split is judged (default: CISTAFIRMA_SOURCE_MIN_SUCCESSES or 20)."
+            ),
+        )
 
     def handle(self, *args, **options):
         window_hours = options["window_hours"]
         min_attempts = options["min_attempts"]
+        min_successes = options["min_successes"]
         window_start = timezone.now() - timedelta(hours=window_hours)
 
         rows = list(
@@ -82,25 +117,66 @@ class Command(BaseCommand):
         )
 
         self.stdout.write(
-            f"  source          attempts  succeeded  ({window_hours}h window)"
+            f"  {'source':<15} {'attempts':>8}  {'succeeded':>9}  "
+            f"{'found':>7}  {'no-record':>9}  ({window_hours}h window)"
         )
 
         unmet = 0
         below_threshold = []
+        notes = []
         for row in rows:
+            source = row["source"]
             attempts = row["attempts"]
             succeeded = row["succeeded"]
+            reported = self._found_count(source, window_start) if succeeded else None
+
+            if reported is None:
+                counts = f"{'-':>7}  {'-':>9}"
+            else:
+                counts = f"{reported:>7}  {succeeded - reported:>9}"
+
+            # A split is only worth judging once there are enough successes for
+            # "none of them" to mean the branch is gone rather than merely
+            # unlucky.
+            split_is_judgeable = (
+                reported is not None and succeeded >= min_successes
+            )
+
             if attempts < min_attempts:
-                below_threshold.append((row["source"], attempts))
+                below_threshold.append((source, attempts))
                 verdict = "OK"
             elif succeeded == 0:
                 verdict = "FAIL"
                 unmet += 1
+                notes.append(
+                    f"source '{source}': {attempts} attempt(s) and no successful "
+                    f"check at all -- the parser recognises nothing"
+                )
+            elif split_is_judgeable and reported == 0:
+                verdict = "FAIL"
+                unmet += 1
+                notes.append(
+                    f"source '{source}': {succeeded} check(s) succeeded and not one "
+                    f"reported a debt -- a company that owes would be recorded as "
+                    f"debt-free"
+                )
+            elif split_is_judgeable and succeeded - reported == 0:
+                verdict = "FAIL"
+                unmet += 1
+                notes.append(
+                    f"source '{source}': {succeeded} check(s) succeeded and not one "
+                    f"reported the source's no-record answer -- a company that owes "
+                    f"nothing can never be marked checked, so it stays due forever"
+                )
             else:
                 verdict = "OK"
+
             self.stdout.write(
-                f"  {row['source']:<15} {attempts:>8}  {succeeded:>9}  {verdict}"
+                f"  {source:<15} {attempts:>8}  {succeeded:>9}  {counts}  {verdict}"
             )
+
+        for note in notes:
+            self.stdout.write(f"  ({note})")
 
         # A source nobody has attempted recently is not evidence of health, and
         # saying so out loud is cheaper than a reader assuming it was checked.
@@ -115,3 +191,20 @@ class Command(BaseCommand):
 
         if unmet:
             sys.exit(1)
+
+    def _found_count(self, source: str, window_start) -> int | None:
+        """How many of this source's in-window successes reported a real amount.
+
+        None for a source whose answer carries no amount: that source cannot be
+        read this way, and is left unjudged rather than guessed at.
+        """
+        field = AMOUNT_FIELDS.get(source)
+        if field is None:
+            return None
+        return (
+            CompanySyncStatus.objects.filter(
+                source=source, last_succeeded_at__gte=window_start
+            )
+            .filter(**{f"company__{field}__gt": 0})
+            .count()
+        )

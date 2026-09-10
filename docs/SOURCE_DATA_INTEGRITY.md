@@ -53,6 +53,43 @@ worth stating because it is not what one would guess:
   záznamy."** Only that message is authoritative. An empty table *without* it is
   ambiguous and stays `unknown`, because it can equally be a server-side error.
 
+`soc_poist_debt.check_socpoist_debt` follows the same principle, and its markup
+is worth stating because the obvious reading of the page is wrong:
+
+- Every search result — including "nothing matched" — is rendered by one Drupal
+  view, `<div class="view view-debitors view-id-debitors …">`. **That container
+  is the anchor:** its presence is what proves the site processed the query. An
+  error, a captcha or an interstitial does not carry it, and the page is then
+  `unknown` rather than a zero.
+- A company that owes money gets a result count — `Dlžníci podľa zadaných
+  kritérií: <strong>1</strong>` — followed by a table. A company that owes
+  nothing gets the same view with **no count line at all**. The site publishes
+  no "no records" sentence anywhere, so searching for one (as this scraper did
+  until 2026-09-10, matching "nevyhovuje žiaden záznam") finds nothing on either
+  page and every non-debtor reads as `unknown`.
+- The amount is read from the row whose own IČO cell matches, and only when that
+  row carries exactly one readable figure. Taking the first `€` on the page —
+  the previous behaviour — can attribute another company's debt, or a number
+  from the page furniture, to the company being checked.
+
+### A parser can lose one branch and still look alive
+
+Both failures above were *branch* failures, not outages. The VSZP scraper had
+lost both of its answers; the Socialná poisťovňa scraper had lost only the
+no-record one. The second is far harder to notice, because the source keeps
+returning results: a success count, a success rate and a queue depth all look
+healthy while it happens.
+
+The damage is in the aggregate rule. `registers.tasks.update_insurance_debt`
+advances `last_insurance_debt` only when **both** sources are authoritative, and
+`schedule_insurance_debt_checks` re-selects every company whose timestamp is
+still NULL. A source that can never say "no record" therefore keeps the majority
+of 441 714 companies due for ever, and the `insurance` queue refills itself
+indefinitely while draining at exactly its configured rate.
+
+That is why `make ops-check` judges a source on **both** of its answers rather
+than only on whether it succeeds at all — see `docs/DATA_PROTECTION.md`.
+
 ### Throughput
 
 The insurance refresh is capacity-bound, not interval-bound.
