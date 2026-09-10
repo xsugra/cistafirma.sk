@@ -218,6 +218,31 @@ that is merely busy. A large backlog is not by itself a failure (the insurance
 queue is deliberately rate-limited and is normally saturated), so it only warns,
 above `CISTAFIRMA_QUEUE_WARN_DEPTH` (default 50000).
 
+### Source health
+
+Depth measures load; it cannot measure outcome, and the two are not substitutes.
+A queue can drain at exactly its configured rate forever against a source that
+has stopped producing usable answers. That is not hypothetical: on 2026-09-10 the
+VSZP scraper was found to have been returning `unknown` for **every** company
+for at least a day — 17 969 attempts, zero successes — so no check ever completed,
+every one of the 441 714 companies stayed due for re-check, and the insurance
+queue held a steady, healthy-looking 30 000 messages throughout. The queue
+section above reported it as `OK` the whole time.
+
+`make ops-check` therefore also chains
+`python manage.py source_health` (`backend/registers/management/commands/`),
+which owns what "a source is healthy" means. It reports, per source and over a
+window, how many companies were attempted and how many succeeded, and it fails
+when a source with at least `CISTAFIRMA_SOURCE_MIN_ATTEMPTS` attempts (default
+200) succeeded for **no one** within `CISTAFIRMA_SOURCE_WINDOW_HOURS` (default
+24).
+
+The failing condition is deliberately zero rather than a low rate: a low rate is
+normal — only a few percent of companies owe the Socialná poisťovňa anything —
+while zero means the parser no longer matches the page. A source with too few
+attempts to judge is reported as *not judged* rather than as healthy, so silence
+is never mistaken for a pass.
+
 ## Recovery incident procedure
 
 1. Stop all data-changing operations and preserve the failed environment for

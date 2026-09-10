@@ -118,8 +118,8 @@ make ops-check                                  # Every operational control, one
 ```
 
 `make ops-check` is the single read-only gate over the whole protection story
-(stack, database, queue depths, backups, off-site controls, drill record, and
-whether the weekly job is still firing). It starts no container and writes
+(stack, database, queue depths, per-source scrape health, backups, off-site
+controls, drill record, and whether the weekly job is still firing). It starts no container and writes
 nothing. The weekly job runs the same gate and, on failure, writes
 `~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
 non-zero. See `docs/DATA_PROTECTION.md` for the two deliberate asymmetries that
@@ -215,7 +215,7 @@ compat shim re-exporting it.
 | `ruz_full` | RUZ bulk sync (sequential, holds SyncProgress/SyncJob cursor) |
 | `orsr` | ORSR/RPO scraper per-company (rate-limited) |
 | `financials` | RUZ financial results per-company |
-| `insurance` | VSZP + Social insurance debt checks (rate-limited) |
+| `insurance` | VSZP + Social insurance debt checks (rate-limited; one full pass takes ~15 days, so the 12 h beat interval selects what is *due*, it does not bound completion) |
 | `celery` (default) | FS updates, orchestration, ad-hoc tasks |
 
 Both a code-defined `CELERY_BEAT_SCHEDULE` and `django-celery-beat`

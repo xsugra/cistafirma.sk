@@ -27,6 +27,8 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 RUN_GAP_MAX_DAYS="${CISTAFIRMA_RUN_GAP_MAX_DAYS:-8}"
 QUEUE_WARN_DEPTH="${CISTAFIRMA_QUEUE_WARN_DEPTH:-50000}"
 QUEUES="${CISTAFIRMA_QUEUES:-celery ruz_full orsr financials insurance}"
+SOURCE_WINDOW_HOURS="${CISTAFIRMA_SOURCE_WINDOW_HOURS:-24}"
+SOURCE_MIN_ATTEMPTS="${CISTAFIRMA_SOURCE_MIN_ATTEMPTS:-200}"
 
 LABEL="sk.cistafirma.backup"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -105,6 +107,51 @@ for queue in $QUEUES; do
     fi
 done
 printf '  total queued: %s\n' "$total"
+
+# --- source health -------------------------------------------------------
+# The section above reports *load*; this one reports *outcome*. They are not
+# substitutes: a queue can drain at its configured rate indefinitely against a
+# source that no longer answers usefully. The VSZP scraper spent at least a day
+# returning "unknown" for every company -- so nothing was ever written, the
+# whole table stayed due for re-check, and the queue kept its healthy-looking
+# depth the entire time.
+#
+# `source_health` owns what "a source is healthy" means, so it is chained here
+# rather than re-implemented, exactly as offsite_status.sh owns the off-site
+# verdict below.
+section "Source health"
+
+if docker compose ps --status running --services 2>/dev/null | grep -qx 'backend'; then
+    # The thresholds are forwarded explicitly: `exec` does not inherit the
+    # caller's environment, so an exported override would otherwise be silently
+    # ignored and the run would look stricter or looser than it was asked to be.
+    set +e
+    source_output=$(docker compose exec -T \
+        -e "CISTAFIRMA_SOURCE_WINDOW_HOURS=$SOURCE_WINDOW_HOURS" \
+        -e "CISTAFIRMA_SOURCE_MIN_ATTEMPTS=$SOURCE_MIN_ATTEMPTS" \
+        backend python manage.py source_health --skip-checks 2>&1)
+    source_rc=$?
+    set -e
+    printf '%s\n' "$source_output" | sed 's/^/  /'
+
+    if [ "$source_rc" -eq 0 ]; then
+        ok "every source with enough attempts produced a result"
+    else
+        # Reuse the count rather than the FAIL lines, so the command stays the
+        # single owner of what its failures are -- and fail closed if its
+        # summary is ever unreadable, since a changed format must not read as
+        # success.
+        unmet=$(printf '%s\n' "$source_output" \
+            | sed -n 's/^Source health: \([0-9][0-9]*\) unmet$/\1/p' | tail -n 1)
+        if [ -z "$unmet" ]; then
+            bad "source_health exited $source_rc without a readable verdict"
+        else
+            failures=$((failures + unmet))
+        fi
+    fi
+else
+    bad "the backend is not running, so no source can be judged"
+fi
 
 # --- backup and off-site controls ---------------------------------------
 section "Backup and off-site controls"

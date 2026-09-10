@@ -73,6 +73,14 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 | `insurance` | 12 h | Kontrola dlhov v poisťovniach (VŠZP, Soc. poisťovňa) |
 | `celery` (default) | 24 h | Aktualizácia FS dát, orchestračné a ad-hoc úlohy |
 
+> `insurance` je **kapacitne viazaná, nie intervalom viazaná**: interval určuje
+> len to, ktoré firmy sú *due* (`last_insurance_debt` staršie ako 12 h alebo
+> nikdy), nie to, že sa stihnú za 12 h. Pri 441 714 firmách, dvoch zdrojoch na
+> firmu a zámernom `rate_limit='20/m'` trvá jeden plný priechod **~15 dní**.
+> Detaily a dôvod, prečo sa rate limit nezvyšuje bez rozhodnutia:
+> `docs/SOURCE_DATA_INTEGRITY.md`.
+
+
 ## 5. Vyhľadávací flow (request lifecycle)
 
 ```mermaid
