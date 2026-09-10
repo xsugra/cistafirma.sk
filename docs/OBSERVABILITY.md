@@ -109,6 +109,14 @@ The variable is therefore set **on the backend service only**, and:
 Celery containers do not set it — they have no scrape target and must not share
 the directory.
 
+### Broker-side queue depth
+
+`/metrics` cannot see the broker, so queue backlog is reported by
+`make ops-check` instead — it prints the depth of every Celery queue and warns
+past `CISTAFIRMA_QUEUE_WARN_DEPTH`. Nothing else in the stack exposes this, and
+a queue that has silently stopped draining is otherwise indistinguishable from
+one that is merely busy. See `docs/DATA_PROTECTION.md` for the gate as a whole.
+
 ### Known limitations
 
 - Counter values are per *container*. With `BACKEND_WORKERS` > 1 they are

@@ -167,6 +167,57 @@ entry cannot mask a broken one, and an unparseable trailing line falls back to
 the previous readable record rather than being trusted. Set `CISTAFIRMA_DRILL_LOG`
 to record somewhere else.
 
+## Operational gate and failure alerting
+
+`make ops-check` answers one question in one command: is everything this
+document depends on actually working? It covers the stack, the database, Celery
+queue depths, the local backup and its checksum, every off-site control, the
+drill record, and whether the weekly job is still firing. It is read-only — it
+starts no container and writes nothing — so it is safe to run at any time, and
+it exits non-zero when a control is unmet.
+
+The weekly job runs the same gate as its last step. On any failure it writes
+`~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
+non-zero so launchd records it too. The marker is cleared only by a fully
+successful run, so a later partial success cannot silently forgive an earlier
+failure.
+
+Two deliberate asymmetries keep that alert trustworthy:
+
+- **A disconnected volume is not a failure there.** This document says to keep
+  the external disk disconnected except while replicating, so the unattended run
+  treats "not mounted" as a warning — an alert that reddens every week for a
+  documented posture is an alert everyone learns to ignore. `make ops-check` and
+  `make db-offsite-status` keep the strict reading: when you ask by hand, you
+  want the truth rather than the policy.
+- **launchd's own run counter is the only proof the job has ever fired.** The
+  log cannot distinguish an unattended run from a manual one, so the gate reads
+  `launchctl print … runs`. A job launchd has never launched cannot be reported
+  as "ran recently" merely because someone ran the script by hand.
+
+### Off-site replica record
+
+`make db-backup-replicate` appends a record to
+
+```text
+$HOME/Library/Application Support/CistaFirma/replicas.log   # mode 600
+```
+
+once the copy has been checksum-verified. The staleness control reads *that
+record* rather than the replica files, because the disk is normally
+disconnected — its mtimes are unavailable exactly when the question "has it been
+attached lately?" matters most. No recorded replica within
+`CISTAFIRMA_REPLICA_MAX_AGE_DAYS` (default 14) fails the gate, and no record at
+all fails it immediately: that means no off-site protection exists yet.
+
+### Celery queue depth
+
+The gate prints the depth of every queue, because nothing else in the stack
+exposes it — a queue that has silently stopped draining looks exactly like one
+that is merely busy. A large backlog is not by itself a failure (the insurance
+queue is deliberately rate-limited and is normally saturated), so it only warns,
+above `CISTAFIRMA_QUEUE_WARN_DEPTH` (default 50000).
+
 ## Recovery incident procedure
 
 1. Stop all data-changing operations and preserve the failed environment for

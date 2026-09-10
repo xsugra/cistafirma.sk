@@ -61,4 +61,34 @@ rsync -a --checksum \
 OFFSITE_BACKUP="$OFFSITE_DIR/$(basename "$BACKUP_FILE")"
 "$ROOT_DIR/scripts/local/verify_postgres_backup.sh" "$OFFSITE_BACKUP"
 
+# Record the replica. The volume is documented as normally disconnected, so the
+# replica file's own mtime is unavailable exactly when the staleness question
+# matters most -- "has the disk been attached lately?". A local record is the
+# only thing that can answer that while the disk is away. Written only after
+# both the source and the copy verified, so the record means a real replica.
+REPLICA_LOG="${CISTAFIRMA_REPLICA_LOG:-${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/replicas.log}"
+
+replica_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sha256"])' \
+    "${BACKUP_FILE}.json" 2>/dev/null || true)
+
+umask 077
+mkdir -p "$(dirname "$REPLICA_LOG")"
+python3 - "$REPLICA_LOG" "$OFFSITE_BACKUP" "${replica_sha:-}" "$OFFSITE_DIR" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+log_path, replica_path, sha, offsite_dir = sys.argv[1:5]
+record = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "backup": Path(replica_path).name,
+    "sha256": sha,
+    "offsite_dir": offsite_dir,
+}
+with open(log_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+PY
+
 echo "Off-site replica verified: $OFFSITE_BACKUP"
+echo "Recorded in: $REPLICA_LOG"

@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-offsite-configure db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-offsite-configure db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status ops-check run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
 
 # ====================================================================================
 # HELP
@@ -146,6 +146,14 @@ db-backup-prune:
 # Off-site readiness report. Read-only; exits non-zero when a control is unmet.
 db-offsite-status:
 	@scripts/local/offsite_status.sh
+
+# Aggregate operational gate: stack, queues, backups, off-site controls and the
+# weekly job's own firing record. Read-only; exits non-zero when a control is
+# unmet. NOTE: the off-site *mount* is required here (a deliberate check wants
+# the truth), unlike in the unattended run, which treats a disconnected volume
+# as the documented normal state.
+ops-check:
+	@scripts/local/ops_check.sh
 
 # Record where the off-site backup volume lives on *this* machine, so the weekly
 # launchd job (which inherits almost no environment) can find it. Writes

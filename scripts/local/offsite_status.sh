@@ -11,14 +11,21 @@ set -Eeuo pipefail
 # Must precede the CISTAFIRMA_* defaults read just below.
 # shellcheck source=lib/backup_env.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+# shellcheck source=lib/backup_time.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_time.sh"
+# shellcheck source=lib/backup_log.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_log.sh"
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-DEFAULT_BACKUP_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/backups"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma"
+DEFAULT_BACKUP_DIR="$STATE_DIR/backups"
 BACKUP_DIR="${CISTAFIRMA_BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 MAX_AGE_DAYS="${CISTAFIRMA_BACKUP_MAX_AGE_DAYS:-7}"
-DEFAULT_DRILL_LOG="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/restore_drills.log"
-DRILL_LOG="${CISTAFIRMA_DRILL_LOG:-$DEFAULT_DRILL_LOG}"
+DRILL_LOG="${CISTAFIRMA_DRILL_LOG:-$STATE_DIR/restore_drills.log}"
 MAX_DRILL_AGE_DAYS="${CISTAFIRMA_DRILL_MAX_AGE_DAYS:-30}"
+REPLICA_LOG="${CISTAFIRMA_REPLICA_LOG:-$STATE_DIR/replicas.log}"
+MAX_REPLICA_AGE_DAYS="${CISTAFIRMA_REPLICA_MAX_AGE_DAYS:-14}"
+REQUIRE_MOUNTED="${CISTAFIRMA_OFFSITE_REQUIRE_MOUNTED:-true}"
 
 failures=0
 ok() { printf 'OK    %s\n' "$*"; }
@@ -26,6 +33,19 @@ warn() { printf 'WARN  %s\n' "$*"; }
 bad() {
     printf 'FAIL  %s\n' "$*"
     failures=$((failures + 1))
+}
+
+# "The volume is not attached" is a documented normal state -- DATA_PROTECTION.md
+# says to keep it disconnected except while replicating -- so an unattended run
+# must not call it a failure, or the weekly alert turns into noise that everyone
+# learns to ignore. A deliberate `make db-offsite-status` keeps the strict
+# default: when you ask by hand you want the truth, not the policy.
+unmounted() {
+    if [ "$REQUIRE_MOUNTED" = "true" ]; then
+        bad "$1"
+    else
+        warn "$1 (not required for an unattended run)"
+    fi
 }
 
 read_sha256() {
@@ -38,71 +58,8 @@ print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["sha256"])
 PY
 }
 
-age_days() {
-    python3 - "$1" <<'PY'
-import os
-import sys
-import time
-
-print(int((time.time() - os.path.getmtime(sys.argv[1])) // 86400))
-PY
-}
-
 plain_checksum() {
     shasum -a 256 "$1" | awk '{print $1}'
-}
-
-# Last recorded successful drill, as "timestamp<TAB>backup<TAB>tables<TAB>source".
-# Unparseable lines are skipped rather than trusted, so a truncated append cannot
-# be mistaken for evidence.
-last_drill() {
-    python3 - "$1" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-if not path.is_file():
-    raise SystemExit(0)
-
-last = None
-for line in path.read_text(encoding="utf-8").splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        record = json.loads(line)
-    except ValueError:
-        continue
-    if isinstance(record, dict) and record.get("timestamp"):
-        last = record
-
-if last:
-    print("{}\t{}\t{}\t{}".format(
-        last.get("timestamp", ""),
-        last.get("backup", ""),
-        last.get("public_tables", ""),
-        last.get("source", ""),
-    ))
-PY
-}
-
-iso_age_days() {
-    python3 - "$1" <<'PY'
-import sys
-from datetime import datetime, timezone
-
-try:
-    stamp = datetime.fromisoformat(sys.argv[1])
-except ValueError:
-    print(-1)
-    raise SystemExit(0)
-
-if stamp.tzinfo is None:
-    stamp = stamp.replace(tzinfo=timezone.utc)
-
-print(int((datetime.now(timezone.utc) - stamp).total_seconds() // 86400))
-PY
 }
 
 printf 'CistaFirma off-site backup status\n'
@@ -142,9 +99,9 @@ printf '\n'
 offsite="${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}"
 
 if [ -z "$offsite" ]; then
-    bad "CISTAFIRMA_OFFSITE_BACKUP_DIR is not set — no off-site replica is possible"
+    unmounted "CISTAFIRMA_OFFSITE_BACKUP_DIR is not set — no off-site replica is possible"
 elif [ ! -d "$offsite" ]; then
-    bad "off-site directory is not mounted: $offsite"
+    unmounted "off-site directory is not mounted: $offsite"
 else
     offsite=$(cd "$offsite" && pwd -P)
     ok "off-site directory is mounted: $offsite"
@@ -183,7 +140,7 @@ fi
 # monthly cadence in docs/DATA_PROTECTION.md is only meaningful if a drill is
 # recorded when it happens, so the gate reads the drill log back.
 printf '\n'
-drill_record=$(last_drill "$DRILL_LOG")
+drill_record=$(last_log_fields "$DRILL_LOG" timestamp backup public_tables source)
 
 if [ -z "$drill_record" ]; then
     bad "no restore drill has been recorded in $DRILL_LOG"
@@ -208,6 +165,36 @@ EOF
         # one exists -- restoring the local dump does not prove the off-site one.
         if [ "$drill_source" != "off-site" ] && [ -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ]; then
             warn "last drill used the local backup; drill the off-site copy when one is present"
+        fi
+    fi
+fi
+
+# --- off-site replica staleness -----------------------------------------
+# Read from a local record rather than from the volume. docs/DATA_PROTECTION.md
+# says to keep the disk disconnected except while replicating, so its mtimes are
+# unavailable exactly when this question matters most: "has it been attached
+# lately?". The newest-replica check above answers "is the current dump safe?";
+# this one answers "is the whole off-site habit still alive?", and only a local
+# record can answer it while the disk is away.
+printf '\n'
+replica_record=$(last_log_fields "$REPLICA_LOG" timestamp backup)
+
+if [ -z "$replica_record" ]; then
+    bad "no off-site replica has ever been recorded in $REPLICA_LOG"
+else
+    IFS=$'\t' read -r replica_time replica_backup <<EOF
+$replica_record
+EOF
+    days=$(iso_age_days "$replica_time")
+
+    if [ "$days" -lt 0 ]; then
+        bad "last recorded replica has an unreadable timestamp: $replica_time"
+    else
+        printf '  last replica     : %s (%s day(s) ago)\n' "${replica_backup:-unknown}" "$days"
+        if [ "$days" -gt "$MAX_REPLICA_AGE_DAYS" ]; then
+            bad "no off-site replica for ${days} day(s) (limit ${MAX_REPLICA_AGE_DAYS}) -- attach the volume and replicate"
+        else
+            ok "off-site replication is recent (${days} day(s) ago)"
         fi
     fi
 fi

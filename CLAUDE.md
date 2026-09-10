@@ -114,7 +114,16 @@ make db-offsite-status                          # Read-only off-site readiness g
 make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"  # Record it, once
 make db-backup-prune                            # Dry-run retention (newest 7 kept)
 make db-backup-schedule-install                 # Weekly launchd backup job
+make ops-check                                  # Every operational control, one verdict
 ```
+
+`make ops-check` is the single read-only gate over the whole protection story
+(stack, database, queue depths, backups, off-site controls, drill record, and
+whether the weekly job is still firing). It starts no container and writes
+nothing. The weekly job runs the same gate and, on failure, writes
+`~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
+non-zero. See `docs/DATA_PROTECTION.md` for the two deliberate asymmetries that
+keep that alert trustworthy.
 
 The off-site path is machine-specific and lives outside the repo, in
 `~/.config/cistafirma/backup.env` (mode 600), written by `db-offsite-configure`.
