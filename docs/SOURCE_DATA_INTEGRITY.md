@@ -146,11 +146,30 @@ ever moves **forward**; `zmenene_od` is read from the stored
 `progress.zmenene_od` (`fetch_ruz_data.py:157`), which is frozen at
 **2026-08-04** and never advanced.
 
-A live API probe confirmed the consequence is structural, not theoretical: with
-`zmenene_od=2026-08-04` and no cursor the API returns changed companies starting
-from RUZ ID 66, but with the cursor applied it returns only IDs above the
-cursor. A company whose RUZ ID is below the cursor is therefore never re-fetched
-by this sync again, even when its data changes. Known limitation, undecided.
+A live API probe on 2026-09-10 measured what the cursor actually does, and it is
+not a filter over the changed set:
+
+| Request | IDs returned |
+|---|---|
+| `zmenene-od=2026-08-04` alone | `66, 133, 280, 369, 496, …` — **scattered**: the changed entities |
+| the same, plus `pokracovat-za-id=2617790` | `2617791, 2617792, 2617793, …` — **consecutive**, 1000 per page, `existujeDalsieId: true` |
+
+So `pokracovat-za-id` does not paginate the changed set — it switches
+`/api/uctovne-jednotky` to listing entities in ID order, and **the change-date
+window stops applying at all**. Every real run passes the stored cursor
+(`fetch_ruz_data.py:208`), so `zmenene_od` is inert for every run after the
+first and this sync only ever advances into newly-added tail IDs. A change to an
+*existing* company is therefore never fetched again, however it changes.
+
+Measured the same day: the ID space ends below 2,700,000, so the walk is bounded
+and a run that finds nothing new exits in milliseconds. That is what the
+six-hourly beat normally does, and it is why five runs a day can "succeed"
+having processed nothing at all.
+
+Known limitation, undecided. Fixing it means first choosing how changes are to
+be found at all — dropping the cursor to use the date window would ask the API
+for the registry's entire changed subset, from ID 66 upward — so it is a load
+decision, not a bug fix.
 
 ## Which RUZ writers announce a dissolution
 
