@@ -155,6 +155,41 @@ else
     bad "the backend is not running, so no source can be judged"
 fi
 
+# --- sync jobs -----------------------------------------------------------
+# The queue section reports load and the one above reports what the sources
+# achieve. Neither reads `registers_syncjob`, so an import whose worker died
+# keeps its `running` status forever and the dashboard counts it as active --
+# job #3 did that for fifteen days. `sync_health` owns what "an active job is
+# really active" means, so it is chained here rather than re-implemented,
+# exactly as offsite_status.sh owns the off-site verdict below.
+section "Sync jobs"
+
+if docker compose ps --status running --services 2>/dev/null | grep -qx 'backend'; then
+    set +e
+    sync_output=$(docker compose exec -T backend python manage.py sync_health --skip-checks 2>&1)
+    sync_rc=$?
+    set -e
+    printf '%s\n' "$sync_output" | sed 's/^/  /'
+
+    if [ "$sync_rc" -eq 0 ]; then
+        ok "no active sync job is stuck or abandoned"
+    else
+        # Reuse the count rather than the FAIL lines, so the command stays the
+        # single owner of what its failures are -- and fail closed if its
+        # summary is ever unreadable, since a changed format must not read as
+        # success.
+        unmet=$(printf '%s\n' "$sync_output" \
+            | sed -n 's/^Sync jobs: \([0-9][0-9]*\) unmet$/\1/p' | tail -n 1)
+        if [ -z "$unmet" ]; then
+            bad "sync_health exited $sync_rc without a readable verdict"
+        else
+            failures=$((failures + unmet))
+        fi
+    fi
+else
+    bad "the backend is not running, so no sync job can be judged"
+fi
+
 # --- backup and off-site controls ---------------------------------------
 section "Backup and off-site controls"
 

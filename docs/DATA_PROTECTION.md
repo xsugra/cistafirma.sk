@@ -171,10 +171,11 @@ to record somewhere else.
 
 `make ops-check` answers one question in one command: is everything this
 document depends on actually working? It covers the stack, the database, Celery
-queue depths, the local backup and its checksum, every off-site control, the
-drill record, and whether the weekly job is still firing. It is read-only — it
-starts no container and writes nothing — so it is safe to run at any time, and
-it exits non-zero when a control is unmet.
+queue depths, active sync jobs, the local backup and its checksum, every
+off-site control, the drill record, and whether the weekly job is still firing.
+It is read-only — it
+starts no container and writes nothing — so it is safe to run at any time, and it
+exits non-zero when a control is unmet.
 
 The weekly job runs the same gate as its last step. On any failure it writes
 `~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
@@ -258,6 +259,41 @@ companies owe the Socialná poisťovňa anything: a low rate is normal, and a ra
 threshold would have to be tuned per source and would drift. A source with too
 few attempts, or too few successes for its split to mean anything, is reported
 as *not judged* rather than as healthy, so silence is never mistaken for a pass.
+
+### Sync jobs
+
+Depth measures load; it cannot measure progress either. A job whose worker died
+holds its `running` row and a frozen `last_heartbeat` indefinitely: the queue
+looks healthy, the admin dashboard keeps counting it as an active import
+(`adminapi/views/dashboard.py:35`), and nothing will ever finish it. SyncJob #3
+(`ruz_full_firmy`) did exactly that for **15 days**, and neither the queue
+section nor the source section above could see it — neither had ever read
+`SyncJob` at all.
+
+`make ops-check` therefore also chains `python manage.py sync_health`
+(`backend/registers/management/commands/`), which owns what "an active job is
+really active" means:
+
+- a `running` job whose heartbeat is past the staleness threshold
+  (`CISTAFIRMA_STUCK_HEARTBEAT_MINUTES`, default 30) — the worker is gone and no
+  retry, resume or cancel will arrive for it;
+- a `queued` job older than `CISTAFIRMA_QUEUED_JOB_MINUTES` (default 720) that
+  was never claimed — accepted, then silently dropped.
+
+Counter values are printed but never judged, because how many items a job
+*should* process depends on the run rather than on its type, so no threshold
+would be honest. The command asks `is_stuck()` in
+`registers/services/sync_engine.py` for the staleness verdict instead of
+re-deriving it, so the gate cannot call a job healthy that the watchdog is about
+to fail; the gate itself parses only the command's `Sync jobs: N unmet` summary
+and fails closed if that line is ever unreadable. The reaper that acts on the
+same verdict on a schedule is described in `docs/OBSERVABILITY.md`.
+
+The queued cutoff is deliberately generous, for the same reason the unattended
+run treats a disconnected disk as a warning: the `insurance` queue is normally
+saturated and a long wait there is a documented normal state, so a control that
+reddens for it every week is one people learn to ignore. A monitored run must
+never fail on something these docs describe as normal.
 
 ## Recovery incident procedure
 

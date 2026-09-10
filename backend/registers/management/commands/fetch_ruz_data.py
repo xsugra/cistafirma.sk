@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from companies.models import Company
-from registers.models import IndividualEntity, SyncProgress
+from registers.models import IndividualEntity, SyncJob, SyncProgress
 from registers.integrations.ruz_api import RuzApi
 import time
 
@@ -173,8 +173,29 @@ class Command(BaseCommand):
             f'Pokračujem za ID: {pokracovat_za_id or 0}'
         ))
 
+        from registers.services.sync_engine import set_job_outcome
+
+        # Nothing else beats this job's heart. Heartbeats come from
+        # `record_item`, which only the per-company `tracked_sync_task` tasks
+        # call, and this command never does -- so a multi-hour resync looked
+        # exactly like a dead job. That is why the watchdog could not be
+        # switched on until this existed.
+        job_row = SyncJob.objects.filter(pk=sync_job_id).first()
+
+        def beat() -> None:
+            if job_row is not None:
+                job_row.heartbeat()
+
+        # This run's own numbers. `progress` cannot supply them: its row is
+        # reused between runs and `start()` resets only `started_at`, so its
+        # counters accumulate -- the 12:22 run logged 6350 before it began and
+        # 6367 after handling 17 records. The job row is per-run, so the counts
+        # belong there.
+        run = {"processed": 0, "created": 0, "updated": 0, "skipped": 0, "errors": 0}
+
         try:
             while True:
+                beat()
                 self.stdout.write(
                     f"[{progress.total_processed}] Fetching company IDs changed since {zmenene_od}, "
                     f"starting after ID {pokracovat_za_id or 0}..."
@@ -189,7 +210,7 @@ class Command(BaseCommand):
                 company_ids = id_data['id']
                 self.stdout.write(f"Found {len(company_ids)} company IDs to process.")
 
-                for company_id in company_ids:
+                for index, company_id in enumerate(company_ids, start=1):
                     try:
                         details = api.get_company_details(company_id)
                         if details:
@@ -199,15 +220,30 @@ class Command(BaseCommand):
                                 created=created_new,
                                 updated=updated_existing
                             )
+                            run["processed"] += 1
+                            if created_new:
+                                run["created"] += 1
+                            elif updated_existing:
+                                run["updated"] += 1
                         else:
                             progress.record_progress(ruz_id=company_id, skipped=True)
+                            run["processed"] += 1
+                            run["skipped"] += 1
                     except Exception as e:
                         self.stderr.write(f"Error processing company ID {company_id}: {e}")
                         progress.record_progress(ruz_id=company_id, error=True)
                         progress.last_error = str(e)
-                    
+                        run["processed"] += 1
+                        run["errors"] += 1
+
                     # Be a good API citizen
-                    time.sleep(0.1) 
+                    time.sleep(0.1)
+
+                    # A page is up to 1000 companies, so at 0.1s each the
+                    # per-page beat alone would be minutes apart. Every 50
+                    # keeps the gap far below any sane staleness threshold.
+                    if index % 50 == 0:
+                        beat()
 
                 if not id_data.get('existujeDalsieId'):
                     self.stdout.write(self.style.SUCCESS("Reached the end of the list."))
@@ -255,6 +291,19 @@ class Command(BaseCommand):
                 fail_job(job, error=f"{type(e).__name__}: {e}")
             self.stderr.write(self.style.ERROR(f'Synchronizácia zlyhala: {e}'))
             raise
+        finally:
+            # Recorded on every exit path -- completed, interrupted, or failed --
+            # so a job's counters always describe the work that was actually
+            # done. A job that reports zero cannot be told apart from one that
+            # did nothing, which is exactly how 17 created companies came to be
+            # stored as `processed_items=0`.
+            set_job_outcome(
+                sync_job_id,
+                processed=run["processed"],
+                succeeded=run["created"] + run["updated"],
+                failed=run["errors"],
+                skipped=run["skipped"],
+            )
 
     def update_or_create_company(self, data: dict, entity_type: str = 'both'):
         """

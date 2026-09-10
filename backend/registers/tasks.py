@@ -18,6 +18,7 @@ from core.task_utils import BaseSyncTask
 from .services.sync_engine import (
     claim_ruz_job,
     complete_job,
+    detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
     fail_job,
     update_company_status,
@@ -648,3 +649,23 @@ def compute_sector_benchmarks(year: int | None = None):
     from companies.services.benchmarking import compute_sector_benchmarks as _compute
     result = _compute(year)
     return f"Sector benchmarks done: {result}"
+
+
+@shared_task(queue='celery')
+def detect_stuck_sync_jobs():
+    """Fail sync jobs whose heartbeat has gone stale.
+
+    The reaper itself always worked; nothing ever called it. A job whose worker
+    died stayed `running` indefinitely -- job #3 sat that way for 15 days,
+    counted as an active import by the admin dashboard, with no manual remedy
+    (the API refuses cancel and resume for RUZ jobs by design).
+
+    On the `celery` queue rather than `ruz_full`, so the reaper can never end up
+    waiting behind the very backlog it is meant to notice.
+    """
+    flipped = detect_and_fail_stuck_jobs()
+    if flipped:
+        logger.warning("Watchdog failed %s stuck sync job(s).", flipped)
+    else:
+        logger.info("Watchdog found no stuck sync jobs.")
+    return flipped

@@ -406,6 +406,17 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 900.0,
         'options': {'expires': 800.0, 'queue': 'celery'},
     },
+    # Reaps sync jobs whose worker died. Without it a dead import stays
+    # `running` forever and is counted as active by the dashboard -- job #3 did
+    # exactly that for 15 days. The staleness threshold is
+    # CISTAFIRMA_STUCK_HEARTBEAT_MINUTES (default 30); it must stay well above
+    # the slowest legitimate gap between heartbeats, or the reaper starts
+    # killing healthy imports instead.
+    'detect-stuck-sync-jobs-every-10-min': {
+        'task': 'registers.tasks.detect_stuck_sync_jobs',
+        'schedule': 600.0,
+        'options': {'expires': 550.0, 'queue': 'celery'},
+    },
 }
 
 # =============================================================================

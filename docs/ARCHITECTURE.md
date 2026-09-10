@@ -80,6 +80,24 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 > Detaily a dôvod, prečo sa rate limit nezvyšuje bez rozhodnutia:
 > `docs/SOURCE_DATA_INTEGRITY.md`.
 
+### `SyncJob` vs `SyncProgress`
+
+Dva záznamy, ktoré vyzerajú podobne, ale majú iný životný cyklus:
+
+- `SyncJob` je **per-run** záznam: jeden riadok na jedno spustenie syncu, s
+  vlastnými počítadlami (`processed_items`, `succeeded_items`, `failed_items`,
+  `skipped_items`) a vlastným `last_heartbeat`, ktorý stráži watchdog.
+- `SyncProgress` je **dlho žijúci, kumulatívny** riadok: `get_or_create_active`
+  ho medzi behmi recykluje a `start()` resetuje len `started_at`, takže jeho
+  počítadlá sa naprieč behmi sčítavajú. Worker log to ukázal priamo: pred
+  spracovaním 17 záznamov hlásil 6350 a po ňom 6367.
+
+Preto `SyncProgress` nevie odpovedať na otázku „čo spravil posledný beh?" a
+výsledky behu patria na job: zapisuje ich `set_job_outcome()`
+(`registers/services/sync_engine.py`), ktoré mení iba počítadlá a `status`
+necháva životnému cyklu (`complete_job` / `fail_job`). Bez toho bol job #8
+(`ruz_incremental`) uložený ako `completed` s `processed_items=0`, hoci beh
+vytvoril 17 firiem — nerozoznateľný od behu, ktorý nič neurobil.
 
 ## 5. Vyhľadávací flow (request lifecycle)
 

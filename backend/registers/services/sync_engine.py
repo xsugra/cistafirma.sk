@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 import random
 import time
 from contextlib import contextmanager
@@ -229,10 +230,14 @@ def claim_ruz_job(job_id: int, *, celery_task_id: str = "") -> SyncJob | None:
 
 
 def start_job(job: SyncJob, *, total_items: int | None = None, celery_task_id: str = "") -> None:
+    # One `now` for both columns: two calls put a few microseconds between a
+    # job's start and its first heartbeat, which reads as a real interval in
+    # the admin and makes "did it ever beat?" needlessly harder to answer.
+    now = timezone.now()
     SyncJob.objects.filter(pk=job.pk).update(
         status="running",
-        started_at=timezone.now(),
-        last_heartbeat=timezone.now(),
+        started_at=now,
+        last_heartbeat=now,
         total_items=total_items if total_items is not None else job.total_items,
         celery_task_id=celery_task_id or job.celery_task_id,
     )
@@ -266,9 +271,39 @@ def cancel_job(job: SyncJob, *, reason: str = "") -> None:
 
 
 def pause_job(job: SyncJob, *, reason: str = "") -> None:
-    SyncJob.objects.filter(pk=job.pk).update(
-        status="paused",
-        notes=(job.notes + f"\nPaused: {reason}").strip(),
+    # Only append when there is something to say. An unconditional f-string
+    # left job #3 with three bare "Paused: " lines -- a note that records
+    # nothing while looking like it does.
+    update: dict = {"status": "paused"}
+    if reason:
+        update["notes"] = (job.notes + f"\nPaused: {reason}").strip()
+    SyncJob.objects.filter(pk=job.pk).update(**update)
+
+
+def set_job_outcome(
+    job_id: int,
+    *,
+    processed: int,
+    succeeded: int = 0,
+    failed: int = 0,
+    skipped: int = 0,
+) -> None:
+    """Record what a run actually achieved, without touching its status.
+
+    A completed job showing zero processed items cannot be told apart from one
+    that did nothing. That is not hypothetical: the 12:22 RUZ run created 17
+    companies and was stored as `processed_items=0`, because the command
+    reports to `SyncProgress` -- whose counters accumulate across runs -- and
+    never to the job at all.
+
+    Only the counters are written. `status` stays the lifecycle owner's
+    (`complete_job` / `fail_job`), so there is never a second writer of it.
+    """
+    SyncJob.objects.filter(pk=job_id).update(
+        processed_items=processed,
+        succeeded_items=succeeded,
+        failed_items=failed,
+        skipped_items=skipped,
     )
 
 
@@ -419,7 +454,63 @@ def _classify_error(exc: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 
-STUCK_HEARTBEAT_THRESHOLD = timedelta(minutes=10)
+DEFAULT_STUCK_HEARTBEAT_MINUTES = 30
+STUCK_HEARTBEAT_ENV = "CISTAFIRMA_STUCK_HEARTBEAT_MINUTES"
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def stuck_heartbeat_threshold() -> timedelta:
+    """How stale a heartbeat may get before its job counts as dead.
+
+    Read from the environment rather than fixed in code, because the right
+    value is set by the slowest *legitimate* step and that is not knowable
+    here. It was 10 minutes while nothing called this at all; the first real
+    caller is the RUZ import, where one page is a thousand companies behind a
+    0.1s-per-company sleep and a retry session that may stall for minutes. A
+    threshold tighter than that does not protect anything -- it kills healthy
+    imports, which is worse than the stale row it was meant to reap.
+    """
+    return timedelta(
+        minutes=_env_int(STUCK_HEARTBEAT_ENV, DEFAULT_STUCK_HEARTBEAT_MINUTES)
+    )
+
+
+def stuck_cutoff():
+    """The instant before which a heartbeat means the job is dead.
+
+    Single owner of what "stuck" means: the watchdog below and the read-only
+    `sync_health` command both need the same verdict, so neither re-derives
+    it. Same principle as `offsite_status.sh` owning the off-site verdict.
+    """
+    return timezone.now() - stuck_heartbeat_threshold()
+
+
+def is_stuck(job: SyncJob, *, cutoff=None) -> bool:
+    """Whether the watchdog would reap this job.
+
+    The single owner of the rule. `detect_and_fail_stuck_jobs` below and the
+    read-only `sync_health` command both need it, and the gate is only useful
+    if it agrees with the reaper -- so it asks rather than re-deriving the
+    condition and drifting. A job that never beat at all is judged on
+    `started_at`, because "never wrote a heartbeat" is not the same as "wrote
+    one long ago" and only the second means a worker once existed.
+    """
+    if job.status != "running":
+        return False
+    if cutoff is None:
+        cutoff = stuck_cutoff()
+    if job.last_heartbeat is None:
+        return job.started_at is not None and job.started_at < cutoff
+    return job.last_heartbeat < cutoff
 
 
 def detect_and_fail_stuck_jobs() -> int:
@@ -428,13 +519,14 @@ def detect_and_fail_stuck_jobs() -> int:
     Called from a periodic Celery beat task.
     Returns the number of jobs flipped.
     """
-    cutoff = timezone.now() - STUCK_HEARTBEAT_THRESHOLD
-    qs = SyncJob.objects.filter(status="running").filter(
-        last_heartbeat__lt=cutoff
-    ) | SyncJob.objects.filter(status="running", last_heartbeat__isnull=True, started_at__lt=cutoff)
-    qs = qs.distinct()
+    cutoff = stuck_cutoff()
     count = 0
-    for job in qs:
+    # Filtered in Python through `is_stuck` rather than in the queryset: the
+    # rule is the part that must not exist twice, and the running set is a
+    # handful of rows that the watchdog walks every ten minutes.
+    for job in SyncJob.objects.filter(status="running"):
+        if not is_stuck(job, cutoff=cutoff):
+            continue
         fail_job(job, error="Stuck job auto-failed by watchdog (no heartbeat).")
         AuditLog.objects.create(
             action="sync.watchdog.failed",

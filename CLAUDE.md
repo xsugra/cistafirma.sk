@@ -118,12 +118,18 @@ make ops-check                                  # Every operational control, one
 ```
 
 `make ops-check` is the single read-only gate over the whole protection story
-(stack, database, queue depths, per-source scrape health, backups, off-site
-controls, drill record, and whether the weekly job is still firing). It starts no container and writes
-nothing. The weekly job runs the same gate and, on failure, writes
-`~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
-non-zero. See `docs/DATA_PROTECTION.md` for the two deliberate asymmetries that
-keep that alert trustworthy.
+(stack, database, queue depths, per-source scrape health, sync jobs, backups,
+off-site controls, drill record, and whether the weekly job is still firing). It
+starts no container and writes nothing. The weekly job runs the same gate and, on
+failure, writes `~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS
+notification, and exits non-zero. See `docs/DATA_PROTECTION.md` for the two
+deliberate asymmetries that keep that alert trustworthy.
+
+`make ops-check` also fails a sync job whose worker is gone — a `running`
+`SyncJob` whose heartbeat has gone stale, or a `queued` one never claimed — and
+`CISTAFIRMA_STUCK_HEARTBEAT_MINUTES` (default 30) sets that staleness threshold,
+so it must stay well above the slowest legitimate gap between heartbeats or the
+reaper starts failing healthy imports.
 
 The off-site path is machine-specific and lives outside the repo, in
 `~/.config/cistafirma/backup.env` (mode 600), written by `db-offsite-configure`.

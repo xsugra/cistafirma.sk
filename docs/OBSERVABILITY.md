@@ -117,6 +117,51 @@ past `CISTAFIRMA_QUEUE_WARN_DEPTH`. Nothing else in the stack exposes this, and
 a queue that has silently stopped draining is otherwise indistinguishable from
 one that is merely busy. See `docs/DATA_PROTECTION.md` for the gate as a whole.
 
+### Sync jobs
+
+Depth measures load, and for the same reason it cannot answer whether an
+*import* is still moving. A job whose worker died keeps its `running` row and a
+frozen `last_heartbeat` for ever: the queue behind it can look healthy while
+nothing in it will ever be processed. That is not hypothetical — SyncJob #3
+(`ruz_full_firmy`) sat `running` from 2026-08-25 22:30:52 with its heartbeat
+frozen at that same instant and `processed_items=0`, and
+`adminapi/views/dashboard.py:35` counted it as an active job for **15 days**.
+
+The reaper for exactly this, `detect_and_fail_stuck_jobs()` in
+`registers/services/sync_engine.py`, had been referenced only at its own
+definition across the whole repository — never scheduled, no management command,
+no tests — while the module docstring already claimed "heartbeat watchdog flips
+it to `failed` after staleness". Two things now close that gap:
+
+- `detect-stuck-sync-jobs-every-10-min` in `CELERY_BEAT_SCHEDULE` (the schedule
+  now has 7 entries) runs `registers.tasks.detect_stuck_sync_jobs` on the
+  `celery` queue every 600 s, expires 550 s — on `celery` rather than `ruz_full`
+  so the reaper can never wait behind the backlog it is meant to notice. It
+  flips a `running` job to `failed` once its heartbeat is past the staleness
+  threshold.
+- `python manage.py sync_health`
+  (`backend/registers/management/commands/`) is a read-only report the gate
+  chains: a table of active and recent jobs, then `Sync jobs: N unmet`, exiting
+  1 when anything is unmet. See `docs/DATA_PROTECTION.md`.
+
+`sync_health` judges exactly two conditions: a `running` job whose heartbeat is
+past the staleness threshold, and a `queued` job older than `--queued-minutes`
+(`CISTAFIRMA_QUEUED_JOB_MINUTES`, default 720) that was never claimed. Counters
+are printed but never judged — how many items a job *should* process depends on
+the run, not on its type, so no threshold would be honest. The report and the
+reaper both ask `is_stuck()` in `registers/services/sync_engine.py` for the
+verdict instead of re-deriving it, so the gate cannot disagree with the watchdog.
+
+`CISTAFIRMA_STUCK_HEARTBEAT_MINUTES` (default **30**) sets that threshold. It
+had been a hard-coded 10-minute constant that nothing called, and it could not
+simply be switched on: `last_heartbeat` was written only by `record_item`, which
+only the per-company `tracked_sync_task` tasks (orsr / financials / insurance)
+call, so the RUZ management command never wrote it and a healthy multi-hour
+resync was indistinguishable from a dead one. `RuzApi` bounds the other side of
+that risk — explicit request timeouts (30 s for the changed-IDs page) plus a
+retry session with 4 attempts (`backend/registers/integrations/ruz_api.py:18-19`)
+— so a stalled run ends within minutes rather than hanging for ever.
+
 ### Known limitations
 
 - Counter values are per *container*. With `BACKEND_WORKERS` > 1 they are
