@@ -262,7 +262,7 @@ export const Profile: React.FC = () => {
                                     </div>
                                     <button
                                         onClick={(e) => handleDeleteFromWatchlist(item.id, e)}
-                                        className="btn btn-ghost btn-icon hover:bg-red-50 hover:text-red-500"
+                                        className="btn btn-ghost btn-icon hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500"
                                         title="Odstrániť"
                                     >
                                         <i className="fas fa-trash-alt"></i>
@@ -377,7 +377,7 @@ export const Profile: React.FC = () => {
                 <h1 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white">Môj Profil</h1>
                 {message && (
                     <div
-                        className={`px-4 py-2 rounded-lg text-sm font-medium w-full md:w-auto ${message.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        className={`px-4 py-2 rounded-lg text-sm font-medium w-full md:w-auto ${message.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
                         {message.text}
                     </div>
                 )}

@@ -90,7 +90,7 @@ export const Login: React.FC = () => {
                     <label
                         className="flex items-center text-gray-600 dark:text-gray-400 cursor-pointer select-none group">
                         <input type="checkbox"
-                               className="mr-2 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 transition-colors"/>
+                               className="mr-2 w-4 h-4 rounded border-gray-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500 transition-colors"/>
                         <span className="group-hover:text-gray-800 dark:group-hover:text-gray-200 transition-colors">Zapamätať prihlásenie</span>
                     </label>
                 </div>

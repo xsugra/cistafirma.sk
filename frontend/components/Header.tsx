@@ -191,7 +191,7 @@ export const Header: React.FC = () => {
                             </button>
                             <button
                                 onClick={handleLogout}
-                                className="btn btn-ghost w-full text-red-500 hover:bg-red-50"
+                                className="btn btn-ghost w-full text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
                             >
                                 Odhlásiť sa
                             </button>

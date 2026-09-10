@@ -9,7 +9,7 @@ export const Footer: React.FC = () => {
             <div className="container mx-auto px-4">
                 <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-4">
-                        <div className="text-gray-500 text-sm text-center md:text-center">
+                        <div className="text-gray-500 dark:text-gray-400 text-sm text-center md:text-center">
                             &copy; {new Date().getFullYear()} cistafirma.sk
                             <br className="md:hidden"/> | Všetky práva vyhradené.
                         </div>

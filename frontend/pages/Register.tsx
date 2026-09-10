@@ -152,7 +152,7 @@ export const Register: React.FC = () => {
                                 required
                                 value={formData.confirmPassword}
                                 onChange={handleChange}
-                                className={`app-input pr-10 ${isTypingConfirm ? (passwordsMatch ? 'border-green-500 focus:border-green-500 focus:ring-green-200' : 'border-red-500 focus:border-red-500 focus:ring-red-200') : ''}`}
+                                className={`app-input pr-10 ${isTypingConfirm ? (passwordsMatch ? 'border-green-500 focus:border-green-500 focus:ring-green-200 dark:focus:ring-green-900/40' : 'border-red-500 focus:border-red-500 focus:ring-red-200 dark:focus:ring-red-900/40') : ''}`}
                                 placeholder="••••••••"
                             />
                             <button

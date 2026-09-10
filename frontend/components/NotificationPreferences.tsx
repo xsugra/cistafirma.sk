@@ -104,8 +104,8 @@ export const NotificationPreferences: React.FC = () => {
                 <div
                     className={`mx-6 mt-4 px-4 py-2 rounded-lg text-sm font-medium ${
                         message.type === 'success'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-red-100 text-red-700'
+                            ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+                            : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'
                     }`}
                 >
                     {message.text}

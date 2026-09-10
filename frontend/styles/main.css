@@ -228,6 +228,10 @@ html.dark .form-label {
     color: var(--text-muted-light);
 }
 
+html.dark .input-icon {
+    color: var(--text-muted-dark);
+}
+
 .app-input {
     width: 100%;
     padding: 0.75rem 1rem 0.75rem 2.5rem;

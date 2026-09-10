@@ -168,7 +168,7 @@ export const Home: React.FC = () => {
                                     className="text-xs font-bold text-blue-600 uppercase tracking-wider">Legislatíva</span>
                                 <span className="text-xs text-gray-400">12. Feb</span>
                             </div>
-                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 transition-colors">
+                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                                 Zmeny v DPH od roku 2025: Na čo si dať pozor?
                             </h4>
                         </div>

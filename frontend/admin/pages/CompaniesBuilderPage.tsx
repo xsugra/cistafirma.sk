@@ -273,11 +273,11 @@ export function CompaniesBuilderPage() {
           <p className="text-sm text-slate-500 dark:text-slate-400">AND/OR builder s URL synchronizáciou, presety a exportom.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="px-3 py-2 rounded-lg border bg-white dark:bg-slate-800 text-sm" onClick={loadCompanies}>Obnoviť</button>
-          <button className="px-3 py-2 rounded-lg border bg-white dark:bg-slate-800 text-sm disabled:opacity-60" onClick={refreshReport} disabled={reportLoading}>
+          <button className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm" onClick={loadCompanies}>Obnoviť</button>
+          <button className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm disabled:opacity-60" onClick={refreshReport} disabled={reportLoading}>
             {reportLoading ? 'Načítavam súhrn…' : 'Obnoviť súhrn'}
           </button>
-          <button className="px-3 py-2 rounded-lg border bg-white dark:bg-slate-800 text-sm" onClick={resetAll}>Reset</button>
+          <button className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm" onClick={resetAll}>Reset</button>
           <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm" onClick={() => exportCurrent('csv')}>Export CSV</button>
           <button className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm" onClick={() => exportCurrent('xlsx')}>Export XLSX</button>
         </div>
@@ -320,9 +320,9 @@ export function CompaniesBuilderPage() {
                   <div className="text-xs text-slate-500 dark:text-slate-400">{filter.description || 'Bez popisu'}</div>
                 </div>
                 <div className="flex gap-1">
-                  <button className="text-xs px-2 py-1 rounded-md border" onClick={() => applySavedFilter(filter)}>Použiť</button>
-                  <button className="text-xs px-2 py-1 rounded-md border" onClick={() => adminApi.updateCompanyFilter(filter.id, { is_favorite: !filter.is_favorite }).then(loadSavedFilters)}>{filter.is_favorite ? '★' : '☆'}</button>
-                  <button className="text-xs px-2 py-1 rounded-md border text-red-600" onClick={() => adminApi.deleteCompanyFilter(filter.id).then(loadSavedFilters)}>×</button>
+                  <button className="text-xs px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700" onClick={() => applySavedFilter(filter)}>Použiť</button>
+                  <button className="text-xs px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700" onClick={() => adminApi.updateCompanyFilter(filter.id, { is_favorite: !filter.is_favorite }).then(loadSavedFilters)}>{filter.is_favorite ? '★' : '☆'}</button>
+                  <button className="text-xs px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 text-red-600 dark:text-red-300" onClick={() => adminApi.deleteCompanyFilter(filter.id).then(loadSavedFilters)}>×</button>
                 </div>
               </div>
             ))}
@@ -340,9 +340,9 @@ export function CompaniesBuilderPage() {
             <p className="text-xs text-slate-500 dark:text-slate-400">Vnorené AND/OR skupiny sa prenášajú cez `filter_builder` v URL.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="px-3 py-2 rounded-lg border text-sm" onClick={() => updateBuilder(addGroup(builder, 'and'))}>+ AND skupina</button>
-            <button className="px-3 py-2 rounded-lg border text-sm" onClick={() => updateBuilder(addGroup(builder, 'or'))}>+ OR skupina</button>
-            <button className="px-3 py-2 rounded-lg border text-sm" onClick={() => updateBuilder(addCondition(builder, defaultCondition('mesto')))}>+ Podmienka</button>
+            <button className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm" onClick={() => updateBuilder(addGroup(builder, 'and'))}>+ AND skupina</button>
+            <button className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm" onClick={() => updateBuilder(addGroup(builder, 'or'))}>+ OR skupina</button>
+            <button className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm" onClick={() => updateBuilder(addCondition(builder, defaultCondition('mesto')))}>+ Podmienka</button>
           </div>
         </div>
         <GroupEditor group={builder} onChange={updateBuilder} isRoot />
@@ -440,7 +440,7 @@ function GroupEditor({ group, onChange, isRoot = false }: { group: FilterBuilder
             <option value="or">OR</option>
           </select>
         </div>
-        {!isRoot && <button className="text-xs px-2 py-1 rounded-md border border-red-300 text-red-600" onClick={() => onChange(emptyGroup())}>Odstrániť</button>}
+        {!isRoot && <button className="text-xs px-2 py-1 rounded-md border border-red-300 text-red-600 dark:border-red-800 dark:text-red-300" onClick={() => onChange(emptyGroup())}>Odstrániť</button>}
       </div>
       <div className="space-y-3">
         {group.children.length === 0 ? <div className="text-xs italic text-slate-500">Zatiaľ bez podmienok.</div> : group.children.map(child => (
@@ -490,7 +490,7 @@ function ConditionEditor({ node, onChange, onDelete }: { node: FilterBuilderCond
         )}
       </div>
       <div className="md:col-span-1 flex md:justify-end">
-        <button className="px-3 py-2 rounded-lg border border-red-300 text-red-600 text-sm" onClick={onDelete}>×</button>
+        <button className="px-3 py-2 rounded-lg border border-red-300 text-red-600 text-sm dark:border-red-800 dark:text-red-300" onClick={onDelete}>×</button>
       </div>
     </div>
   );
@@ -498,7 +498,7 @@ function ConditionEditor({ node, onChange, onDelete }: { node: FilterBuilderCond
 
 function PresetCard({ preset, active, onApply, onExportCsv, onExportXlsx }: { preset: CompanyPreset; active: boolean; onApply: () => void; onExportCsv: () => void; onExportXlsx: () => void }) {
   return (
-    <div className={`min-w-[240px] flex-1 rounded-xl border p-3 space-y-2 ${active ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/40'}`}>
+    <div className={`min-w-[240px] flex-1 rounded-xl border p-3 space-y-2 ${active ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-900/60' : 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/40'}`}>
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="font-semibold text-slate-900 dark:text-white">{preset.name}</div>
