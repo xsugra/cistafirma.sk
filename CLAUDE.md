@@ -49,6 +49,12 @@ cd frontend && npm run dev    # Vite dev server on localhost:5173
 cd frontend && npm run build  # Production build into frontend/dist/
 ```
 
+Note: the Docker dev container is the canonical dependency installer (Node is
+pinned in `frontend/Dockerfile` so the bundled npm 10 writes `package-lock.json`
+in a stable format). Running `npm install` with a newer host npm (11.x) rewrites
+the lockfile formatting and leaves the working tree dirty — prefer
+`docker compose exec frontend npm install` when changing dependencies.
+
 ### Docker (preferred for full-stack; this is the production-like environment)
 
 ```bash
