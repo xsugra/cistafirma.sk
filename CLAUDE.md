@@ -248,3 +248,14 @@ auto-deploys; production deploys on `v*.*.*` tags (manual trigger). See
 - Prefer English in new code/comments, but existing Slovak comments are
   accepted; do not mass-rewrite working code for language.
 - Run the relevant backend tests before/after changes in sync/scraper logic.
+- **Dark mode (Tailwind v4):** a bare `border` / `border-t` / `border-b` with no
+  `border-<color>` resolves to `currentColor` (v3 used `gray-200`), and
+  `main.css` sets `html.dark body { color: #f8fafc }` with no global dark
+  border-color override — so it renders as a **near-white hairline** in dark
+  mode. Always pair it: `border border-slate-200 dark:border-slate-700`, or the
+  theme tokens `border-light-border dark:border-dark-border`. The same applies
+  to light-only `bg-*` / `text-*` / `hover:*` (e.g. `bg-green-100
+  text-green-700` → `bg-green-50 dark:bg-green-900/20 text-green-700
+  dark:text-green-400`).
+- Verify frontend edits with `docker compose exec -T frontend npx tsc --noEmit`
+  and `npm run build`; there is no frontend test runner.
