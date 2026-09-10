@@ -325,7 +325,26 @@ really active" means:
   (`CISTAFIRMA_STUCK_HEARTBEAT_MINUTES`, default 30) — the worker is gone and no
   retry, resume or cancel will arrive for it;
 - a `queued` job older than `CISTAFIRMA_QUEUED_JOB_MINUTES` (default 720) that
-  was never claimed — accepted, then silently dropped.
+  was never claimed — accepted, then silently dropped;
+- the **newest** run of a `triggered_via='beat_schedule'` job type that ended
+  `failed`, within `CISTAFIRMA_FAILED_JOB_HOURS` (default 24) — the one failure
+  with nobody in front of it.
+
+The third is judged on the newest attempt rather than on any failed one, so a
+failure the next run supersedes is history: job #11 (18:22, an `ImportError`
+after a deploy) went red on the spot and job #12 (18:53, 6 850 records)
+released it half an hour later. A gate that stayed red for the superseded run
+would be reporting a scar rather than a state. The window bounds the complaint
+as well as opening it, so a failure nothing has followed up stops counting —
+and a schedule that has genuinely stopped dispatching still produces a fresh
+failed row long before that. What it cannot see is a schedule that dies
+*before* a job row is ever created (a task that was never registered); the
+command prints an empty window instead of staying quiet about it, which is
+labelled as an absence rather than a pass.
+
+`paused` and `cancelled` runs are printed with their status but not judged:
+pausing is a resumable operator action, and the admin API refuses both cancel
+and resume for RUZ jobs, so neither can be a control quietly failing.
 
 Counter values are printed but never judged, because how many items a job
 *should* process depends on the run rather than on its type, so no threshold

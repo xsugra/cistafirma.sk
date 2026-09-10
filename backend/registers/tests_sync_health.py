@@ -123,7 +123,13 @@ class SyncHealthCommandTests(TestCase):
         self.assertIn("not judged", output)
         self.assertIn("completed", output)
 
-    def test_terminal_jobs_are_listed_but_never_fail_the_gate(self):
+    def test_a_cancelled_job_is_listed_but_not_judged(self):
+        """Cancelling is a decision somebody made, not a control that failed.
+
+        Judging it would make the gate red for the operator's own deliberate
+        action -- and for a RUZ job it cannot even happen, since the admin API
+        refuses both cancel and resume for them.
+        """
         self._job(
             status="cancelled",
             started_at=timezone.now() - timedelta(days=40),
@@ -168,3 +174,125 @@ class SyncHealthCommandTests(TestCase):
         after, code = self._run()
         self.assertEqual(code, 0)
         self.assertIn("Sync jobs: 0 unmet", after)
+
+
+class FailedBeatJobTests(TestCase):
+    """The run nobody is watching.
+
+    A beat-scheduled import that dies has no operator in front of it: the row
+    says `failed`, the table prints it, and until 2026-09-10 the gate's verdict
+    still read `Sync jobs: 0 unmet` -- so a schedule that had stopped
+    delivering data looked exactly like one that was working. Job #11 (18:22,
+    an `ImportError` after a deploy) and job #3 (reaped by the watchdog) were
+    both on screen while the gate said zero.
+    """
+
+    def _beat_job(self, *, status, age, **kwargs):
+        job = SyncJob.objects.create(
+            job_type="ruz_incremental",
+            status=status,
+            triggered_via="beat_schedule",
+            started_at=timezone.now() - age,
+            last_heartbeat=timezone.now() - age,
+            completed_at=timezone.now() - age,
+            **kwargs,
+        )
+        SyncJob.objects.filter(pk=job.pk).update(queued_at=timezone.now() - age)
+        job.refresh_from_db()
+        return job
+
+    def _run(self, **options):
+        out = StringIO()
+        try:
+            call_command("sync_health", stdout=out, **options)
+        except SystemExit as exc:
+            return out.getvalue(), exc.code
+        return out.getvalue(), 0
+
+    def test_a_failed_beat_run_is_unmet(self):
+        self._beat_job(
+            status="failed", age=timedelta(hours=1), last_error="ImportError: boom"
+        )
+
+        output, code = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertIn("Sync jobs: 1 unmet", output)
+        self.assertIn("the newest beat-scheduled run", output)
+        self.assertIn("ImportError: boom", output)
+
+    def test_a_manual_run_that_failed_is_not_the_schedules_problem(self):
+        """The distinction the whole rule rests on.
+
+        Someone starting a sync by hand is watching it; a run that dies at
+        00:22 is not. Judging both would put the gate red on an operator's own
+        failed experiment.
+        """
+        SyncJob.objects.create(
+            job_type="ruz_incremental",
+            status="failed",
+            triggered_via="admin_ui",
+            started_at=timezone.now(),
+            completed_at=timezone.now(),
+            last_error="operator cancelled the wrong thing",
+        )
+
+        output, code = self._run()
+
+        self.assertEqual(code, 0)
+        self.assertIn("Sync jobs: 0 unmet", output)
+
+    def test_a_later_successful_run_clears_it(self):
+        """A failure the next run supersedes is history, not state.
+
+        Otherwise the gate would stay red for a transient failure that fixed
+        itself -- the alarm that stops being read.
+        """
+        self._beat_job(
+            status="failed", age=timedelta(hours=2), last_error="ReadTimeoutError"
+        )
+        self._beat_job(status="completed", age=timedelta(minutes=30))
+
+        output, code = self._run()
+
+        self.assertEqual(code, 0)
+        self.assertIn("Sync jobs: 0 unmet", output)
+
+    def test_a_failure_the_window_has_passed_is_not_judged(self):
+        """It bounds the complaint as well as opening it.
+
+        Past the window the job is history. A control that cannot clear is one
+        nobody reads, and the failure this catches -- a schedule that has
+        stopped -- will produce a fresh failed row long before the window runs
+        out.
+        """
+        self._beat_job(status="failed", age=timedelta(days=3))
+
+        output, code = self._run(failed_job_hours=24)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Sync jobs: 0 unmet", output)
+
+    def test_the_failed_window_is_configurable_and_can_come_from_the_env(self):
+        self._beat_job(status="failed", age=timedelta(days=3))
+
+        _, strict = self._run(failed_job_hours=24 * 7)
+        self.assertEqual(strict, 1)
+
+        with patch.dict("os.environ", {"CISTAFIRMA_FAILED_JOB_HOURS": "168"}):
+            output, code = self._run()
+        self.assertEqual(code, 1)
+        self.assertIn("Sync jobs: 1 unmet", output)
+
+    def test_an_empty_window_says_so_instead_of_going_quiet(self):
+        """Absence of evidence, labelled as such.
+
+        A schedule that has stopped dispatching leaves no failed row to judge,
+        so this control cannot see it -- and saying that out loud is what keeps
+        `0 unmet` from being read as "the schedule is fine".
+        """
+        output, code = self._run()
+
+        self.assertEqual(code, 0)
+        self.assertIn("beat-scheduled job types", output)
+        self.assertIn("none recorded in the window", output)

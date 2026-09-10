@@ -144,9 +144,16 @@ it to `failed` after staleness". Two things now close that gap:
   chains: a table of active and recent jobs, then `Sync jobs: N unmet`, exiting
   1 when anything is unmet. See `docs/DATA_PROTECTION.md`.
 
-`sync_health` judges exactly two conditions: a `running` job whose heartbeat is
-past the staleness threshold, and a `queued` job older than `--queued-minutes`
-(`CISTAFIRMA_QUEUED_JOB_MINUTES`, default 720) that was never claimed. Counters
+`sync_health` judges exactly three conditions: a `running` job whose heartbeat is
+past the staleness threshold, a `queued` job older than `--queued-minutes`
+(`CISTAFIRMA_QUEUED_JOB_MINUTES`, default 720) that was never claimed, and the
+newest run of a `triggered_via='beat_schedule'` job type that ended `failed`
+within `CISTAFIRMA_FAILED_JOB_HOURS` (default 24). The third covers the one
+failure nobody is watching: a run that dies in the beat has no operator in
+front of it, so before this the table showed the failed row while the verdict
+still read `0 unmet`. It is judged on the *newest* attempt, so a later
+successful run clears it rather than leaving the gate red for a transient
+failure. Counters
 are printed but never judged — how many items a job *should* process depends on
 the run, not on its type, so no threshold would be honest. The report and the
 reaper both ask `is_stuck()` in `registers/services/sync_engine.py` for the

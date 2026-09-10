@@ -129,7 +129,11 @@ deliberate asymmetries that keep that alert trustworthy.
 `SyncJob` whose heartbeat has gone stale, or a `queued` one never claimed — and
 `CISTAFIRMA_STUCK_HEARTBEAT_MINUTES` (default 30) sets that staleness threshold,
 so it must stay well above the slowest legitimate gap between heartbeats or the
-reaper starts failing healthy imports.
+reaper starts failing healthy imports. It also fails the **newest** run of a
+beat-scheduled job type that ended `failed` within `CISTAFIRMA_FAILED_JOB_HOURS`
+(default 24) — the one failure with nobody in front of it. Judging the newest
+attempt rather than any failed one is what keeps it a state instead of a scar: a
+later successful run clears it.
 
 The off-site path is machine-specific and lives outside the repo, in
 `~/.config/cistafirma/backup.env` (mode 600), written by `db-offsite-configure`.
