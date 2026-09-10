@@ -551,12 +551,12 @@ class RuzDateGuardTests(TestCase):
     def test_a_refused_date_reaches_the_source_health_gate(self):
         """A refusal that only logs is not a control.
 
-        `source_health` judges a source on whether its attempts produce a
-        usable answer -- "attempts, and not one of them usable" is a
-        date-format change. Recording the refusal as a failed attempt for
-        `ruz` is what lets `make ops-check` reach that verdict; without it the
-        guard's failure mode is a JSON line nobody queries, and the gate
-        reports SATISFIED throughout a mass erasure.
+        `source_health` judges a source on whether it produced a usable
+        answer, and a date-format change is exactly "records arrived, and not
+        one of them usable". Recording the refusal against `ruz` is what lets
+        `make ops-check` reach that verdict; without it the guard's failure
+        mode is a JSON line nobody queries, and the gate reports SATISFIED
+        throughout a mass erasure.
         """
         from registers.models import CompanySyncStatus
         from registers.tasks import _update_company_from_ruz_data

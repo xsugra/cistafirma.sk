@@ -30,6 +30,12 @@ The counts are deliberately the signal rather than a rate. Only a few percent
 of companies owe Socialna poistovna anything, so a low rate is normal; what is
 never normal is a whole branch of a parser going quiet.
 
+A second kind of row is judged separately: a source that refuses a *field* it
+cannot read rather than failing a company outright. `ruz` records one only when
+it declines to apply an unparseable date, so its rows carry no attempt count and
+no success, and a format change shows up as a flood of them. Those are rendered
+and judged on their own terms -- see `FIELD_REFUSAL_SOURCES`.
+
 Read-only: it issues SELECTs and writes nothing.
 """
 
@@ -55,6 +61,19 @@ DEFAULT_MIN_SUCCESSES = 20
 AMOUNT_FIELDS = {
     CompanySyncStatus.SOURCE_VSZP: "debt_vszp",
     CompanySyncStatus.SOURCE_SOCIAL: "debt_soc_poist",
+}
+
+# Sources whose rows in `CompanySyncStatus` mean something else, mapped to what
+# it is they could not read. `vszp` and `social` write a row per company
+# *attempt* carrying whether it succeeded; `ruz` writes one only when it refuses
+# to apply a field it cannot parse, and never writes a success. Rendered in the
+# columns above, `ruz` would therefore read "N attempts, 0 succeeded" -- false
+# in both halves, because RUZ syncs fine and reads every field except the one,
+# and because `succeeded` there means "not recorded", not "none succeeded".
+# These rows are judged as refusals instead, on the same threshold: a trickle is
+# an upstream typo, a flood is the source's shape having changed.
+FIELD_REFUSAL_SOURCES = {
+    CompanySyncStatus.SOURCE_RUZ: "date field",
 }
 
 
@@ -116,15 +135,22 @@ class Command(BaseCommand):
             .order_by("source")
         )
 
-        self.stdout.write(
-            f"  {'source':<15} {'attempts':>8}  {'succeeded':>9}  "
-            f"{'found':>7}  {'no-record':>9}  ({window_hours}h window)"
-        )
+        # Two kinds of row live in this table and they do not mean the same
+        # thing, so they are not rendered the same way -- see
+        # `FIELD_REFUSAL_SOURCES`.
+        refusal_rows = [r for r in rows if r["source"] in FIELD_REFUSAL_SOURCES]
+        attempt_rows = [r for r in rows if r["source"] not in FIELD_REFUSAL_SOURCES]
+
+        if attempt_rows:
+            self.stdout.write(
+                f"  {'source':<15} {'attempts':>8}  {'succeeded':>9}  "
+                f"{'found':>7}  {'no-record':>9}  ({window_hours}h window)"
+            )
 
         unmet = 0
         below_threshold = []
         notes = []
-        for row in rows:
+        for row in attempt_rows:
             source = row["source"]
             attempts = row["attempts"]
             succeeded = row["succeeded"]
@@ -187,6 +213,29 @@ class Command(BaseCommand):
                 f"{min_attempts} threshold -- not judged)"
             )
 
+        for row in refusal_rows:
+            source = row["source"]
+            refusals = row["attempts"]
+            what = FIELD_REFUSAL_SOURCES[source]
+
+            if refusals < min_attempts:
+                verdict = f"OK (below the {min_attempts} threshold -- not judged)"
+            else:
+                verdict = "FAIL"
+                unmet += 1
+
+            self.stdout.write(
+                f"  {source:<15} {refusals:>8} record(s) carried an unreadable "
+                f"{what}  {verdict}"
+            )
+            if verdict == "FAIL":
+                self.stdout.write(
+                    f"  (source '{source}': {refusals} record(s) carried a {what} "
+                    f"that could not be read -- the source's shape has changed. "
+                    f"The affected values were kept, not overwritten, so the "
+                    f"stored data is stale rather than gone."
+                )
+
         self.stdout.write("")
         self.stdout.write(f"Source health: {unmet} unmet")
 
@@ -196,11 +245,12 @@ class Command(BaseCommand):
     def _recorded_errors(self, source: str, window_start) -> str:
         """The error types actually recorded in the window, as a suffix.
 
-        "The parser recognises nothing" is one cause of a source failing with
-        no successes, and not the only one -- RUZ refusing a date field it
-        cannot read fails identically while every record it does read is
-        fine. Naming what was recorded is what stops the verdict sending an
-        operator to the wrong file.
+        "The parser recognises nothing" is the reading a source with no
+        successes invites, and it is only one of the ways to get there: a
+        source whose every attempt timed out, or was refused, reaches the
+        same verdict while its parser is fine. Naming what was actually
+        recorded is what stops the note sending an operator to the wrong
+        file.
         """
         rows = (
             CompanySyncStatus.objects.filter(

@@ -118,27 +118,33 @@ def update_company_status(
 def record_unreadable_field(
     *, company_id: int, source: str, field: str, raw: Any
 ) -> CompanySyncStatus:
-    """Record a source field we could not read as a failed attempt for it.
+    """Record that a source sent a field we could not read.
 
     This is what makes `ruz_api.apply_ruz_dates` refusing to write a control
-    rather than a log line. `source_health` judges a source on whether its
-    attempts produce a *usable* answer, and a date-format change is precisely
-    "attempts, and not one usable answer" -- so counting these is what lets
-    `make ops-check` reach a verdict instead of a human having to grep a JSON
-    stream. A lone malformed record stays below `source_health`'s attempt
-    threshold and is reported but not judged, which is the right weight for
-    an upstream typo.
+    rather than a log line: `source_health` counts these against the source and
+    fails it when they stop looking like an upstream typo and start looking
+    like a format change, which is what lets `make ops-check` reach a verdict
+    instead of a human having to grep a JSON stream.
 
-    It is recorded as a failure even though the rest of the record was
-    applied, because from the source's side the answer was not usable.
+    It deliberately does **not** go through `update_company_status`. That
+    function models a per-company *attempt*: a failure increments
+    `consecutive_failures` and schedules a retry. A refused field is not an
+    attempt, and for this source no success row is ever written -- so a company
+    whose date went unread would accumulate failures on every re-fetch with
+    nothing able to reset the count, and `next_retry_at` would back off towards
+    its 24h cap. Nothing reads those two fields today, and this keeps it that
+    way rather than leaving a trap for whatever reads them next.
     """
-    return update_company_status(
+    status, _ = CompanySyncStatus.objects.update_or_create(
         company_id=company_id,
         source=source,
-        success=False,
-        error=f"Unreadable {field}={raw!r}",
-        error_type="parse_error",
+        defaults={
+            "last_attempted_at": timezone.now(),
+            "last_error": f"Unreadable {field}={raw!r}",
+            "last_error_type": "parse_error",
+        },
     )
+    return status
 
 
 def block_company(*, company_id: int, source: str, reason: str = "") -> CompanySyncStatus:

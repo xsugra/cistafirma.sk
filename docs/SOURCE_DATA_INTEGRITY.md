@@ -219,11 +219,9 @@ reality.
 
 **A refusal that only reaches a log line is not a control.** The guard refuses
 the write, and `registers.services.sync_engine.record_unreadable_field` records
-that refusal against the source: a `CompanySyncStatus` row with
-`source='ruz'`, `error_type='parse_error'` and no success. That is what puts it
-inside `make ops-check`'s existing reach, because `source_health` fails a source
-that made enough attempts and produced no usable answer — which is exactly the
-shape of a format change:
+that refusal against the source as a `CompanySyncStatus` row
+(`source='ruz'`, `error_type='parse_error'`, no success). That is what puts it
+inside `make ops-check`'s reach:
 
 | Unreadable dates in the window | `source_health` verdict |
 |---|---|
@@ -233,15 +231,32 @@ shape of a format change:
 The threshold is inherited, not tuned for RUZ, and it keeps its meaning: a lone
 malformed record is an upstream typo and must not hold the gate red forever, or
 the alarm stops being read. The cost is that a *slow* trickle takes longer than
-a day to reach 200 attempts — which is why the `ERROR` log and the count in the
+a day to reach 200 refusals — which is why the `ERROR` log and the count in the
 gate table both exist alongside the verdict.
 
-Note what a `ruz` row in that table means: not that RUZ was synced, but that a
-date went unread. Nothing writes `ruz` health rows otherwise, so RUZ appears
-there only when something is wrong. `source_health`'s verdict note names the
-error types it recorded (`recorded: parse_error x200`), because "the parser
-recognises nothing" is one cause of that failure and not the only one — a date
-field we cannot read fails identically while every other field is fine.
+**A `ruz` row does not mean what a `vszp` row means, so it is not rendered as
+one.** `vszp` and `social` write a row per company *attempt*, carrying whether
+it succeeded; `ruz` writes one only when a date went unread, and never writes a
+success. In the shared table that reads `200 attempts, 0 succeeded` — false in
+both halves, since RUZ syncs fine and reads every field except the one, and
+since `succeeded` there would mean "not recorded" rather than "none succeeded".
+`source_health` therefore renders refusals in their own row kind
+(`FIELD_REFUSAL_SOURCES`), with their own wording:
+
+```
+  ruz                  200 record(s) carried an unreadable date field  FAIL
+  (source 'ruz': 200 record(s) carried a date field that could not be read --
+   the source's shape has changed. The affected values were kept, not
+   overwritten, so the stored data is stale rather than gone.)
+```
+
+Nothing writes `ruz` health rows otherwise, so RUZ appears in that output only
+when something is wrong. `record_unreadable_field` deliberately does **not**
+route through `update_company_status`: that function models an *attempt*, and a
+failure there increments `consecutive_failures` and pushes `next_retry_at`
+towards its 24 h cap. A refused field is not an attempt, and since no success
+row is ever written for this source the count could never reset — a trap for
+whatever first reads those two columns, which today nothing does.
 
 One gap, deliberately recorded rather than hidden: `CompanySyncStatus` keys to
 `Company`, and RUZ also writes SZCO records to `IndividualEntity`. A refused
