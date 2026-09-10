@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
 
 # ====================================================================================
 # HELP
@@ -219,6 +219,19 @@ docker-logs-celery:
 docker-shell:
 	@echo "Opening shell in backend container..."
 	@docker compose exec backend bash
+
+metrics:
+	@echo "Fetching /metrics from inside the backend container (loopback client)..."
+	@docker compose exec -T backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=5).read().decode())"
+
+docker-metrics-up:
+	@echo "Starting optional Prometheus + Grafana (monitoring profile)..."
+	@docker compose --profile monitoring up -d prometheus grafana
+	@echo "  Prometheus: http://127.0.0.1:9090   Grafana: http://127.0.0.1:3000"
+
+docker-metrics-down:
+	@echo "Stopping Prometheus + Grafana (volumes are kept)..."
+	@docker compose --profile monitoring stop prometheus grafana
 
 docker-migrate:
 	@echo "Running migrations in Docker (one-shot migrate service)..."

@@ -40,6 +40,17 @@ LOG_FORMAT = os.getenv('LOG_FORMAT', 'json').strip().lower()
 if LOG_FORMAT not in {'json', 'text'}:
     raise ImproperlyConfigured(f'LOG_FORMAT must be "json" or "text", got {LOG_FORMAT!r}')
 
+# --- Prometheus metrics (Phase 3, pillar 2) ---
+# METRICS_ENABLED turns the /metrics scrape target on or off. The endpoint is
+# never public regardless: core/metrics.py restricts it to loopback/private
+# clients, or to a bearer METRICS_TOKEN when that variable is set.
+_raw_metrics_enabled = os.getenv('METRICS_ENABLED', 'true').strip().lower()
+if _raw_metrics_enabled not in {'true', 'false', '1', '0', 'yes', 'no'}:
+    raise ImproperlyConfigured(
+        f'METRICS_ENABLED must be a boolean-ish value, got {_raw_metrics_enabled!r}'
+    )
+METRICS_ENABLED = _raw_metrics_enabled in {'true', '1', 'yes'}
+
 # SECURITY WARNING: keep the secret key used in production secret!
 _default_secret = 'django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma'
 SECRET_KEY = os.getenv('SECRET_KEY', default=_default_secret if DEBUG else '')
@@ -534,11 +545,17 @@ LOGGING = {
             'datefmt': '%Y-%m-%dT%H:%M:%S%z',
         },
     },
+    'filters': {
+        # Adds task_id/task_name to records logged while a Celery task runs, so
+        # a task's own logs (and anything it calls) can be correlated.
+        'celery_task': {'()': 'core.logging.CeleryTaskFilter'},
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'stream': 'ext://sys.stdout',  # structured logs to stdout, not stderr
             'formatter': LOG_FORMAT,
+            'filters': ['celery_task'],
         },
     },
     'root': {

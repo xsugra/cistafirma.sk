@@ -1,0 +1,17 @@
+# Grafana datasource provisioning (opt-in `monitoring` profile).
+#
+# The uid is intentionally the human-readable name `Prometheus` so that the
+# provisioned dashboard JSON can reference the datasource by that name.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s

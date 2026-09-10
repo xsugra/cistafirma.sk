@@ -1,0 +1,32 @@
+# Prometheus scrape configuration for the opt-in `monitoring` profile.
+#
+# This file is mounted read-only into the `prometheus` service at
+# /etc/prometheus/prometheus.yml. Prometheus and the backend share the compose
+# default network, so the service name `backend` resolves via Docker DNS.
+
+global:
+  # Matches the per-job interval required by the CistaFirma Overview dashboard.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    stack: cistafirma
+
+scrape_configs:
+  # Self-scrape so the Prometheus UI can report its own TSDB health.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Application metrics. The backend container runs gunicorn on port 8000
+  # (`gunicorn --bind 0.0.0.0:8000`, EXPOSE 8000) and exposes /metrics there via
+  # the cistafirma_http_requests_total /
+  # cistafirma_http_request_duration_seconds collectors.
+  - job_name: cistafirma-backend
+    metrics_path: /metrics
+    scheme: http
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["backend:8000"]
+
+# No alerting rules are provisioned — dashboards only.

@@ -99,6 +99,12 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      # prometheus_client multiprocess mode. With >1 worker each process would
+      # otherwise export its own counters and a scrape would alternate between
+      # them, breaking rate(). Set on the backend only: Celery containers have
+      # no scrape target and must not share this directory. Wiped at gunicorn
+      # startup by backend/gunicorn.conf.py.
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus-multiproc
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -115,7 +121,7 @@ services:
     # `migrate --check`.
     command: >
       sh -c "python manage.py collectstatic --noinput --settings=backend.settings &&
-             gunicorn --bind 0.0.0.0:8000 --workers ${BACKEND_WORKERS:-2} --threads ${BACKEND_THREADS:-4} --timeout 120 --worker-class gthread --worker-tmp-dir /dev/shm backend.wsgi:application"
+             gunicorn --config /app/gunicorn.conf.py --bind 0.0.0.0:8000 --workers ${BACKEND_WORKERS:-2} --threads ${BACKEND_THREADS:-4} --timeout 120 --worker-class gthread --worker-tmp-dir /dev/shm backend.wsgi:application"
 
   frontend:
     build:
@@ -207,8 +213,56 @@ services:
       disable: true
     command: ["python", "manage.py", "migrate", "--settings=backend.settings"]
 
+  # ---------------------------------------------------------------------------
+  # Opt-in observability stack. Both services sit in the `monitoring` profile,
+  # so a plain `docker compose up` stays completely inert and neither container
+  # is created. Start them explicitly with:
+  #   docker compose --profile monitoring up -d prometheus grafana
+  # Both UIs bind to loopback only — nothing here is reachable from the LAN.
+  # Neither service declares `networks:`, matching every other service in this
+  # file: they join the compose default network, so `backend` resolves via
+  # Docker DNS.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: cistafirma_prometheus
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./deploy/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - cistafirma_prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"  # loopback only; UI never exposed to LAN
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    container_name: cistafirma_grafana
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    environment:
+      # Sane non-secret default; override via GRAFANA_ADMIN_PASSWORD in .env.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-cistafirma}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - cistafirma_grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"  # loopback only; UI never exposed to LAN
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   redis_data:
   static_volume:
   frontend_node_modules:
+  cistafirma_prometheus_data:
+  cistafirma_grafana_data:

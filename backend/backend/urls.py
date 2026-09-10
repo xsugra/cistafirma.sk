@@ -9,6 +9,7 @@ from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 
 from companies.views import landing_stats, WatchlistViewSet, SearchHistoryViewSet
+from core.metrics import metrics_view
 
 
 def frontend_or_api_info(request):
@@ -78,6 +79,12 @@ history_list = SearchHistoryViewSet.as_view({'get': 'list'})
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz/", healthz),
+    # Prometheus scrape target. Internal-only — see core/metrics.py: private and
+    # loopback clients, or a bearer METRICS_TOKEN when one is configured;
+    # everyone else gets the same 404 as an unknown URL. Both spellings are
+    # registered so a scrape never depends on an APPEND_SLASH redirect.
+    path("metrics", metrics_view),
+    path("metrics/", metrics_view),
     path('api/auth/', include('users.urls')),
     path('api/registers/', include('registers.urls')),
     path('api/stats/landing/', landing_stats),

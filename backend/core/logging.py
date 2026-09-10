@@ -82,3 +82,57 @@ class JsonFormatter(logging.Formatter):
             return record.getMessage()
         except Exception:
             return str(getattr(record, "msg", record))
+
+
+# --- Celery task correlation -------------------------------------------------
+# Celery 5 only adds task_id/task_name through its own TaskFormatter, which the
+# JSON formatter does not use, so every task log line was uncorrelatable. The
+# values are pulled from celery._state, a thread-local holding the task running
+# in the current worker thread; non-task threads resolve to None and are left
+# untouched, which is the case for every web request.
+_UNRESOLVED = object()
+_get_current_task: Any = _UNRESOLVED
+
+
+def _current_task():
+    """The Celery task executing in this thread, or None. Never raises."""
+    global _get_current_task
+    if _get_current_task is _UNRESOLVED:
+        try:
+            from celery import _state
+
+            _get_current_task = _state.get_current_task
+        except Exception:
+            _get_current_task = None
+
+    if _get_current_task is None:
+        return None
+    try:
+        return _get_current_task()
+    except Exception:
+        return None
+
+
+class CeleryTaskFilter(logging.Filter):
+    """Tag records emitted while a Celery task runs with task_id/task_name.
+
+    Attached to the console handler, so it covers every logger (including the
+    Django/app loggers used from inside a task) rather than only celery.*.
+    Explicit ``extra={'task_id': ...}`` on a record always wins.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        task = _current_task()
+        if task is None:
+            return True
+
+        if not hasattr(record, "task_id"):
+            request = getattr(task, "request", None)
+            task_id = getattr(request, "id", None)
+            if task_id:
+                record.task_id = task_id
+        if not hasattr(record, "task_name"):
+            task_name = getattr(task, "name", None)
+            if task_name:
+                record.task_name = task_name
+        return True

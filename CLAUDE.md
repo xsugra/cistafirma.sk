@@ -72,6 +72,30 @@ waits until migrations are applied.
 `docker-reset` exists but is volume-destructive and now token-gated; treat it as
 an emergency-only tool. See Data safety rules.
 
+Note: **each compose service with a `build:` block gets its own image tag**
+(`cistafirma-backend`, `cistafirma-celery_worker_ruz`, …). `docker compose build
+backend` rebuilds only the backend image, so the workers keep the old one while
+their code arrives through the bind mount — a changed import then crash-loops
+every worker. After changing `backend/requirements.txt`, rebuild them all:
+`docker compose build backend migrate celery_beat celery_worker_ruz
+celery_worker_orsr celery_worker_financials celery_worker_insurance
+celery_worker_default`.
+
+### Observability (see docs/OBSERVABILITY.md)
+
+```bash
+make metrics                # Fetch /metrics from inside the backend container
+make docker-metrics-up      # Opt-in Prometheus + Grafana (monitoring profile)
+make docker-metrics-down    # Stop them (volumes kept)
+make docker-logs-celery     # Every worker + beat
+```
+
+Logs are structured JSON on stdout (`LOG_LEVEL`, `LOG_FORMAT`). `/metrics` is
+**never public**: it answers only loopback/private clients, or a bearer
+`METRICS_TOKEN` when set, and 404 for everyone else — the backend port is
+published to the host, so never loosen this. Prometheus/Grafana only start under
+the `monitoring` profile; they bind to loopback.
+
 ### Database backup / restore (see docs/DATA_PROTECTION.md)
 
 ```bash
@@ -204,6 +228,12 @@ Local: copy `.env.default` to `.env` and fill in secrets. Docker Compose reads
 - `REDIS_URL` – Redis DSN
 - `SECRET_KEY` – Django secret key
 - `DEBUG` – Enable Django debug mode
+- `LOG_LEVEL` / `LOG_FORMAT` – `DEBUG|INFO|WARNING|ERROR|CRITICAL` / `json|text`
+- `METRICS_ENABLED` – serve `/metrics` (internal clients only) or not
+- `METRICS_TOKEN` – when set, `/metrics` needs `Authorization: Bearer <token>`
+  instead of relying on the private-address check
+- `BACKEND_WORKERS` / `BACKEND_THREADS` – gunicorn sizing (metrics aggregate
+  across workers via `PROMETHEUS_MULTIPROC_DIR`)
 
 ### CI/CD (GitLab)
 

@@ -2,8 +2,13 @@
 
 Placed FIRST in MIDDLEWARE: measures the whole chain including Django's own
 exception handling, and request.user is available (resolved by inner layers)
-when the response returns. Health/static probes are skipped so the Docker
-HEALTHCHECK does not pollute the request log.
+when the response returns.
+
+Health, scrape and static traffic is skipped entirely (_SKIP_EXACT /
+_SKIP_PREFIXES): the Docker HEALTHCHECK hits /healthz and Prometheus hits
+/metrics every 15s, and monitoring must not dominate the telemetry it feeds —
+neither the request log nor the counters, which are fed from this same single
+observation point.
 """
 
 from __future__ import annotations
@@ -11,9 +16,11 @@ from __future__ import annotations
 import logging
 import time
 
+from core import metrics
+
 logger = logging.getLogger("cistafirma.request")
 
-_SKIP_EXACT = {"/healthz", "/healthz/"}
+_SKIP_EXACT = {"/healthz", "/healthz/", "/metrics", "/metrics/"}
 _SKIP_PREFIXES = ("/static/",)
 
 
@@ -77,3 +84,7 @@ class RequestLogMiddleware:
                 "user_id": user_id,
             },
         )
+
+        # Prometheus counters are labelled with the *normalized* path (the log
+        # line above keeps the raw one); record_request never raises.
+        metrics.record_request(method, path, status, duration_ms / 1000.0)
