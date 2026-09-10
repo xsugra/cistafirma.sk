@@ -1,8 +1,13 @@
-from datetime import date
+from datetime import date, timedelta
+from io import StringIO
 from unittest.mock import patch, MagicMock
+from django.core.management import call_command
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from companies.models import Company
+from registers.models import SyncJob
 from registers.scrapers.debt_result import DebtCheckResult
+from registers.services import sync_engine
 
 
 @override_settings(
@@ -210,6 +215,200 @@ class SyncPipelineTests(TestCase):
         })
 
         self.assertEqual(NotificationEvent.objects.count(), 0)
+
+
+class _FakeRuzApi:
+    """One page of companies, then the end of the list.
+
+    The command's own `RuzApi` is a retrying HTTP client; nothing here should
+    reach the network.
+    """
+
+    def __init__(self, pages):
+        self._pages = list(pages)
+        self.detail_calls = []
+
+    def get_changed_company_ids(self, zmenene_od=None, pokracovat_za_id=None):
+        if not self._pages:
+            return {"id": [], "existujeDalsieId": False}
+        page = self._pages.pop(0)
+        if isinstance(page, Exception):
+            raise page
+        return {"id": page, "existujeDalsieId": bool(self._pages)}
+
+    def get_company_details(self, company_id):
+        self.detail_calls.append(company_id)
+        return {
+            "ico": f"9{company_id:07d}",
+            "id": company_id,
+            "nazovUJ": f"Firma {company_id}",
+            "pravnaForma": "112",
+            "datumZalozenia": "2020-01-01",
+        }
+
+
+class RuzCommandHeartbeatTests(TestCase):
+    """The beat that makes the watchdog safe to switch on.
+
+    `detect_and_fail_stuck_jobs` treats a stale heartbeat as death, so the RUZ
+    command has to write one -- it never did, which is why wiring the reaper up
+    unchanged would have failed every healthy multi-hour import instead of the
+    dead job it was written for. These tests are what keeps that ordering from
+    silently reverting.
+    """
+
+    def _job(self, **kwargs):
+        # No `concurrency_key`: these tests are about the heartbeat and the
+        # per-run counters, and the partial unique index that guards the RUZ
+        # singleton allows only one live holder at a time -- which
+        # `tests_sync_job_singleton.py` owns.
+        defaults = {
+            "job_type": "ruz_incremental",
+            "status": "running",
+            "started_at": timezone.now(),
+            "last_heartbeat": timezone.now(),
+        }
+        defaults.update(kwargs)
+        return SyncJob.objects.create(**defaults)
+
+    def _run(self, job, pages):
+        api = _FakeRuzApi(pages)
+        with patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi", return_value=api
+        ):
+            call_command(
+                "fetch_ruz_data", sync_job_id=job.pk, stdout=StringIO(), stderr=StringIO()
+            )
+        return api
+
+    def test_the_run_beats_its_own_heart(self):
+        """Without this the job looks dead from the instant it starts."""
+        stale = timezone.now() - timedelta(hours=3)
+        job = self._job(started_at=stale, last_heartbeat=stale)
+
+        self._run(job, [[111, 222]])
+
+        job.refresh_from_db()
+        self.assertGreater(job.last_heartbeat, stale + timedelta(hours=2))
+
+    def test_a_running_import_is_not_stuck_while_it_is_working(self):
+        """The property the watchdog depends on, asserted against the reaper
+        itself rather than against a timestamp: a live run must not be a
+        candidate for reaping."""
+        job = self._job(last_heartbeat=timezone.now() - timedelta(hours=3))
+
+        self._run(job, [[111, 222]])
+
+        job.refresh_from_db()
+        self.assertEqual(sync_engine.detect_and_fail_stuck_jobs(), 0)
+        job.refresh_from_db()
+        self.assertEqual(job.status, "running")
+
+    def test_the_run_records_what_it_actually_did(self):
+        """`processed_items=0` on a run that created companies is the defect
+        this counter exists to remove."""
+        job = self._job()
+
+        self._run(job, [[111, 222, 333]])
+
+        job.refresh_from_db()
+        self.assertEqual(job.processed_items, 3)
+        self.assertEqual(job.succeeded_items, 3)
+        self.assertEqual(job.failed_items, 0)
+        self.assertEqual(Company.objects.filter(ruz_id__in=[111, 222, 333]).count(), 3)
+
+    def test_the_counters_describe_this_run_not_every_run_before_it(self):
+        """`SyncProgress` accumulates across runs -- it reuses its row and
+        `start()` resets only `started_at` -- so it cannot answer what the last
+        run did. That is why the outcome lives on the job instead, and why it
+        must not inherit the old total."""
+        job = self._job()
+
+        self._run(job, [[111, 222, 333]])
+        job.refresh_from_db()
+        self.assertEqual(job.processed_items, 3)
+
+        second = self._job()
+        self._run(second, [[444, 555]])
+
+        second.refresh_from_db()
+        self.assertEqual(second.processed_items, 2)
+
+    def test_recording_the_outcome_never_writes_the_status(self):
+        """`status` belongs to the lifecycle (`complete_job` / `fail_job`).
+
+        This run does not own the job -- it was dispatched with an explicit
+        `sync_job_id` -- so the row must come out of it exactly as running as
+        it went in. A second writer of `status` is how a job gets marked
+        `completed` before anyone has decided it is.
+        """
+        job = self._job()
+
+        self._run(job, [[111, 222]])
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, "running")
+        self.assertIsNone(job.completed_at)
+
+    def test_one_bad_company_is_counted_not_swallowed(self):
+        """A record that blows up must not kill the other 439 999.
+
+        The per-company handler catches everything and counts it, which is
+        deliberate for a bulk import -- but it means the *only* trace of a
+        failure is the counter. If `failed_items` were not recorded, a run
+        that threw away a tenth of its batch would look identical to a clean
+        one.
+        """
+        job = self._job()
+        api = _FakeRuzApi([[111, 222]])
+        good = {
+            "ico": "90000001",
+            "id": 111,
+            "nazovUJ": "Firma 111",
+            "pravnaForma": "112",
+        }
+        api.get_company_details = MagicMock(side_effect=[good, RuntimeError("boom")])
+
+        with patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi", return_value=api
+        ):
+            call_command(
+                "fetch_ruz_data",
+                sync_job_id=job.pk,
+                stdout=StringIO(),
+                stderr=StringIO(),
+            )
+
+        job.refresh_from_db()
+        self.assertEqual(job.processed_items, 2)
+        self.assertEqual(job.succeeded_items, 1)
+        self.assertEqual(job.failed_items, 1)
+        self.assertEqual(Company.objects.filter(ico="90000001").count(), 1)
+
+    def test_a_run_that_dies_midway_still_records_what_it_managed(self):
+        """The `finally` exists so a truncated run is still legible.
+
+        A crash used to leave the counters at zero, which reads exactly like a
+        run that did nothing -- and a job reporting zero cannot be told from
+        one that silently processed nothing.
+        """
+        job = self._job()
+
+        with patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi",
+            return_value=_FakeRuzApi([[111, 222], RuntimeError("connection reset")]),
+        ):
+            with self.assertRaises(RuntimeError):
+                call_command(
+                    "fetch_ruz_data",
+                    sync_job_id=job.pk,
+                    stdout=StringIO(),
+                    stderr=StringIO(),
+                )
+
+        job.refresh_from_db()
+        self.assertEqual(job.processed_items, 2)
+        self.assertEqual(job.succeeded_items, 2)
 
 
 class BaseSyncTaskTests(TestCase):
