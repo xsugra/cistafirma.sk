@@ -72,6 +72,14 @@ waits until migrations are applied.
 `docker-reset` exists but is volume-destructive and now token-gated; treat it as
 an emergency-only tool. See Data safety rules.
 
+The backend (`BACKEND_PORT`, default 8080) and the frontend (5173) are published
+on **loopback only**, like db and redis. The frontend's Vite dev server proxies
+`/api/` to the backend, so both ports have to stay bound for the stack to be
+unreachable from the LAN — binding only one leaves the whole API reachable
+through the other. `BIND_HOST=0.0.0.0` in `.env` re-exposes them deliberately;
+do not set it on a network you do not control. `db` and `redis` ignore
+`BIND_HOST` and are always loopback-bound.
+
 Note: **each compose service with a `build:` block gets its own image tag**
 (`cistafirma-backend`, `cistafirma-celery_worker_ruz`, …). `docker compose build
 backend` rebuilds only the backend image, so the workers keep the old one while
@@ -92,9 +100,8 @@ make docker-logs-celery     # Every worker + beat
 
 Logs are structured JSON on stdout (`LOG_LEVEL`, `LOG_FORMAT`). `/metrics` is
 **never public**: it answers only loopback/private clients, or a bearer
-`METRICS_TOKEN` when set, and 404 for everyone else — the backend port is
-published to the host, so never loosen this. Prometheus/Grafana only start under
-the `monitoring` profile; they bind to loopback.
+`METRICS_TOKEN` when set, and 404 for everyone else. Prometheus/Grafana only
+start under the `monitoring` profile; they bind to loopback.
 
 ### Database backup / restore (see docs/DATA_PROTECTION.md)
 

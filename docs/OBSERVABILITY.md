@@ -49,10 +49,14 @@ instead of growing without bound.
 ### Endpoint and access control
 
 `GET /metrics` on the backend exposes the Prometheus text format. It is **not
-public** and must not be made public — the backend port is published to the
-host:
+public** and must not be made public. The backend port is bound to loopback by
+default, but `BIND_HOST=0.0.0.0` deliberately re-exposes it, so the endpoint
+keeps its own guard rather than relying on the binding:
 
-- Default: only loopback and private/RFC1918 clients receive metrics.
+- Default: only loopback and private/RFC1918 clients receive metrics. Note this
+  admits **any** private address — on a shared LAN, `BIND_HOST=0.0.0.0` makes
+  `/metrics` readable by every neighbour, which is one of the reasons the
+  default binding is loopback. Set `METRICS_TOKEN` if the port is ever exposed.
 - With `METRICS_TOKEN` set, a bearer token is required instead:
   `Authorization: Bearer <token>` (compared in constant time).
 - Everyone else gets **404**, never 403 — an unauthorised caller learns nothing
