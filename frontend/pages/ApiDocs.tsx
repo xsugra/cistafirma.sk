@@ -603,7 +603,9 @@ export const ApiDocs: React.FC = () => {
                 Autentifikačný flow
               </h2>
             </div>
-            <CodeBlock code={AUTH_FLOW} />
+            <div className="bg-white dark:bg-slate-900 shadow-sm border border-gray-200 dark:border-gray-700/50 rounded-lg p-4">
+              <CodeBlock code={AUTH_FLOW} />
+            </div>
           </div>
 
           {/* Error Codes */}
