@@ -69,6 +69,35 @@ html.dark body {
     color: var(--text-main-dark);
 }
 
+/* Default border colour for an unqualified `border` / `border-t` / `border-b`.
+   Tailwind v4's preflight resolves those to `currentColor` (v3 used gray-200),
+   and `html.dark body` is #f8fafc -- so a border written without a colour
+   utility rendered as a near-white hairline in dark mode, which is invisible
+   in review and only shows up on screen.
+
+   This lives in `@layer base`, and Tailwind declares its layers as
+   `theme, base, components, utilities` -- a utilities-layer rule always wins
+   over a base-layer one regardless of specificity, so every explicit
+   `border-<colour>` (including `dark:border-*`) is unaffected. The default is
+   therefore a safety net for the omission, never an override of a choice. */
+@layer base {
+    *,
+    ::after,
+    ::before,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: var(--border-light);
+    }
+
+    html.dark *,
+    html.dark ::after,
+    html.dark ::before,
+    html.dark ::backdrop,
+    html.dark ::file-selector-button {
+        border-color: var(--border-dark);
+    }
+}
+
 /* --- UTILITIES & ANIMATIONS --- */
 .animate-fade-in {
     animation: fadeIn 0.5s ease-out forwards;
