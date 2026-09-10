@@ -63,15 +63,19 @@ AMOUNT_FIELDS = {
     CompanySyncStatus.SOURCE_SOCIAL: "debt_soc_poist",
 }
 
-# Sources whose rows in `CompanySyncStatus` mean something else, mapped to what
-# it is they could not read. `vszp` and `social` write a row per company
-# *attempt* carrying whether it succeeded; `ruz` writes one only when it refuses
-# to apply a field it cannot parse, and never writes a success. Rendered in the
-# columns above, `ruz` would therefore read "N attempts, 0 succeeded" -- false
-# in both halves, because RUZ syncs fine and reads every field except the one,
-# and because `succeeded` there means "not recorded", not "none succeeded".
-# These rows are judged as refusals instead, on the same threshold: a trickle is
-# an upstream typo, a flood is the source's shape having changed.
+# Sources that can also *refuse* a field, mapped to what it is they could not
+# read. Every source now writes one row per company per attempt carrying
+# whether it succeeded -- `ruz` included, which is why it is no longer held out
+# of the attempts table: it used to write a row only when it refused to apply a
+# field, never a success, so counting its rows as attempts read "N attempts, 0
+# succeeded" -- false in both halves.
+#
+# The refusal is a second, distinct failure mode, and it needs its own line: a
+# format change shows up as *some* attempts succeeding while a growing set of
+# companies cannot be read at all, which the attempts table cannot distinguish
+# from ordinary health. So `ruz` appears in both tables -- the attempts row is
+# the denominator, this one is the diagnosis -- and a source that fails both
+# lines is one event, counted once.
 FIELD_REFUSAL_SOURCES = {
     CompanySyncStatus.SOURCE_RUZ: "date field",
 }
@@ -90,8 +94,9 @@ def _env_int(name: str, default: int) -> int:
 class Command(BaseCommand):
     help = (
         "Report per-source sync success over a window and fail when a source "
-        "with enough attempts has produced no successful result at all, or has "
-        "lost one of the two answers a check can carry."
+        "with enough attempts has produced no successful result at all, has "
+        "lost one of the two answers a check can carry, or is refusing to read "
+        "a field of the records it is answering with."
     )
 
     def add_arguments(self, parser):
@@ -106,7 +111,8 @@ class Command(BaseCommand):
             type=int,
             default=_env_int("CISTAFIRMA_SOURCE_MIN_ATTEMPTS", DEFAULT_MIN_ATTEMPTS),
             help=(
-                "Attempts a source needs before its silence is judged "
+                "Attempts a source needs before its silence is judged, and "
+                "companies a source needs to be refusing before that is judged "
                 "(default: CISTAFIRMA_SOURCE_MIN_ATTEMPTS or 200)."
             ),
         )
@@ -131,15 +137,29 @@ class Command(BaseCommand):
             .annotate(
                 attempts=Count("id", filter=Q(last_attempted_at__gte=window_start)),
                 succeeded=Count("id", filter=Q(last_succeeded_at__gte=window_start)),
+                # A refusal is a company *currently* refusing, not a row that
+                # once refused: the row records the latest attempt, so a
+                # company whose next sync read its dates cleanly is back to
+                # `consecutive_failures = 0` and drops out of this count. That
+                # is what keeps the column self-clearing instead of a permanent
+                # scar -- the failure mode that made writing these failures
+                # unsafe while there was no success path to clear them.
+                refusing=Count(
+                    "id",
+                    filter=Q(
+                        last_attempted_at__gte=window_start,
+                        consecutive_failures__gt=0,
+                    ),
+                ),
             )
             .order_by("source")
         )
 
-        # Two kinds of row live in this table and they do not mean the same
-        # thing, so they are not rendered the same way -- see
-        # `FIELD_REFUSAL_SOURCES`.
+        # Every source is an attempt source now; a source in
+        # `FIELD_REFUSAL_SOURCES` gets a second line as well. See the comment
+        # on that mapping.
         refusal_rows = [r for r in rows if r["source"] in FIELD_REFUSAL_SOURCES]
-        attempt_rows = [r for r in rows if r["source"] not in FIELD_REFUSAL_SOURCES]
+        attempt_rows = rows
 
         if attempt_rows:
             self.stdout.write(
@@ -150,6 +170,7 @@ class Command(BaseCommand):
         unmet = 0
         below_threshold = []
         notes = []
+        failed_sources: set[str] = set()
         for row in attempt_rows:
             source = row["source"]
             attempts = row["attempts"]
@@ -198,6 +219,9 @@ class Command(BaseCommand):
             else:
                 verdict = "OK"
 
+            if verdict == "FAIL":
+                failed_sources.add(source)
+
             self.stdout.write(
                 f"  {source:<15} {attempts:>8}  {succeeded:>9}  {counts}  {verdict}"
             )
@@ -215,25 +239,36 @@ class Command(BaseCommand):
 
         for row in refusal_rows:
             source = row["source"]
-            refusals = row["attempts"]
+            refusals = row["refusing"]
             what = FIELD_REFUSAL_SOURCES[source]
+            plural = "company" if refusals == 1 else "companies"
 
-            if refusals < min_attempts:
+            if refusals == 0:
+                # Not silence: the source answered in the window and refused
+                # nothing. Zero here is a reading, not a lack of evidence.
+                verdict = "OK"
+            elif refusals < min_attempts:
                 verdict = f"OK (below the {min_attempts} threshold -- not judged)"
+            elif source in failed_sources:
+                # The attempts line already failed this source and already
+                # counted it. When every attempt refuses, "no successes" and
+                # "N companies refusing" are one event, and reporting it twice
+                # would make the gate's own count of unmet controls wrong.
+                verdict = "FAIL"
             else:
                 verdict = "FAIL"
                 unmet += 1
 
             self.stdout.write(
-                f"  {source:<15} {refusals:>8} record(s) carried an unreadable "
-                f"{what}  {verdict}"
+                f"  {source:<15} {refusals:>8} {plural} refusing a {what}  {verdict}"
             )
             if verdict == "FAIL":
                 self.stdout.write(
-                    f"  (source '{source}': {refusals} record(s) carried a {what} "
-                    f"that could not be read -- the source's shape has changed. "
-                    f"The affected values were kept, not overwritten, so the "
-                    f"stored data is stale rather than gone."
+                    f"  (source '{source}': {refusals} {plural} have a {what} that "
+                    f"cannot be read -- the source's shape has changed. The "
+                    f"affected values were kept, not overwritten, so the stored "
+                    f"data is stale rather than gone. A company leaves this count "
+                    f"as soon as a sync reads its dates cleanly again."
                 )
 
         self.stdout.write("")

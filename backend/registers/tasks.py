@@ -13,7 +13,6 @@ from .services.rpo_sync import RpoSyncService
 from .services.ruz_financials_sync import RuzFinancialsSyncService
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company, normalize_legal_form_code
-from .models import CompanySyncStatus
 from core.task_utils import BaseSyncTask
 from .services.sync_engine import (
     claim_ruz_job,
@@ -21,7 +20,7 @@ from .services.sync_engine import (
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
     fail_job,
-    record_unreadable_field,
+    record_ruz_date_outcome,
     update_company_status,
 )
 
@@ -352,18 +351,10 @@ def _update_company_from_ruz_data(data: dict):
         except Exception:
             logger.error("Failed to detect status change for %s", company.ico, exc_info=True)
 
-    # A date we could not read is recorded against the source, not just
-    # logged: `source_health` judges a source on whether its attempts yield a
-    # usable answer, and a date-format change is exactly that -- attempts, and
-    # nothing usable. Below the attempt threshold a lone malformed record is
-    # reported and left unjudged, which is the right weight for a typo.
-    for key, raw in refused_dates:
-        record_unreadable_field(
-            company_id=company.id,
-            source=CompanySyncStatus.SOURCE_RUZ,
-            field=key,
-            raw=raw,
-        )
+    # One row per on-demand sync, carrying either the success or the refusal --
+    # the same call the six-hourly command makes, so a refusal recorded by one
+    # is cleared by the other. See `record_ruz_date_outcome`.
+    record_ruz_date_outcome(company_id=company.id, refused=refused_dates)
 
     return company
 

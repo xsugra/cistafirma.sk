@@ -115,10 +115,10 @@ def update_company_status(
     return status
 
 
-def record_unreadable_field(
-    *, company_id: int, source: str, field: str, raw: Any
+def record_ruz_date_outcome(
+    *, company_id: int, refused: Iterable[tuple[str, Any]]
 ) -> CompanySyncStatus:
-    """Record that a source sent a field we could not read.
+    """Record one RUZ attempt for a company: a success, or a refusal.
 
     This is what makes `ruz_api.apply_ruz_dates` refusing to write a control
     rather than a log line: `source_health` counts these against the source and
@@ -126,25 +126,38 @@ def record_unreadable_field(
     like a format change, which is what lets `make ops-check` reach a verdict
     instead of a human having to grep a JSON stream.
 
-    It deliberately does **not** go through `update_company_status`. That
-    function models a per-company *attempt*: a failure increments
-    `consecutive_failures` and schedules a retry. A refused field is not an
-    attempt, and for this source no success row is ever written -- so a company
-    whose date went unread would accumulate failures on every re-fetch with
-    nothing able to reset the count, and `next_retry_at` would back off towards
-    its 24h cap. Nothing reads those two fields today, and this keeps it that
-    way rather than leaving a trap for whatever reads them next.
+    It writes a row for **every** attempt, not only for a refusal, and that is
+    the change: `ruz` used to write a row only when a date went unread and never
+    a success, so `consecutive_failures` stayed 0 and the refusal was invisible
+    to every reader that keys on it -- `adminapi`'s `failures_24h`, its
+    per-source card, `company_filters`' `sync_state=failing`, and
+    `lead_scoring`'s average all read that column. The gate could say *how many*
+    records carried an unreadable date and no screen could say *which*.
+
+    That bypass existed for a real reason, and the reason is now gone: with no
+    success path, a written failure could never be cleared, so incrementing the
+    count would have armed a trap for the first reader to trust it. A success
+    row is what makes writing the failure honest. The cost is one row per
+    company per RUZ run -- what every other source already pays -- paid on the
+    incremental run (thousands) far more often than on a full resync, which is
+    already a manual, backup-gated, hours-long operation.
+
+    Both RUZ writers call this, so the two cannot drift: a refusal recorded by
+    the six-hourly beat is cleared by an on-demand sync of the same company, and
+    the other way round.
     """
-    status, _ = CompanySyncStatus.objects.update_or_create(
+    refused = list(refused)
+    if not refused:
+        return update_company_status(
+            company_id=company_id, source=CompanySyncStatus.SOURCE_RUZ, success=True
+        )
+    return update_company_status(
         company_id=company_id,
-        source=source,
-        defaults={
-            "last_attempted_at": timezone.now(),
-            "last_error": f"Unreadable {field}={raw!r}",
-            "last_error_type": "parse_error",
-        },
+        source=CompanySyncStatus.SOURCE_RUZ,
+        success=False,
+        error="; ".join(f"Unreadable {field}={raw!r}" for field, raw in refused),
+        error_type="parse_error",
     )
-    return status
 
 
 def block_company(*, company_id: int, source: str, reason: str = "") -> CompanySyncStatus:

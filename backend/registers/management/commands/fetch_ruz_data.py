@@ -2,9 +2,9 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from companies.models import Company
-from registers.models import CompanySyncStatus, IndividualEntity, SyncJob, SyncProgress
+from registers.models import IndividualEntity, SyncJob, SyncProgress
 from registers.integrations.ruz_api import RuzApi, apply_ruz_dates
-from registers.services.sync_engine import record_unreadable_field
+from registers.services.sync_engine import record_ruz_date_outcome
 import logging
 import time
 
@@ -375,6 +375,18 @@ class Command(BaseCommand):
                 self.stdout.write(f"Created new SZCO/individual: {entity.nazov_UJ}, IČO: {entity.ico}")
             else:
                 self.stdout.write(f"Updated SZCO/individual: {entity.nazov_UJ}, IČO: {entity.ico}")
+
+            # An SZCO has no `Company` row, and `CompanySyncStatus.company` is a
+            # non-nullable FK to one, so a refused date here has nowhere to be
+            # recorded. Reported on stderr rather than dropped in silence: the
+            # gap is real, and a warning that names the field is the difference
+            # between a known limitation and a lost signal.
+            if refused_dates:
+                self.stderr.write(
+                    f"Unreadable date(s) for SZCO {entity.ico} could not be "
+                    f"recorded against the source (no Company row): "
+                    + ", ".join(f"{key}={raw!r}" for key, raw in refused_dates)
+                )
         else:
             # Save to Company (LPO - legal entities)
             # Add company-specific fields if needed
@@ -428,18 +440,14 @@ class Command(BaseCommand):
                     )
                 self.stdout.write(f"Updated company: {company.nazov_UJ}, IČO: {company.ico}")
 
-            # A date we could not read is recorded against the source, not
-            # just logged: `source_health` judges a source on whether its
-            # attempts yield a usable answer, and a date-format change is
-            # exactly that -- attempts, and nothing usable. Below the
-            # attempt threshold a lone malformed record is reported and left
-            # unjudged, which is the right weight for an upstream typo.
-            for key, raw in refused_dates:
-                record_unreadable_field(
-                    company_id=company.id,
-                    source=CompanySyncStatus.SOURCE_RUZ,
-                    field=key,
-                    raw=raw,
-                )
+            # One row per company per run, carrying either the success or the
+            # refusal -- see `record_ruz_date_outcome` for why both halves have
+            # to be written for either to be worth anything. Called with the
+            # whole list so two refused fields are one attempt, not two.
+            #
+            # This is the write that puts a refused date in front of the four
+            # admin surfaces; before it, `ruz` had no success path at all and
+            # the refusal was visible only to `source_health`.
+            record_ruz_date_outcome(company_id=company.id, refused=refused_dates)
 
         return created, not created

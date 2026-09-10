@@ -248,14 +248,15 @@ old and the format has never changed, so nothing here has been tested by
 reality.
 
 **A refusal that only reaches a log line is not a control.** The guard refuses
-the write, and `registers.services.sync_engine.record_unreadable_field` records
+the write, and `registers.services.sync_engine.record_ruz_date_outcome` records
 that refusal against the source as a `CompanySyncStatus` row
-(`source='ruz'`, `error_type='parse_error'`, no success). That is what puts it
-inside `make ops-check`'s reach:
+(`source='ruz'`, `error_type='parse_error'`). That is what puts it inside
+`make ops-check`'s reach:
 
-| Unreadable dates in the window | `source_health` verdict |
+| Companies refusing in the window | `source_health` verdict |
 |---|---|
-| fewer than `CISTAFIRMA_SOURCE_MIN_ATTEMPTS` (200) | counted and shown, **not judged** |
+| 0 | **OK** — a reading, not a lack of evidence |
+| 1 to 199 | counted and shown, **not judged** |
 | 200 or more | **FAIL**, and `make ops-check` goes red |
 
 The threshold is inherited, not tuned for RUZ, and it keeps its meaning: a lone
@@ -264,62 +265,78 @@ the alarm stops being read. The cost is that a *slow* trickle takes longer than
 a day to reach 200 refusals — which is why the `ERROR` log and the count in the
 gate table both exist alongside the verdict.
 
-**A `ruz` row does not mean what a `vszp` row means, so it is not rendered as
-one.** `vszp` and `social` write a row per company *attempt*, carrying whether
-it succeeded; `ruz` writes one only when a date went unread, and never writes a
-success. In the shared table that reads `200 attempts, 0 succeeded` — false in
-both halves, since RUZ syncs fine and reads every field except the one, and
-since `succeeded` there would mean "not recorded" rather than "none succeeded".
-`source_health` therefore renders refusals in their own row kind
-(`FIELD_REFUSAL_SOURCES`), with their own wording:
+**`ruz` writes an attempt row like every other source, and that is the fix.**
+It used to write a row *only* when it refused a date and never a success —
+which made the refusal invisible to every reader that judges on
+`consecutive_failures`, and made the source read "0 % coverage" on the admin
+dashboard while it was the healthiest one there. `record_ruz_date_outcome` now
+writes one row per company per run, success or refusal, through the same
+`update_company_status` every other source uses, and both RUZ writers call it —
+so the six-hourly command and an on-demand sync cannot drift apart.
+
+The bypass had a real reason and the reason is gone. With no success path, a
+written failure could never be cleared: `consecutive_failures` would climb on
+every re-fetch of the same company with `next_retry_at` backing off towards its
+24 h cap, arming a trap for whichever reader trusted it next. A success row is
+what makes writing the failure honest.
+
+Cost, measured rather than assumed: one extra upsert per company per run. The
+six-hourly incremental run processed 6 850 records in 26 minutes on 2026-09-10,
+so the marginal cost is a few queries per second; a full resync pays it on
+441 714 companies, in a run that is already manual, backup-gated and takes
+hours. A refusal does **not** double-count: the refused fields of one record go
+in as one attempt, so two unreadable dates are `consecutive_failures = 1`.
+
+**The refusal keeps its own line in the gate, because the attempts table cannot
+see it.** A partial format change does not silence a source — most records
+still parse, `succeeded` never reaches 0, and the attempts line reads OK. Only
+the refusal count distinguishes it, so `ruz` now appears in *both* tables: the
+attempts row is the denominator, and the refusal row is the diagnosis.
 
 ```
-  ruz                  200 record(s) carried an unreadable date field  FAIL
-  (source 'ruz': 200 record(s) carried a date field that could not be read --
-   the source's shape has changed. The affected values were kept, not
-   overwritten, so the stored data is stale rather than gone.)
+  source          attempts  succeeded    found  no-record  (24h window)
+  ruz                 6850       6847        -          -  OK
+  ruz                  200 companies refusing a date field  FAIL
+  (source 'ruz': 200 companies have a date field that cannot be read -- the
+   source's shape has changed. The affected values were kept, not overwritten,
+   so the stored data is stale rather than gone. A company leaves this count as
+   soon as a sync reads its dates cleanly again.)
 ```
 
-Nothing writes `ruz` health rows otherwise, so RUZ appears in that output only
-when something is wrong. `record_unreadable_field` deliberately does **not**
-route through `update_company_status`: that function models an *attempt*, and a
-failure there increments `consecutive_failures` and pushes `next_retry_at`
-towards its 24 h cap. A refused field is not an attempt, and since no success
-row is ever written for this source the count could never reset — a trap for
-whatever first reads those two columns, which today nothing does.
+A source that fails both lines is **one** unmet control, not two: when every
+attempt refuses, the two readings describe one event, and counting it twice
+would make the gate's own headline number wrong.
 
-**The gate sees a refusal; the admin surfaces do not.** Leaving
-`consecutive_failures` at 0 keeps a trap from arming, but that column is what
-every *judging* reader keys on, and nothing replaced it. Read at each site:
+**The refusal is a state, not a scar.** The count is read from
+`consecutive_failures`, which the row carries for its *latest* attempt — so a
+company whose next sync reads its dates cleanly drops out. Had the gate instead
+counted rows that had ever refused, a fixed upstream typo would hold
+`make ops-check` red forever, which is how an alarm stops being read.
+
+**What the admin surfaces now see.** All four read `consecutive_failures` and
+nothing else, so one write path fixes them without touching any of them:
 
 | Reader | Keys on | Sees a refused date? |
 |---|---|---|
-| `adminapi/views/dashboard.py:39` `failures_24h` | `consecutive_failures__gt=0` | no |
-| `adminapi/views/dashboard.py:97-104` per-source card | `last_succeeded_at__isnull=False`, `consecutive_failures__gt=0` | no |
-| `adminapi/services/company_filters.py:265,426` `sync_state=failing` | `consecutive_failures__gt=0` | no |
-| `lead_scoring/services/scoring.py:178-180` | `Avg(consecutive_failures)` | no |
+| `adminapi/views/dashboard.py:39` `company_failures_24h` | `consecutive_failures__gt=0` | **yes** |
+| `adminapi/views/dashboard.py:97-104` per-source card | `last_succeeded_at__isnull=False`, `consecutive_failures__gt=0` | **yes** |
+| `adminapi/services/company_filters.py:265,426` `sync_state=failing` | `consecutive_failures__gt=0` | **yes** |
+| `lead_scoring/services/scoring.py:178-180` | `Avg(consecutive_failures)` | **yes** |
 
-So the gate tells you **how many** records carry an unreadable date, and no
-surface lets you find **which** ones. The root is one level below the columns:
-`grep -rn SOURCE_RUZ backend/` returns two write sites, both
-`record_unreadable_field`. There is no success path for this source, so
-`last_succeeded_at` has never once been written for `ruz` and nothing can clear
-a refusal. That is also why the admin's `ruz` card reads "0 % coverage, 0
-failing" — self-contradictory, and it read that before any of this existed;
-these rows did not break it, they made it visible.
-
-**Not fixed here, and the reason is cost, not doubt.** Making the signal real
-means giving the source a success path, which means a write on the RUZ bulk
-sync — a run that touches every one of 441 714 companies — and it changes every
-aggregate above at once. That is a design change with a production write cost,
-so it is named as a gap and left for a decision rather than folded into a
-correctness fix.
+So the gate tells you **how many** records carry an unreadable date and the
+company screens now let you find **which** ones.
+`adminapi/tests/test_dashboard_refusals.py` asserts this through the real HTTP
+endpoints rather than the ORM, because the claim is about what the screens
+report.
 
 One gap, deliberately recorded rather than hidden: `CompanySyncStatus` keys to
 `Company`, and RUZ also writes SZCO records to `IndividualEntity`. A refused
-date on an individual is logged but **counted nowhere**, so the gate does not
-cover that third of the RUZ surface. It is not covered because there is no row
-to attach it to — a gap in the control, not a claim about the data.
+date on an individual cannot be attached to a row, so it is **counted nowhere**
+and the command now says so on stderr instead of dropping it in silence. The
+gate therefore does not cover that third of the RUZ surface. Closing it means a
+nullable FK or a second table plus a migration on a production volume, for a
+signal that has not fired once in production — so it stays a named gap, not a
+silent one.
 
 **A caller must hand `detect_status_change` the value it wrote, not the row read
 back.** `update_or_create` returns the row as it now stands, so where a writer

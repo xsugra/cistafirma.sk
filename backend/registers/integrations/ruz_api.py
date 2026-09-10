@@ -227,10 +227,12 @@ def apply_ruz_dates(defaults: Dict[str, Any], data: Dict[str, Any]) -> List[tupl
     `None`.
 
     Returns the fields that were refused, as `(payload key, raw value)` pairs,
-    so the caller can record them against the source. Returning them is the
-    point: a refusal that only reaches a log line is not a control, and
-    `registers.services.sync_engine.record_unreadable_field` is what turns it
-    into one `make ops-check` can read.
+    so the caller can record them against the source. Returning them *all*, as
+    one list, is the point on both counts: a refusal that only reaches a log
+    line is not a control, and
+    `registers.services.sync_engine.record_ruz_date_outcome` turns the list
+    into one attempt row per company -- so two unreadable dates are one
+    failure, not two, and a company that reads cleanly later clears it.
     """
     ico = data.get('ico')
     refused = []

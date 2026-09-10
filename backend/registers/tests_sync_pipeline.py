@@ -571,16 +571,107 @@ class RuzDateGuardTests(TestCase):
         self.assertIn("datumZrusenia", status.last_error)
         self.assertIsNone(status.last_succeeded_at)
 
-    def test_a_clean_sync_records_nothing_against_the_source(self):
-        """The other half: RUZ must not appear in the gate's table at all
-        while it is answering us properly. A row here means a date went
-        unread, not that RUZ was synced."""
+    def test_a_refused_date_is_counted_so_the_admin_screens_can_see_it(self):
+        """The refusal has to reach the readers that key on the failure count.
+
+        The gate was never the only audience. `adminapi`'s dashboard builds
+        `failures_24h` and its per-source card from `consecutive_failures`, and
+        so do the company filters and the lead-scoring average -- all four read
+        that column and nothing else. A refusal written without incrementing it
+        left `ruz` looking immaculate everywhere a human looks, while the one
+        screen that could see it said only how many records were affected and
+        never which company. This asserts the count, because the count is what
+        the four readers actually consume.
+        """
+        from registers.models import CompanySyncStatus
+        from registers.tasks import _update_company_from_ruz_data
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+
+        status = CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_RUZ
+        )
+        self.assertEqual(status.consecutive_failures, 1)
+
+        # Exactly the dashboard's `failures_24h` query, run against the row the
+        # sync just wrote.
+        self.assertEqual(
+            CompanySyncStatus.objects.filter(
+                last_attempted_at__gte=timezone.now() - timedelta(hours=24),
+                consecutive_failures__gt=0,
+            ).count(),
+            1,
+        )
+
+    def test_two_refused_fields_are_one_attempt_not_two(self):
+        """A record refusing two dates is one bad record, not two failures.
+
+        The refusal used to be written one field per call, which was harmless
+        only because nothing incremented a counter. Routing it through the
+        shared attempt path makes the count load-bearing: per-field writes
+        would count one malformed record twice, and the backoff that
+        `next_retry_at` derives from the count would grow on a phantom.
+        """
+        from registers.models import CompanySyncStatus
+        from registers.tasks import _update_company_from_ruz_data
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(
+                self._record(datumZrusenia="12.03.2026", datumZalozenia="01.01.2020")
+            )
+
+        status = CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_RUZ
+        )
+        self.assertEqual(status.consecutive_failures, 1)
+        self.assertIn("datumZrusenia", status.last_error)
+        self.assertIn("datumZalozenia", status.last_error)
+
+    def test_a_clean_sync_records_a_success_so_a_refusal_can_clear(self):
+        """The success path is what makes writing the failure honest.
+
+        `ruz` used to write a row only when it refused a field and never a
+        success, and that was deliberate: with nothing able to reset the count,
+        a written failure would accumulate on every re-fetch of the same
+        company with `next_retry_at` backing off towards its 24h cap -- a trap
+        for whichever reader trusted it next. So this asserts both halves of
+        the trade: the row exists, and it says the company is healthy.
+        """
         from registers.models import CompanySyncStatus
         from registers.tasks import _update_company_from_ruz_data
 
         _update_company_from_ruz_data(self._record(datumZrusenia="2026-04-01"))
 
-        self.assertEqual(CompanySyncStatus.objects.count(), 0)
+        status = CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_RUZ
+        )
+        self.assertEqual(status.consecutive_failures, 0)
+        self.assertIsNotNone(status.last_succeeded_at)
+        self.assertEqual(status.last_error, "")
+        self.assertIsNone(status.next_retry_at)
+
+    def test_a_later_clean_sync_clears_an_earlier_refusal(self):
+        """A refusal is a state, not a scar.
+
+        `source_health` counts a company as refusing only while
+        `consecutive_failures` is above zero, so an upstream typo that is fixed
+        has to stop counting -- otherwise the gate stays red for a format
+        change that is over, and the alarm stops being read.
+        """
+        from registers.models import CompanySyncStatus
+        from registers.tasks import _update_company_from_ruz_data
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+        _update_company_from_ruz_data(self._record(datumZrusenia="2026-03-12"))
+
+        status = CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_RUZ
+        )
+        self.assertEqual(status.consecutive_failures, 0)
+        self.assertEqual(status.last_error_type, "")
+        self.assertIsNotNone(status.last_succeeded_at)
 
     def test_the_command_writer_is_guarded_too(self):
         """`fetch_ruz_data` is the one that runs every six hours; it maps the
@@ -660,6 +751,105 @@ class RefusedDatesReachTheGateTests(TestCase):
         })
 
         call_command("source_health", skip_checks=True)
+
+    def test_a_source_that_fails_both_of_its_lines_is_counted_once(self):
+        """One broken source is one unmet control, not two.
+
+        When every attempt refuses, the attempts line and the refusal line are
+        two readings of a single event, and both go red. Counting the source
+        twice would make the gate's own headline number -- and therefore the
+        threshold anyone tunes against it -- wrong.
+        """
+        from registers.tasks import _update_company_from_ruz_data
+
+        for index in range(self.MIN_ATTEMPTS):
+            _update_company_from_ruz_data({
+                "ico": f"8{index:07d}",
+                "id": 100000 + index,
+                "nazovUJ": f"Firma {index}",
+                "datumZrusenia": "12.03.2026",
+            })
+
+        stdout = StringIO()
+        with self.assertRaises(SystemExit):
+            call_command("source_health", skip_checks=True, stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("Source health: 1 unmet", output)
+        self.assertEqual(output.count("FAIL"), 2)
+
+    def test_a_refusal_is_judged_even_when_the_source_is_mostly_answering(self):
+        """The shape a format change actually has.
+
+        A partial format change does not silence a source: most records still
+        parse, and `succeeded == 0` never becomes true. Only the refusal count
+        can see it -- which is why the refusal line survives the move of `ruz`
+        into the attempts table rather than being replaced by it. One healthy
+        company is added here so that the attempts line reads OK and the
+        verdict can only be coming from the refusals.
+        """
+        from registers.tasks import _update_company_from_ruz_data
+
+        for index in range(self.MIN_ATTEMPTS):
+            _update_company_from_ruz_data({
+                "ico": f"8{index:07d}",
+                "id": 100000 + index,
+                "nazovUJ": f"Firma {index}",
+                "datumZrusenia": "12.03.2026",
+            })
+        _update_company_from_ruz_data({
+            "ico": "89999999",
+            "id": 100999,
+            "nazovUJ": "Zdravá firma",
+            "datumZrusenia": "2026-03-12",
+        })
+
+        stdout = StringIO()
+        with self.assertRaises(SystemExit) as exit_info:
+            call_command("source_health", skip_checks=True, stdout=stdout)
+
+        self.assertEqual(exit_info.exception.code, 1)
+        output = stdout.getvalue()
+        self.assertIn("200 companies refusing a date field", output)
+        self.assertIn("Source health: 1 unmet", output)
+
+    def test_a_refusal_that_stops_counting_releases_the_gate(self):
+        """A refusal is a state, and the gate has to let it go.
+
+        The refusal count is "companies refusing *now*", read from
+        `consecutive_failures`. If it were instead a count of rows that had
+        ever refused, an upstream typo that was fixed would hold `make
+        ops-check` red forever -- and an alarm that cannot clear is an alarm
+        that stops being read.
+        """
+        from registers.tasks import _update_company_from_ruz_data
+
+        records = [
+            {
+                "ico": f"8{index:07d}",
+                "id": 100000 + index,
+                "nazovUJ": f"Firma {index}",
+            }
+            for index in range(self.MIN_ATTEMPTS)
+        ]
+
+        for record in records:
+            with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+                _update_company_from_ruz_data({**record, "datumZrusenia": "12.03.2026"})
+
+        with self.assertRaises(SystemExit):
+            call_command("source_health", skip_checks=True, stdout=StringIO())
+
+        # The upstream format is corrected; every company syncs cleanly again.
+        for record in records:
+            _update_company_from_ruz_data({**record, "datumZrusenia": "2026-03-12"})
+
+        stdout = StringIO()
+        call_command("source_health", skip_checks=True, stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("0 companies refusing a date field", output)
+        self.assertIn("Source health: 0 unmet", output)
 
 
 class BaseSyncTaskTests(TestCase):
