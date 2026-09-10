@@ -6,6 +6,12 @@
 # CI or a health check.
 set -Eeuo pipefail
 
+# Machine-local off-site configuration; an already exported variable wins, so
+# `make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=...` still overrides.
+# Must precede the CISTAFIRMA_* defaults read just below.
+# shellcheck source=lib/backup_env.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 DEFAULT_BACKUP_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/backups"
 BACKUP_DIR="${CISTAFIRMA_BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"

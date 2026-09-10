@@ -5,6 +5,12 @@
 # Read-only with respect to the database; never destructive.
 set -Eeuo pipefail
 
+# Machine-local off-site configuration (the volume path cannot live in the
+# repo). Sourced before anything reads a CISTAFIRMA_* default; an already
+# exported variable wins. See lib/backup_env.sh.
+# shellcheck source=lib/backup_env.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd "$ROOT_DIR"
 
@@ -25,11 +31,23 @@ fi
 
 "$ROOT_DIR/scripts/local/verify_postgres_backup.sh" "$backup_file"
 
-if [ -n "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ] && [ -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR}" ]; then
+# Three distinct outcomes, reported distinctly. Collapsing them into one
+# "volume not mounted" line is what hid a real defect: the scheduled job had no
+# way to learn the volume path, so it printed the same message a genuinely
+# unplugged drive would produce, every week, indefinitely.
+if [ -z "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ]; then
+    echo "[$(stamp)] WARNING: no off-site directory is configured, so NO off-site replica was made."
+    echo "           Record it once with:"
+    echo "             make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/<volume>/cistafirmaBackups"
+    echo "           Then re-run the replica for today's dump:"
+    echo "             make db-backup-replicate BACKUP_FILE='$backup_file'"
+elif [ ! -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR}" ]; then
+    echo "[$(stamp)] WARNING: off-site directory is configured but not mounted, so NO replica was made:"
+    echo "             ${CISTAFIRMA_OFFSITE_BACKUP_DIR}"
+    echo "           Attach the volume and run: make db-backup-replicate BACKUP_FILE='$backup_file'"
+else
     echo "[$(stamp)] off-site volume detected; replicating"
     "$ROOT_DIR/scripts/local/replicate_postgres_backup.sh" "$backup_file"
-else
-    echo "[$(stamp)] off-site volume not mounted; replica skipped"
 fi
 
 echo "[$(stamp)] scheduled backup finished ($(basename "$backup_file"))"

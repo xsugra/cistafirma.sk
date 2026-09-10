@@ -6,6 +6,12 @@
 # touches files inside the backup directory (fail-closed inside the repo).
 set -Eeuo pipefail
 
+# Machine-local off-site configuration; an already exported variable wins.
+# This has to come before the CISTAFIRMA_* defaults below (CISTAFIRMA_BACKUP_KEEP
+# is read a few lines down, well before ROOT_DIR is computed).
+# shellcheck source=lib/backup_env.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+
 usage() {
     cat <<'USAGE'
 Usage: prune_postgres_backups.sh [--apply] [--keep=N] [--offsite]

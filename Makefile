@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-offsite-configure db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
 
 # ====================================================================================
 # HELP
@@ -120,9 +120,11 @@ db-backup-verify:
 	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
 	@scripts/local/verify_postgres_backup.sh "$(BACKUP_FILE)"
 
+# CISTAFIRMA_OFFSITE_BACKUP_DIR is optional here: when omitted, the script reads
+# it from the machine-local config written by `make db-offsite-configure`. An
+# empty value is forwarded as an empty string, which the loader treats as unset.
 db-backup-replicate:
 	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
-	@test -n "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" || (echo "ERROR: CISTAFIRMA_OFFSITE_BACKUP_DIR is required" >&2; exit 2)
 	@CISTAFIRMA_OFFSITE_BACKUP_DIR="$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP="$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" scripts/local/replicate_postgres_backup.sh "$(BACKUP_FILE)"
 
 db-restore-drill:
@@ -138,6 +140,13 @@ db-backup-prune:
 # Off-site readiness report. Read-only; exits non-zero when a control is unmet.
 db-offsite-status:
 	@scripts/local/offsite_status.sh
+
+# Record where the off-site backup volume lives on *this* machine, so the weekly
+# launchd job (which inherits almost no environment) can find it. Writes
+# ~/.config/cistafirma/backup.env; the repository stays free of machine paths.
+db-offsite-configure:
+	@test -n "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" || (echo "ERROR: CISTAFIRMA_OFFSITE_BACKUP_DIR is required, e.g. make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/Verbatim/cistafirmaBackups" >&2; exit 2)
+	@scripts/local/configure_offsite.sh "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" "$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)"
 
 # Weekly unattended backup via launchd (backup -> verify -> replica if mounted).
 db-backup-schedule-install:

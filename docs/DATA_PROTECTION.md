@@ -49,6 +49,7 @@ starting a database or changing source data.
 make db-backup-prune                       # dry run: list what would be deleted
 make db-backup-prune PRUNE_ARGS="--apply"  # keep the newest 7, delete older
 make db-offsite-status                     # read-only readiness report
+make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"  # record the volume
 make db-backup-schedule-install            # weekly launchd job (Sunday 03:17)
 make db-backup-schedule-status
 make db-backup-schedule-uninstall
@@ -58,10 +59,36 @@ make db-backup-schedule-uninstall
 backup directory, and refuses a directory inside this repository. Add
 `PRUNE_ARGS="--apply --offsite"` to mirror the same retention onto the off-site
 volume. `db-offsite-status` writes nothing and exits non-zero when a required
-control is unmet, so it is safe as a gate anywhere (CI included). The launchd
-job runs `scripts/local/scheduled_backup.sh` — backup, verify, and replicate
-only when the off-site volume is mounted — and logs to
-`~/Library/Logs/CistaFirma/backup.out.log`.
+control is unmet, so it is safe as a gate anywhere (CI included).
+
+### Where the off-site path is recorded
+
+The off-site path is machine-specific, so it must not live in the repository —
+yet the weekly launchd job needs it, and launchd starts agents with an almost
+empty environment. `make db-offsite-configure` therefore writes it once to a
+machine-local file:
+
+```
+~/.config/cistafirma/backup.env      # chmod 600, never committed
+```
+
+```bash
+make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups"
+```
+
+Every backup script sources `scripts/local/lib/backup_env.sh`, which reads that
+file. Precedence is: **an already-exported variable wins**, so one-off overrides
+still work (`make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=/tmp/x`), and
+the same file can carry other `CISTAFIRMA_*` settings — in particular the
+temporary unencrypted-volume exception below. Only `CISTAFIRMA_*` keys are ever
+set, so a stray line cannot inject an unrelated variable. `db-offsite-configure`
+updates the file in place; other keys already in it are preserved.
+
+The launchd job runs `scripts/local/scheduled_backup.sh` — backup, verify, and
+replicate when the off-site volume is mounted — and logs to
+`~/Library/Logs/CistaFirma/backup.out.log`. When it makes no replica it says so
+explicitly and distinguishes *not configured* from *configured but not mounted*,
+because the two need different fixes and used to be reported identically.
 
 ## External encrypted replica
 
@@ -71,12 +98,16 @@ different filesystem than the local backup, and refuses volumes that do not
 report encryption through `diskutil`. It never creates a fallback copy on the
 internal disk.
 
-After connecting and unlocking the external disk:
+Record the destination once with `make db-offsite-configure` (see *Where the
+off-site path is recorded*), then after connecting and unlocking the external
+disk:
 
 ```bash
-export CISTAFIRMA_OFFSITE_BACKUP_DIR="/Verbatim/cistafirmaBackups"
 make db-backup-replicate BACKUP_FILE="/absolute/path/to/cistafirma_YYYYMMDDTHHMMSSZ.dump"
 ```
+
+Passing `CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"` on the command line still works
+and overrides the recorded value for that one run.
 
 The copied archive and manifest are checksum-verified after transfer. Keep the
 disk disconnected except while making or testing a replica. Perform an isolated
@@ -88,8 +119,14 @@ An unencrypted external volume is not an acceptable long-term backup target.
 Only when explicitly approved for temporary use may the copy proceed with:
 
 ```bash
-export CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true
+make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups" \
+    CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true
 ```
+
+(or `export CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true` for a single
+interactive run). Set it through the config file, not only an export, whenever
+the **weekly job** must keep working — launchd inherits almost no environment,
+so an `export` in a terminal never reaches it.
 
 This exception is logged to stderr by the replication script and must be removed
 after the external volume is encrypted. Treat the unencrypted disk as containing
@@ -147,14 +184,23 @@ An off-host replica is the only protection against loss of this computer. The
 replication tooling already exists and fails closed; what is required is the
 encrypted destination plus one verified retrieval.
 
-1. Connect an external disk and erase it as **APFS (Encrypted)** in Disk Utility
-   (or otherwise enable encryption on the volume). The replication script
-   refuses volumes that do not report encryption through `diskutil`.
-2. Create the target directory and point the environment at it:
+1. Connect an external disk and encrypt its volume. On an **empty** disk, erase
+   it as **APFS (Encrypted)** in Disk Utility. On a disk that already holds
+   data — including one that already holds a replica — do **not** erase it;
+   encrypt it in place instead (non-destructive, runs in the background, and
+   the disk must stay connected until it finishes):
+
+   ```bash
+   diskutil apfs encryptVolume <apfsVolumeDisk> -user disk
+   ```
+
+   Either way the replication script refuses volumes that do not report
+   encryption through `diskutil`. Save the passphrase in a password manager.
+2. Create the target directory and record it on this machine:
 
    ```bash
    mkdir -p "/Volumes/<disk>/cistafirmaBackups"
-   export CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups"
+   make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups"
    ```
 
 3. Make and replicate a verified backup:
@@ -165,11 +211,19 @@ encrypted destination plus one verified retrieval.
    make db-offsite-status   # must print: Off-site backup controls: SATISFIED
    ```
 
-4. Install the weekly schedule so this repeats unattended:
+4. Install the weekly schedule so this repeats unattended. Do this *after*
+   step 2 — the job reads the recorded path from `~/.config/cistafirma/backup.env`,
+   and it cannot see an `export` from your shell:
 
    ```bash
    make db-backup-schedule-install
+   make db-backup-schedule-status
    ```
+
+   Afterwards, check the first unattended run in
+   `~/Library/Logs/CistaFirma/backup.out.log`: it must report either
+   `off-site volume detected; replicating` or an explicit warning naming what is
+   missing. It must **not** be silent about the replica.
 
 5. At least monthly, restore the newest off-site dump **from a different
    machine** (or after a simulated disk loss) with `make db-restore-drill`,
