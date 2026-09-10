@@ -213,7 +213,20 @@ else
         failures=$((failures + unmet))
     fi
 fi
-warnings=$((warnings + $(printf '%s\n' "$offsite_output" | grep -c '^WARN  ' || true)))
+# Read from the off-site script's own summary line for the same reason the unmet
+# count is: the two scripts must not be coupled by the shape of its prose. This
+# used to be `grep -c '^WARN  '` against that output, which counted warnings only
+# as long as both `warn()` helpers kept printing exactly two spaces -- so a
+# one-character edit in either file would have made every off-site warning vanish
+# from this total, silently, with the gate still reporting SATISFIED. Unreadable
+# is not zero, and it fails closed exactly as the unmet count above does.
+offsite_warnings=$(printf '%s\n' "$offsite_output" \
+    | sed -n 's/^Off-site backup warnings: \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+if [ -z "$offsite_warnings" ]; then
+    bad "offsite_status.sh did not report a readable warning count"
+else
+    warnings=$((warnings + offsite_warnings))
+fi
 
 # --- weekly job ----------------------------------------------------------
 # A control that never runs looks exactly like a control that always passes.

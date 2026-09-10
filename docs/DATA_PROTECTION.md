@@ -196,6 +196,17 @@ Two deliberate asymmetries keep that alert trustworthy:
   `launchctl print … runs`. A job launchd has never launched cannot be reported
   as "ran recently" merely because someone ran the script by hand.
 
+The gate does not read the off-site report's prose. `offsite_status.sh` publishes
+two summary lines of its own — `Off-site backup controls: N unmet` and
+`Off-site backup warnings: N` — and `ops_check.sh` parses those, failing closed if
+either is unreadable. The warning count used to be derived by grepping that
+script's output for `^WARN  `, which held only as long as both scripts' `warn()`
+helpers kept printing exactly two spaces: a one-character edit in either file
+would have made every off-site warning disappear from the total while the gate
+still reported SATISFIED. A count that can silently under-report is worse than no
+count, because it is believed. The same rule covers the other chained scripts,
+whose own summary lines are the entire contract between them and this gate.
+
 ### Known risk: an unresponsive volume stalls the gate, it does not fail it
 
 Nothing under `scripts/local` uses `timeout`. The off-site controls read the

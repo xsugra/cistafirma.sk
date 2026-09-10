@@ -28,8 +28,12 @@ MAX_REPLICA_AGE_DAYS="${CISTAFIRMA_REPLICA_MAX_AGE_DAYS:-14}"
 REQUIRE_MOUNTED="${CISTAFIRMA_OFFSITE_REQUIRE_MOUNTED:-true}"
 
 failures=0
+warnings=0
 ok() { printf 'OK    %s\n' "$*"; }
-warn() { printf 'WARN  %s\n' "$*"; }
+warn() {
+    printf 'WARN  %s\n' "$*"
+    warnings=$((warnings + 1))
+}
 bad() {
     printf 'FAIL  %s\n' "$*"
     failures=$((failures + 1))
@@ -200,6 +204,16 @@ EOF
 fi
 
 printf '\n'
+# Both counts are published as their own summary lines, and they are the only
+# thing a caller may read. The verdict below says whether the controls hold;
+# this one says how much was excused, which the verdict cannot express -- a
+# caller that counted the `WARN  ` lines instead would be coupled to this
+# script's spacing through a convention neither script owns, and a control
+# that silently under-reports is worse than one that reports nothing, because
+# it is believed. Printed before the verdict, and on both exits, so the count
+# is available whether or not the controls were satisfied.
+echo "Off-site backup warnings: $warnings"
+
 if [ "$failures" -eq 0 ]; then
     echo "Off-site backup controls: SATISFIED"
     exit 0
