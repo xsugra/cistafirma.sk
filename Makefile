@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-restore-drill run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
 
 # ====================================================================================
 # HELP
@@ -128,6 +128,26 @@ db-backup-replicate:
 db-restore-drill:
 	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
 	@scripts/local/restore_postgres_drill.sh "$(BACKUP_FILE)"
+
+# Retention: keeps the newest N local backups (default 7). Dry-run unless
+# applied, e.g. make db-backup-prune PRUNE_ARGS="--apply" (add --offsite to
+# mirror the retention onto CISTAFIRMA_OFFSITE_BACKUP_DIR).
+db-backup-prune:
+	@scripts/local/prune_postgres_backups.sh $(PRUNE_ARGS)
+
+# Off-site readiness report. Read-only; exits non-zero when a control is unmet.
+db-offsite-status:
+	@scripts/local/offsite_status.sh
+
+# Weekly unattended backup via launchd (backup -> verify -> replica if mounted).
+db-backup-schedule-install:
+	@scripts/local/install_backup_schedule.sh
+
+db-backup-schedule-uninstall:
+	@scripts/local/uninstall_backup_schedule.sh
+
+db-backup-schedule-status:
+	@scripts/local/backup_schedule_status.sh
 
 celery-down: venv
 	@echo "Turning off all backend Celery tasks..."

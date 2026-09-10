@@ -43,6 +43,26 @@ containing its SHA-256 checksum and size. The verifier checks the checksum and
 uses the pinned `postgres:16-alpine` image to read the archive directory without
 starting a database or changing source data.
 
+### Retention, status and schedule
+
+```bash
+make db-backup-prune                       # dry run: list what would be deleted
+make db-backup-prune PRUNE_ARGS="--apply"  # keep the newest 7, delete older
+make db-offsite-status                     # read-only readiness report
+make db-backup-schedule-install            # weekly launchd job (Sunday 03:17)
+make db-backup-schedule-status
+make db-backup-schedule-uninstall
+```
+
+`db-backup-prune` never deletes the newest backup, only touches files inside the
+backup directory, and refuses a directory inside this repository. Add
+`PRUNE_ARGS="--apply --offsite"` to mirror the same retention onto the off-site
+volume. `db-offsite-status` writes nothing and exits non-zero when a required
+control is unmet, so it is safe as a gate anywhere (CI included). The launchd
+job runs `scripts/local/scheduled_backup.sh` — backup, verify, and replicate
+only when the off-site volume is mounted — and logs to
+`~/Library/Logs/CistaFirma/backup.out.log`.
+
 ## External encrypted replica
 
 The second copy must be stored on an encrypted external macOS volume. The
@@ -108,10 +128,10 @@ or removes the running Compose database or its named volume.
 - **Owner:** repository maintainer (Samuel Šugra). Backup creation, verification
   and drills are the owner's responsibility; AI agents and contributors must not
   bypass these controls.
-- **RPO (Recovery Point Objective):** backups are taken manually today, so RPO
-  equals the age of the newest verified dump. Run `make db-backup` before any
-  schema/data-changing work and at least after each meaningful sync milestone.
-  Until an off-host replica exists, treat RPO as unbounded across hardware loss.
+- **RPO (Recovery Point Objective):** with the weekly launchd job installed, RPO
+  is at most 7 days. Run `make db-backup` before any schema/data-changing work
+  and after each meaningful sync milestone for a tighter point. Until a verified
+  off-host replica exists, treat RPO as unbounded across hardware loss.
 - **RTO (Recovery Time Objective):** an isolated restore drill restores 38+
   tables in roughly a minute. A production-target restore additionally requires
   a pre-restore backup, maintenance mode and post-restore integrity checks, so
@@ -121,8 +141,39 @@ or removes the running Compose database or its named volume.
   each initial backup and at least monthly (from the external copy when it
   exists).
 
-## Remaining required control
+## Off-site setup runbook (required control)
 
-Configure an encrypted off-host replication destination and test retrieval from
-another machine or storage failure domain. Until then, the local backup is an
-important first layer, not a complete disaster-recovery solution.
+An off-host replica is the only protection against loss of this computer. The
+replication tooling already exists and fails closed; what is required is the
+encrypted destination plus one verified retrieval.
+
+1. Connect an external disk and erase it as **APFS (Encrypted)** in Disk Utility
+   (or otherwise enable encryption on the volume). The replication script
+   refuses volumes that do not report encryption through `diskutil`.
+2. Create the target directory and point the environment at it:
+
+   ```bash
+   mkdir -p "/Volumes/<disk>/cistafirmaBackups"
+   export CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups"
+   ```
+
+3. Make and replicate a verified backup:
+
+   ```bash
+   make db-backup
+   make db-backup-replicate BACKUP_FILE="/absolute/path/to/cistafirma_YYYYMMDDTHHMMSSZ.dump"
+   make db-offsite-status   # must print: Off-site backup controls: SATISFIED
+   ```
+
+4. Install the weekly schedule so this repeats unattended:
+
+   ```bash
+   make db-backup-schedule-install
+   ```
+
+5. At least monthly, restore the newest off-site dump **from a different
+   machine** (or after a simulated disk loss) with `make db-restore-drill`,
+   proving retrieval from a second failure domain.
+
+Until step 3 has produced a verified replica, the local backup is an important
+first layer — not a complete disaster-recovery solution.

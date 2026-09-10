@@ -73,6 +73,9 @@ make db-backup                                  # Fresh timestamped dump
 make db-backup-verify BACKUP_FILE="<abs path>"  # Checksum + archive read check
 make db-restore-drill BACKUP_FILE="<abs path>"  # Isolated restore (never live DB)
 make db-backup-replicate BACKUP_FILE="<abs>" CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"
+make db-offsite-status                          # Read-only off-site readiness gate
+make db-backup-prune                            # Dry-run retention (newest 7 kept)
+make db-backup-schedule-install                 # Weekly launchd backup job
 ```
 
 ### Testing
