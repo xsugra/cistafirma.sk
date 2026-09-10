@@ -67,8 +67,14 @@ migrate: venv
 superuser: venv
 	@$(PYTHON) $(DJANGO_MANAGE_DIR) createsuperuser
 
+# Run from inside backend/: unittest discovery starts at the working directory
+# and cannot descend into a directory that is not a package, so from the repo
+# root `backend/` (which has no __init__.py) was invisible and this target found
+# 0 tests while still exiting 0 -- a silent false green. CI already does the
+# equivalent with `cd backend`. The labelled targets below (users, registers, …)
+# are unaffected: a label is an importable module, not a discovery root.
 test: venv
-	@$(PYTHON) $(DJANGO_MANAGE_DIR) test
+	@cd $(BACKEND_DIR) && $(CURDIR)/$(PYTHON) manage.py test
 
 users: venv
 	@$(PYTHON) $(DJANGO_MANAGE_DIR) test users
