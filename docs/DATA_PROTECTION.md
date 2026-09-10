@@ -213,8 +213,11 @@ be in:
 - **present and not answering** — not handled. This is what an intermittently
   stalling USB volume produces.
 
-A mounted volume that has stopped responding blocks those calls indefinitely.
-The result is worse than a red gate: the gate never returns, so
+A mounted volume that stops responding blocks those calls for an unbounded
+time. Nothing in that path imposes an upper bound, and that absence — not any
+observed hang — is what the fix has to restore: the stalls seen on this disk so
+far have all returned, some only after minutes, and nothing here guarantees the
+next one will. While the gate is blocked it does not return, so
 `scheduled_backup.sh` never reaches its `exit`, its `EXIT` trap never fires, and
 neither `~/Library/Logs/CistaFirma/LAST_FAILURE` nor the macOS notification is
 written. **The alarm goes silent in exactly the condition it exists to detect**,
@@ -226,6 +229,15 @@ and that was judged out of scope for the increment that found it. The fix, when
 it is taken up, is a bounded wait around each of those calls with the timeout
 treated as a **failure** — never as a skip, which would turn a missing answer
 into a passing control.
+
+Two properties are needed, and only the first is obvious. The bound must give
+the *caller* a verdict even when the blocked process cannot be reaped: a process
+parked in an uninterruptible I/O wait ignores SIGTERM and SIGKILL alike, so a
+watchdog that backgrounds the call and kills it will report "timed out" while
+leaving the real process parked — the gate returns, but every stall leaks a
+process against a job launchd will not re-run. If the mechanism cannot promise
+the caller a verdict regardless of whether the stuck process dies, it is the
+wrong mechanism.
 
 Until then detection is manual: a hung run writes no failure marker *and* no
 success line, so read the tail of the run log and the `launchctl print … runs`
