@@ -196,6 +196,41 @@ Two deliberate asymmetries keep that alert trustworthy:
   `launchctl print … runs`. A job launchd has never launched cannot be reported
   as "ran recently" merely because someone ran the script by hand.
 
+### Known risk: an unresponsive volume stalls the gate, it does not fail it
+
+Nothing under `scripts/local` uses `timeout`. The off-site controls read the
+external volume through unguarded I/O — `offsite_status.sh` does `cd` and
+`pwd -P`, `stat -f '%d'` twice, `df -P`, `diskutil info`, and a checksum read of
+the replica — and both callers wrap that script in a bare command substitution
+(`ops_check.sh`, `scheduled_backup.sh`).
+
+So the controls can distinguish only two of the three states a backup target can
+be in:
+
+- **absent** — handled, deliberately: the staleness and drill controls read
+  local records precisely because the disk is normally disconnected;
+- **present and healthy** — handled;
+- **present and not answering** — not handled. This is what an intermittently
+  stalling USB volume produces.
+
+A mounted volume that has stopped responding blocks those calls indefinitely.
+The result is worse than a red gate: the gate never returns, so
+`scheduled_backup.sh` never reaches its `exit`, its `EXIT` trap never fires, and
+neither `~/Library/Logs/CistaFirma/LAST_FAILURE` nor the macOS notification is
+written. **The alarm goes silent in exactly the condition it exists to detect**,
+and a run that is hung is indistinguishable from a run that is still working.
+
+Recorded as a known risk on 2026-09-10 and deliberately left unfixed: adding a
+bounded wait to every external-device call changes how the whole gate reports,
+and that was judged out of scope for the increment that found it. The fix, when
+it is taken up, is a bounded wait around each of those calls with the timeout
+treated as a **failure** — never as a skip, which would turn a missing answer
+into a passing control.
+
+Until then detection is manual: a hung run writes no failure marker *and* no
+success line, so read the tail of the run log and the `launchctl print … runs`
+counter, not the marker alone.
+
 ### Off-site replica record
 
 `make db-backup-replicate` appends a record to
@@ -336,12 +371,22 @@ encrypted destination plus one verified retrieval.
 1. Connect an external disk and encrypt its volume. On an **empty** disk, erase
    it as **APFS (Encrypted)** in Disk Utility. On a disk that already holds
    data — including one that already holds a replica — do **not** erase it;
-   encrypt it in place instead (non-destructive, runs in the background, and
-   the disk must stay connected until it finishes):
+   encrypt it in place instead. This is non-destructive and the volume stays
+   readable and writable throughout, so a disk does not have to be empty — or
+   to be dedicated to backups — before it can be encrypted:
 
    ```bash
    diskutil apfs encryptVolume <apfsVolumeDisk> -user disk
    ```
+
+   The command returns within about a second, and `diskutil info` reports the
+   volume as encrypted from that moment while the conversion continues in the
+   background — **so a green off-site control is not evidence that the
+   conversion has finished.** That behaviour was measured on 2026-09-10 on an
+   APFS volume built on a disk image (i.e. on the internal SSD). It was *not*
+   measured on an external USB disk, and whether the background pass completes
+   without incident on one is Apple's design intent rather than a verified
+   result: keep the disk connected and powered until the conversion is done.
 
    Either way the replication script refuses volumes that do not report
    encryption through `diskutil`. Save the passphrase in a password manager.
