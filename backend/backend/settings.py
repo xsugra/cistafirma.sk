@@ -300,8 +300,22 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = "Europe/Bratislava"
 CELERY_ENABLE_UTC = True
 
-# Django Celery Beat - fix for Python 3.12+ zoneinfo issue
-DJANGO_CELERY_BEAT_TZ_AWARE = False
+# Django Celery Beat -- timezone-aware scheduling.
+#
+# This was False to dodge a Python 3.12+ zoneinfo problem. That problem is gone
+# in django-celery-beat 2.9.0: TzAwareCrontab uses only stdlib `datetime.now(tz)`
+# and `astimezone`, with no pytz `.localize()`. With the flag False the scheduler
+# builds a plain `crontab`, whose timezone comes from CELERY_TIMEZONE rather than
+# from each row -- so a row given a *different* timezone in the admin is silently
+# ignored. Setting it True makes the row's own `timezone` field authoritative.
+#
+# No firing time changes today: the only crontab row (`celery.backend_cleanup`,
+# "0 4 * * *") already carries Europe/Bratislava, which is also CELERY_TIMEZONE,
+# so both readings agree. Verified before flipping -- next run 04:00 Bratislava
+# either way. The flag is what makes PeriodicTask.last_run_at aware, so leaving
+# it False logged `RuntimeWarning: ... received a naive datetime` on every due
+# task, about 100 times a day.
+DJANGO_CELERY_BEAT_TZ_AWARE = True
 
 # Queue layout: každá queue mapuje na samostatný Celery worker deployment v k8s.
 # - ruz_full: sekvenčné RUZ bulk operácie (1 worker only, drží SyncProgress kurzor)
