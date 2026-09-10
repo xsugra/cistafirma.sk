@@ -166,8 +166,16 @@ def update_insurance_debt(company_id: int):
                 company_name=company.nazov_UJ,
                 changes=changes,
             )
-        except Exception as e:
-            logger.warning("Failed to create debt change notifications for %s: %s", company.ico, e)
+        except Exception:
+            # The debt itself is already saved above; only the notification is
+            # lost. That makes this survivable, not silent -- a swallowed failure
+            # here is indistinguishable from a company nobody watches, so it is
+            # logged as an error with the traceback rather than a warning.
+            logger.error(
+                "Failed to create debt change notifications for %s",
+                company.ico,
+                exc_info=True,
+            )
 
     logger.info(
         "Insurance debt check finished for %s (ICO: %s, VSZP=%s, social=%s)",

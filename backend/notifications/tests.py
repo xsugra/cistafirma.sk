@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -6,9 +7,18 @@ from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from .models import NotificationEvent
+from companies.models import Company, Watchlist
+
+from .models import NotificationEvent, NotificationPreference
 from .serializers import NotificationEventSerializer
-from .services import CLAIM_LEASE, MAX_ATTEMPTS, send_pending_email_notifications
+from .services import (
+    CLAIM_LEASE,
+    MAX_ATTEMPTS,
+    create_debt_change_event,
+    create_executive_change_event,
+    create_status_change_event,
+    send_pending_email_notifications,
+)
 
 User = get_user_model()
 
@@ -147,3 +157,121 @@ class NotificationEventSerializerTests(TestCase):
         data = NotificationEventSerializer(event).data
         self.assertIs(False, data['sentEmail'])
         self.assertEqual(data['deliveryStatus'], 'pending')
+
+
+class ChangeEventTextFittingTests(TestCase):
+    """A long registered name must cost the title, not the notification.
+
+    `Company.nazov_UJ` allows 500 characters and live rows already reach 200,
+    while `NotificationEvent.title` and `.company_name` are 255. Postgres
+    rejects an over-long value rather than trimming it, and the caller catches
+    that broadly -- so an unbounded title does not degrade the notification, it
+    writes it nowhere and reports it in a single warning line.
+    """
+
+    # 496 characters: inside nazov_UJ's 500, well past the 255 of both
+    # NotificationEvent columns.
+    LONG_NAME = 'Dlhé meno, n.o. ' * 31
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='watcher@example.com', password='testpass123',
+        )
+        self.company = Company.objects.create(
+            ruz_id=990001,
+            ico='99000001',
+            nazov_UJ=self.LONG_NAME,
+            debt_vszp=Decimal('0'),
+            debt_soc_poist=Decimal('0'),
+        )
+        Watchlist.objects.create(user=self.user, company=self.company)
+        NotificationPreference.objects.create(
+            user=self.user,
+            email_enabled=True,
+            on_debt_change=True,
+            on_status_change=True,
+            on_executive_change=True,
+        )
+
+    def _assert_fits(self, event):
+        title_limit = NotificationEvent._meta.get_field('title').max_length
+        name_limit = NotificationEvent._meta.get_field('company_name').max_length
+        self.assertLessEqual(len(event.title), title_limit)
+        self.assertLessEqual(len(event.company_name), name_limit)
+
+    def test_debt_change_fits_its_columns(self):
+        created = create_debt_change_event(
+            company_id=self.company.id,
+            company_ico=self.company.ico,
+            company_name=self.LONG_NAME,
+            changes={
+                'vszp': {'old': 0, 'new': 6641.86},
+                'soc_poist': {'old': 0, 'new': 731.46},
+            },
+        )
+
+        self.assertEqual(created, 1)
+        self._assert_fits(NotificationEvent.objects.get())
+
+    def test_the_change_survives_the_trim(self):
+        """The name gives way; the news is what the reader is being told."""
+        create_debt_change_event(
+            company_id=self.company.id,
+            company_ico=self.company.ico,
+            company_name=self.LONG_NAME,
+            changes={
+                'vszp': {'old': 0, 'new': 6641.86},
+                'soc_poist': {'old': 0, 'new': 731.46},
+            },
+        )
+
+        title = NotificationEvent.objects.get().title
+        self.assertIn('VšZP', title)
+        self.assertIn('Sociálna poisťovňa', title)
+        self.assertTrue(title.endswith(')'), title)
+
+    def test_a_trimmed_name_says_so(self):
+        create_debt_change_event(
+            company_id=self.company.id,
+            company_ico=self.company.ico,
+            company_name=self.LONG_NAME,
+            changes={'vszp': {'old': 0, 'new': 6641.86}},
+        )
+
+        self.assertIn('…', NotificationEvent.objects.get().company_name)
+
+    def test_status_change_fits_its_columns(self):
+        created = create_status_change_event(
+            company_ico=self.company.ico,
+            company_name=self.LONG_NAME,
+            old_status='Aktívna',
+            new_status='V likvidácii',
+        )
+
+        self.assertEqual(created, 1)
+        self._assert_fits(NotificationEvent.objects.get())
+
+    def test_executive_change_fits_its_columns(self):
+        """Three long officer names overflow the title on their own."""
+        created = create_executive_change_event(
+            company_ico=self.company.ico,
+            company_name=self.LONG_NAME,
+            changes=[f'Pribudol: {n}' for n in ('Ing. ' + 'X' * 80,) * 3],
+        )
+
+        self.assertEqual(created, 1)
+        self._assert_fits(NotificationEvent.objects.get())
+
+    def test_a_short_name_is_left_exactly_as_it_was(self):
+        """The bound must not quietly rewrite names that already fit."""
+        create_debt_change_event(
+            company_id=self.company.id,
+            company_ico=self.company.ico,
+            company_name='Krátke s.r.o.',
+            changes={'vszp': {'old': 0, 'new': 100}},
+        )
+
+        event = NotificationEvent.objects.get()
+        self.assertEqual(event.company_name, 'Krátke s.r.o.')
+        # format_currency_eur rounds to whole euros and appends "€".
+        self.assertEqual(event.title, 'Krátke s.r.o. — zmena dlhov (VšZP: +100€)')

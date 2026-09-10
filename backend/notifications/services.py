@@ -26,6 +26,36 @@ MAX_ATTEMPTS = 5
 CLAIM_LEASE = timedelta(minutes=30)
 
 
+def _column_width(field_name: str) -> int:
+    """The model column's own width, so the bound cannot drift from the schema."""
+    return NotificationEvent._meta.get_field(field_name).max_length
+
+
+def _fit(value: str, limit: int) -> str:
+    """Cut a value to a column's width, marking it when something was dropped."""
+    if len(value) <= limit:
+        return value
+    return value[: max(limit - 1, 0)] + '…'
+
+
+def _compose_title(company_name: str, suffix: str) -> str:
+    """Build a title that fits `NotificationEvent.title`, keeping the suffix.
+
+    The suffix carries the change itself -- the news the reader is being told.
+    The company name is what they already know, so the name is what gives way.
+
+    This is not hypothetical: `Company.nazov_UJ` allows 500 characters and live
+    rows already reach 200, while a debt suffix names two sources. Together they
+    overflow the 255-character title. Postgres rejects such a row rather than
+    trimming it, so an unbounded title does not degrade the notification -- it
+    loses it.
+    """
+    limit = _column_width('title')
+    if len(suffix) >= limit:
+        return _fit(suffix, limit)
+    return _fit(company_name, limit - len(suffix)) + suffix
+
+
 def _extract_orsr_person_names(profile) -> list[str]:
     """Extract person names from an OrsrCompanyProfile for comparison."""
     names: list[str] = []
@@ -125,7 +155,8 @@ def create_debt_change_event(
     if not parts:
         return 0
 
-    title = f'{company_name} — zmena dlhov ({", ".join(parts)})'
+    name = _fit(company_name, _column_width('company_name'))
+    title = _compose_title(name, f' — zmena dlhov ({", ".join(parts)})')
 
     # Get users with preferences enabled
     prefs = NotificationPreference.objects.filter(
@@ -138,7 +169,7 @@ def create_debt_change_event(
         NotificationEvent(
             user_id=uid,
             company_ico=company_ico,
-            company_name=company_name,
+            company_name=name,
             event_type=NotificationEvent.EventType.DEBT_CHANGE,
             title=title,
             details={'changes': changes},
@@ -165,7 +196,8 @@ def create_status_change_event(
     if not watcher_ids:
         return 0
 
-    title = f'{company_name} — zmena statusu: {old_status} → {new_status}'
+    name = _fit(company_name, _column_width('company_name'))
+    title = _compose_title(name, f' — zmena statusu: {old_status} → {new_status}')
 
     prefs = NotificationPreference.objects.filter(
         user_id__in=watcher_ids,
@@ -177,7 +209,7 @@ def create_status_change_event(
         NotificationEvent(
             user_id=uid,
             company_ico=company_ico,
-            company_name=company_name,
+            company_name=name,
             event_type=NotificationEvent.EventType.STATUS_CHANGE,
             title=title,
             details={'old_status': old_status, 'new_status': new_status},
@@ -202,7 +234,8 @@ def create_executive_change_event(
     if not watcher_ids:
         return 0
 
-    title = f'{company_name} — zmena štatutárov ({", ".join(changes[:3])})'
+    name = _fit(company_name, _column_width('company_name'))
+    title = _compose_title(name, f' — zmena štatutárov ({", ".join(changes[:3])})')
 
     prefs = NotificationPreference.objects.filter(
         user_id__in=watcher_ids,
@@ -214,7 +247,7 @@ def create_executive_change_event(
         NotificationEvent(
             user_id=uid,
             company_ico=company_ico,
-            company_name=company_name,
+            company_name=name,
             event_type=NotificationEvent.EventType.EXECUTIVE_CHANGE,
             title=title,
             details={'changes': changes},
