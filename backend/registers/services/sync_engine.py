@@ -23,7 +23,7 @@ import random
 import time
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Iterable
+from typing import Any, Iterable
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -113,6 +113,32 @@ def update_company_status(
             status.next_retry_at = compute_next_retry(status.consecutive_failures)
         status.save()
     return status
+
+
+def record_unreadable_field(
+    *, company_id: int, source: str, field: str, raw: Any
+) -> CompanySyncStatus:
+    """Record a source field we could not read as a failed attempt for it.
+
+    This is what makes `ruz_api.apply_ruz_dates` refusing to write a control
+    rather than a log line. `source_health` judges a source on whether its
+    attempts produce a *usable* answer, and a date-format change is precisely
+    "attempts, and not one usable answer" -- so counting these is what lets
+    `make ops-check` reach a verdict instead of a human having to grep a JSON
+    stream. A lone malformed record stays below `source_health`'s attempt
+    threshold and is reported but not judged, which is the right weight for
+    an upstream typo.
+
+    It is recorded as a failure even though the rest of the record was
+    applied, because from the source's side the answer was not usable.
+    """
+    return update_company_status(
+        company_id=company_id,
+        source=source,
+        success=False,
+        error=f"Unreadable {field}={raw!r}",
+        error_type="parse_error",
+    )
 
 
 def block_company(*, company_id: int, source: str, reason: str = "") -> CompanySyncStatus:

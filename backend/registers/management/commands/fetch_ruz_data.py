@@ -2,8 +2,9 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from companies.models import Company
-from registers.models import IndividualEntity, SyncJob, SyncProgress
-from registers.integrations.ruz_api import RuzApi
+from registers.models import CompanySyncStatus, IndividualEntity, SyncJob, SyncProgress
+from registers.integrations.ruz_api import RuzApi, apply_ruz_dates
+from registers.services.sync_engine import record_unreadable_field
 import logging
 import time
 
@@ -344,8 +345,6 @@ class Command(BaseCommand):
             'mesto': data.get('mesto'),
             'ulica': data.get('ulica'),
             'psc': data.get('psc'),
-            'datum_zalozenia': parse_date(data.get('datumZalozenia', '')),
-            'datum_zrusenia': parse_date(data.get('datumZrusenia', '')),
             'pravna_forma': data.get('pravnaForma'),
             'sk_NACE': data.get('skNace'),
             'velkost_organizacie': data.get('velkostOrganizacie'),
@@ -357,9 +356,13 @@ class Command(BaseCommand):
             'id_uctovnych_zavierok': data.get('idUctovnychZavierok', list()),
             'id_vyrocnych_sprav': data.get('idVyrocnychSprav', list()),
             'zdroj_dat': data.get('zdrojDat'),
-            'datum_poslednej_upravy': parse_date(data.get('datumPoslednejUpravy', '')),
         }
 
+        # The three date fields go in together, and a field whose value we
+        # cannot read is left out entirely -- `update_or_create` then keeps
+        # what is stored instead of overwriting it with `None`. See
+        # `apply_ruz_dates` for why those two cases have to be told apart.
+        refused_dates = apply_ruz_dates(common_defaults, data)
 
         if is_szco:
             # Save to IndividualEntity
@@ -381,7 +384,11 @@ class Command(BaseCommand):
             # dissolved. Read the previous value first -- and only when the
             # incoming record HAS a dissolution date, which keeps this extra
             # query off the 73% of the batch that is not being dissolved.
-            new_zrusenie = common_defaults['datum_zrusenia']
+            # `.get`, not `[...]`: an unreadable `datumZrusenia` is left out of
+            # the defaults, so the key may genuinely be missing -- and in that
+            # case nothing about the company's status is changing, which is
+            # exactly what a `None` here means to `detect_status_change`.
+            new_zrusenie = common_defaults.get('datum_zrusenia')
             previous_zrusenie = None
             if new_zrusenie is not None:
                 previous_zrusenie = (
@@ -407,12 +414,32 @@ class Command(BaseCommand):
                         company_ico=company.ico,
                         company_name=company.nazov_UJ,
                         old_datum_zrusenia=previous_zrusenie,
-                        new_datum_zrusenia=company.datum_zrusenia,
+                        # `new_zrusenie`, not `company.datum_zrusenia`: the
+                        # latter reads the row back, so when `apply_ruz_dates`
+                        # has just declined to write an unreadable value it
+                        # would hand `detect_status_change` the *stored* date
+                        # as though it were new -- announcing an untouched
+                        # date as a dissolution.
+                        new_datum_zrusenia=new_zrusenie,
                     )
                 except Exception:
                     logger.error(
                         "Failed to detect status change for %s", company.ico, exc_info=True
                     )
                 self.stdout.write(f"Updated company: {company.nazov_UJ}, IČO: {company.ico}")
+
+            # A date we could not read is recorded against the source, not
+            # just logged: `source_health` judges a source on whether its
+            # attempts yield a usable answer, and a date-format change is
+            # exactly that -- attempts, and nothing usable. Below the
+            # attempt threshold a lone malformed record is reported and left
+            # unjudged, which is the right weight for an upstream typo.
+            for key, raw in refused_dates:
+                record_unreadable_field(
+                    company_id=company.id,
+                    source=CompanySyncStatus.SOURCE_RUZ,
+                    field=key,
+                    raw=raw,
+                )
 
         return created, not created

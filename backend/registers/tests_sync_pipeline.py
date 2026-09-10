@@ -411,6 +411,257 @@ class RuzCommandHeartbeatTests(TestCase):
         self.assertEqual(job.succeeded_items, 2)
 
 
+class RuzDateGuardTests(TestCase):
+    """A date we cannot read must not erase a date we already hold.
+
+    `parse_date` answers `None` both for a field RUZ omitted and for one it
+    sent in a shape we cannot read, and both writers stored that `None`
+    alike. For `datum_zrusenia` an upstream format change would therefore
+    erase every dissolution date at once -- and the sync that followed the
+    fix would restore all of them as dissolution notifications, through the
+    feature `detect_status_change` exists to serve.
+
+    Measured against the live API on 2026-09-10 before touching anything:
+    20/20 dissolved records carry `datumZrusenia`, 8/8 active ones omit it.
+    The format has not changed and nothing has been lost. These tests are
+    what keeps that from mattering if it ever does.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=111,
+            ico="90000111",
+            nazov_UJ="Zrušená s.r.o.",
+            datum_zrusenia=date(2026, 3, 12),
+        )
+
+    def _watch(self):
+        from django.contrib.auth import get_user_model
+        from companies.models import Watchlist
+        from notifications.models import NotificationPreference
+
+        watcher = get_user_model().objects.create_user(
+            email="watcher@example.com", password="testpass123",
+        )
+        Watchlist.objects.create(user=watcher, company=self.company)
+        NotificationPreference.objects.create(
+            user=watcher, email_enabled=True, on_status_change=True,
+        )
+
+    def _record(self, **overrides):
+        data = {
+            "ico": self.company.ico,
+            "id": self.company.ruz_id,
+            "nazovUJ": self.company.nazov_UJ,
+        }
+        data.update(overrides)
+        return data
+
+    def test_a_parsed_date_is_written_as_before(self):
+        from registers.tasks import _update_company_from_ruz_data
+
+        _update_company_from_ruz_data(self._record(datumZrusenia="2026-04-01"))
+
+        self.company.refresh_from_db()
+        self.assertEqual(self.company.datum_zrusenia, date(2026, 4, 1))
+
+    def test_an_absent_date_still_clears_the_stored_one(self):
+        """The guard has to stay narrow.
+
+        RUZ says "not dissolved" by omitting the key, so absence is a
+        statement and must land -- otherwise a revoked dissolution could
+        never clear, and the company would read as dissolved forever.
+        """
+        from registers.tasks import _update_company_from_ruz_data
+
+        _update_company_from_ruz_data(self._record())
+
+        self.company.refresh_from_db()
+        self.assertIsNone(self.company.datum_zrusenia)
+
+    def test_an_unreadable_date_does_not_erase_the_stored_one(self):
+        from registers.tasks import _update_company_from_ruz_data
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+
+        self.company.refresh_from_db()
+        self.assertEqual(self.company.datum_zrusenia, date(2026, 3, 12))
+
+    def test_an_unreadable_date_says_which_value_it_could_not_read(self):
+        """An operator has to be able to tell a format change from a typo
+        without going to the API by hand."""
+        from registers.tasks import _update_company_from_ruz_data
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR") as logs:
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+
+        self.assertEqual(len(logs.records), 1)
+        message = logs.records[0].getMessage()
+        self.assertIn("datumZrusenia", message)
+        self.assertIn("12.03.2026", message)
+        self.assertIn(self.company.ico, message)
+
+    def test_an_unreadable_date_is_not_announced_as_a_dissolution(self):
+        """The caller has to pass the value it *meant* to write.
+
+        `detect_status_change` is told the old value by a pre-read that only
+        happens when the record carries a dissolution date. Handing it
+        `company.datum_zrusenia` instead -- the row, read back -- means that
+        when `apply_ruz_dates` declines to write an unreadable value, the
+        untouched stored date is reported as new, with `old=None`, and every
+        watcher is told about a dissolution that did not happen. That is the
+        failure this whole guard exists to prevent, arriving by the back door.
+        """
+        from notifications.models import NotificationEvent
+        from registers.tasks import _update_company_from_ruz_data
+
+        self._watch()
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+
+        self.assertEqual(NotificationEvent.objects.count(), 0)
+
+    def test_a_format_change_cannot_produce_a_false_dissolution(self):
+        """The whole point, end to end.
+
+        A watcher is told about a dissolution once. If a format change erased
+        the date and the next sync restored it, they would be told again --
+        for a company that never stopped being dissolved.
+        """
+        from notifications.models import NotificationEvent
+        from registers.tasks import _update_company_from_ruz_data
+
+        self._watch()
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+        _update_company_from_ruz_data(self._record(datumZrusenia="2026-03-12"))
+
+        self.company.refresh_from_db()
+        self.assertEqual(self.company.datum_zrusenia, date(2026, 3, 12))
+        self.assertEqual(
+            NotificationEvent.objects.filter(
+                event_type=NotificationEvent.EventType.STATUS_CHANGE
+            ).count(),
+            0,
+        )
+
+    def test_a_refused_date_reaches_the_source_health_gate(self):
+        """A refusal that only logs is not a control.
+
+        `source_health` judges a source on whether its attempts produce a
+        usable answer -- "attempts, and not one of them usable" is a
+        date-format change. Recording the refusal as a failed attempt for
+        `ruz` is what lets `make ops-check` reach that verdict; without it the
+        guard's failure mode is a JSON line nobody queries, and the gate
+        reports SATISFIED throughout a mass erasure.
+        """
+        from registers.models import CompanySyncStatus
+        from registers.tasks import _update_company_from_ruz_data
+
+        with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+            _update_company_from_ruz_data(self._record(datumZrusenia="12.03.2026"))
+
+        status = CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_RUZ
+        )
+        self.assertEqual(status.last_error_type, "parse_error")
+        self.assertIn("datumZrusenia", status.last_error)
+        self.assertIsNone(status.last_succeeded_at)
+
+    def test_a_clean_sync_records_nothing_against_the_source(self):
+        """The other half: RUZ must not appear in the gate's table at all
+        while it is answering us properly. A row here means a date went
+        unread, not that RUZ was synced."""
+        from registers.models import CompanySyncStatus
+        from registers.tasks import _update_company_from_ruz_data
+
+        _update_company_from_ruz_data(self._record(datumZrusenia="2026-04-01"))
+
+        self.assertEqual(CompanySyncStatus.objects.count(), 0)
+
+    def test_the_command_writer_is_guarded_too(self):
+        """`fetch_ruz_data` is the one that runs every six hours; it maps the
+        same payload by hand and had the same hole."""
+        job = SyncJob.objects.create(
+            job_type="ruz_incremental",
+            status="running",
+            started_at=timezone.now(),
+            last_heartbeat=timezone.now(),
+        )
+        api = _FakeRuzApi([[self.company.ruz_id]])
+        api.get_company_details = MagicMock(return_value={
+            "ico": self.company.ico,
+            "id": self.company.ruz_id,
+            "nazovUJ": self.company.nazov_UJ,
+            "datumZrusenia": "12.03.2026",
+        })
+
+        with patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi", return_value=api
+        ):
+            with self.assertLogs("registers.integrations.ruz_api", level="ERROR"):
+                call_command(
+                    "fetch_ruz_data",
+                    sync_job_id=job.pk,
+                    stdout=StringIO(),
+                    stderr=StringIO(),
+                )
+
+        self.company.refresh_from_db()
+        self.assertEqual(self.company.datum_zrusenia, date(2026, 3, 12))
+
+
+class RefusedDatesReachTheGateTests(TestCase):
+    """The verdict, not the mechanism.
+
+    `source_health` fails a source that made `min_attempts` attempts in the
+    window and produced no successful answer at all. A date-format change is
+    exactly that shape, so this asserts the end of the chain the guard starts:
+    `make ops-check` goes red instead of reporting SATISFIED while dates are
+    being erased. Without this the guard's failure mode would be a JSON line
+    nobody queries -- the defect class this repo keeps paying for.
+    """
+
+    MIN_ATTEMPTS = 200
+
+    def test_enough_unreadable_dates_fail_the_source_health_gate(self):
+        from registers.tasks import _update_company_from_ruz_data
+
+        for index in range(self.MIN_ATTEMPTS):
+            _update_company_from_ruz_data({
+                "ico": f"8{index:07d}",
+                "id": 100000 + index,
+                "nazovUJ": f"Firma {index}",
+                "datumZrusenia": "12.03.2026",
+            })
+
+        with self.assertRaises(SystemExit) as exit_info:
+            call_command("source_health", skip_checks=True)
+
+        self.assertEqual(exit_info.exception.code, 1)
+
+    def test_one_malformed_record_is_reported_but_not_judged(self):
+        """The threshold has to keep its meaning.
+
+        A single upstream typo must not hold the gate red forever, or the
+        alarm stops being read -- so below `min_attempts` the count is shown
+        and left alone.
+        """
+        from registers.tasks import _update_company_from_ruz_data
+
+        _update_company_from_ruz_data({
+            "ico": "80000001",
+            "id": 100001,
+            "nazovUJ": "Firma 1",
+            "datumZrusenia": "12.03.2026",
+        })
+
+        call_command("source_health", skip_checks=True)
+
+
 class BaseSyncTaskTests(TestCase):
     def test_base_sync_task_config(self):
         from core.task_utils import BaseSyncTask

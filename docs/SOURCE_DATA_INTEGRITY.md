@@ -183,3 +183,108 @@ company finds nothing to announce. No dedupe table is involved.
 Not covered by design: the two staff write paths (`AdminCompanyViewSet` and the
 Django admin form) can also overwrite `datum_zrusenia`. A manual edit by staff
 is a deliberate act, not a registry event, so it does not notify.
+
+## A date we cannot read must not erase a date we hold
+
+`parse_date` collapses two different things into `None`: a field RUZ **omitted**,
+and a field it sent in a shape we cannot parse. Both writers stored that `None`
+alike, which is how an upstream format change becomes data loss.
+
+Measured against the live API on 2026-09-10, before changing anything:
+
+| Payload | `datumZrusenia` |
+|---|---|
+| 20 dissolved companies | present, ISO, parses, matches the stored value |
+| 8 active companies | absent |
+
+So absence is a *statement* — "this company is not dissolved" — and it is the
+only way RUZ revokes a dissolution. An unreadable value is *noise*, and is never
+an instruction. `registers.integrations.ruz_api.apply_ruz_dates` maps all three
+RUZ date fields on that distinction: absence still clears a stored date, and an
+unreadable value is left out of the `defaults` dict entirely so
+`update_or_create` keeps what is stored, with an `ERROR` naming the IČO, the
+field and the raw value.
+
+The failure this removes, in order: RUZ changes its date format → every
+dissolution date is silently erased → 120 289 companies read as active → the
+format is fixed → every one of them "newly dissolves" and notifies.
+
+**This is a judgement, not a settled fact.** The asymmetry is deliberate —
+an unreadable value costs a stale date, which is visible, where writing it
+through costs 120 289 dates, which is not. It is one-sided on purpose: if RUZ
+ever *does* mean "clear this date" by sending something unreadable, we keep a
+stale date and say so rather than clearing. The measurement above is one day
+old and the format has never changed, so nothing here has been tested by
+reality.
+
+**A refusal that only reaches a log line is not a control.** The guard refuses
+the write, and `registers.services.sync_engine.record_unreadable_field` records
+that refusal against the source: a `CompanySyncStatus` row with
+`source='ruz'`, `error_type='parse_error'` and no success. That is what puts it
+inside `make ops-check`'s existing reach, because `source_health` fails a source
+that made enough attempts and produced no usable answer — which is exactly the
+shape of a format change:
+
+| Unreadable dates in the window | `source_health` verdict |
+|---|---|
+| fewer than `CISTAFIRMA_SOURCE_MIN_ATTEMPTS` (200) | counted and shown, **not judged** |
+| 200 or more | **FAIL**, and `make ops-check` goes red |
+
+The threshold is inherited, not tuned for RUZ, and it keeps its meaning: a lone
+malformed record is an upstream typo and must not hold the gate red forever, or
+the alarm stops being read. The cost is that a *slow* trickle takes longer than
+a day to reach 200 attempts — which is why the `ERROR` log and the count in the
+gate table both exist alongside the verdict.
+
+Note what a `ruz` row in that table means: not that RUZ was synced, but that a
+date went unread. Nothing writes `ruz` health rows otherwise, so RUZ appears
+there only when something is wrong. `source_health`'s verdict note names the
+error types it recorded (`recorded: parse_error x200`), because "the parser
+recognises nothing" is one cause of that failure and not the only one — a date
+field we cannot read fails identically while every other field is fine.
+
+One gap, deliberately recorded rather than hidden: `CompanySyncStatus` keys to
+`Company`, and RUZ also writes SZCO records to `IndividualEntity`. A refused
+date on an individual is logged but **counted nowhere**, so the gate does not
+cover that third of the RUZ surface. It is not covered because there is no row
+to attach it to — a gap in the control, not a claim about the data.
+
+**A caller must hand `detect_status_change` the value it wrote, not the row read
+back.** `update_or_create` returns the row as it now stands, so where a writer
+declines to write, `company.datum_zrusenia` is the *untouched stored* date —
+and passing that as new, with `old=None` because the pre-read is skipped,
+announces a dissolution that never happened. That is the guard manufacturing
+the very alarm it exists to prevent; `RuzDateGuardTests` in
+`registers/tests_sync_pipeline.py` pins it.
+
+## Status vocabulary: the API produces two, the frontend declares four
+
+`Company.datum_zrusenia` is the only status input, and the product derives
+exactly two labels from it — `Aktívna` and `Vymazaná`. `frontend/types.ts`
+declares four (`+ V likvidácii`, `V konkurze`) in three interfaces, and
+`StatusBadge` renders all four, but nothing the backend emits can reach the
+extra two: they survive only in `mockData.ts` and the `ENABLE_MOCK_DATA`
+fixtures.
+
+This is **aspirational, not wrong, and not to be "fixed" by narrowing the
+type.** `notifications.models.NotificationPreference.on_status_change` carries
+`help_text='Zrušenie, likvidácia, konkurz'`, so likvidácia and konkurz are
+planned; the union is where they will land. No code branches on either label
+today.
+
+That `help_text` over-promises — only dissolution is wired, so a staff user
+reading the admin checkbox is told about two things that cannot happen. The
+user-facing copy in `NotificationPreferences.tsx` was corrected to say what the
+feature does; the model string was left alone deliberately, because changing
+`help_text` generates an `AlterField` migration, and a migration means taking a
+verified backup first. It belongs with the next change that migrates anyway.
+
+The two reachable labels, by contrast, are **duplicated, not shared**. The same
+`'Vymazaná' if datum_zrusenia else 'Aktívna'` decision is written out in six
+places — `connections/views.py:32,86,200`, `companies/serializers.py:36,232`,
+`companies/services/pdf_report.py:328` — with a seventh spelling (unaccented
+`Zrusena`/`Aktivna`) in `companies/admin.py:291`. `notifications.services`
+defines its own pair rather than importing one. That is a real defect, and it is
+a separate, larger change than the one above: unifying it means one vocabulary
+module that the API, the PDF, the admin and the notifications all read from. It
+has not been done.

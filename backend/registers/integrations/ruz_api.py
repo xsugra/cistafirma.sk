@@ -2,6 +2,8 @@ import requests
 import logging
 from typing import Dict, Any, Optional, List
 
+from django.utils.dateparse import parse_date
+
 from registers.http_client import build_retry_session
 
 logger = logging.getLogger(__name__)
@@ -161,4 +163,82 @@ class RuzApi:
         except requests.exceptions.RequestException as e:
             logger.error("Network error fetching report template %s: %s", template_id, e)
             return None
+
+
+# The date fields every RUZ accounting-unit record carries, as
+# (payload key, model field). Three writers map these by hand; keeping the
+# pairs here means a new one cannot quietly map only two of them.
+RUZ_DATE_FIELDS = (
+    ('datumZalozenia', 'datum_zalozenia'),
+    ('datumZrusenia', 'datum_zrusenia'),
+    ('datumPoslednejUpravy', 'datum_poslednej_upravy'),
+)
+
+# `parse_ruz_date` returns this when the payload held a value we could not
+# read. It is deliberately not `None`, because `None` means something else
+# entirely -- see below.
+UNREADABLE = object()
+
+
+def parse_ruz_date(data: Dict[str, Any], key: str, ico: Optional[str] = None):
+    """Read one RUZ date field, distinguishing "absent" from "unreadable".
+
+    `django.utils.dateparse.parse_date` collapses two very different things
+    into `None`, and the writers cannot tell them apart afterwards:
+
+    * the key is **absent or empty** -- a statement. Measured against the live
+      API on 2026-09-10: 20/20 dissolved records carry `datumZrusenia`, 8/8
+      active ones omit it. So absence means "this company is not dissolved",
+      and it is what clears a date when RUZ revokes a dissolution.
+    * the key holds **something we cannot parse** -- noise, not a statement.
+      RUZ sends ISO dates; a switch to `31.07.2026` would make every value
+      unreadable at once, and writing that `None` through would erase 120 289
+      dissolution dates in a single sync -- and the next sync, with the format
+      fixed, would restore them as 120 289 false dissolution notifications.
+
+    Absence therefore returns `None` (the caller may clear), and noise returns
+    `UNREADABLE` (the caller must keep what is stored). The guard cannot block
+    a legitimate correction, because RUZ has no way to say "clear this date"
+    other than by omitting the key.
+    """
+    raw = data.get(key)
+    if not raw:
+        return None
+
+    parsed = parse_date(raw)
+    if parsed is None:
+        logger.error(
+            "Unreadable RUZ date %s=%r for ICO %s; keeping the stored value "
+            "rather than erasing it. The source's date format has probably "
+            "changed.",
+            key, raw, ico or data.get('ico'),
+        )
+        return UNREADABLE
+
+    return parsed
+
+
+def apply_ruz_dates(defaults: Dict[str, Any], data: Dict[str, Any]) -> List[tuple]:
+    """Fill the three date fields of `defaults` from a RUZ payload.
+
+    A field comes back `UNREADABLE` when the payload held something we cannot
+    parse; leaving the key out of `defaults` is what makes
+    `update_or_create` keep the stored value instead of overwriting it with
+    `None`.
+
+    Returns the fields that were refused, as `(payload key, raw value)` pairs,
+    so the caller can record them against the source. Returning them is the
+    point: a refusal that only reaches a log line is not a control, and
+    `registers.services.sync_engine.record_unreadable_field` is what turns it
+    into one `make ops-check` can read.
+    """
+    ico = data.get('ico')
+    refused = []
+    for key, field in RUZ_DATE_FIELDS:
+        value = parse_ruz_date(data, key, ico)
+        if value is UNREADABLE:
+            refused.append((key, data.get(key)))
+        else:
+            defaults[field] = value
+    return refused
 

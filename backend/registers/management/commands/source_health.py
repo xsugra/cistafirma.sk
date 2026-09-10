@@ -151,6 +151,7 @@ class Command(BaseCommand):
                 notes.append(
                     f"source '{source}': {attempts} attempt(s) and no successful "
                     f"check at all -- the parser recognises nothing"
+                    f"{self._recorded_errors(source, window_start)}"
                 )
             elif split_is_judgeable and reported == 0:
                 verdict = "FAIL"
@@ -191,6 +192,27 @@ class Command(BaseCommand):
 
         if unmet:
             sys.exit(1)
+
+    def _recorded_errors(self, source: str, window_start) -> str:
+        """The error types actually recorded in the window, as a suffix.
+
+        "The parser recognises nothing" is one cause of a source failing with
+        no successes, and not the only one -- RUZ refusing a date field it
+        cannot read fails identically while every record it does read is
+        fine. Naming what was recorded is what stops the verdict sending an
+        operator to the wrong file.
+        """
+        rows = (
+            CompanySyncStatus.objects.filter(
+                source=source, last_attempted_at__gte=window_start
+            )
+            .exclude(last_error_type="")
+            .values("last_error_type")
+            .annotate(n=Count("id"))
+            .order_by("-n")
+        )
+        parts = [f"{row['last_error_type']} x{row['n']}" for row in rows]
+        return f" (recorded: {', '.join(parts)})" if parts else ""
 
     def _found_count(self, source: str, window_start) -> int | None:
         """How many of this source's in-window successes reported a real amount.

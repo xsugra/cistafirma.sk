@@ -3,17 +3,17 @@ from django.db.models import Q
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
-from django.utils.dateparse import parse_date
 from datetime import timedelta
 import logging
 
 from .scrapers.vszp_debt import check_vszp_debt_get
 from .scrapers.soc_poist_debt import check_socpoist_debt
-from .integrations.ruz_api import RuzApi
+from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService
 from .services.ruz_financials_sync import RuzFinancialsSyncService
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company, normalize_legal_form_code
+from .models import CompanySyncStatus
 from core.task_utils import BaseSyncTask
 from .services.sync_engine import (
     claim_ruz_job,
@@ -21,6 +21,7 @@ from .services.sync_engine import (
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
     fail_job,
+    record_unreadable_field,
     update_company_status,
 )
 
@@ -288,8 +289,6 @@ def _update_company_from_ruz_data(data: dict):
         'mesto': data.get('mesto'),
         'ulica': data.get('ulica'),
         'psc': data.get('psc'),
-        'datum_zalozenia': parse_date(data.get('datumZalozenia', '')),
-        'datum_zrusenia': parse_date(data.get('datumZrusenia', '')),
         'pravna_forma': normalize_legal_form_code(data.get('pravnaForma')),
         'sk_NACE': data.get('skNace'),
         'velkost_organizacie': data.get('velkostOrganizacie'),
@@ -301,14 +300,22 @@ def _update_company_from_ruz_data(data: dict):
         'id_uctovnych_zavierok': data.get('idUctovnychZavierok', []),
         'id_vyrocnych_sprav': data.get('idVyrocnychSprav', []),
         'zdroj_dat': data.get('zdrojDat'),
-        'datum_poslednej_upravy': parse_date(data.get('datumPoslednejUpravy', '')),
     }
-    
+
+    # The three date fields go in together, and a field whose value we cannot
+    # read is left out entirely -- `update_or_create` then keeps what is
+    # stored instead of overwriting it with `None`. See `apply_ruz_dates`.
+    refused_dates = apply_ruz_dates(defaults, data)
+
     # `update_or_create` discards the row it matched, so once the write lands
     # there is no way to tell whether the company was already dissolved. Read
     # the previous value first -- and only when the incoming record HAS a
     # dissolution date, which keeps this extra query off the common path.
-    new_zrusenie = defaults['datum_zrusenia']
+    #
+    # `.get`, not `[...]`: an unreadable `datumZrusenia` is left out of the
+    # defaults, and nothing about the company's status is changing then --
+    # which is exactly what a `None` here means to `detect_status_change`.
+    new_zrusenie = defaults.get('datum_zrusenia')
     previous_zrusenie = None
     if new_zrusenie is not None:
         previous_zrusenie = (
@@ -334,10 +341,29 @@ def _update_company_from_ruz_data(data: dict):
                 company_ico=company.ico,
                 company_name=company.nazov_UJ,
                 old_datum_zrusenia=previous_zrusenie,
-                new_datum_zrusenia=company.datum_zrusenia,
+                # `new_zrusenie`, not `company.datum_zrusenia`: the latter
+                # reads the row back, so when `apply_ruz_dates` has just
+                # declined to write an unreadable value it would hand
+                # `detect_status_change` the *stored* date as though it were
+                # new -- and the untouched date would be announced as a
+                # dissolution.
+                new_datum_zrusenia=new_zrusenie,
             )
         except Exception:
             logger.error("Failed to detect status change for %s", company.ico, exc_info=True)
+
+    # A date we could not read is recorded against the source, not just
+    # logged: `source_health` judges a source on whether its attempts yield a
+    # usable answer, and a date-format change is exactly that -- attempts, and
+    # nothing usable. Below the attempt threshold a lone malformed record is
+    # reported and left unjudged, which is the right weight for a typo.
+    for key, raw in refused_dates:
+        record_unreadable_field(
+            company_id=company.id,
+            source=CompanySyncStatus.SOURCE_RUZ,
+            field=key,
+            raw=raw,
+        )
 
     return company
 
@@ -582,8 +608,14 @@ def sync_company_orsr_data(company_id: int):
             )
             if created:
                 logger.info("Created %d executive change notifications for %s", created, company.ico)
-    except Exception as e:
-        logger.warning("Failed to detect executive changes for %s: %s", company.ico, e)
+    except Exception:
+        # `logger.warning` with the exception interpolated into the message is
+        # the shape cce632f fixed one path over: no traceback, and a severity
+        # that does not reach the error rate. A notification that was never
+        # created is a silent loss, not a warning.
+        logger.error(
+            "Failed to detect executive changes for %s", company.ico, exc_info=True
+        )
 
     return f"Company profile sync OK for {company.ico}"
 

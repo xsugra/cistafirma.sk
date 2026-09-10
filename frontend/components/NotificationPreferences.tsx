@@ -79,8 +79,8 @@ export const NotificationPreferences: React.FC = () => {
         },
         {
             key: 'onStatusChange',
-            label: 'Zmena statusu',
-            description: 'Upozorniť pri zmene statusu (napr. platca DPH)',
+            label: 'Zmena statusu firmy',
+            description: 'Upozorniť pri zrušení sledovanej firmy',
             icon: 'fa-flag',
         },
         {

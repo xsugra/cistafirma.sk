@@ -152,6 +152,15 @@ def detect_status_change(
     to repeat. Every RUZ upsert writes the new value before calling this, so on
     the next sync of the same company the stored value is already a date and
     there is nothing left to announce -- idempotent without a dedupe table.
+
+    `new_datum_zrusenia` must be the value the caller *wrote*, not the row read
+    back afterwards. Those differ whenever a writer declines to write -- see
+    `registers.integrations.ruz_api.apply_ruz_dates`, which leaves a date alone
+    when it cannot read the incoming one. Handing over `company.datum_zrusenia`
+    there reports a stored date as though it were new, with `old=None`, and
+    announces a dissolution that never happened. Likewise `old_datum_zrusenia`
+    must be the value read *before* the write: passing `None` for "I did not
+    look" is indistinguishable from "it was not dissolved".
     """
     if new_datum_zrusenia is None or old_datum_zrusenia is not None:
         return 0
