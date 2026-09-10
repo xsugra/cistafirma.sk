@@ -258,6 +258,33 @@ towards its 24 h cap. A refused field is not an attempt, and since no success
 row is ever written for this source the count could never reset — a trap for
 whatever first reads those two columns, which today nothing does.
 
+**The gate sees a refusal; the admin surfaces do not.** Leaving
+`consecutive_failures` at 0 keeps a trap from arming, but that column is what
+every *judging* reader keys on, and nothing replaced it. Read at each site:
+
+| Reader | Keys on | Sees a refused date? |
+|---|---|---|
+| `adminapi/views/dashboard.py:39` `failures_24h` | `consecutive_failures__gt=0` | no |
+| `adminapi/views/dashboard.py:97-104` per-source card | `last_succeeded_at__isnull=False`, `consecutive_failures__gt=0` | no |
+| `adminapi/services/company_filters.py:265,426` `sync_state=failing` | `consecutive_failures__gt=0` | no |
+| `lead_scoring/services/scoring.py:178-180` | `Avg(consecutive_failures)` | no |
+
+So the gate tells you **how many** records carry an unreadable date, and no
+surface lets you find **which** ones. The root is one level below the columns:
+`grep -rn SOURCE_RUZ backend/` returns two write sites, both
+`record_unreadable_field`. There is no success path for this source, so
+`last_succeeded_at` has never once been written for `ruz` and nothing can clear
+a refusal. That is also why the admin's `ruz` card reads "0 % coverage, 0
+failing" — self-contradictory, and it read that before any of this existed;
+these rows did not break it, they made it visible.
+
+**Not fixed here, and the reason is cost, not doubt.** Making the signal real
+means giving the source a success path, which means a write on the RUZ bulk
+sync — a run that touches every one of 441 714 companies — and it changes every
+aggregate above at once. That is a design change with a production write cost,
+so it is named as a gap and left for a decision rather than folded into a
+correctness fix.
+
 One gap, deliberately recorded rather than hidden: `CompanySyncStatus` keys to
 `Company`, and RUZ also writes SZCO records to `IndividualEntity`. A refused
 date on an individual is logged but **counted nowhere**, so the gate does not
