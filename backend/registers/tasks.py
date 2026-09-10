@@ -304,6 +304,19 @@ def _update_company_from_ruz_data(data: dict):
         'datum_poslednej_upravy': parse_date(data.get('datumPoslednejUpravy', '')),
     }
     
+    # `update_or_create` discards the row it matched, so once the write lands
+    # there is no way to tell whether the company was already dissolved. Read
+    # the previous value first -- and only when the incoming record HAS a
+    # dissolution date, which keeps this extra query off the common path.
+    new_zrusenie = defaults['datum_zrusenia']
+    previous_zrusenie = None
+    if new_zrusenie is not None:
+        previous_zrusenie = (
+            Company.objects.filter(ico=data['ico'])
+            .values_list('datum_zrusenia', flat=True)
+            .first()
+        )
+
     company, created = Company.objects.update_or_create(
         ico=data['ico'],
         defaults=defaults
@@ -312,6 +325,20 @@ def _update_company_from_ruz_data(data: dict):
     action = "Vytvorená" if created else "Aktualizovaná"
     logger.info(f"{action} firma: {company.nazov_UJ} (IČO: {company.ico})")
     
+    # Only an existing company can have *become* dissolved -- one created here
+    # already dissolved was never known to us as active.
+    if not created:
+        try:
+            from notifications.services import detect_status_change
+            detect_status_change(
+                company_ico=company.ico,
+                company_name=company.nazov_UJ,
+                old_datum_zrusenia=previous_zrusenie,
+                new_datum_zrusenia=company.datum_zrusenia,
+            )
+        except Exception:
+            logger.error("Failed to detect status change for %s", company.ico, exc_info=True)
+
     return company
 
 

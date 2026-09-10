@@ -117,6 +117,53 @@ def detect_executive_changes(
     )
 
 
+# The two states the product actually derives from `Company.datum_zrusenia`.
+# `companies/serializers.py` and `connections/views.py` spell these the same way;
+# there is no shared constant for them (yet), so this pair is the notification
+# layer's own copy of the vocabulary rather than a sixth divergent one.
+STATUS_ACTIVE = 'Aktívna'
+STATUS_DISSOLVED = 'Vymazaná'
+
+
+def _status_label(datum_zrusenia) -> str:
+    """Name a company's legal status, with the date when there is one.
+
+    The date is the actionable half: "Vymazaná" alone does not say whether the
+    company was struck off last month or in 2011.
+    """
+    if datum_zrusenia is None:
+        return STATUS_ACTIVE
+    return f'{STATUS_DISSOLVED} ({datum_zrusenia:%d.%m.%Y})'
+
+
+def detect_status_change(
+    company_ico: str,
+    company_name: str,
+    old_datum_zrusenia,
+    new_datum_zrusenia,
+) -> int:
+    """Notify watchers that a company has been dissolved.
+
+    Only one transition is in scope: `None` -> a date. A date that moved or
+    disappeared is a correction, and raising an alarm on those would turn RUZ's
+    own fixes into false notifications.
+
+    The same `old_datum_zrusenia is not None` guard is what makes a caller safe
+    to repeat. Every RUZ upsert writes the new value before calling this, so on
+    the next sync of the same company the stored value is already a date and
+    there is nothing left to announce -- idempotent without a dedupe table.
+    """
+    if new_datum_zrusenia is None or old_datum_zrusenia is not None:
+        return 0
+
+    return create_status_change_event(
+        company_ico=company_ico,
+        company_name=company_name,
+        old_status=_status_label(old_datum_zrusenia),
+        new_status=_status_label(new_datum_zrusenia),
+    )
+
+
 def create_debt_change_event(
     company_id: int,
     company_ico: str,
@@ -219,6 +266,7 @@ def create_status_change_event(
 
     if events:
         NotificationEvent.objects.bulk_create(events)
+        logger.info('Created %d status-change notifications for %s', len(events), company_ico)
 
     return len(events)
 

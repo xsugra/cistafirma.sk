@@ -120,3 +120,66 @@ a second company-data import.
 
 RUZ jobs must not be force-cancelled or redispatched by the admin API. Those
 actions can interrupt an import after part of its data has been persisted.
+
+### A transport failure reads as the end of the list
+
+The RUZ import loop ends at `fetch_ruz_data.py:206`, on `if not id_data or not
+id_data.get('id')`, logging `No more company IDs to fetch.`.
+
+Every `get_*` method in `backend/registers/integrations/ruz_api.py` catches
+`requests.exceptions.RequestException` and returns `None`, which is
+indistinguishable from a genuine "not found" at this point. A network failure
+therefore ends the loop, and the code below it then runs `progress.complete()`
+and `complete_job(job)` — marking the whole sync `completed` on a truncated run.
+
+This is **latent, not demonstrated**: the fail-open line `No more company IDs to
+fetch.` occurs **0 times** in the retained worker logs, while the legitimate
+`Reached the end of the list.` occurs once. It is recorded here as a known,
+unfixed risk rather than a closed one — one transient failure at the wrong
+moment would silently truncate a run and store it as a success.
+
+### The incremental cursor only ever moves forward
+
+`fetch_ruz_data.py:253` sets `pokracovat_za_id = company_ids[-1]` after each
+page and reads it back from `progress.last_processed_ruz_id`, so the cursor only
+ever moves **forward**; `zmenene_od` is read from the stored
+`progress.zmenene_od` (`fetch_ruz_data.py:157`), which is frozen at
+**2026-08-04** and never advanced.
+
+A live API probe confirmed the consequence is structural, not theoretical: with
+`zmenene_od=2026-08-04` and no cursor the API returns changed companies starting
+from RUZ ID 66, but with the cursor applied it returns only IDs above the
+cursor. A company whose RUZ ID is below the cursor is therefore never re-fetched
+by this sync again, even when its data changes. Known limitation, undecided.
+
+## Which RUZ writers announce a dissolution
+
+`Company.datum_zrusenia` is written by five upsert sites, all shaped
+`Company.objects.update_or_create(ico=..., defaults=...)`. `update_or_create`
+discards the row it matched, so after the write there is no way to tell whether
+the company was *already* dissolved — the transition `NULL -> date` has to be
+captured by reading the previous value **before** the write.
+
+Two writers do that and notify watchers through
+`notifications.services.detect_status_change`:
+
+| Writer | Reached by |
+|---|---|
+| `fetch_ruz_data.py` → `update_or_create_company` | the 6-hourly beat, and any manual `make fetch-ruz` |
+| `registers/tasks.py` → `_update_company_from_ruz_data` | on-demand sync, search-and-add, `orchestrate_full_company_sync` |
+
+**The three `repair_ruz_*` commands deliberately do not.** They are manual
+repair tools that already require a backup to be taken first, and their job is
+to correct a known-wrong table, not to report registry news. Leaving them
+unwired means a *missed* notification during a repair run — not a wrong one,
+which is the right trade for a corrective tool.
+
+Only the direction `NULL -> date` is announced. A date that moved or was
+cleared is a correction, and alarming on RUZ's own fixes would make the
+notification worthless. The same guard is what makes a writer safe to repeat:
+after the first write the stored value is a date, so the next sync of that
+company finds nothing to announce. No dedupe table is involved.
+
+Not covered by design: the two staff write paths (`AdminCompanyViewSet` and the
+Django admin form) can also overwrite `datum_zrusenia`. A manual edit by staff
+is a deliberate act, not a registry event, so it does not notify.

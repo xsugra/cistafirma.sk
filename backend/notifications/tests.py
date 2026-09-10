@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -17,6 +17,7 @@ from .services import (
     create_debt_change_event,
     create_executive_change_event,
     create_status_change_event,
+    detect_status_change,
     send_pending_email_notifications,
 )
 
@@ -275,3 +276,141 @@ class ChangeEventTextFittingTests(TestCase):
         self.assertEqual(event.company_name, 'Krátke s.r.o.')
         # format_currency_eur rounds to whole euros and appends "€".
         self.assertEqual(event.title, 'Krátke s.r.o. — zmena dlhov (VšZP: +100€)')
+
+
+class DetectStatusChangeTests(TestCase):
+    """Only a company that *becomes* dissolved is news.
+
+    `create_status_change_event` was written and never called, so the
+    "Zmena statusu" switch in the UI could not fire. Wiring it up means
+    deciding what counts as a change: the write path stores a date and can no
+    longer see what it overwrote, so the transition has to be judged by the
+    caller -- and the risk of getting that wrong is a notification for every
+    one of the 120k companies already carrying a dissolution date.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='watcher@example.com', password='testpass123',
+        )
+        self.company = Company.objects.create(
+            ruz_id=990002,
+            ico='99000002',
+            nazov_UJ='Sledovaná s.r.o.',
+        )
+        Watchlist.objects.create(user=self.user, company=self.company)
+        NotificationPreference.objects.create(
+            user=self.user,
+            email_enabled=True,
+            on_status_change=True,
+        )
+
+    def test_a_first_dissolution_notifies(self):
+        created = detect_status_change(
+            company_ico=self.company.ico,
+            company_name=self.company.nazov_UJ,
+            old_datum_zrusenia=None,
+            new_datum_zrusenia=date(2026, 3, 12),
+        )
+
+        self.assertEqual(created, 1)
+        event = NotificationEvent.objects.get()
+        self.assertEqual(event.event_type, NotificationEvent.EventType.STATUS_CHANGE)
+        self.assertEqual(event.details, {
+            'old_status': 'Aktívna',
+            'new_status': 'Vymazaná (12.03.2026)',
+        })
+        self.assertIn('Vymazaná', event.title)
+
+    def test_an_already_dissolved_company_is_not_re_announced(self):
+        """Idempotence: the second sync of the same company must be silent."""
+        company = Company.objects.create(
+            ruz_id=990003, ico='99000003', nazov_UJ='Zaniknutá s.r.o.',
+            datum_zrusenia=date(2026, 3, 12),
+        )
+        Watchlist.objects.create(user=self.user, company=company)
+
+        created = detect_status_change(
+            company_ico=company.ico,
+            company_name=company.nazov_UJ,
+            old_datum_zrusenia=date(2026, 3, 12),
+            new_datum_zrusenia=date(2026, 3, 12),
+        )
+
+        self.assertEqual(created, 0)
+        self.assertEqual(NotificationEvent.objects.count(), 0)
+
+    def test_a_company_without_a_dissolution_date_is_ignored(self):
+        created = detect_status_change(
+            company_ico=self.company.ico,
+            company_name=self.company.nazov_UJ,
+            old_datum_zrusenia=None,
+            new_datum_zrusenia=None,
+        )
+
+        self.assertEqual(created, 0)
+        self.assertEqual(NotificationEvent.objects.count(), 0)
+
+    def test_a_correction_is_not_an_alarm(self):
+        """RUZ moving or clearing a date is a fix, not a dissolution."""
+        moved = detect_status_change(
+            company_ico=self.company.ico,
+            company_name=self.company.nazov_UJ,
+            old_datum_zrusenia=date(2026, 3, 12),
+            new_datum_zrusenia=date(2026, 4, 1),
+        )
+        cleared = detect_status_change(
+            company_ico=self.company.ico,
+            company_name=self.company.nazov_UJ,
+            old_datum_zrusenia=date(2026, 3, 12),
+            new_datum_zrusenia=None,
+        )
+
+        self.assertEqual((moved, cleared), (0, 0))
+        self.assertEqual(NotificationEvent.objects.count(), 0)
+
+    def test_an_unwatched_company_notifies_nobody(self):
+        created = detect_status_change(
+            company_ico='99999999',
+            company_name='Nesledovaná s.r.o.',
+            old_datum_zrusenia=None,
+            new_datum_zrusenia=date(2026, 3, 12),
+        )
+
+        self.assertEqual(created, 0)
+
+    def test_a_watcher_who_opted_out_is_not_notified(self):
+        NotificationPreference.objects.filter(user=self.user).update(on_status_change=False)
+
+        created = detect_status_change(
+            company_ico=self.company.ico,
+            company_name=self.company.nazov_UJ,
+            old_datum_zrusenia=None,
+            new_datum_zrusenia=date(2026, 3, 12),
+        )
+
+        self.assertEqual(created, 0)
+
+    def test_a_long_name_still_fits_its_columns(self):
+        """The date in `new_status` widens a title that was already bounded."""
+        company = Company.objects.create(
+            ruz_id=990004, ico='99000004', nazov_UJ='Dlhé meno, n.o. ' * 31,
+        )
+        Watchlist.objects.create(user=self.user, company=company)
+
+        created = detect_status_change(
+            company_ico=company.ico,
+            company_name=company.nazov_UJ,
+            old_datum_zrusenia=None,
+            new_datum_zrusenia=date(2026, 3, 12),
+        )
+
+        self.assertEqual(created, 1)
+        event = NotificationEvent.objects.get()
+        self.assertLessEqual(
+            len(event.title), NotificationEvent._meta.get_field('title').max_length
+        )
+        self.assertLessEqual(
+            len(event.company_name),
+            NotificationEvent._meta.get_field('company_name').max_length,
+        )

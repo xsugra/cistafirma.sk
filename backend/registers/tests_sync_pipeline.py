@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, override_settings
 from companies.models import Company
@@ -135,6 +136,80 @@ class SyncPipelineTests(TestCase):
             result = sync_company_orsr_data(self.company.id)
         self.assertIn("skipped", result)
         MockService.return_value.sync_company.assert_not_called()
+
+    def _watch(self):
+        from django.contrib.auth import get_user_model
+        from companies.models import Watchlist
+        from notifications.models import NotificationPreference
+
+        user = get_user_model().objects.create_user(
+            email="watcher@example.com", password="testpass123",
+        )
+        Watchlist.objects.create(user=user, company=self.company)
+        NotificationPreference.objects.create(
+            user=user, email_enabled=True, on_status_change=True,
+        )
+
+    def test_a_dissolution_survives_the_sync_being_run_twice(self):
+        """The same company dissolving once must notify once.
+
+        `_update_company_from_ruz_data` writes `datum_zrusenia` with
+        `update_or_create`, which cannot see what it overwrote -- so the
+        transition has to be captured by reading the old value first. If that
+        read is missing, every sync re-announces every company that has ever
+        been dissolved: 120k rows on the first pass, and again every 6 hours.
+        """
+        from notifications.models import NotificationEvent
+        from registers.tasks import _update_company_from_ruz_data
+
+        self._watch()
+        data = {
+            "ico": self.company.ico,
+            "id": self.company.ruz_id,
+            "nazovUJ": self.company.nazov_UJ,
+            "datumZrusenia": "2026-03-12",
+        }
+
+        _update_company_from_ruz_data(data)
+        _update_company_from_ruz_data(data)
+
+        self.company.refresh_from_db()
+        self.assertEqual(self.company.datum_zrusenia, date(2026, 3, 12))
+        self.assertEqual(
+            NotificationEvent.objects.filter(
+                event_type=NotificationEvent.EventType.STATUS_CHANGE
+            ).count(),
+            1,
+        )
+
+    def test_a_company_first_seen_already_dissolved_notifies_nobody(self):
+        """We never knew it as active, so there is no change to report."""
+        from notifications.models import NotificationEvent
+        from registers.tasks import _update_company_from_ruz_data
+
+        self._watch()
+        _update_company_from_ruz_data({
+            "ico": "11111111",
+            "id": 999,
+            "nazovUJ": "Už zaniknutá s.r.o.",
+            "datumZrusenia": "2026-03-12",
+        })
+
+        self.assertEqual(Company.objects.filter(ico="11111111").count(), 1)
+        self.assertEqual(NotificationEvent.objects.count(), 0)
+
+    def test_a_sync_that_does_not_dissolve_anything_notifies_nobody(self):
+        from notifications.models import NotificationEvent
+        from registers.tasks import _update_company_from_ruz_data
+
+        self._watch()
+        _update_company_from_ruz_data({
+            "ico": self.company.ico,
+            "id": self.company.ruz_id,
+            "nazovUJ": self.company.nazov_UJ,
+        })
+
+        self.assertEqual(NotificationEvent.objects.count(), 0)
 
 
 class BaseSyncTaskTests(TestCase):

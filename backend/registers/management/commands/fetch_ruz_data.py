@@ -4,7 +4,10 @@ from django.utils import timezone
 from companies.models import Company
 from registers.models import IndividualEntity, SyncJob, SyncProgress
 from registers.integrations.ruz_api import RuzApi
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 # Legal form codes for SZCO (individual entities)
 SZCO_LEGAL_FORMS = {
@@ -372,14 +375,44 @@ class Command(BaseCommand):
         else:
             # Save to Company (LPO - legal entities)
             # Add company-specific fields if needed
+
+            # `update_or_create` discards the row it matched, so once the write
+            # lands there is no way to tell whether the company was already
+            # dissolved. Read the previous value first -- and only when the
+            # incoming record HAS a dissolution date, which keeps this extra
+            # query off the 73% of the batch that is not being dissolved.
+            new_zrusenie = common_defaults['datum_zrusenia']
+            previous_zrusenie = None
+            if new_zrusenie is not None:
+                previous_zrusenie = (
+                    Company.objects.filter(ico=data['ico'])
+                    .values_list('datum_zrusenia', flat=True)
+                    .first()
+                )
+
             company, created = Company.objects.update_or_create(
                 ico=data['ico'],
                 defaults=common_defaults
             )
 
             if created:
+                # A company first seen already dissolved is not a transition --
+                # we never knew it as active, so there is nothing to announce.
+                # This branch being the `created` one is what enforces that.
                 self.stdout.write(f"Created new company: {company.nazov_UJ}, IČO: {company.ico}")
             else:
+                try:
+                    from notifications.services import detect_status_change
+                    detect_status_change(
+                        company_ico=company.ico,
+                        company_name=company.nazov_UJ,
+                        old_datum_zrusenia=previous_zrusenie,
+                        new_datum_zrusenia=company.datum_zrusenia,
+                    )
+                except Exception:
+                    logger.error(
+                        "Failed to detect status change for %s", company.ico, exc_info=True
+                    )
                 self.stdout.write(f"Updated company: {company.nazov_UJ}, IČO: {company.ico}")
 
         return created, not created
