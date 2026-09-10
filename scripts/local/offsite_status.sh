@@ -16,6 +16,9 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 DEFAULT_BACKUP_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/backups"
 BACKUP_DIR="${CISTAFIRMA_BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 MAX_AGE_DAYS="${CISTAFIRMA_BACKUP_MAX_AGE_DAYS:-7}"
+DEFAULT_DRILL_LOG="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/restore_drills.log"
+DRILL_LOG="${CISTAFIRMA_DRILL_LOG:-$DEFAULT_DRILL_LOG}"
+MAX_DRILL_AGE_DAYS="${CISTAFIRMA_DRILL_MAX_AGE_DAYS:-30}"
 
 failures=0
 ok() { printf 'OK    %s\n' "$*"; }
@@ -47,6 +50,59 @@ PY
 
 plain_checksum() {
     shasum -a 256 "$1" | awk '{print $1}'
+}
+
+# Last recorded successful drill, as "timestamp<TAB>backup<TAB>tables<TAB>source".
+# Unparseable lines are skipped rather than trusted, so a truncated append cannot
+# be mistaken for evidence.
+last_drill() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(0)
+
+last = None
+for line in path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        record = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(record, dict) and record.get("timestamp"):
+        last = record
+
+if last:
+    print("{}\t{}\t{}\t{}".format(
+        last.get("timestamp", ""),
+        last.get("backup", ""),
+        last.get("public_tables", ""),
+        last.get("source", ""),
+    ))
+PY
+}
+
+iso_age_days() {
+    python3 - "$1" <<'PY'
+import sys
+from datetime import datetime, timezone
+
+try:
+    stamp = datetime.fromisoformat(sys.argv[1])
+except ValueError:
+    print(-1)
+    raise SystemExit(0)
+
+if stamp.tzinfo is None:
+    stamp = stamp.replace(tzinfo=timezone.utc)
+
+print(int((datetime.now(timezone.utc) - stamp).total_seconds() // 86400))
+PY
 }
 
 printf 'CistaFirma off-site backup status\n'
@@ -118,6 +174,40 @@ else
             ok "newest dump has a checksum-verified off-site replica"
         else
             bad "off-site replica checksum mismatch: $(basename "$replica")"
+        fi
+    fi
+fi
+
+# --- restore drill -------------------------------------------------------
+# A backup nobody has ever restored from is a hypothesis, not a control. The
+# monthly cadence in docs/DATA_PROTECTION.md is only meaningful if a drill is
+# recorded when it happens, so the gate reads the drill log back.
+printf '\n'
+drill_record=$(last_drill "$DRILL_LOG")
+
+if [ -z "$drill_record" ]; then
+    bad "no restore drill has been recorded in $DRILL_LOG"
+else
+    IFS=$'\t' read -r drill_time drill_backup drill_tables drill_source <<EOF
+$drill_record
+EOF
+    days=$(iso_age_days "$drill_time")
+
+    if [ "$days" -lt 0 ]; then
+        bad "last recorded drill has an unreadable timestamp: $drill_time"
+    else
+        printf '  last drill       : %s (%s day(s) ago, %s, %s table(s))\n' \
+            "${drill_backup:-unknown}" "$days" "${drill_source:-unknown}" "${drill_tables:-?}"
+        if [ "$days" -gt "$MAX_DRILL_AGE_DAYS" ]; then
+            bad "last restore drill was ${days} day(s) ago (limit ${MAX_DRILL_AGE_DAYS})"
+        else
+            ok "restore drill is recent (${days} day(s) ago)"
+        fi
+
+        # The doc asks for the monthly drill to come from the external copy once
+        # one exists -- restoring the local dump does not prove the off-site one.
+        if [ "$drill_source" != "off-site" ] && [ -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ]; then
+            warn "last drill used the local backup; drill the off-site copy when one is present"
         fi
     fi
 fi

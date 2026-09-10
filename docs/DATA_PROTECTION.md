@@ -146,6 +146,27 @@ container named `cistafirma_restore_drill_*`, confirms public tables exist, and
 removes only that temporary container. It never connects to, stops, writes to,
 or removes the running Compose database or its named volume.
 
+Every successful drill appends one JSON object to a drill log:
+
+```text
+$HOME/Library/Application Support/CistaFirma/restore_drills.log   # mode 600
+```
+
+```json
+{"timestamp": "2026-09-10T10:03:39+00:00", "backup": "cistafirma_20260908T174923Z.dump",
+ "sha256": "7bcb5275…", "public_tables": 38, "source": "off-site"}
+```
+
+`make db-offsite-status` reads the last entry back, so "at least monthly" is an
+enforced control instead of an intention. It **fails** when no drill is
+recorded, when the recorded timestamp is unreadable, or when the last drill is
+older than `CISTAFIRMA_DRILL_MAX_AGE_DAYS` (default 30), and it warns when the
+last drill used the local dump while an off-site copy exists. A *failed* drill
+writes nothing — the absence of a recent record is itself the signal, so an old
+entry cannot mask a broken one, and an unparseable trailing line falls back to
+the previous readable record rather than being trusted. Set `CISTAFIRMA_DRILL_LOG`
+to record somewhere else.
+
 ## Recovery incident procedure
 
 1. Stop all data-changing operations and preserve the failed environment for

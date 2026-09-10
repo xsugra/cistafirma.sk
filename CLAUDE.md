@@ -123,6 +123,14 @@ is what lets the **launchd job** replicate, since launchd starts agents with
 almost no environment. An exported variable of the same name overrides the file,
 so `make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=/tmp/x` still works.
 
+Each successful `db-restore-drill` appends a record to
+`~/Library/Application Support/CistaFirma/restore_drills.log`, and
+`db-offsite-status` reads it back — so the documented monthly drill cadence is
+checkable rather than assumed. A drill older than `CISTAFIRMA_DRILL_MAX_AGE_DAYS`
+(default 30) fails the gate. `db-offsite-status` therefore reports on two things
+beyond the backup files: whether a drill happened recently, and whether the
+newest dump has an encrypted off-site replica.
+
 ### Testing
 
 ```bash

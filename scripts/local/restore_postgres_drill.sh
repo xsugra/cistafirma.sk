@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Machine-local backup configuration; an already exported variable wins. Gives
+# this script CISTAFIRMA_OFFSITE_BACKUP_DIR (to label the drill's source) and
+# CISTAFIRMA_DRILL_LOG. See lib/backup_env.sh.
+# shellcheck source=lib/backup_env.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 /absolute/path/to/cistafirma_*.dump" >&2
     exit 64
@@ -55,4 +61,43 @@ if [ "$table_count" -eq 0 ]; then
     exit 1
 fi
 
+# Record the drill. docs/DATA_PROTECTION.md requires a drill "at least monthly",
+# but nothing recorded when one last succeeded, so the control could not be
+# verified -- only assumed. One JSON object per line; `make db-offsite-status`
+# reads the last entry back. A *failed* drill writes nothing: the absence of a
+# recent record is itself the signal, so an old record cannot mask a failure.
+DEFAULT_DRILL_LOG="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/restore_drills.log"
+DRILL_LOG="${CISTAFIRMA_DRILL_LOG:-$DEFAULT_DRILL_LOG}"
+
+drill_source="local"
+if [ -n "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ] && [ -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR}" ]; then
+    if [ "$(cd "$(dirname "$BACKUP_FILE")" && pwd -P)" = "$(cd "$CISTAFIRMA_OFFSITE_BACKUP_DIR" && pwd -P)" ]; then
+        drill_source="off-site"
+    fi
+fi
+
+drill_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sha256"])' \
+    "${BACKUP_FILE}.json" 2>/dev/null || true)
+
+umask 077
+mkdir -p "$(dirname "$DRILL_LOG")"
+python3 - "$DRILL_LOG" "$BACKUP_FILE" "${drill_sha:-}" "$table_count" "$drill_source" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+log_path, backup_file, sha, tables, source = sys.argv[1:6]
+record = {
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "backup": Path(backup_file).name,
+    "sha256": sha,
+    "public_tables": int(tables),
+    "source": source,
+}
+with open(log_path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+PY
+
 echo "Restore drill passed: $table_count public tables restored into isolated container."
+echo "Recorded in: $DRILL_LOG (source: $drill_source)"
