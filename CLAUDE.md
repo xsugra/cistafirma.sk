@@ -129,7 +129,17 @@ venv/bin/python backend/manage.py test registers.tests.SomeTestClass
 venv/bin/python backend/manage.py test registers.tests.SomeTestClass.test_method
 ```
 
-There is no frontend test runner configured yet.
+Frontend tests run on **Vitest** (jsdom, `frontend/test/setup.ts`). Run them in
+the container, alongside the other two checks CI runs:
+
+```bash
+docker compose exec -T frontend npm test         # vitest run
+docker compose exec -T frontend npm run typecheck # tsc --noEmit
+docker compose exec -T frontend npm run build     # vite build
+```
+
+GitLab CI runs exactly these (`frontend_tests`, `frontend_validate`), so a
+typecheck break fails the pipeline rather than reaching a running stack.
 
 ### Celery (background workers)
 
@@ -264,5 +274,6 @@ auto-deploys; production deploys on `v*.*.*` tags (manual trigger). See
   to light-only `bg-*` / `text-*` / `hover:*` (e.g. `bg-green-100
   text-green-700` → `bg-green-50 dark:bg-green-900/20 text-green-700
   dark:text-green-400`).
-- Verify frontend edits with `docker compose exec -T frontend npx tsc --noEmit`
-  and `npm run build`; there is no frontend test runner.
+- Verify frontend edits with all three CI checks — `npm test`, `npm run
+  typecheck`, `npm run build` — run via `docker compose exec -T frontend`. See
+  Testing above.
