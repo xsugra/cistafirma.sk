@@ -684,6 +684,18 @@ rather than a comment because the fix is one `isnull` away from being undone by
 anyone who reads `filter(sync_failures=0)` as the natural spelling of "has no
 failures".
 
+**What this changes for the operator.** The preset `clean_and_healthy` goes
+from 11 451 to **275 912** companies. The number is not new data — it is the
+same table, asked a question that now has one answer instead of two — but the
+preset's *meaning* moves with it: it now includes 264 461 companies that have
+never been checked by any source that writes status. Read plainly, "clean and
+healthy" now means **"no known failure"**, not "verified clean". That is the
+honest reading given the old behaviour recorded "never looked at" as unhealthy,
+but the name promises more than the data can. A third value — the one this
+vocabulary lacks — is *unknown*; `sync_state` offers only `healthy` / `failing`
+/ `blocked`, so a company nobody has ever tried cannot say so. `blocked` is
+unaffected: it reads an `Exists` annotation, which is boolean and never NULL.
+
 ## An empty result must say which condition emptied it
 
 The preset above returned 0 rows for months and no screen could say why. The
