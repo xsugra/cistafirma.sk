@@ -141,14 +141,24 @@ backend_tests:
   tags: [macos]
   image: docker:27.1.2
   services:
-    # Registry bezi na HTTP (gitlab.home.arpa:5050). docker CLI deleguje login
-    # aj push na daemona — v CI je tym daedom DinD, nie Docker na hostiteli.
-    # Bez tohto flagu kazdy login/push skonci na
-    #   http: server gave HTTP response to HTTPS client
+    # Registry bezi na HTTP (gitlab.home.arpa:5050), takze DinD musí vedieť,
+    # že je "insecure". Týka sa to push/pull — tie idú cez démona.
+    # (Na `docker login` to nestačí, viď before_script nižšie.)
     - name: docker:27.1.2-dind
       command: ["--insecure-registry=gitlab.home.arpa:5050"]
   before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # POZOR: `docker login` tu NEMOZE byt. Je to klientska operacia — ide
+    # PRIAMO na registry a demona vobec nepouzije, takze --insecure-registry
+    # na DinD mu nepomoze. Na HTTP registry skonci vzdy na
+    #   Get "https://gitlab.home.arpa:5050/v2/": http: server gave HTTP
+    #   response to HTTPS client
+    # (overene: chyba je bez prefixu "Error response from daemon").
+    # Zapiseme credentials rovno do docker configu. CLI ich pri pushi odovzda
+    # demonovi a ten HTTP zvladne — ma --insecure-registry.
+    - mkdir -p ~/.docker
+    - |
+      AUTH=$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
+      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > ~/.docker/config.json
 
 build_backend_image:
   extends: .build_template
