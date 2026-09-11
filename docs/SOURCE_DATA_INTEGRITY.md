@@ -463,3 +463,163 @@ it holds on an empty table where every assertion about results would pass
 vacuously — and that a company with no financial statement still matches the
 preset. `profitable_it` deliberately keeps `has_financials`: its description
 promises statements, and `profit_state=profit` requires one anyway.
+
+## The financials rotation selected the same 500 companies 32 times
+
+The preset above was the symptom. The cause was upstream, in
+`schedule_ruz_financials_sync`.
+
+Its selection was `Company.objects.order_by('id')[:limit]` — no cursor, no
+`offset`, nothing that remembers where the last run stopped. Celery Beat called
+it with `args=[500]` every 12 hours, so **every run chose the same 500
+companies**. Measured on 2026-09-11, after 32 runs of the 12-hour beat:
+
+| Measure | Value |
+|---|---|
+| Companies with any financial result | 309 |
+| Rows in `CompanyFinancialResult` | 3 506 |
+| Of those 309, sitting inside RUZ ids 202–701 | **297** |
+| `CompanySyncStatus(source='financials')` rows | **0** |
+| Eligible companies (ORSR forms, not dissolved) | 251 598 |
+| Eligible companies never attempted | **251 598** |
+| `PeriodicTask` #6 `total_run_count` | 32 |
+
+Nothing failed. No error was logged, no alert fired, no job turned red — the
+task ran, completed, and reported success 32 times. Coverage simply stopped at
+0.1 % of the population and stayed there. It is the same defect class as the
+rest of this document, in its purest form: **a scheduled job that looks alive
+and never advances.**
+
+### `rows=0` used to mean four different things
+
+`RuzFinancialsSyncService.sync_company()` returned `0` when the registry was
+unreachable, when the company had no RUZ record, when it had no statements, and
+when the statements it had yielded nothing readable. Callers could not tell
+these apart, so "we never reached the registry" was recorded, counted and
+displayed exactly like "this company genuinely has no statements".
+
+That is why the second half of the measurement above is 0. A company whose
+financials attempt failed left **no row at all**, so there was no way to count
+how many companies had been tried and how many had not — and the two are the
+same number only if nothing ever fails.
+
+**Fixed 2026-09-11.** `sync_company_detailed()` returns a
+`FinancialsSyncResult` carrying a `FinancialsOutcome`:
+`RECORDED`, `NO_STATEMENTS`, `NOT_IN_RUZ`, or `UNREACHABLE`. The first three
+are *knowledge about the company*; the fourth is *ignorance about the
+registry*. `sync_company()` is kept as a one-line delegate so existing callers
+and tests keep their signature.
+
+`RuzApi` gained `raise_on_transport_error` (default `False`, so all six
+construction sites and every existing caller behave byte for byte as before).
+The financials service builds its client with it on, so a transport failure
+arrives as an exception rather than as `None`. A **404 stays `None` either
+way** — the registry answered, and its answer was "no such record". A 5xx after
+the retry session has given up is not an answer, and raises.
+
+`sync_company_and_record()` is the single owner of the outcome → status rule.
+An unreachable registry is recorded as a **failure** with
+`consecutive_failures` and `next_retry_at`; the three answered outcomes are
+recorded as **successes**. Recording "checked and empty" as a success is what
+makes it countable — and it is why `CompanySyncStatus` now distinguishes the
+two populations that used to share one silent state.
+
+The transport failure deliberately does **not** propagate.
+`orchestrate_full_company_sync` builds its `group(...)` with
+`update_insurance_debt` as the chord callback, so an exception here would stop
+that callback from ever running and a company would quietly stop having its
+insurance debts refreshed — a second outage caused by the handling of the
+first. Repetition is owned by `next_retry_at` alone, not by Celery autoretry.
+
+### A success must schedule itself, or the fix reintroduces the bug
+
+`update_company_status(success=True)` cleared `next_retry_at` to `NULL`, and
+the due-query reads `NULL` as **due now**. So the first version of this fix
+would have refilled every batch with the companies the previous batch had just
+synced, and the never-attempted population would never have been reached —
+the original bug, reintroduced by its own repair.
+
+`update_company_status` therefore takes `retry_after`, and an answered outcome
+passes `ANSWERED_RETRY_AFTER` (365 days). A failure ignores it: how long to
+wait after a failure is `compute_next_retry`'s exponential backoff, not a fixed
+delay. `SyncCompanyAndRecordTests` pins the distinction, and
+`test_the_rotation_only_advances_because_attempts_are_recorded` states the
+coupling out loud: the status row is not bookkeeping, it **is** the cursor.
+
+### The batch: retries first, then new ground
+
+`financials_sync_batch()` draws from two populations:
+
+1. **Retries** — `financials` status rows whose `next_retry_at` has arrived,
+   capped at `1/RETRY_SHARE` (a quarter) of the batch, so a failing minority
+   cannot spend the whole batch on itself.
+2. **New ground** — companies with no `financials` status row at all, ordered
+   by `id`. An attempt always writes a row, so the head of this queue moves
+   after every batch: resumable and deterministic without storing a cursor.
+
+The task **name is unchanged** (`schedule_ruz_financials_sync`) and only its
+internals changed. The admin-managed `PeriodicTask` row, `FOCUS_KEEP_TASKS`,
+`CELERY_BEAT_SCHEDULE`, the manual dispatcher and two tests all key on that
+name, so keeping it means no `PeriodicTask` row had to be edited, no migration
+was needed, and a rollback is a code revert rather than a scheduler change.
+
+`eligible_only` (ORSR-eligible legal forms, not dissolved — the same population
+`schedule_missing_orsr_sync` uses) became the default. The beat passes only
+`limit`, so this is what decides what the scheduled path imports; both manual
+callers pass the flag explicitly and are unaffected.
+
+### The pilot, measured 2026-09-11
+
+The 136 companies behind the reported symptom (Trnava / PSČ 917 / active /
+NACE 62 / no debt) were run through the fixed path. Every outcome was
+recorded, and for the first time the four cases are countable separately:
+
+| Outcome | Companies |
+|---|---|
+| `recorded` — statements imported | 114 |
+| `no_statements` — registry answered, company has none | 22 |
+| `not_in_ruz` | 0 |
+| `unreachable` — registry could not be read | 0 |
+
+1 262 rows written, **0 errors**. Coverage moved from 309 companies / 3 506
+rows to **423 companies / 4 724 rows**, and
+`CompanySyncStatus(source='financials')` from **0 rows to 136** — the trace
+that did not exist before, and the reason the previous measurement could only
+say "309 covered" and never "251 598 never attempted".
+
+`profitable_it` moved 5 → 108: it keeps `has_financials`, and its description
+promises statements, so the preset was right all along and simply had no data
+to be right about. `clean_and_healthy` could not have moved: before the pilot
+its `sync_state=healthy` had zero `financials` rows to judge, and 136 rows with
+`consecutive_failures=0` cannot change an `Exists(failures > 0)` either way.
+
+**A warning about how to check this.** Running the selection twice without
+syncing in between returns *the same companies both times* — which is also
+what the broken code did, so the naive check cannot tell the fix from the bug.
+The rotation advances only because an attempt records a status row. The canary
+therefore selects a batch, syncs it, and selects again:
+
+| Run | Companies chosen |
+|---|---|
+| Selection before any sync (batch 1) | ids 202 – 284 |
+| The old selection, after batch 1 was synced | ids 202 – 251 — **unchanged** |
+| Selection after batch 1 was synced (batch 2) | ids 285 – 383 |
+
+Intersection of batch 1 and batch 2: **empty**.
+
+### Honest arithmetic, and what a rollback would not recover
+
+500 companies per 12 hours is 1 000 a day, against 251 598 eligible companies:
+about **252 days** for one pass. That is today's configured pace and this
+change does not alter it — the point was to make the rotation advance at all,
+and to make its pace measurable. Changing the pace is a separate decision.
+
+`companies_due_for_sync()` — dead scaffolding with zero callers since it was
+written — is now the retry half of the batch, ordered with an `id` tiebreak
+because every row written by one batch shares a `last_attempted_at` to the
+microsecond.
+
+**Known limitation, not fixed here.** The same non-advancing selection exists
+in `fetch_ruz_financials` batch mode and in the legacy dashboard's manual
+trigger. Both are operator-bounded and print what they chose, so they fail
+visibly rather than silently; they are recorded here rather than changed.

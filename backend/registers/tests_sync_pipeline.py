@@ -116,14 +116,74 @@ class SyncPipelineTests(TestCase):
         with self.assertRaises(Company.DoesNotExist):
             update_insurance_debt(99999)
 
-    @patch("registers.tasks.RuzFinancialsSyncService")
-    def test_sync_financials_calls_service(self, MockService):
-        mock_service = MockService.return_value
-        mock_service.sync_company.return_value = 5
+    @patch("registers.tasks.sync_company_and_record")
+    def test_sync_financials_calls_service(self, record):
+        from registers.services.ruz_financials_sync import (
+            FinancialsOutcome,
+            FinancialsSyncResult,
+        )
+
+        record.return_value = FinancialsSyncResult(FinancialsOutcome.RECORDED, rows=5)
         from registers.tasks import sync_company_financials_from_ruz
         result = sync_company_financials_from_ruz(self.company.id)
-        mock_service.sync_company.assert_called_once_with(self.company)
+        record.assert_called_once_with(self.company)
         self.assertIn("rows=5", result)
+
+    def _financials_status(self):
+        from registers.models import CompanySyncStatus
+        return CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_FINANCIALS
+        )
+
+    def test_an_unreachable_registry_leaves_a_failure_not_a_silent_zero(self):
+        """The whole path, with only the HTTP client replaced.
+
+        Before this, the same run stored nothing at all: `CompanySyncStatus`
+        had zero `financials` rows for the entire table, so "we never reached
+        the registry" and "this company has no statements" were the same state
+        -- and the second is what everything downstream reported.
+        """
+        from registers.integrations.ruz_api import RuzUnreachable
+        from registers.tasks import sync_company_financials_from_ruz
+
+        class _UnreachableRuzApi:
+            def __init__(self, **_kwargs):
+                pass
+
+            def get_company_details(self, company_id):
+                raise RuzUnreachable("Failed to resolve www.registeruz.sk")
+
+        with patch("registers.services.ruz_financials_sync.RuzApi", _UnreachableRuzApi):
+            result = sync_company_financials_from_ruz(self.company.id)
+
+        status = self._financials_status()
+        self.assertGreater(status.consecutive_failures, 0)
+        self.assertIsNotNone(status.next_retry_at)
+        self.assertEqual(status.last_error_type, "network")
+        self.assertIn("unreachable", result)
+
+    def test_a_company_with_no_statements_leaves_a_success_far_in_the_future(self):
+        from registers.tasks import sync_company_financials_from_ruz
+
+        class _EmptyRuzApi:
+            def __init__(self, **_kwargs):
+                pass
+
+            def get_company_details(self, company_id):
+                return {"id": company_id, "idUctovnychZavierok": []}
+
+        with patch("registers.services.ruz_financials_sync.RuzApi", _EmptyRuzApi):
+            result = sync_company_financials_from_ruz(self.company.id)
+
+        status = self._financials_status()
+        self.assertEqual(status.consecutive_failures, 0)
+        self.assertIsNotNone(
+            status.next_retry_at,
+            "a success must not clear next_retry_at -- NULL reads as 'due now', "
+            "and the batch would refill with the companies it just synced",
+        )
+        self.assertGreater(status.next_retry_at, timezone.now() + timedelta(days=300))
+        self.assertIn("no_statements", result)
 
     @patch("registers.tasks.RpoSyncService")
     def test_sync_orsr_calls_rpo_for_eligible(self, MockService):

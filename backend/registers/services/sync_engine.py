@@ -17,6 +17,7 @@ Design principles:
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import os
 import random
@@ -28,6 +29,7 @@ from typing import Any, Iterable
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from companies.models import Company
 from registers.models import (
     AuditLog,
     CompanySyncStatus,
@@ -91,8 +93,19 @@ def update_company_status(
     success: bool,
     error: str = "",
     error_type: str = "",
+    retry_after: timedelta | None = None,
 ) -> CompanySyncStatus:
-    """Upsert the per-company, per-source status after a sync attempt."""
+    """Upsert the per-company, per-source status after a sync attempt.
+
+    `retry_after` sets how long a **successful** attempt stays out of the due
+    queue. It defaults to `None`, which stores `next_retry_at = NULL` -- and the
+    due-query reads `NULL` as "due now", so a source whose successes are common
+    needs to say something here or its rotation cannot advance. See
+    `registers.services.ruz_financials_sync.ANSWERED_RETRY_AFTER`.
+
+    A failure ignores it: how long to wait after a failure is
+    `compute_next_retry`'s decision, and it is backoff, not a fixed delay.
+    """
     now = timezone.now()
     with transaction.atomic():
         status, _ = CompanySyncStatus.objects.select_for_update().get_or_create(
@@ -105,7 +118,7 @@ def update_company_status(
             status.consecutive_failures = 0
             status.last_error = ""
             status.last_error_type = ""
-            status.next_retry_at = None
+            status.next_retry_at = now + retry_after if retry_after else None
         else:
             status.consecutive_failures += 1
             status.last_error = (error or "")[:4000]
@@ -394,6 +407,42 @@ def record_item(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_item_key(func, args: tuple, kwargs: dict, item_key_arg: str):
+    """Find the wrapped task's company-id argument, or refuse to guess.
+
+    Asks the function's own signature rather than assuming a position, because
+    the position depends on whether the task is bound: `functools.wraps` keeps
+    the wrapped signature, so `self` shows up in `parameters` exactly when the
+    task declared `bind=True`.
+
+    Raises `TypeError` when the argument cannot be found. That is deliberate:
+    the previous version fell back to `None`, the decorator then recorded
+    nothing, and the task ran untracked while appearing wired up. A decorator
+    that cannot do its job must say so at the first call, not quietly skip it.
+    """
+    if item_key_arg in kwargs:
+        return kwargs[item_key_arg]
+
+    params = list(inspect.signature(func).parameters)
+    offset = 1 if params and params[0] == "self" else 0
+    if item_key_arg not in params[offset:]:
+        raise TypeError(
+            f"tracked_sync_task(item_key_arg={item_key_arg!r}) wraps "
+            f"{getattr(func, '__name__', func)!r}, whose parameters are "
+            f"{params}. It cannot tell which argument carries the company id, "
+            f"and will not guess."
+        )
+
+    index = params.index(item_key_arg)
+    if index >= len(args):
+        raise TypeError(
+            f"{getattr(func, '__name__', func)!r} was called without "
+            f"{item_key_arg!r} (got {len(args)} positional argument(s)), so "
+            f"this attempt cannot be attributed to a company."
+        )
+    return args[index]
+
+
 def tracked_sync_task(*, source: str, item_key_arg: str = "company_id"):
     """Decorator that wraps a per-company Celery task to auto-update sync state.
 
@@ -409,15 +458,22 @@ def tracked_sync_task(*, source: str, item_key_arg: str = "company_id"):
 
     The wrapped function may raise to signal failure; the decorator will
     record the error and re-raise (so Celery retry semantics still work).
+
+    **Nothing uses this today.** It is kept, and fixed, because the alternative
+    was leaving a trap: the old resolution was `args[1] if len(args) >= 2`,
+    which assumes `args[0]` is a bound task's `self`. Both tasks it was written
+    for -- `sync_company_orsr_data` and `sync_company_financials_from_ruz` --
+    are unbound, so it would have read the *second positional argument* as a
+    company id, resolved `None` on a single-argument call, and written nothing
+    while looking like it was tracking. Wiring it up would have produced a
+    silent no-op rather than an error, which is the same defect this module
+    keeps meeting.
     """
 
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # Resolve company_id from kwargs first, then positional after `self`.
-            company_id = kwargs.get(item_key_arg)
-            if company_id is None and len(args) >= 2:
-                company_id = args[1]
+            company_id = _resolve_item_key(func, args, kwargs, item_key_arg)
 
             # Optional job_id passed via kwargs lets us link this attempt to a parent job.
             job_id = kwargs.pop("_sync_job_id", None)
@@ -430,7 +486,11 @@ def tracked_sync_task(*, source: str, item_key_arg: str = "company_id"):
                 duration_ms = int((time.time() - started) * 1000)
                 error_type = _classify_error(exc)
                 error_message = f"{type(exc).__name__}: {exc}"
-                if company_id:
+                # `Company.DoesNotExist` means the row this status would point
+                # at is gone. Writing it anyway raises on the foreign key, and
+                # that second exception replaces the first -- turning a clear
+                # "company 42 was deleted" into an opaque IntegrityError.
+                if company_id and not isinstance(exc, Company.DoesNotExist):
                     update_company_status(
                         company_id=company_id,
                         source=source,
@@ -608,32 +668,43 @@ def heartbeat_loop(job: SyncJob, interval_seconds: int = 30):
         job.heartbeat()
 
 
+def sync_due_q(next_retry_field: str, now):
+    """The one definition of "this source may be attempted now".
+
+    `next_retry_field` is the full lookup path to a `next_retry_at` column, e.g.
+    `"next_retry_at"` on `CompanySyncStatus` or
+    `"sync_statuses__next_retry_at"` on `Company`.
+
+    Kept in a single place because two different populations are asked about it
+    in two different shapes -- rows that exist and carry a `next_retry_at`, and
+    companies that have never been attempted and have no row at all -- and they
+    must agree on what "due" means, or a rotation double-counts one and starves
+    the other. `NULL` means "due now", which is why a successful attempt that
+    wants to stay out of the queue has to write a real timestamp rather than
+    clearing the field.
+    """
+    from django.db.models import Q
+
+    return Q(**{f"{next_retry_field}__lte": now}) | Q(
+        **{f"{next_retry_field}__isnull": True}
+    )
+
+
 def companies_due_for_sync(source: str, *, limit: int = 200) -> Iterable[CompanySyncStatus]:
     """Return CompanySyncStatus rows that are eligible for a fresh attempt.
 
     Eligible = not blocked AND (next_retry_at is null OR next_retry_at <= now).
-    Ordered by oldest last_attempted_at first so we revisit the staleset rows.
+    Ordered by oldest last_attempted_at first so we revisit the stalest rows,
+    with `id` as a tiebreak: every row written by one batch shares a
+    `last_attempted_at` to the microsecond, so without it the order within a
+    batch is the database's to choose and two consecutive calls can return the
+    same rows.
     """
     now = timezone.now()
     qs = (
         CompanySyncStatus.objects.filter(source=source, is_blocked=False)
-        .filter(
-            models_q_lte("next_retry_at", now) | models_q_isnull("next_retry_at")
-        )
-        .order_by("last_attempted_at")
+        .filter(sync_due_q("next_retry_at", now))
+        .order_by("last_attempted_at", "id")
         .select_related("company")[:limit]
     )
     return qs
-
-
-# tiny Q helpers to avoid importing django.db.models.Q at top level
-def models_q_lte(field, value):
-    from django.db.models import Q
-
-    return Q(**{f"{field}__lte": value})
-
-
-def models_q_isnull(field, value=True):
-    from django.db.models import Q
-
-    return Q(**{f"{field}__isnull": value})

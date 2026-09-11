@@ -1,5 +1,5 @@
 from celery import shared_task, chain, chord, group
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
@@ -10,12 +10,14 @@ from .scrapers.vszp_debt import check_vszp_debt_get
 from .scrapers.soc_poist_debt import check_socpoist_debt
 from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService
-from .services.ruz_financials_sync import RuzFinancialsSyncService
+from .services.ruz_financials_sync import sync_company_and_record
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
+from .models import CompanySyncStatus
 from .services.sync_engine import (
     claim_ruz_job,
+    companies_due_for_sync,
     complete_job,
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
@@ -633,27 +635,120 @@ def schedule_missing_orsr_sync(limit: int = 200):
 @shared_task(base=BaseSyncTask, queue='financials', rate_limit='20/m')
 def sync_company_financials_from_ruz(company_id: int):
     company = Company.objects.get(id=company_id)
-    service = RuzFinancialsSyncService()
-    upserts = service.sync_company(company)
-    logger.info("RUZ financial sync company_id=%s ico=%s rows=%s", company_id, company.ico, upserts)
-    return f"RUZ financial sync finished for {company.ico}, rows={upserts}"
+    result = sync_company_and_record(company)
+    logger.info(
+        "RUZ financial sync company_id=%s ico=%s outcome=%s rows=%s",
+        company_id, company.ico, result.outcome.value, result.rows,
+    )
+    return (
+        f"RUZ financial sync for {company.ico}: "
+        f"{result.outcome.value}, rows={result.rows}"
+    )
 
 
-@shared_task(queue='financials')
-def schedule_ruz_financials_sync(limit: int = 200, eligible_only: bool = False, missing_only: bool = False):
-    """Naplánuje RUZ financial sync pre dávku firiem."""
-    qs = Company.objects.order_by('id')
+# How much of a batch may be spent on retries. The rest goes to companies that
+# have never been attempted, so a failing minority cannot hold the rotation in
+# place -- which is how the previous selection failed, except that it held the
+# *whole* rotation, permanently, and silently.
+RETRY_SHARE = 4
 
+
+def _financials_candidates(*, eligible_only: bool, missing_only: bool):
+    """The population a financials batch may draw from, before ordering."""
+    qs = Company.objects.all()
     if eligible_only:
         qs = qs.filter(
             pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS,
             datum_zrusenia__isnull=True,
         )
-
     if missing_only:
         qs = qs.filter(financial_results__isnull=True)
+    return qs
 
-    company_ids = list(qs.values_list('id', flat=True)[:limit])
+
+def financials_sync_batch(
+    limit: int, *, eligible_only: bool = True, missing_only: bool = False
+) -> list[int]:
+    """Choose the company ids for one financials batch: retries, then new ground.
+
+    The previous selection was `Company.objects.order_by('id')[:limit]` with a
+    beat argument of 500, and it has no cursor, so **every run chose the same
+    500 companies**. Measured 2026-09-11: 297 of the 309 companies holding any
+    financial result at all sit inside ids 202-701, after 32 runs of the 12-hour
+    beat. Nothing failed and nothing logged; coverage simply stopped at 309 of
+    251 598 companies and stayed there. A scheduled job that looks alive and
+    never advances is this repository's recurring defect, and this is its
+    clearest instance.
+
+    Two populations, in this order:
+
+    1. **Retries** -- `CompanySyncStatus(source='financials')` rows whose
+       `next_retry_at` has arrived: the companies that were tried and asked to
+       be tried again. Capped at `1 / RETRY_SHARE` of the batch, because a
+       failing minority must not be able to spend the whole batch on itself.
+    2. **New ground** -- companies with no `financials` status row at all,
+       ordered by `id`. An attempt always writes a row, so the head of this
+       queue moves after every batch: resumable and deterministic without
+       storing a cursor of its own.
+
+    `eligible_only` (ORSR-eligible legal forms, not dissolved) is now the
+    default. It is the same population `schedule_missing_orsr_sync` uses, and
+    the beat calls this task with only `limit` -- whether to import statements
+    for every company rather than the eligible subset is a separate decision
+    from making the rotation advance, and it is not being made by default here.
+    """
+    retry_budget = limit // RETRY_SHARE
+
+    retry_ids: list[int] = []
+    if retry_budget > 0:
+        due = companies_due_for_sync(
+            CompanySyncStatus.SOURCE_FINANCIALS, limit=retry_budget
+        )
+        if missing_only:
+            # `missing_only` needs a database condition, so the due rows are
+            # re-checked against the population rather than trusted as-is.
+            retry_ids = list(
+                _financials_candidates(
+                    eligible_only=eligible_only, missing_only=True
+                )
+                .filter(id__in=[status.company_id for status in due])
+                .order_by('id')
+                .values_list('id', flat=True)
+            )
+        else:
+            retry_ids = [status.company_id for status in due]
+
+    remaining = max(limit - len(retry_ids), 0)
+    if remaining == 0:
+        return retry_ids
+
+    attempted = CompanySyncStatus.objects.filter(
+        company_id=OuterRef('pk'), source=CompanySyncStatus.SOURCE_FINANCIALS
+    )
+    new_ids = list(
+        _financials_candidates(eligible_only=eligible_only, missing_only=missing_only)
+        .exclude(Exists(attempted))
+        .order_by('id')
+        .values_list('id', flat=True)[:remaining]
+    )
+    return retry_ids + new_ids
+
+
+@shared_task(queue='financials')
+def schedule_ruz_financials_sync(
+    limit: int = 200, eligible_only: bool = True, missing_only: bool = False
+):
+    """Naplánuje RUZ financial sync pre dávku firiem, ktorá naozaj postupuje.
+
+    The task name is load-bearing and deliberately unchanged: the admin-managed
+    `PeriodicTask` row, `FOCUS_KEEP_TASKS`, `CELERY_BEAT_SCHEDULE`, the manual
+    dispatcher and two tests all key on it. Only the selection changed, so
+    there is no data migration to make and no row to edit -- and a rollback is
+    a code revert rather than a scheduler change.
+    """
+    company_ids = financials_sync_batch(
+        limit, eligible_only=eligible_only, missing_only=missing_only
+    )
     for company_id in company_ids:
         sync_company_financials_from_ruz.delay(company_id)
     logger.info("Scheduled RUZ financial sync for %s companies", len(company_ids))

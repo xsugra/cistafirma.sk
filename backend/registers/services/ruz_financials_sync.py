@@ -1,12 +1,70 @@
 import logging
 import re
+from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from typing import Dict, List, Optional
 
 from companies.models import Company, CompanyFinancialResult
-from registers.integrations.ruz_api import RuzApi
+from registers.integrations.ruz_api import RuzApi, RuzUnreachable
+from registers.models import CompanySyncStatus
+from registers.services.sync_engine import _classify_error, update_company_status
 
 logger = logging.getLogger(__name__)
+
+# A company the registry answered about is not due again for a year. This is
+# not a retry delay -- the retry delay is `compute_next_retry`'s exponential
+# backoff, and it applies to failures. This is what "we asked, and the answer
+# is not going to change this week" costs: without it a successful attempt
+# leaves `next_retry_at = NULL`, which the due-query reads as "due now", so the
+# whole freshly-synced batch would refill the next batch and starve every
+# company that has never been attempted.
+ANSWERED_RETRY_AFTER = timedelta(days=365)
+
+
+class FinancialsOutcome(str, Enum):
+    """What one financials attempt actually established.
+
+    `sync_company() -> int` returned `0` for every one of these at once, and the
+    first three do not belong with the last one. The first three are *knowledge
+    about the company*; the last is *ignorance about the registry*. A caller
+    that cannot tell them apart records "checked, nothing there" for a company
+    it never reached -- which is how this import read as healthy while covering
+    309 of 251 598 companies, and why the Trnava preset returned an empty table
+    for months without anything looking broken.
+    """
+
+    RECORDED = "recorded"            # registry answered; statements stored
+    NO_STATEMENTS = "no_statements"  # registry answered; nothing to store
+    NOT_IN_RUZ = "not_in_ruz"        # registry answered; no such company
+    UNREACHABLE = "unreachable"      # registry never answered
+
+    @property
+    def answered(self) -> bool:
+        """Whether the registry told us something, as opposed to us failing to ask."""
+        return self is not FinancialsOutcome.UNREACHABLE
+
+
+@dataclass(frozen=True)
+class FinancialsSyncResult:
+    """The outcome of one company's financials attempt, with the rows it stored."""
+
+    outcome: FinancialsOutcome
+    rows: int = 0
+    detail: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        """Whether this attempt should be recorded as a success.
+
+        True for all three answered outcomes, including the two that stored
+        nothing. A sync that reached the registry and read it correctly *did*
+        succeed; the data being absent is a fact about the company, and
+        recording it as a success is what makes "checked and empty" visible as
+        something different from "never checked".
+        """
+        return self.outcome.answered
 
 
 BALANCE_SHEET_KEYS = ("suvaha", "bilancia", "balance sheet", "strana aktiv", "strana pasiv", "assets", "liabilities")
@@ -64,24 +122,62 @@ class RuzFinancialsSyncService:
     PROFIT_KEYS = ("vysledok hospodarenia", "hospodarsky vysledok", "vysledok")
 
     def __init__(self, api: Optional[RuzApi] = None):
-        self.api = api or RuzApi()
+        # The strict client is what makes this service's outcome meaningful. The
+        # other five `RuzApi()` construction sites keep the permissive default,
+        # so their behaviour is untouched, while this path can no longer answer
+        # "0 rows" for a registry it never reached.
+        self.api = api or RuzApi(raise_on_transport_error=True)
 
     IFRS_TEMPLATE_ID = 709
 
     def sync_company(self, company: Company, max_statements: int = 30) -> int:
-        """Fetch and upsert yearly financial data for one company. Returns number of upserts."""
+        """Number of upserts. Prefer `sync_company_detailed`: `0` does not say why.
+
+        Kept as a one-line delegate so existing callers and tests keep the
+        signature they had, without the ambiguity that made this increment
+        necessary.
+        """
+        return self.sync_company_detailed(company, max_statements).rows
+
+    def sync_company_detailed(
+        self, company: Company, max_statements: int = 30
+    ) -> FinancialsSyncResult:
+        """Fetch and upsert yearly financial data, and say what that established.
+
+        An unreachable registry comes back as `UNREACHABLE` rather than as
+        `rows=0`, which is the difference this whole increment turns on. Any
+        other exception is a bug in the reading code and is left to propagate --
+        it is not a statement about the registry, and folding it into an outcome
+        would recreate exactly the ambiguity being removed here.
+        """
+        try:
+            return self._read_company(company, max_statements)
+        except RuzUnreachable as exc:
+            logger.error(
+                "RUZ financial sync: registry unreachable for company %s (%s): %s",
+                company.id, company.ico, exc,
+            )
+            return FinancialsSyncResult(FinancialsOutcome.UNREACHABLE, detail=str(exc))
+
+    def _read_company(self, company: Company, max_statements: int) -> FinancialsSyncResult:
         if not company.ruz_id:
             detail = self.api.get_company_by_ico(company.ico)
         else:
             detail = self.api.get_company_details(company.ruz_id)
 
         if not detail:
-            logger.warning("RUZ financial sync: company %s (%s) not found in RUZ", company.id, company.ico)
-            return 0
+            logger.info(
+                "RUZ financial sync: company %s (%s) has no record in RUZ", company.id, company.ico
+            )
+            return FinancialsSyncResult(
+                FinancialsOutcome.NOT_IN_RUZ, detail="company has no RUZ record"
+            )
 
         statement_ids = detail.get("idUctovnychZavierok", []) or []
         if not statement_ids:
-            return 0
+            return FinancialsSyncResult(
+                FinancialsOutcome.NO_STATEMENTS, detail="company has no statements in RUZ"
+            )
 
         upserts = 0
         found_ifrs = False
@@ -118,7 +214,16 @@ class RuzFinancialsSyncService:
             company.uses_ifrs = found_ifrs
             company.save(update_fields=["uses_ifrs"])
 
-        return upserts
+        if upserts == 0:
+            # Statements exist but none yielded a revenue or a profit we could
+            # read. Still an answer -- and worth being able to count, because a
+            # population that is all this and no `RECORDED` is a parser signal.
+            return FinancialsSyncResult(
+                FinancialsOutcome.NO_STATEMENTS,
+                detail=f"{len(statement_ids)} statement(s) present, none readable",
+            )
+
+        return FinancialsSyncResult(FinancialsOutcome.RECORDED, rows=upserts)
 
     def _extract_year(self, statement: Dict) -> Optional[int]:
         for key in ("obdobieDo", "obdobieOd"):
@@ -348,3 +453,55 @@ class RuzFinancialsSyncService:
             "aacdeeillnoorrstuyzAACDEEILLNOORRSTUYZ",
         )
         return (value or "").translate(ascii_map).lower()
+
+
+def sync_company_and_record(
+    company: Company, *, service: Optional[RuzFinancialsSyncService] = None
+) -> FinancialsSyncResult:
+    """Sync one company's financials and record the attempt against the source.
+
+    The single owner of the outcome -> `CompanySyncStatus` rule, so the Celery
+    task, the management command and the batch scheduler cannot each decide
+    differently what `rows=0` means. That divergence is the bug being fixed: the
+    API could not tell "checked, nothing there" from "never reached", and every
+    caller quietly resolved the ambiguity its own way.
+
+    The transport failure does **not** propagate. `orchestrate_full_company_sync`
+    builds its `group(...)` with `update_insurance_debt` as the chord callback,
+    so an exception raised here would stop that callback from ever running and a
+    company would silently stop having its insurance debts refreshed -- a second
+    outage caused by the handling of the first. Repetition is therefore owned
+    entirely by `next_retry_at` (exponential backoff, capped at 24 h), not by
+    Celery autoretry.
+
+    Any *other* exception is recorded and re-raised: it is a bug in the reading
+    code, not a statement about the registry, and it belongs in the worker's
+    error rate rather than in an outcome.
+    """
+    service = service or RuzFinancialsSyncService()
+
+    try:
+        result = service.sync_company_detailed(company)
+    except Exception as exc:  # noqa: BLE001 -- recorded, then re-raised
+        update_company_status(
+            company_id=company.id,
+            source=CompanySyncStatus.SOURCE_FINANCIALS,
+            success=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type=_classify_error(exc),
+        )
+        raise
+
+    update_company_status(
+        company_id=company.id,
+        source=CompanySyncStatus.SOURCE_FINANCIALS,
+        success=result.succeeded,
+        # `error_type` stays "network" and not `_classify_error`'s verdict: the
+        # one thing we know about an `UNREACHABLE` is that the registry was not
+        # read, and `_classify_error` matches substrings -- a company id
+        # containing "500" would be filed as a server error.
+        error="" if result.succeeded else result.detail,
+        error_type="" if result.succeeded else "network",
+        retry_after=ANSWERED_RETRY_AFTER if result.succeeded else None,
+    )
+    return result

@@ -8,6 +8,18 @@ from registers.http_client import build_retry_session
 
 logger = logging.getLogger(__name__)
 
+
+class RuzUnreachable(RuntimeError):
+    """The registry could not be read, as distinct from "it has no such record".
+
+    Every `get_*` here answers `None` for a record that does not exist, which is
+    a real answer. Transport failures and server-side refusals used to arrive as
+    the same `None`, and a caller that read it as "nothing there" had no way to
+    tell. This exception is the difference, and it is raised only by a client
+    built with `raise_on_transport_error=True`.
+    """
+
+
 class RuzApi:
     """
     A client for the Slovak Register of Financial Statements (RUZ) API.
@@ -16,9 +28,32 @@ class RuzApi:
     BASE_URL = "https://www.registeruz.sk/cruz-public/api"
     HEADERS = {"User-Agent": "CistaFirma SK App / 1.0"}
 
-    def __init__(self, timeout: int = 20):
+    def __init__(self, timeout: int = 20, raise_on_transport_error: bool = False):
+        """`raise_on_transport_error` decides what a transport failure becomes.
+
+        Default `False` is the historical behaviour -- every `get_*` answers
+        `None`, and the six existing construction sites plus every test keep
+        working byte for byte. `True` raises `RuzUnreachable` instead, for
+        callers that must not mistake an unreachable registry for an empty one.
+
+        A **404 is not a transport failure** and stays `None` either way: the
+        registry answered, and its answer was "no such record". A 5xx after the
+        retry session has exhausted its attempts is one, because nothing was
+        answered at all.
+        """
         self.timeout = timeout
+        self.raise_on_transport_error = raise_on_transport_error
         self.session = build_retry_session(headers=self.HEADERS, total_retries=4, backoff_factor=0.6)
+
+    def _on_transport_error(self, context: str, exc: Exception) -> None:
+        """The one place that decides whether a swallowed error stays swallowed.
+
+        Returns `None` when the client is not strict, so the caller's existing
+        `return None` goes through unchanged. Raises otherwise, chaining the
+        original exception so the transport cause is still in the traceback.
+        """
+        if self.raise_on_transport_error:
+            raise RuzUnreachable(f"{context}: {exc}") from exc
 
     def _get_json(self, url: str, *, params: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
         response = self.session.get(url, params=params, timeout=timeout or self.timeout)
@@ -77,6 +112,7 @@ class RuzApi:
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching company ID by ICO {ico}: {e}")
+            self._on_transport_error(f"RUZ unreachable looking up ICO {ico}", e)
             return None
 
     def get_company_by_ico(self, ico: str) -> Optional[Dict[str, Any]]:
@@ -105,13 +141,15 @@ class RuzApi:
                 return None
             return data
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 logger.warning(f"Company with RUZ ID {company_id} not found (404).")
             else:
                 logger.error(f"HTTP error fetching details for RUZ ID {company_id}: {e}")
+                self._on_transport_error(f"RUZ refused company {company_id}", e)
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error fetching details for RUZ ID {company_id}: {e}")
+            self._on_transport_error(f"RUZ unreachable reading company {company_id}", e)
             return None
 
     def get_financial_statement_details(self, statement_id: int) -> Optional[Dict[str, Any]]:
@@ -131,9 +169,11 @@ class RuzApi:
                 logger.warning("Financial statement %s not found (404).", statement_id)
             else:
                 logger.error("HTTP error fetching financial statement %s: %s", statement_id, e)
+                self._on_transport_error(f"RUZ refused statement {statement_id}", e)
             return None
         except requests.exceptions.RequestException as e:
             logger.error("Network error fetching financial statement %s: %s", statement_id, e)
+            self._on_transport_error(f"RUZ unreachable reading statement {statement_id}", e)
             return None
 
     def get_financial_report_details(self, report_id: int) -> Optional[Dict[str, Any]]:
@@ -153,9 +193,11 @@ class RuzApi:
                 logger.warning("Financial report %s not found (404).", report_id)
             else:
                 logger.error("HTTP error fetching financial report %s: %s", report_id, e)
+                self._on_transport_error(f"RUZ refused report {report_id}", e)
             return None
         except requests.exceptions.RequestException as e:
             logger.error("Network error fetching financial report %s: %s", report_id, e)
+            self._on_transport_error(f"RUZ unreachable reading report {report_id}", e)
             return None
 
     def get_report_template_details(self, template_id: int) -> Optional[Dict[str, Any]]:
@@ -169,9 +211,11 @@ class RuzApi:
                 logger.warning("Report template %s not found (404).", template_id)
             else:
                 logger.error("HTTP error fetching report template %s: %s", template_id, e)
+                self._on_transport_error(f"RUZ refused template {template_id}", e)
             return None
         except requests.exceptions.RequestException as e:
             logger.error("Network error fetching report template %s: %s", template_id, e)
+            self._on_transport_error(f"RUZ unreachable reading template {template_id}", e)
             return None
 
 
