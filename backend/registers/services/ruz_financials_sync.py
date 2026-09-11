@@ -1,7 +1,6 @@
 import logging
 import re
 from dataclasses import dataclass
-from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Dict, List, Optional
@@ -9,18 +8,13 @@ from typing import Dict, List, Optional
 from companies.models import Company, CompanyFinancialResult
 from registers.integrations.ruz_api import RuzApi, RuzUnreachable
 from registers.models import CompanySyncStatus
-from registers.services.sync_engine import _classify_error, update_company_status
+from registers.services.sync_engine import (
+    ANSWERED_RETRY_AFTER,
+    _classify_error,
+    update_company_status,
+)
 
 logger = logging.getLogger(__name__)
-
-# A company the registry answered about is not due again for a year. This is
-# not a retry delay -- the retry delay is `compute_next_retry`'s exponential
-# backoff, and it applies to failures. This is what "we asked, and the answer
-# is not going to change this week" costs: without it a successful attempt
-# leaves `next_retry_at = NULL`, which the due-query reads as "due now", so the
-# whole freshly-synced batch would refill the next batch and starve every
-# company that has never been attempted.
-ANSWERED_RETRY_AFTER = timedelta(days=365)
 
 
 class FinancialsOutcome(str, Enum):

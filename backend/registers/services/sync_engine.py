@@ -57,6 +57,19 @@ RUZ_CONCURRENCY_KEY = "ruz:global"
 MAX_BACKOFF_SECONDS = 24 * 60 * 60  # cap at 24h
 BASE_BACKOFF_SECONDS = 30
 
+# A company the registry answered about is not due again for a year. This is
+# not a retry delay -- the retry delay is `compute_next_retry`'s exponential
+# backoff, and it applies to failures. This is what "we asked, and the answer
+# is not going to change this week" costs: without it a successful attempt
+# leaves `next_retry_at = NULL`, which the due-query reads as "due now", so the
+# whole freshly-synced batch would refill the next batch and starve every
+# company that has never been attempted.
+#
+# It lives here rather than beside either source because it is a fact about
+# `update_company_status`'s `retry_after` contract and about `sync_due_q`
+# below, and every rotating source needs the same value for the same reason.
+ANSWERED_RETRY_AFTER = timedelta(days=365)
+
 
 def compute_next_retry(consecutive_failures: int) -> timezone.datetime:
     """Exponential backoff with full jitter.
@@ -106,7 +119,7 @@ def update_company_status(
     queue. It defaults to `None`, which stores `next_retry_at = NULL` -- and the
     due-query reads `NULL` as "due now", so a source whose successes are common
     needs to say something here or its rotation cannot advance. See
-    `registers.services.ruz_financials_sync.ANSWERED_RETRY_AFTER`.
+    `ANSWERED_RETRY_AFTER` above.
 
     A failure ignores it: how long to wait after a failure is
     `compute_next_retry`'s decision, and it is backoff, not a fixed delay.
@@ -175,6 +188,44 @@ def record_ruz_date_outcome(
         success=False,
         error="; ".join(f"Unreadable {field}={raw!r}" for field, raw in refused),
         error_type="parse_error",
+    )
+
+
+def record_orsr_outcome(
+    company: Company, *, fetch_ok: bool, error: str = "", error_type: str = ""
+) -> CompanySyncStatus:
+    """Record one ORSR attempt for a company: the source's only writer.
+
+    ORSR wrote `OrsrCompanyProfile` and nothing else, so `CompanySyncStatus`
+    held **no** `orsr` row at all -- measured 2026-09-11, zero rows, and no code
+    path able to create one. Everything that reads that table was therefore
+    blind to the source rather than reporting it as quiet: `source_health` could
+    not name it, the per-source dashboard card, `company_filters`'
+    `sync_state=failing` and `lead_scoring`'s average each covered a population
+    that silently excluded it.
+
+    It also gave ORSR no **backoff**, and the two ways an attempt can fail both
+    ended in a dead end. `OrsrScraperError` is raised *after*
+    `OrsrSyncService` has written `fetch_ok=False` onto the profile, so the
+    company leaves the `orsr_profile__isnull=True` population and
+    `schedule_missing_orsr_sync` never selects it again. Any other exception --
+    a transport failure inside `RpoClient` -- writes nothing at all, so the
+    company stays in that population and is re-dispatched at the head of an
+    `order_by('id')` queue on every run, and `BaseSyncTask`'s three retries
+    over a few minutes are the only ones it will ever get.
+
+    A success is pushed `ANSWERED_RETRY_AFTER` out for the same reason
+    financials is: `next_retry_at = NULL` reads as "due now", so a success that
+    wrote nothing would sit permanently at the head of the retry lane and starve
+    every company that genuinely needs another attempt.
+    """
+    return update_company_status(
+        company_id=company.id,
+        source=CompanySyncStatus.SOURCE_ORSR,
+        success=fetch_ok,
+        error="" if fetch_ok else error,
+        error_type="" if fetch_ok else error_type,
+        retry_after=ANSWERED_RETRY_AFTER if fetch_ok else None,
     )
 
 

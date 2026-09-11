@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from decimal import Decimal
 from io import StringIO
 from unittest.mock import patch, MagicMock
 import requests
@@ -6,7 +7,7 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from companies.models import Company
-from registers.models import SyncJob, SyncProgress
+from registers.models import CompanySyncStatus, SyncJob, SyncProgress
 from registers.scrapers.debt_result import DebtCheckResult
 from registers.services import sync_engine
 
@@ -867,6 +868,41 @@ class RefusedDatesReachTheGateTests(TestCase):
     """
 
     MIN_ATTEMPTS = 200
+
+    # The sources `source_health` now expects to attempt, and fails for silence.
+    # This class is about `ruz`, so the rest get a healthy baseline in `setUp` --
+    # otherwise every assertion below would be reading four unrelated FAILs.
+    # Not a change of subject: the command was made to name every declared
+    # source, and these tests pin the verdict for one of them.
+    OTHER_SOURCES = ("orsr", "financials", "vszp", "social")
+
+    def setUp(self):
+        now = timezone.now()
+        statuses = []
+        for index, source in enumerate(self.OTHER_SOURCES):
+            # `vszp` and `social` are judged on the found / no-record split as
+            # well as on having a success, so the baseline has to carry both.
+            amount_field = {"vszp": "debt_vszp", "social": "debt_soc_poist"}.get(source)
+            companies = Company.objects.bulk_create([
+                Company(
+                    ruz_id=900000 + index * 1000 + i,
+                    ico=f"7{index}{i:06d}",
+                    nazov_UJ=f"Baseline {source} {i}",
+                    **({amount_field: Decimal("100.00") if i < 25 else Decimal("0.00")}
+                       if amount_field else {}),
+                )
+                for i in range(self.MIN_ATTEMPTS)
+            ])
+            statuses.extend(
+                CompanySyncStatus(
+                    company=company,
+                    source=source,
+                    last_attempted_at=now - timedelta(hours=1),
+                    last_succeeded_at=now - timedelta(hours=1),
+                )
+                for company in companies
+            )
+        CompanySyncStatus.objects.bulk_create(statuses)
 
     def test_enough_unreadable_dates_fail_the_source_health_gate(self):
         from registers.tasks import _update_company_from_ruz_data

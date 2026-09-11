@@ -8,6 +8,7 @@ import logging
 
 from .scrapers.vszp_debt import check_vszp_debt_get
 from .scrapers.soc_poist_debt import check_socpoist_debt
+from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService
 from .services.ruz_financials_sync import sync_company_and_record
@@ -16,12 +17,14 @@ from companies.models import Company, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
 from .models import CompanySyncStatus
 from .services.sync_engine import (
+    _classify_error,
     claim_ruz_job,
     companies_due_for_sync,
     complete_job,
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
     fail_job,
+    record_orsr_outcome,
     record_ruz_date_outcome,
     update_company_status,
 )
@@ -585,7 +588,38 @@ def sync_company_orsr_data(company_id: int):
         old_names = _extract_orsr_person_names(old_profile)
 
     service = RpoSyncService()
-    profile = service.sync_company(company)
+    try:
+        profile = service.sync_company(company)
+    except OrsrScraperError as exc:
+        # Filed as "network" rather than left to `_classify_error`'s substring
+        # matching, for the reason `sync_company_and_record` gives one source
+        # over: this message carries the ICO inside a URL, so an ICO containing
+        # "500" would be filed as a server error. The scraper raises it after
+        # every transport attempt failed *or* returned nothing it could parse,
+        # and the one thing certainly true of both is that the register was not
+        # read.
+        record_orsr_outcome(
+            company,
+            fetch_ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type="network",
+        )
+        raise
+    except Exception as exc:
+        # A transport failure inside `RpoClient`, or a bug in the reading code.
+        # Recorded and re-raised: whatever it was, the company would otherwise
+        # leave no trace of having been attempted.
+        record_orsr_outcome(
+            company,
+            fetch_ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type=_classify_error(exc),
+        )
+        raise
+
+    record_orsr_outcome(
+        company, fetch_ok=profile.fetch_ok, error=profile.last_error
+    )
     logger.info("Company profile sync OK for company_id=%s ico=%s", company_id, company.ico)
 
     # Detect executive changes after sync
