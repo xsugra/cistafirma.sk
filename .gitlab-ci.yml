@@ -21,6 +21,7 @@ workflow:
 
 backend_validate:
   stage: validate
+  tags: [lenovo]
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -33,6 +34,7 @@ backend_validate:
 
 frontend_validate:
   stage: validate
+  tags: [lenovo]
   image: node:20-alpine
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -50,6 +52,7 @@ frontend_validate:
 
 docs_audit:
   stage: validate
+  tags: [lenovo]
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -60,6 +63,7 @@ docs_audit:
 # Helm: lint and render templates for dev + prod (dry-run validation).
 helm_render_validate:
   stage: validate
+  tags: [lenovo]
   image:
     name: alpine/helm:3.17.2
     entrypoint: [""]
@@ -80,8 +84,9 @@ helm_render_validate:
 # Helm+kubectl: validate rendered manifests against cluster schema (dry-run).
 helm_k8s_validate:
   stage: validate
+  tags: [lenovo]
   image:
-    name: bitnami/kubectl:1.30
+    name: bitnamilegacy/kubectl:1.30
     entrypoint: [""]
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -111,6 +116,7 @@ helm_k8s_validate:
 
 backend_tests:
   stage: test
+  tags: [lenovo]
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -125,6 +131,7 @@ backend_tests:
 
 .build_template:
   stage: build
+  tags: [macos]
   image: docker:27.1.2
   services:
     - docker:27.1.2-dind
@@ -182,8 +189,9 @@ build_frontend_image:
 # Deploy using raw kubectl + kustomize overlays (not Helm).
 .deploy_template:
   stage: deploy
+  tags: [lenovo]
   image:
-    name: bitnami/kubectl:1.30
+    name: bitnamilegacy/kubectl:1.30
     entrypoint: [""]
   before_script:
     - mkdir -p ~/.kube
