@@ -22,6 +22,17 @@ from registers.services.orsr_sync import OrsrSyncService
 
 logger = logging.getLogger(__name__)
 
+NOT_STATED = "Neuvedené"
+"""What RPO writes into a field it has no value for.
+
+It is a *value*, not an absence. `entity.ico == NOT_STATED` is a truthy string,
+so the `or company.ico` fallback never fired and the sentinel went into
+`ico = varchar(8)` as nine characters. Measured 2026-09-11: every such write
+raised `DataError`, the whole profile was lost -- and that is the only reason
+the defect was visible at all. One character more of column width and the
+profile would have been saved, quietly, with an IČO of "Neuvedené".
+"""
+
 
 class RpoSyncService:
     """Synchronize company profile from RPO REST API."""
@@ -42,14 +53,22 @@ class RpoSyncService:
         profile, _ = OrsrCompanyProfile.objects.update_or_create(
             company=company,
             defaults={
-                "ico": entity.ico or company.ico,
-                "obchodne_meno": entity.current_name,
-                "sidlo": entity.current_address.format() if entity.current_address else "",
+                "ico": self._storable(entity.ico, "ico", ico=company.ico) or company.ico,
+                "obchodne_meno": self._storable(entity.current_name, "obchodne_meno", ico=company.ico),
+                "sidlo": self._storable(
+                    entity.current_address.format() if entity.current_address else "",
+                    "sidlo",
+                    ico=company.ico,
+                ),
                 "den_zapisu": self._parse_date(entity.establishment),
-                "pravna_forma": entity.legal_form,
-                "oddiel": self._extract_oddiel(entity),
-                "oddiel_type": self._extract_oddiel_type(entity),
-                "vlozka_cislo": self._extract_vlozka(entity),
+                "pravna_forma": self._storable(entity.legal_form, "pravna_forma", ico=company.ico),
+                "oddiel": self._storable(self._extract_oddiel(entity), "oddiel", ico=company.ico),
+                "oddiel_type": self._storable(
+                    self._extract_oddiel_type(entity), "oddiel_type", ico=company.ico
+                ),
+                "vlozka_cislo": self._storable(
+                    self._extract_vlozka(entity), "vlozka_cislo", ico=company.ico
+                ),
                 "konanie": flat["konanie"],
                 "konanie_menom_spolocnosti": flat["konanie"],
                 "vyska_zakladneho_imania": flat["vyska_zakladneho_imania"],
@@ -67,7 +86,16 @@ class RpoSyncService:
                 "orsr_datum_vypisu": None,
                 "source_url": f"https://api.statistics.sk/rpo/v1/entity/{entity.rpo_id}",
                 "raw_sections": {},
-                "raw_payload": {"structured": structured, "source": "rpo", "rpo_id": entity.rpo_id},
+                "raw_payload": {
+                    "structured": structured,
+                    "source": "rpo",
+                    "rpo_id": entity.rpo_id,
+                    # Kept whole because it is what `oddiel` / `oddiel_type` /
+                    # `vlozka_cislo` are *parsed* from, and parsing is lossy: a
+                    # registration number that does not fit its column is
+                    # refused below, and this is then the only place it exists.
+                    "source_register": self._source_register_payload(entity),
+                },
                 "fetch_ok": True,
                 "last_error": "",
             },
@@ -267,10 +295,58 @@ class RpoSyncService:
         if person.valid_from:
             result["vznik_funkcie"] = person.valid_from
 
-        if person.identifier and person.identifier != "Neuvedené":
+        if person.identifier and person.identifier != NOT_STATED:
             result["person_ico"] = person.identifier
 
         return result
+
+    @staticmethod
+    def _storable(value: Optional[str], field: str, *, ico: str = "") -> str:
+        """Map a source value onto a column -- or refuse it, never truncate.
+
+        Two ways a source value must not be stored verbatim:
+
+        * it is `NOT_STATED`, which states an absence and therefore has to
+          *become* one. This is the whole defect: the sentinel is truthy, so
+          every `or fallback` and every `if not value` guard in this module
+          read it as data;
+        * it does not fit the column. Truncating would store a string nobody
+          wrote, and would do it silently -- the row would look complete.
+          Refusing leaves the column empty and this warning leaves a trace.
+
+        The width comes from the model rather than from a literal here, so the
+        guard cannot drift away from the column it is guarding.
+        """
+        if value is None:
+            return ""
+        text = str(value)
+        if not text or text == NOT_STATED:
+            return ""
+        max_length = OrsrCompanyProfile._meta.get_field(field).max_length
+        if max_length is not None and len(text) > max_length:
+            logger.warning(
+                "RPO: refusing %s for IČO %s -- %d characters do not fit "
+                "%s(%d): %r",
+                field,
+                ico or "?",
+                len(text),
+                field,
+                max_length,
+                text,
+            )
+            return ""
+        return text
+
+    @staticmethod
+    def _source_register_payload(entity: RpoEntity) -> dict:
+        sr = entity.source_register
+        if not sr:
+            return {}
+        return {
+            "register_name": sr.register_name,
+            "registration_office": sr.registration_office,
+            "registration_number": sr.registration_number,
+        }
 
     @staticmethod
     def _extract_oddiel(entity: RpoEntity) -> str:
