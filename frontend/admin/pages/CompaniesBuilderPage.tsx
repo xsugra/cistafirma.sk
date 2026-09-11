@@ -36,6 +36,11 @@ const FIELD_DEFS = [
   { value: 'financial_year', label: 'Rok financií', kind: 'number', operators: ['equals', 'gte', 'lte'] as const },
 ] as const;
 
+/** The API names conditions by key; the builder shows them by label. */
+const FIELD_LABELS: Record<string, string> = Object.fromEntries(
+  FIELD_DEFS.map(field => [field.value, field.label]),
+);
+
 type QueryParams = Record<string, string>;
 const COMPANY_PAGE_SIZE = 50;
 
@@ -65,6 +70,12 @@ export function CompaniesBuilderPage() {
   const listRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const reportRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const requestIdRef = useRef(0);
+  /**
+   * Which condition emptied the result. The API only sends this when nothing
+   * matched, so an empty array here means "no explanation available" -- either
+   * the report has not arrived yet or a page past the end was requested.
+   */
+  const zeroDiagnosis = report?.zero_diagnosis ?? [];
 
   const queryParams = useMemo(() => {
     const params: QueryParams = {};
@@ -380,7 +391,32 @@ export function CompaniesBuilderPage() {
               {loading ? (
                 <tr><td colSpan={8} className="text-center py-12 text-slate-400">Načítavam...</td></tr>
               ) : companies.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-400">Žiadne výsledky</td></tr>
+                <tr>
+                  <td colSpan={8} className="px-4 py-12 text-center">
+                    <p className="text-slate-400">Žiadne výsledky</p>
+                    {zeroDiagnosis.length > 0 ? (
+                      <div className="mx-auto mt-4 max-w-2xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-left dark:border-amber-900/50 dark:bg-amber-900/20">
+                        <p className="text-sm text-amber-900 dark:text-amber-300">
+                          Filtru nezodpovedá ani jedna firma. Podmienky sú zoradené
+                          podľa toho, koľko firiem by zostalo bez nich:
+                        </p>
+                        <ul className="mt-2 space-y-1 text-sm text-amber-800 dark:text-amber-400">
+                          {zeroDiagnosis.map(entry => (
+                            <li key={entry.condition}>
+                              {FIELD_LABELS[entry.condition] ?? entry.condition} ={' '}
+                              <span className="font-mono">{entry.value}</span> — bez tejto
+                              podmienky {formatMaybeInt(entry.count_without)} firiem
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="mt-3 text-xs text-amber-700 dark:text-amber-500">
+                          Ak je aj najvyššie číslo malé, je to skôr údaj, ktorý ešte
+                          nemáme naimportovaný, než chyba filtra.
+                        </p>
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
               ) : companies.map(company => (
                 <tr key={company.id} className="border-b border-slate-100 dark:border-slate-700/50">
                   <td className="px-4 py-3 font-mono text-xs text-blue-600 dark:text-blue-400">{company.ico}</td>

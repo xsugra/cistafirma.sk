@@ -178,6 +178,62 @@ class AdminCompanyViewSet(viewsets.ModelViewSet):
             normalized[key] = str(value)
         return normalized
 
+    def _effective_filter_params(self, request):
+        """The filters actually applied: the request's own, plus the preset's.
+
+        Pulled out of `report()` so the empty-result diagnosis below sees the
+        same set the report was built from -- a preset's conditions are merged
+        into the params here and nowhere else, and a diagnosis that missed them
+        would name the wrong condition.
+        """
+        params = request.query_params.copy()
+        preset_key = request.query_params.get("preset")
+        if preset_key:
+            preset = self.filter_service.get_preset(preset_key)
+            if preset:
+                params.update(preset.get("filters", {}))
+        return params
+
+    def _zero_diagnosis(self, filter_params):
+        """Name the conditions responsible for an empty result.
+
+        An empty table is indistinguishable from a broken filter, and that is
+        not hypothetical here: the preset "IT firmy v Trnave bez dlhov" returned
+        nothing for months because it required financial statements we had never
+        imported, and no screen could say so -- the operator had to have it
+        dug out by analysis. This drops one condition at a time and reports how
+        many companies would remain without it, so the condition to loosen is
+        named rather than guessed at.
+
+        Counted over a bare `Company` queryset, not `_listing_queryset()`: the
+        listing carries a dozen subquery annotations for the table columns, and
+        paying for them once per condition would make an empty result the
+        slowest request in the admin. The filter service answers the same way
+        on both querysets -- `SyncStateBranchTests` pins that.
+
+        Only called when nothing matched, so the ordinary path pays nothing.
+        """
+        diagnoses = []
+        for key in sorted(filter_params):
+            if key in self.REPORT_CACHE_CONTROL_PARAMS:
+                continue
+            if not str(filter_params.get(key) or "").strip():
+                continue
+            relaxed = filter_params.copy()
+            del relaxed[key]
+            remaining = self.filter_service.apply(Company.objects.all(), relaxed).count()
+            if remaining:
+                diagnoses.append(
+                    {
+                        "condition": key,
+                        "value": str(filter_params.get(key)),
+                        "count_without": remaining,
+                    }
+                )
+        # Most exclusions first: the condition whose removal restores the most
+        # companies is the one the operator should look at.
+        return sorted(diagnoses, key=lambda item: item["count_without"], reverse=True)
+
     def _report_cache_key(self, request, mode="full", filters=None):
         """Build an opaque key scoped to the effective filters and staff user."""
         user = getattr(request, "user", None)
@@ -270,12 +326,7 @@ class AdminCompanyViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def report(self, request):
         export_format = request.query_params.get("export")
-        filter_params = request.query_params.copy()
-        preset_key = request.query_params.get("preset")
-        if preset_key:
-            preset = self.filter_service.get_preset(preset_key)
-            if preset:
-                filter_params.update(preset.get("filters", {}))
+        filter_params = self._effective_filter_params(request)
         queryset = self.filter_service.apply(self._listing_queryset(), filter_params)
         if export_format in {"csv", "xlsx"}:
             return self._export_queryset(queryset, export_format)
@@ -360,6 +411,14 @@ class AdminCompanyViewSet(viewsets.ModelViewSet):
             counts["blocked_count"] = queryset.filter(is_blocked_flag=True).count()
         summary = {
             "count": counts.get("count") or 0,
+            # Only when nothing matched, so the ordinary path pays nothing --
+            # and this is the one case where the operator cannot tell an empty
+            # dataset from a filter that asks for one.
+            **(
+                {"zero_diagnosis": self._zero_diagnosis(self._effective_filter_params(request))}
+                if not (counts.get("count") or 0)
+                else {}
+            ),
             "active_count": counts.get("active_count") or 0,
             "inactive_count": counts.get("inactive_count") or 0,
             "debt_free_count": counts.get("debt_free_count") or 0,

@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -263,6 +264,71 @@ class AdminCompanyReportModeTests(TestCase):
         self.assertTrue(view._is_light_mode(_Request({})))
         self.assertTrue(view._is_light_mode(_Request({"light": "1"})))
         self.assertFalse(view._is_light_mode(_Request({"mode": "full"})))
+
+
+class ZeroResultDiagnosisTests(TestCase):
+    """An empty table has to say which condition emptied it.
+
+    The preset behind the reported symptom returned nothing for months and no
+    screen could say why -- an empty result and a filter over a dataset we do
+    not hold look exactly alike. The report now names the condition whose
+    removal brings rows back, and only when the result is empty, so nothing
+    pays for it on the ordinary path.
+    """
+
+    def setUp(self):
+        self.service = CompanyFilterService()
+        self.view = AdminCompanyViewSet()
+        # Both match the Trnava IT preset in every respect except that both are
+        # dissolved, so exactly one condition is responsible for the empty
+        # result -- and the preset's own keys are what the diagnosis must see.
+        for index, name in enumerate(("Alfa s.r.o.", "Beta s.r.o."), start=1):
+            Company.objects.create(
+                ruz_id=930000 + index,
+                ico=f"9300000{index}",
+                nazov_UJ=name,
+                mesto="Trnava",
+                psc="91701",
+                sk_NACE="62.01",
+                debt_vszp=Decimal("0"),
+                debt_soc_poist=Decimal("0"),
+                tax_debt=Decimal("0"),
+                datum_zrusenia=date(2020, 1, 1),
+            )
+
+    def _summary(self, query_string):
+        request = RequestFactory().get(f"/api/admin/companies/report/?{query_string}")
+        request.query_params = QueryDict(query_string)
+        filter_params = self.view._effective_filter_params(request)
+        queryset = self.service.apply(self.view._listing_queryset(), filter_params)
+        return self.view._build_aggregate_report(queryset, True, request)
+
+    def test_the_condition_that_emptied_the_result_is_named(self):
+        summary = self._summary("preset=it_trnava_no_debt")
+
+        self.assertEqual(summary["count"], 0)
+        diagnosis = summary["zero_diagnosis"]
+        self.assertEqual(
+            [item["condition"] for item in diagnosis],
+            ["active"],
+            "only `active` excludes these two; the other conditions restore none",
+        )
+        self.assertEqual(diagnosis[0]["count_without"], 2)
+
+    def test_the_preset_is_not_reported_as_a_condition(self):
+        """`preset` is a name for a set of conditions, not one of them."""
+        conditions = [
+            item["condition"] for item in self._summary("preset=it_trnava_no_debt")["zero_diagnosis"]
+        ]
+
+        self.assertNotIn("preset", conditions)
+        self.assertNotIn("mode", conditions)
+
+    def test_a_result_that_is_not_empty_carries_no_diagnosis(self):
+        summary = self._summary("mesto=Trnava")
+
+        self.assertEqual(summary["count"], 2)
+        self.assertNotIn("zero_diagnosis", summary)
 
 
 @override_settings(

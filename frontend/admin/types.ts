@@ -167,6 +167,18 @@ export interface CompanyReport {
   filters_applied: Record<string, any>;
   presets: CompanyPreset[];
   top_companies: AdminCompany[];
+  /**
+   * Present only when `count` is 0: which condition is responsible for the
+   * empty result, most-excluding first. `count_without` is how many companies
+   * would remain if that one condition were dropped.
+   */
+  zero_diagnosis?: ZeroDiagnosisEntry[];
+}
+
+export interface ZeroDiagnosisEntry {
+  condition: string;
+  value: string;
+  count_without: number;
 }
 
 export interface AdminUser {
