@@ -104,7 +104,11 @@ graphify-out/
 # AI tooling: commit shared guidance, ignore machine-local state
 # CLAUDE.md and AGENTS.md are intentionally tracked (AI onboarding).
 # .claude/settings.json is tracked (project guardrails); settings.local.json is per-machine.
+# .claude/agents/ is tracked too: project-scoped subagents carry this repo's
+# invariants and traps, so they are onboarding like CLAUDE.md. Everything else
+# under .claude/ stays machine-local.
 .claude/*
 !.claude/settings.json
+!.claude/agents/
 .github/copilot-instructions.md
 code-reviews.md
