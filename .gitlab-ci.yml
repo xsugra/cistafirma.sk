@@ -141,7 +141,12 @@ backend_tests:
   tags: [macos]
   image: docker:27.1.2
   services:
-    - docker:27.1.2-dind
+    # Registry bezi na HTTP (gitlab.home.arpa:5050). docker CLI deleguje login
+    # aj push na daemona — v CI je tym daedom DinD, nie Docker na hostiteli.
+    # Bez tohto flagu kazdy login/push skonci na
+    #   http: server gave HTTP response to HTTPS client
+    - name: docker:27.1.2-dind
+      command: ["--insecure-registry=gitlab.home.arpa:5050"]
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
 
