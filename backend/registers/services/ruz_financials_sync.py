@@ -180,24 +180,29 @@ class RuzFinancialsSyncService:
             )
 
         upserts = 0
+        skipped = 0
         found_ifrs = False
         for statement_id in statement_ids[:max_statements]:
             statement = self.api.get_financial_statement_details(statement_id)
             if not statement:
+                skipped += 1
                 continue
 
             year = self._extract_year(statement)
             if not year:
+                skipped += 1
                 continue
 
             report_ids = statement.get("idUctovnychVykazov", []) or []
             if not report_ids:
+                skipped += 1
                 continue
 
             financials, is_ifrs = self._extract_financials_from_reports(report_ids)
             if is_ifrs:
                 found_ifrs = True
             if financials.get("revenue") is None and financials.get("profit") is None:
+                skipped += 1
                 continue
 
             CompanyFinancialResult.objects.update_or_create(
@@ -223,7 +228,19 @@ class RuzFinancialsSyncService:
                 detail=f"{len(statement_ids)} statement(s) present, none readable",
             )
 
-        return FinancialsSyncResult(FinancialsOutcome.RECORDED, rows=upserts)
+        # A statement we could not read is worth naming even when others were
+        # fine. `RECORDED` alone cannot show the difference between "all 13
+        # statements read" and "12 of 13 did, and the parser is drifting" --
+        # and the second is the early warning that the first is about to stop
+        # being true. The count is the signal; the trend across runs is the
+        # alarm. Measured 2026-09-11 on the pilot: 12-13 statements per company,
+        # all read.
+        readable = f"{upserts} of {len(statement_ids)} statement(s) readable"
+        return FinancialsSyncResult(
+            FinancialsOutcome.RECORDED,
+            rows=upserts,
+            detail=readable if skipped else "",
+        )
 
     def _extract_year(self, statement: Dict) -> Optional[int]:
         for key in ("obdobieDo", "obdobieOd"):

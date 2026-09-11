@@ -188,6 +188,36 @@ class FinancialsOutcomeTests(TestCase):
 
         self.assertEqual(service.sync_company(self.company), 1)
 
+    def test_a_partly_readable_company_says_how_much_it_could_read(self):
+        """`RECORDED` alone cannot show a parser starting to drift.
+
+        All thirteen statements read and twelve of thirteen read both report
+        `RECORDED` with rows > 0, and only the second one is the early warning
+        that the first is about to stop being true. The count belongs in the
+        result so a run can see the trend before it becomes a total failure.
+        """
+        result = self._service(
+            detail={"idUctovnychZavierok": [77, 79]},
+            statements={
+                77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88], "idSablony": 1},
+                # 79 is answered with nothing, as an unreadable statement is.
+            },
+            reports={
+                88: {"idSablony": 1, "obsah": {"tabulky": [{"nazov": "Vynosy", "data": ["1000"]}]}}
+            },
+            templates={1: {"tabulky": []}},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.RECORDED)
+        self.assertEqual(result.rows, 1)
+        self.assertIn("1 of 2", result.detail)
+
+    def test_a_fully_readable_company_does_not_carry_a_skipped_count(self):
+        """No silent branch is being reported, so the detail stays empty."""
+        result = self._service(**self._readable()).sync_company_detailed(self.company)
+
+        self.assertEqual(result.detail, "")
+
 
 class SyncCompanyAndRecordTests(TestCase):
     """The single outcome -> CompanySyncStatus rule."""
