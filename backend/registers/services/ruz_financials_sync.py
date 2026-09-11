@@ -107,6 +107,22 @@ PL_EXTENDED_LABELS = {
 
 _template_cache: Dict[int, Dict] = {}
 
+# The templates name the two accounting periods in one of two vocabularies,
+# both read live from RUZ on 2026-09-12: the words ("Bezprostredne predchádzajúce
+# účtovné obdobie", šablóny 687 and 699) or the form's own placeholder pair
+# ("20xx" against "20xx-1", šablóny 690, 696 and 727). Whichever appears, the
+# cell carrying it marks where the current period's columns stop.
+_PREVIOUS_PERIOD_MARKERS = ("predchadzajuc", "preceding")
+_PREVIOUS_PERIOD_PLACEHOLDER = re.compile(r"(?:20xx|\d{4})-1")
+
+# Inside the current period's block, the column the rest of the app means is the
+# aggregate one: "Netto" on the balance sheet (a gross value, or the correction
+# column beside it, does not satisfy assets = equity + liabilities) and "Spolu"
+# on the cost and revenue tables (against "Hlavná činnosť" and "Podnikateľská
+# činnosť"). Where neither is present the block's last column is the aggregate,
+# which is where every measured template puts it.
+_PERIOD_TOTAL_MARKERS = ("netto", "spolu")
+
 
 class RuzFinancialsSyncService:
     """Synchronizuje hospodarske vysledky firmy z RUZ API (uctovne zavierky/vykazy)."""
@@ -269,13 +285,31 @@ class RuzFinancialsSyncService:
                     if value is not None:
                         result[key] = self._pick_better(result.get(key), value)
 
-            for table in tables:
+            for idx, table in enumerate(tables):
                 name = self._normalize_text(self._table_name(table))
                 if not name:
                     continue
 
-                total = self._extract_table_total(table)
+                total = self._extract_table_total(
+                    table,
+                    template_tables[idx] if idx < len(template_tables) else None,
+                )
                 if total is None:
+                    # Only a table whose *name* promises one of these figures is
+                    # worth a word when it delivers nothing -- the others are
+                    # simply not totals. Silence here would be the same defect
+                    # in miniature: a company quietly losing its revenue with
+                    # nothing in the log to count.
+                    if any(
+                        k in name
+                        for k in self.REVENUE_KEYS + self.COST_KEYS + self.PROFIT_KEYS
+                    ):
+                        logger.warning(
+                            "RUZ financials: table %r names a revenue, cost or "
+                            "profit figure, but no total could be read in the "
+                            "current period's column; contributing nothing",
+                            self._table_name(table),
+                        )
                     continue
 
                 if any(k in name for k in self.REVENUE_KEYS):
@@ -289,6 +323,118 @@ class RuzFinancialsSyncService:
             result["profit"] = result["revenue"] - result["costs"]
 
         return result, is_ifrs
+
+    def _data_column_shape(
+        self, template_table: Dict, rows: List[Dict], data: List
+    ) -> Optional[tuple]:
+        """`(columns per row, index of the current period's column)`, or None.
+
+        The width is arithmetic here, not an inference. `data` is the values of
+        the table flattened row by row, so it is `rows x columns` long, and the
+        template declares `pocetDatovychStlpcov`. Measured 2026-09-12 across 38
+        tables of 25 companies: the two agree exactly every time, which is what
+        makes the old `len(data) >= len(rows) * 2` test unnecessary as well as
+        unsafe -- it held for the four-column asset side too, and reading it as
+        "two columns" is the defect this replaces.
+
+        A template that omits the declared width still gives the shape when the
+        values divide evenly by the row count; that division is a fact about the
+        data, not a guess about it. When neither holds, or when the current
+        period cannot be located in the header, the answer is None: the caller
+        refuses the table rather than picking a column.
+        """
+        cols = template_table.get("pocetDatovychStlpcov")
+        if not isinstance(cols, int) or cols < 1:
+            if not rows or len(data) % len(rows):
+                return None
+            cols = len(data) // len(rows)
+
+        if len(data) < len(rows) * cols:
+            return None
+
+        current = self._current_period_column(template_table, cols)
+        if current is None:
+            return None
+        return cols, current
+
+    def _current_period_column(self, template_table: Dict, cols: int) -> Optional[int]:
+        """Which of a row's data columns holds the current period, 0-based.
+
+        The current period is always the first block of data columns -- that is
+        the form's own layout, in every template measured -- and the header says
+        where the block ends, because the cell naming the *preceding* period is
+        the first column after it. That single fact covers all three shapes seen
+        so far: two plain columns (šablóna 699 "Strana pasív"), four carrying a
+        gross/correction/net figure (šablóna 699 "Strana aktív"), and the
+        cost-and-revenue tables whose three columns are main activity, business
+        activity and their sum (šablóny 696 and 727).
+
+        A block one column wide has nothing to choose between. A wider one does,
+        and the choice matters: on the asset side, "Brutto" and "Korekcia" are
+        both the current period and both wrong as a balance-sheet total.
+
+        None means the header does not say, including the case where the
+        preceding period comes first -- an order this code has never seen and
+        will not assume away.
+        """
+        cells = template_table.get("hlavicka") or []
+        columns = [
+            cell.get("stlpec") for cell in cells if isinstance(cell.get("stlpec"), int)
+        ]
+        if not columns:
+            # No header at all to disagree with: a one-column table can only
+            # mean one thing. Anything wider is left to the caller's refusal.
+            return 0 if cols == 1 else None
+
+        first = max(columns) - cols + 1
+
+        preceding = [
+            cell["stlpec"]
+            for cell in cells
+            if isinstance(cell.get("stlpec"), int)
+            and self._names_previous_period(self._header_text(cell))
+        ]
+        if not preceding:
+            return 0 if cols == 1 else None
+
+        block = min(preceding) - first
+        if not 0 < block <= cols:
+            return None
+
+        # The deepest header row at each data column is the most specific label
+        # for it ("Netto 2" rather than the period name spanning over it).
+        deepest: Dict[int, tuple] = {}
+        for cell in cells:
+            column = cell.get("stlpec")
+            if not isinstance(column, int):
+                continue
+            rank = cell.get("riadok")
+            rank = rank if isinstance(rank, int) else 0
+            if column not in deepest or rank > deepest[column][0]:
+                deepest[column] = (rank, self._header_text(cell))
+
+        for index in range(block - 1, -1, -1):
+            label = deepest.get(first + index, (0, ""))[1]
+            if any(marker in label for marker in _PERIOD_TOTAL_MARKERS):
+                return index
+        return block - 1
+
+    def _names_previous_period(self, text: str) -> bool:
+        """Whether a header label names the period *before* the current one."""
+        if any(marker in text for marker in _PREVIOUS_PERIOD_MARKERS):
+            return True
+        # Per word, because `_header_text` hands over both languages at once and
+        # a cell carrying "20xx-1" in each would otherwise never match whole.
+        return any(
+            _PREVIOUS_PERIOD_PLACEHOLDER.fullmatch(word) for word in text.split()
+        )
+
+    def _header_text(self, cell: Dict) -> str:
+        """A header cell's label in either language, normalised for matching."""
+        text = cell.get("text")
+        if isinstance(text, dict):
+            text = " ".join(str(text.get(key) or "") for key in ("sk", "en"))
+        return self._normalize_text(text)
 
     def _get_template_tables(self, template_id: Optional[int]) -> List[Dict]:
         if not template_id:
@@ -309,10 +455,35 @@ class RuzFinancialsSyncService:
         if not data or not rows:
             return extracted
 
-        if len(data) >= len(rows) * 2:
-            get_row_value = lambda idx: self._to_decimal(data[idx * 2])
-        else:
-            get_row_value = lambda idx: self._to_decimal(data[idx]) if idx < len(data) else None
+        shape = self._data_column_shape(template_table, rows, data)
+        if shape is None:
+            # Refusing is the point, not a failure to handle. The width used to
+            # be guessed from `len(data) >= len(rows) * 2`, which for the
+            # four-column asset side is true and wrong at once: template row i
+            # read sheet row i // 2, so `assets_total` held the GROSS
+            # current-period assets of a different line and every asset line
+            # below it was another row's value. A number that looks right and
+            # is not is worse than an absent one, so an unreadable template
+            # contributes nothing rather than something invented -- and says so
+            # out loud, because a refusal nobody can count is its own silence.
+            logger.warning(
+                "RUZ financials: no readable data-column shape for table %r "
+                "(cols=%s, rows=%s, values=%s); refusing to guess which column "
+                "is the current period",
+                self._table_name(template_table),
+                template_table.get("pocetDatovychStlpcov"),
+                len(rows),
+                len(data),
+            )
+            return extracted
+
+        cols, current = shape
+
+        def get_row_value(idx):
+            position = idx * cols + current
+            if position >= len(data):
+                return None
+            return self._to_decimal(data[position])
 
         table_name = self._normalize_text(
             self._table_name(template_table) or self._table_name(table)
@@ -428,16 +599,65 @@ class RuzFinancialsSyncService:
             return name.get("sk") or name.get("en") or ""
         return str(name or "")
 
-    def _extract_table_total(self, table: Dict) -> Optional[Decimal]:
+    def _extract_table_total(
+        self, table: Dict, template_table: Optional[Dict] = None
+    ) -> Optional[Decimal]:
+        """The last row that carries a figure, in the current period's column.
+
+        This is the other half of the same defect. It used to return
+        `numbers[-1]` -- the last numeric value anywhere in the flattened table,
+        in whatever column it happened to sit. The tables it serves are the ones
+        whose *name* matches the revenue, cost and profit keys: "Výnosy" and
+        "Náklady", four data columns wide (šablóny 696 and 727), where the
+        current period occupies the first three and the fourth repeats the
+        previous period. Since those tables end in empty "Kontrolné číslo súčet"
+        rows, the last value found was the last filled data row's fourth column
+        -- last year's figure, read as this year's. For the companies that use
+        these templates those two tables are the *only* source of `revenue` and
+        `costs`, so the wrong number had nothing beside it to contradict it.
+
+        Reading down from the bottom for the last non-empty value *in the
+        current period's column* keeps the original intent -- the table's own
+        total row, which is the last filled one -- and drops the part that made
+        the column arbitrary.
+
+        A table with **no template at all** keeps the old reading, deliberately.
+        That is a different population from the one that was measured -- every
+        table in the 38-table sample had its template, so nothing here says how
+        wide a template-less table is -- and refusing would move a documented
+        outcome as a side effect: a statement whose every table is unreadable
+        contributes no field, so it counts as zero rows, and a template fetch
+        that failed would arrive as "this company has no statements". That is
+        the conflation `UNREACHABLE` was introduced to undo. Left as it was and
+        reported separately rather than decided quietly.
+        """
         data = table.get("data") or []
-        numbers = []
-        for value in data:
-            parsed = self._to_decimal(value)
-            if parsed is not None:
-                numbers.append(parsed)
-        if not numbers:
+
+        if not template_table:
+            numbers = [
+                parsed
+                for parsed in (self._to_decimal(value) for value in data)
+                if parsed is not None
+            ]
+            return numbers[-1] if numbers else None
+
+        rows = template_table.get("riadky") or []
+        if not rows:
             return None
-        return numbers[-1]
+
+        shape = self._data_column_shape(template_table, rows, data)
+        if shape is None:
+            return None
+
+        cols, current = shape
+        for idx in range(len(rows) - 1, -1, -1):
+            position = idx * cols + current
+            if position >= len(data):
+                continue
+            value = self._to_decimal(data[position])
+            if value is not None:
+                return value
+        return None
 
     def _to_decimal(self, value) -> Optional[Decimal]:
         if value is None:
