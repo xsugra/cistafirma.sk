@@ -132,11 +132,29 @@ indistinguishable from a genuine "not found" at this point. A network failure
 therefore ends the loop, and the code below it then runs `progress.complete()`
 and `complete_job(job)` — marking the whole sync `completed` on a truncated run.
 
-This is **latent, not demonstrated**: the fail-open line `No more company IDs to
-fetch.` occurs **0 times** in the retained worker logs, while the legitimate
-`Reached the end of the list.` occurs once. It is recorded here as a known,
-unfixed risk rather than a closed one — one transient failure at the wrong
-moment would silently truncate a run and store it as a success.
+This was first recorded here as **latent, not demonstrated**, on the strength of
+the fail-open line occurring **0 times** in the retained worker logs while the
+legitimate `Reached the end of the list.` occurred once. That window was about a
+day long, so it was evidence about the window and not about the path.
+
+**On 2026-09-11 it fired twice.** The 00:22 and 06:22 beat runs — jobs #13 and
+#14 — both failed to resolve `www.registeruz.sk`, exhausted their retries,
+printed `No more company IDs to fetch.`, and were stored as `completed` with
+`processed_items=0` and a final `Errors: 0`. Both requested the *same* page
+(`pokracovat-za-id=2624307`, the stored cursor, in the failing URL of both), so
+the cursor did not move and no company was fetched at all.
+
+**No control catches it.** `sync_health` prints a run's counters and explicitly
+declines to judge them — "how many items a job should process depends on the
+run, so no threshold would be honest" — and the beat-scheduled-run control
+judges a job type whose newest attempt ended `failed`, while these ended
+`completed`. A transport failure that ends a run therefore passes every control
+that reads sync jobs, and the row it leaves is indistinguishable from a run that
+found nothing new.
+
+It stays recorded and unfixed: making the two cases distinguishable changes what
+the import loop treats as an ending, which is a scope decision rather than a
+closed bug.
 
 ### The incremental cursor only ever moves forward
 
