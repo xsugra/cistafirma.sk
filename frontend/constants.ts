@@ -8,6 +8,7 @@ export const ENABLE_MOCK_DATA = false;
 export const ROUTES = {
   HOME: '/',
   MONITORING: '/monitoring',
+  COMPANY: '/firma',
   BLOG: '/blog',
   ABOUT: '/about',
   PRIVACY: '/privacy',
@@ -22,3 +23,13 @@ export const ROUTES = {
 } as const;
 
 export type RouteKey = keyof typeof ROUTES;
+
+/**
+ * `/firma/:ico` shows the overview, `/firma/:ico/:sekcia` a named section.
+ *
+ * Both halves of the URL are built here rather than at each call site, because
+ * a link written by hand in one place drifts from the route declared in
+ * `App.tsx` and the drift is invisible until someone clicks it.
+ */
+export const companyPath = (ico: string, section?: string): string =>
+  section ? `${ROUTES.COMPANY}/${ico}/${section}` : `${ROUTES.COMPANY}/${ico}`;

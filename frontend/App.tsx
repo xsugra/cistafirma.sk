@@ -7,6 +7,7 @@ import { Footer } from './components/Footer';
 import { VantaBackground } from './components/VantaBackground';
 import { Home } from './pages/Home';
 import { Monitoring } from './pages/Monitoring';
+import { Company } from './pages/Company';
 import { Blog } from './pages/Blog';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -121,6 +122,11 @@ const AppContent: React.FC = () => {
             <Routes>
               <Route path={ROUTES.HOME} element={<Home />} />
               <Route path={ROUTES.MONITORING} element={<Monitoring />} />
+              {/* `/firma` alone has no firm in it; send it to the search that
+                  knows how to find one. */}
+              <Route path={ROUTES.COMPANY} element={<Navigate to={ROUTES.MONITORING} replace />} />
+              <Route path={`${ROUTES.COMPANY}/:ico`} element={<Company />} />
+              <Route path={`${ROUTES.COMPANY}/:ico/:sekcia`} element={<Company />} />
               <Route path={ROUTES.BLOG} element={<Blog />} />
               <Route path={ROUTES.ABOUT} element={<About />} />
               <Route path={ROUTES.PRIVACY} element={<Privacy />} />

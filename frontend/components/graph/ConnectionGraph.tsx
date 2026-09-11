@@ -7,7 +7,7 @@ import { GraphTooltip } from './GraphTooltip';
 import { GraphLegend } from './GraphLegend';
 import { useGraphData } from './useGraphData';
 import type { GraphNode } from './graphTypes';
-import { ROUTES } from '../../constants';
+import { companyPath } from '../../constants';
 
 interface ConnectionGraphProps {
   ico: string;
@@ -91,7 +91,7 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
 
   const handleNodeDoubleClick = useCallback((node: GraphNode) => {
     if (node.type === 'company' && node.ico) {
-      navigate(`${ROUTES.MONITORING}?ico=${encodeURIComponent(node.ico)}`);
+      navigate(companyPath(node.ico));
     }
   }, [navigate]);
 
