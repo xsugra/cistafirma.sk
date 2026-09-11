@@ -200,13 +200,18 @@ build_frontend_image:
   script:
     - sh scripts/k8s/deploy.sh
 
-# DEV deploy on dev branch (auto)
+# DEV deploy on dev branch — ZATIAL VYPNUTY.
+# Klaster neexistuje (na sam-lenovo nie je kubectl ani ~/.kube, minikube na
+# Macu nebezi) a KUBE_CONFIG nie je definovana. Tento job sa spustal
+# AUTOMATICKY na branchi dev, takze kazdy push na dev robil cervenu pipeline.
+# Ked budes mat klaster, vrat sem povodne pravidlo:
+#     - if: '$CI_COMMIT_BRANCH == "dev"'
 deploy_dev:
   extends: .deploy_template
   environment:
     name: dev
   rules:
-    - if: '$CI_COMMIT_BRANCH == "dev"'
+    - when: never
   variables:
     DEPLOY_ENV: dev
     DEPLOY_IMAGE_TAG: "$IMAGE_TAG"
