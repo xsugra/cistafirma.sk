@@ -395,8 +395,14 @@ Prístup obmedzený na `is_staff` používateľov. Vyžaduje JWT.
 
 **Report režimy:**
 
-- `mode=full` (default): plný report vrátane súm (`revenue_sum`, `profit_sum`, debt sums), priemerov a `top_companies`.
-- `mode=light` alebo `light=1`: rýchly report bez ťažkých agregácií; vracia základné počty a ostatné sumy/priemery sú `0`.
+- `mode=light` (**default**): rýchly report bez ťažkých agregácií; vracia základné počty a ostatné sumy/priemery sú `0`.
+- `mode=full`: plný report vrátane súm (`revenue_sum`, `profit_sum`, debt sums), priemerov a `top_companies`.
+
+Svetlý režim je predvolený zámerne — `_is_light_mode`
+(`adminapi/views/companies.py`) vráti `True` pre všetko okrem `mode=full`, aby
+zostal zoznamový endpoint použiteľný nad veľkými dátami. `light=1` je len
+ďalší spôsob, ako si vyžiadať to isté; `mode=full` je jediná hodnota, ktorá
+agregácie naozaj spustí.
 
 ### Používatelia
 

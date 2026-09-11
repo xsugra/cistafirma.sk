@@ -524,6 +524,14 @@ recorded as **successes**. Recording "checked and empty" as a success is what
 makes it countable — and it is why `CompanySyncStatus` now distinguishes the
 two populations that used to share one silent state.
 
+**A partly readable company now says so.** Inside `RECORDED`, a company whose
+thirteen statements all parsed and a company whose twelve of thirteen parsed
+were the same value: `rows > 0`. Only the second is the early warning that the
+first is about to stop being true, so the result carries `N of M statement(s)
+readable` in its `detail` whenever any statement was skipped. The count is on
+the result rather than in a log line because the trend is what matters and a
+log line cannot be counted.
+
 The transport failure deliberately does **not** propagate.
 `orchestrate_full_company_sync` builds its `group(...)` with
 `update_insurance_debt` as the chord callback, so an exception here would stop
@@ -623,3 +631,88 @@ microsecond.
 in `fetch_ruz_financials` batch mode and in the legacy dashboard's manual
 trigger. Both are operator-bounded and print what they chose, so they fail
 visibly rather than silently; they are recorded here rather than changed.
+
+## One filter, two answers, and the wrong one on screen
+
+`sync_state=healthy` had two branches, and they disagreed about the largest
+population in the table.
+
+`_apply_sync_state` reads the annotation `sync_failures` when the queryset
+carries it — the admin listing does, every other caller does not. The annotated
+branch was:
+
+```python
+return queryset.filter(sync_failures=0)
+```
+
+`sync_failures` is a `Subquery`, so a company with no `CompanySyncStatus` rows
+at all gets **NULL**, not 0 — and `NULL = 0` is NULL, which Django reads as
+false. Every company that had never been synced by a source that writes status
+was therefore silently dropped. Measured 2026-09-11 on the same filter through
+the two paths:
+
+| Path | `clean_and_healthy` |
+|---|---|
+| Unannotated (every other caller) | 275 912 |
+| Annotated (the admin listing, what the operator sees) | 11 451 |
+
+A difference of **264 461 companies**, all of it companies whose only sin was
+never having failed anything.
+
+**The replacement took two attempts, and both wrong ones were plausible.**
+
+```python
+queryset.exclude(sync_failures__gt=0)   # still 11 451
+```
+
+`NOT (NULL > 0)` is NULL too, so `exclude()` drops the row as well — the fix
+that reads as the obvious inversion of the bug reproduces it exactly. The only
+form that works names the NULL:
+
+```python
+Q(sync_failures=0) | Q(sync_failures__isnull=True)
+```
+
+which is also what the `failing` branch beneath it has always assumed, since
+`sync_failures__gt=0` treats NULL as "not failing". **Absence of a failure is
+not a failure**, and the two branches now have to agree about that.
+
+`_condition_to_q` — the filter-builder path — carried its own copy of the same
+expression and got the same fix. `SyncStateBranchTests` runs both branches
+against both values and asserts they return the same set, and it is a test
+rather than a comment because the fix is one `isnull` away from being undone by
+anyone who reads `filter(sync_failures=0)` as the natural spelling of "has no
+failures".
+
+## An empty result must say which condition emptied it
+
+The preset above returned 0 rows for months and no screen could say why. The
+report endpoint now answers that question itself, and only when it is asked by
+an empty result.
+
+When `count` is 0, `_zero_diagnosis()` drops one filter condition at a time and
+counts what remains, ordering the conditions by how many companies their
+removal restores. The conditions come from `_effective_filter_params()`, which
+is also what the report itself was built from — the preset's conditions are
+merged into the request's there and nowhere else, so a diagnosis that read
+`request.query_params` directly would have diagnosed a filter nobody ran.
+
+The counts are taken over a bare `Company` queryset rather than
+`_listing_queryset()`: the listing carries a dozen subquery annotations for its
+table columns, and paying for them once per condition would make an empty
+result the slowest request in the admin. That the filter service answers
+identically on both querysets is exactly what `SyncStateBranchTests` pins — the
+two fixes share one invariant.
+
+The builder then shows it (`frontend/admin/pages/CompaniesBuilderPage.tsx`):
+each condition by its label, its value, and how many companies would remain
+without it — plus the reading that matters, that a small number means *data we
+do not hold yet*, not *a broken filter*. That distinction is the whole finding:
+an empty table is what this defect class looks like from the outside.
+
+**Not covered.** The diagnosis only relaxes one condition at a time. A result
+emptied solely by the *combination* of two conditions restores nothing when
+either is dropped alone, so neither is named and the panel stays silent — the
+same empty screen this section is about. Pairs would cost a quadratic number of
+counts on the slowest path in the admin, so the limitation is recorded rather
+than paid for.
