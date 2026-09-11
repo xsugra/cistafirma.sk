@@ -266,7 +266,21 @@ class CompanyFilterService:
         annotation_names = annotation_names or set()
         if value == "healthy":
             if "sync_failures" in annotation_names:
-                return queryset.filter(sync_failures=0)
+                # `sync_failures` is a Subquery, so a company with no status
+                # rows at all gets NULL -- and neither `filter(sync_failures=0)`
+                # nor `exclude(sync_failures__gt=0)` is true of NULL, because
+                # SQL's `NOT (NULL > 0)` is NULL too. Both of those were tried
+                # and both silently dropped every company that had never been
+                # synced by a source that writes status; the NULL has to be
+                # named. Measured 2026-09-11 on `clean_and_healthy`: 11 451
+                # either way, against 275 912 through the `Exists` branch
+                # below -- a 264 461-company difference, all of it companies
+                # whose only sin was never having failed anything.
+                #
+                # `isnull=True` is what makes the two branches of this method
+                # agree, and it is also what the `failing` branch just beneath
+                # has always assumed: there, NULL means "not failing".
+                return queryset.filter(Q(sync_failures=0) | Q(sync_failures__isnull=True))
             # Use Exists subquery with negation instead of join
             return queryset.exclude(Exists(CompanySyncStatus.objects.filter(company_id=OuterRef("pk"), consecutive_failures__gt=0)))
         if value == "failing":
@@ -427,7 +441,9 @@ class CompanyFilterService:
         if field == "sync_state":
             if value == "healthy":
                 if "sync_failures" in annotation_names:
-                    return Q(sync_failures=0)
+                    # Same NULL trap as `_apply_sync_state` -- see the longer
+                    # note there. A company with no status rows is healthy.
+                    return Q(sync_failures=0) | Q(sync_failures__isnull=True)
                 # Fallback to Exists subquery with negation
                 return ~Q(Exists(CompanySyncStatus.objects.filter(company_id=OuterRef("pk"), consecutive_failures__gt=0)))
             if value == "failing":

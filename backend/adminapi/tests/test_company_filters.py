@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.db.models import OuterRef, Subquery
 from django.http import QueryDict
 from django.test import RequestFactory, TestCase, override_settings
 
@@ -141,6 +142,114 @@ class CompanyPresetTests(TestCase):
         matched = self.service.apply(self.base, dict(preset["filters"]))
 
         self.assertEqual(list(matched.values_list("ico", flat=True)), ["91000001"])
+
+
+class SyncStateBranchTests(TestCase):
+    """`sync_state` must not answer differently depending on how it is asked.
+
+    The filter has two branches -- one for a queryset carrying the
+    `sync_failures` annotation (the admin listing), one for a queryset that does
+    not (every other caller) -- and they disagreed about the largest population
+    in the table: a company with no `CompanySyncStatus` rows at all. Its
+    annotation is NULL, and `sync_failures = 0` is not true of NULL, so the
+    annotated branch dropped them. Measured 2026-09-11 through the two paths:
+    11 451 against 275 912 for the same filter, all of the difference being
+    companies that had simply never failed anything.
+
+    A test rather than a note, because the fix is one `isnull` away from being
+    undone by anyone who reads `filter(sync_failures=0)` as the obvious way to
+    write "has no failures" -- and the annotated path is the one the operator
+    actually sees.
+    """
+
+    def setUp(self):
+        self.service = CompanyFilterService()
+        self.never_synced = Company.objects.create(
+            ruz_id=920001, ico="92000001", nazov_UJ="Nikdy nesynchronizovana s.r.o."
+        )
+        self.clean = Company.objects.create(
+            ruz_id=920002, ico="92000002", nazov_UJ="Cista s.r.o."
+        )
+        self.failing = Company.objects.create(
+            ruz_id=920003, ico="92000003", nazov_UJ="Zlyhavajuca s.r.o."
+        )
+        CompanySyncStatus.objects.create(
+            company=self.clean,
+            source=CompanySyncStatus.SOURCE_FS,
+            consecutive_failures=0,
+        )
+        CompanySyncStatus.objects.create(
+            company=self.failing,
+            source=CompanySyncStatus.SOURCE_FS,
+            consecutive_failures=2,
+        )
+
+    def _annotated(self):
+        """The admin listing's own annotation, ordering and all."""
+        return Company.objects.annotate(
+            sync_failures=Subquery(
+                CompanySyncStatus.objects.filter(company_id=OuterRef("pk"))
+                .order_by("-consecutive_failures", "-updated_at", "-id")
+                .values("consecutive_failures")[:1]
+            )
+        )
+
+    def _ids(self, queryset):
+        return set(queryset.values_list("id", flat=True))
+
+    def test_a_company_that_was_never_synced_is_healthy(self):
+        """The whole point: absence of a failure is not a failure."""
+        params = {"sync_state": "healthy"}
+
+        for label, queryset in (
+            ("without the annotation", Company.objects.all()),
+            ("with the annotation", self._annotated()),
+        ):
+            with self.subTest(queryset=label):
+                matched = self._ids(self.service.apply(queryset, params))
+                self.assertIn(
+                    self.never_synced.id,
+                    matched,
+                    "a company with no sync status rows was called unhealthy",
+                )
+                self.assertIn(self.clean.id, matched)
+                self.assertNotIn(self.failing.id, matched)
+
+    def test_both_branches_agree_on_both_values(self):
+        for state in ("healthy", "failing"):
+            with self.subTest(sync_state=state):
+                params = {"sync_state": state}
+                self.assertEqual(
+                    self._ids(self.service.apply(Company.objects.all(), params)),
+                    self._ids(self.service.apply(self._annotated(), params)),
+                    f"the two branches disagree about sync_state={state}",
+                )
+
+    def test_the_filter_builder_path_agrees_as_well(self):
+        """It carries its own copy of the same two branches."""
+        params = {
+            "filter_builder": json.dumps(
+                {
+                    "id": "root",
+                    "type": "group",
+                    "logic": "and",
+                    "children": [
+                        {
+                            "type": "condition",
+                            "field": "sync_state",
+                            "operator": "equals",
+                            "value": "healthy",
+                        },
+                    ],
+                }
+            )
+        }
+
+        without = self._ids(self.service.apply(Company.objects.all(), params))
+        with_annotation = self._ids(self.service.apply(self._annotated(), params))
+
+        self.assertEqual(without, with_annotation)
+        self.assertIn(self.never_synced.id, without)
 
 
 class AdminCompanyReportModeTests(TestCase):
