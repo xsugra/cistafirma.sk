@@ -415,3 +415,51 @@ defines its own pair rather than importing one. That is a real defect, and it is
 a separate, larger change than the one above: unifying it means one vocabulary
 module that the API, the PDF, the admin and the notifications all read from. It
 has not been done.
+
+## A filter over data we do not hold fails silently
+
+The admin preset **IT firmy v Trnave bez dlhov** returned **0 rows**. The
+operator's question was whether the preset was misconfigured. It was not: every
+condition in it was applied exactly as written, and the honest answer was that
+the population it describes is 136 companies and the filter asked for 7
+conditions while its own description promised 5.
+
+Measured on 2026-09-11, narrowing one condition at a time:
+
+| Condition | Companies |
+|---|---|
+| active, Trnava, PSČ 917, no debts | 4 481 |
+| + NACE 62 | **136** |
+| + has an ORSR profile | 4 |
+| + has an imported financial statement | **0** |
+
+Two conditions (`has_financials`, `has_orsr`) had been added on top of the four
+the description names. Neither was broken — both were simply true of almost
+nobody. The preset was dropped from them rather than the description reworded,
+because the description is what the operator reads, and those two conditions
+described *the data we wish we had*, not the filter the preset claims to be.
+
+**The general shape is the point.** A filter that requires a dataset we do not
+hold does not error, does not warn and does not degrade — it returns an empty
+table, and an empty table is indistinguishable from "we have no such data",
+from "the filter is wrong", and from "the import is running fine but this
+company genuinely has no statement". The preset was correct for months while
+returning nothing, and the only reason it was found is that a human noticed an
+empty screen and asked.
+
+This is the same defect class as the rest of this document, one level up: the
+import failure recorded in *An unreachable registry must not read as an empty
+one* was itself invisible, and the preset was where it finally surfaced — as a
+number that was wrong in a way nothing was measuring.
+
+**Fixed 2026-09-11** in `backend/adminapi/services/company_filters.py`. The
+population behind the preset (136) is the pilot sample for the financials-import
+recovery, so the two findings are the same finding seen from two ends.
+
+`CompanyPresetTests` in `backend/adminapi/tests/test_company_filters.py` pins
+both halves: that no preset names a filter key `apply()` does not implement —
+checked against the compiled query rather than a hand-kept list of key names, so
+it holds on an empty table where every assertion about results would pass
+vacuously — and that a company with no financial statement still matches the
+preset. `profitable_it` deliberately keeps `has_financials`: its description
+promises statements, and `profit_state=profit` requires one anyway.

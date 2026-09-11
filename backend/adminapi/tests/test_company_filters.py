@@ -73,6 +73,76 @@ class CompanyFilterServicePerformanceTests(TestCase):
         self.assertNotIn('JOIN "registers_companysyncstatus"', sql)
 
 
+class CompanyPresetTests(TestCase):
+    """Presets are a promise about the data, and until now nothing checked them.
+
+    `it_trnava_no_debt` carried two conditions its own description never named
+    -- `has_financials` and `has_orsr` -- and returned 0 rows out of a
+    population of 136. Neither condition was broken; both were simply true of
+    almost nobody (0 and 4 of the 136). A preset key that no branch of `apply()`
+    reads fails the same way and just as quietly, so the first test below asks
+    the generated query rather than a hand-kept list of key names.
+    """
+
+    def setUp(self):
+        self.service = CompanyFilterService()
+        self.view = AdminCompanyViewSet()
+        self.base = self.view._listing_queryset()
+
+    def test_every_preset_key_produces_a_filter(self):
+        """A key `apply()` does not implement is dropped without a word.
+
+        This is the shape of the whole defect class: the request looks
+        well-formed, the response comes back, and the filter simply was not
+        applied. Comparing the compiled SQL is data-independent, so this holds
+        even on an empty table -- where every other assertion about a preset
+        would pass vacuously.
+
+        `self.fail` rather than `assertNotEqual`: the compiled SQL for this
+        queryset is ~150 lines of annotated column list, and an equality
+        assertion prints both copies, burying the one line that says which key
+        was ignored.
+        """
+        unfiltered = str(self.service.apply(self.base, {}).query)
+        for preset in CompanyFilterService.PRESETS:
+            for key, value in preset["filters"].items():
+                with self.subTest(preset=preset["key"], key=key):
+                    filtered = str(self.service.apply(self.base, {key: value}).query)
+                    if filtered == unfiltered:
+                        self.fail(
+                            f"preset {preset['key']!r} sets {key!r}={value!r}, but "
+                            f"applying it does not change the query -- no branch "
+                            f"of apply() reads that key, so the condition the "
+                            f"preset claims is not being applied at all."
+                        )
+
+    def test_the_preset_matches_a_company_that_has_no_statements_yet(self):
+        """The reported symptom, as a test.
+
+        An active IT company in Trnava with no debts is what this preset says it
+        looks for. It must match whether or not we happen to have imported the
+        company's financial statement -- requiring the statement made the preset
+        return nothing for months without anyone noticing.
+        """
+        Company.objects.create(
+            ruz_id=910001,
+            ico="91000001",
+            nazov_UJ="IT Trnava s.r.o.",
+            mesto="Trnava",
+            psc="91701",
+            sk_NACE="62.01",
+            debt_vszp=Decimal("0"),
+            debt_soc_poist=Decimal("0"),
+            tax_debt=Decimal("0"),
+        )
+        preset = self.service.get_preset("it_trnava_no_debt")
+        self.assertIsNotNone(preset)
+
+        matched = self.service.apply(self.base, dict(preset["filters"]))
+
+        self.assertEqual(list(matched.values_list("ico", flat=True)), ["91000001"])
+
+
 class AdminCompanyReportModeTests(TestCase):
     def test_light_mode_is_default_and_full_mode_is_explicit(self):
         view = AdminCompanyViewSet()

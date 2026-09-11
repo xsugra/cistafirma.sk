@@ -22,6 +22,19 @@ class CompanyFilterService:
 
     PRESETS = [
         {
+            # This preset asked for `has_financials` and `has_orsr` on top of the
+            # four conditions its own description names, and returned nothing at
+            # all: 0 of the 136 matching companies had a financial statement and
+            # only 4 had an ORSR profile. Both were dropped rather than the
+            # description reworded, because the description is what the operator
+            # reads and the two conditions were a description of the *data we
+            # wish we had*, not of the filter the preset claims to be. Measured
+            # 2026-09-11: 0 results before, 136 after.
+            #
+            # The general shape is worth keeping in view: a filter that requires
+            # a dataset we do not hold fails *silently* -- an empty table is
+            # indistinguishable from "we have no such data", and the operator has
+            # no way to tell which. See docs/SOURCE_DATA_INTEGRITY.md.
             "key": "it_trnava_no_debt",
             "name": "IT firmy v Trnave bez dlhov",
             "description": "Aktívne firmy v Trnave, s IT NACE a bez dlhov.",
@@ -30,8 +43,6 @@ class CompanyFilterService:
                 "psc": "917",
                 "active": "1",
                 "debt_state": "no_debt",
-                "has_financials": "1",
-                "has_orsr": "1",
                 "sk_nace": "62",
             },
         },
