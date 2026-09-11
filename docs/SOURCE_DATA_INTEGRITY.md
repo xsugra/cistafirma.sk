@@ -895,6 +895,34 @@ raises `StringDataTruncation`. In the last 24 h that was **64** permanently
 failed tasks on `varying(8)` and **6** on `varying(50)`, where the same
 unvalidated mapping writes `_extract_oddiel` into a `varchar(50)`.
 
+**How far it reaches — bounded by measurement, because a rate would have misled
+in both directions.** A live 20-company batch drew 12 of its 20 from this cause,
+but that batch is the *head* of an `order_by('id')` queue, where the affected
+entities cluster; the first full 500-company beat batch that followed recorded 12
+of 97 attempts (**~12%**). Neither number is the population. The population is
+this: the placeholder tracks the legal form. Of the 2 926 `801` (obec/mesto)
+companies in the ORSR-eligible population, 2 839 already hold a profile and 87 do
+not — and **6 of 6 sampled from those 87** returned `entity.ico == 'Neuvedené'`,
+so for them the upsert can never succeed **and never has**. A 6-company sample of
+the 2 483 profile-less `721` (church communities) returned **0 of 6**, so their
+missing profiles are ordinary new ground rather than this defect.
+
+The honest bound is therefore **≈ the 87 municipalities with no profile**, plus
+isolated cases elsewhere (one `112` s.r.o. is among the 12 measured) — not the
+thousands a 12% rate would imply. It is a real ceiling on ORSR coverage for a
+known, enumerable set of companies, and every one of them can be named by
+querying for a failing `orsr` status row whose `last_error` begins `DataError`.
+
+**The gate cannot see this, by design.** `source_health` fails a source when its
+parser recognises *nothing* (`succeeded == 0`), not when some fraction fails — so
+ORSR at ~86% success reads `OK` while 87 companies can never be synced at all.
+This is not a gap to close by inventing a ratio threshold (`how many items a
+source should succeed on depends on the source, so no threshold would be
+honest`, as `sync_job_health` already argues for counters). It is why the status
+rows this increment added matter: the affected companies are reachable through
+`sync_state=failing`, they move `clean_and_healthy`, and they can be listed by
+name. The reading that names them is the per-company one, not the per-source one.
+
 Had the placeholder been eight characters or shorter it would have been stored
 as if it were data, silently overwriting a correct ICO with "not stated" and
 raising nothing — the reason this is worth writing down even though the loud
