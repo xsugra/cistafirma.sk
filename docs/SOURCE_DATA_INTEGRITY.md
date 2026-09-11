@@ -15,6 +15,30 @@ This intentionally favors incomplete data over a false association. A future
 manual-review workflow may present unverified source items with evidence and a
 human-approved target, but it must not reuse automatic fuzzy matching.
 
+**Nothing measures whether FS data is still fresh.** Stated plainly here
+because the alternative is a reader assuming it is covered somewhere. FS is a
+bulk ingest — `update_fs_data` downloads the national dataset, matches it by
+IČO in one pass and `bulk_update`s the matches — so it never visits a company
+and has no per-company attempt to record;
+`CompanySyncStatus.SOURCE_CHOICES` declares `fs`, and **no runtime code writes
+that value**. `migrate` seeds none either.
+
+Per-company rows are deliberately *not* invented for it. Forty thousand rows a
+day, rewritten, would be a precision that does not exist: the ingest either
+read the file or it did not, and that fact belongs to the run, not to each
+company. `source_health` therefore prints `fs` and verdicts it **`not
+measured`** — never `OK`, because `OK` would claim a check this command cannot
+make. See `SOURCES_WITHOUT_ATTEMPT_ROWS` in
+`backend/registers/management/commands/source_health.py`.
+
+The larger gap is one step further out: `update_fs_data_task` is **not** a
+`BaseSyncTask`, so a run creates no `SyncJob` row either. Between the three —
+no job, no item, no status — the daily ingest of the national dataset has **no
+control anywhere that would notice it had stopped**. The data would simply age.
+A single `SyncJob` row per run (not per company) is the cheap honest fix; it is
+recorded here as new work with a clear brief rather than done as a side effect
+of something else.
+
 ## Insurance debts
 
 Insurance scraper outcomes are classified as:
@@ -728,3 +752,95 @@ either is dropped alone, so neither is named and the panel stays silent — the
 same empty screen this section is about. Pairs would cost a quadratic number of
 counts on the slowest path in the admin, so the limitation is recorded rather
 than paid for.
+
+## A control that omits a source is not a control
+
+`source_health` used to build its table from
+`CompanySyncStatus.objects.values("source")` — the rows that exist — so a source
+with **no** rows produced no line at all. Measured on the live stack
+2026-09-11, `make ops-check` listed `financials`, `social` and `vszp` and said
+nothing whatsoever about `ruz`, `orsr` or `fs`.
+
+A missing line is not a neutral absence. It reads exactly like a source that was
+checked and found healthy, which is the one thing it never means. Under that
+silence two different things were invisible at once: `orsr` had a writer that
+did not exist, and `ruz` had a task that had not yet run against the fix in
+commit `8f40586`. Neither could be told from a healthy source, and neither could
+be told from the other.
+
+The table is now driven by the **declared vocabulary**
+(`CompanySyncStatus.SOURCE_CHOICES`) rather than by what came back, so every
+source gets a line, including the ones with nothing to report. What cannot be
+measured is then *named* as unmeasured rather than left to be inferred:
+`SOURCES_WITHOUT_ATTEMPT_ROWS` says of `fs` that it records no per-company
+attempt and that nothing here measures its freshness.
+
+**Silence is judged per source, because it does not mean the same thing
+everywhere.** A source whose task draws from a due-list that cannot be empty
+has no way to be idle by accident — attempting nothing there is a finding. A
+source that records only what the registry reported as *changed* is merely
+quiet. Two declarations carry that distinction:
+
+| Declaration | Sources | Zero attempts in the window |
+|---|---|---|
+| *(none)* | `orsr`, `financials` | **FAIL** — their due-lists are never empty |
+| `SOURCES_THAT_MAY_BE_SILENT` | `ruz` | OK, and the reason is printed |
+| `SOURCES_PAUSED_BY_FOCUS_MODE` | `vszp`, `social` | OK *while Focus Mode is active* |
+| `SOURCES_WITHOUT_ATTEMPT_ROWS` | `fs` | `not measured` |
+
+`ruz` writes a row per company the registry reported as changed, so a 24-hour
+window in which nothing changed produces zero rows on a run that worked
+perfectly; failing it would be a false alarm. Focus Mode switches off
+`vszp`/`social` periodic tasks **by design** — a uniform zero-attempt rule would
+turn the gate red every time an operator used a documented feature, and an alarm
+that cries wolf is one that stops being read. `orsr` and `financials` stay a
+hard FAIL because `registers.services.focus_mode.FOCUS_KEEP_TASKS` guarantees
+they always attempt.
+
+This was a deliberate deviation from the plan approved for this increment, which
+specified a uniform rule; the false alarms above are why it was not implemented
+as specified, and the deviation is recorded in the commit that made it.
+
+## ORSR had no writer at all
+
+`CompanySyncStatus` held **zero** rows with `source='orsr'` and no code path
+able to create one. ORSR wrote `OrsrCompanyProfile` and nothing else — the only
+thing that had ever written an `orsr` status row was an unused
+`tracked_sync_task` decorator, and a one-off backfill in migration
+`0008_admin_overhaul`. Everything reading that table therefore covered a
+population that silently excluded the source, and the previous section is what
+made it visible rather than inferred.
+
+It also had no **backoff**, and both ways an attempt can fail ended in a dead
+end:
+
+- `OrsrScraperError` is raised *after* `OrsrSyncService.sync_company` has
+  written `fetch_ok=False` onto the profile. The company therefore leaves the
+  `orsr_profile__isnull=True` population and `schedule_missing_orsr_sync` never
+  selects it again.
+- Any other exception — a transport failure inside `RpoClient` — writes nothing
+  at all, so the company stays in that population and is re-dispatched at the
+  head of an `order_by('id')` queue on **every run**, blocking the rotation
+  behind it.
+
+`BaseSyncTask`'s three retries over a few minutes were the only attempts such a
+company would ever get. `sync_engine.record_orsr_outcome` is now the source's
+only writer and the single owner of the outcome → status rule, mirroring
+`ruz_financials_sync.sync_company_and_record`: it is called by the Celery task
+*and* by both manual drivers (`fetch_orsr_data`, `sync_orsr_filtered`), because
+an attempt made by hand is an attempt the gate has to be able to see.
+
+A success is pushed `ANSWERED_RETRY_AFTER` (365 days) into the future. This is
+not decoration: `next_retry_at = NULL` reads as "due now" in `sync_due_q`, and
+the rotation's retry lane is `companies_due_for_sync('orsr')` — a success that
+cleared the field would put all 19 743 already-fetched companies into a lane
+sized at a fraction of each batch, and the companies that genuinely need another
+attempt would never be reached.
+
+**A visible consequence, measured rather than assumed.** `orsr` rows enter
+`sync_state=healthy/failing` and the presets. One induced failure on a company
+whose profile had been `fetch_ok=False` since before this change moved
+`clean_and_healthy` 275 912 → 275 911 and `sync_state` failing 25 146 →
+25 147. The 148 companies with a stored `fetch_ok=False` will each move
+`failing` the first time the rotation revisits them — correct, and no longer
+invisible.

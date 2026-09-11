@@ -318,6 +318,24 @@ threshold would have to be tuned per source and would drift. A source with too
 few attempts, or too few successes for its split to mean anything, is reported
 as *not judged* rather than as healthy, so silence is never mistaken for a pass.
 
+The table is built from `CompanySyncStatus.SOURCE_CHOICES` — the declared
+vocabulary — and not from the rows that happen to exist, so **every** source
+gets a line. It used to iterate `values("source")`, which meant a source with no
+rows produced no line at all: measured 2026-09-11, the gate listed `financials`,
+`social` and `vszp` and said nothing whatsoever about `ruz`, `orsr` or `fs`. A
+missing line reads exactly like a source that was checked and found healthy.
+
+Silence is judged per source rather than uniformly, because it does not mean the
+same thing everywhere. `orsr` and `financials` draw from due-lists that are
+never empty, so attempting nothing fails them. `ruz` records only the companies
+the registry reported as *changed*, so a quiet window is a reading, not a
+failure — the reason is printed beside it. `vszp` and `social` are excused
+*only while Focus Mode is active*, which switches their periodic tasks off by
+design. `fs` is a bulk file ingest with no per-company attempt to report and is
+verdict'd **`not measured`** — never `OK`, which would claim a check this
+command cannot make. Nothing anywhere measures whether FS data is still fresh;
+see `docs/SOURCE_DATA_INTEGRITY.md`.
+
 ### Sync jobs
 
 Depth measures load; it cannot measure progress either. A job whose worker died

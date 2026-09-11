@@ -172,6 +172,35 @@ that risk — explicit request timeouts (30 s for the changed-IDs page) plus a
 retry session with 4 attempts (`backend/registers/integrations/ruz_api.py:18-19`)
 — so a stalled run ends within minutes rather than hanging for ever.
 
+#### Per-item progress inside a job: what it would take
+
+The deleted `SyncJobItem` was an attempt at this and is worth recording so the
+next attempt starts from the diagnosis rather than from the same idea. It held
+**zero** rows for its whole life, and the reason was structural, not a bug in
+the model: its only writer was a decorator applied to no task, and no task ever
+had a *reason* to report into a job — nothing passed a `SyncJob` id down to a
+per-company Celery task.
+
+Reinstating it is new work with three parts, and all three are needed:
+
+1. **The parent job has to exist.** A fan-out scheduler (`schedule_missing_orsr_sync`,
+   `schedule_ruz_financials_sync`, `orchestrate_full_company_sync`) must create
+   one `SyncJob` for the batch — the `ruz_full` path already does this via
+   `enqueue_ruz_job`; the others create none, which is why the 12:22 RUZ run
+   reporting to `SyncProgress` was stored as `processed_items=0`.
+2. **The id has to be carried to every child.** Each per-company task takes
+   `job_id` as an argument and records its own row against it. This is the part
+   that costs: it changes a task signature that the beat, the admin dispatcher
+   and `companies/admin.py` all call.
+3. **Something has to read it.** `SyncJobs.tsx` shows counts, not items; the
+   `items` endpoint the deleted serializer fed was never called by the frontend.
+   A per-item table nobody opens is the same defect one layer up.
+
+Until all three exist, per-company attempts are recorded where they already are
+and where the gate actually reads them: `CompanySyncStatus`, one row per company
+per source, written by `record_ruz_date_outcome`, `record_orsr_outcome` and
+`sync_company_and_record`.
+
 ### Known limitations
 
 - Counter values are per *container*. With `BACKEND_WORKERS` > 1 they are
