@@ -880,7 +880,7 @@ the worker was restarted recorded 1 of 20 and repeated all 19 — the running
 Celery worker still held the pre-change module, which is the trap recorded in
 `docs/OBSERVABILITY.md` about the bind mount not being a reload.
 
-## "Neuvedené" is a value, not an absence — recorded, not fixed
+## "Neuvedené" is a value, not an absence — fixed in `d2f4e9b`
 
 `RpoSyncService.sync_company` writes `"ico": entity.ico or company.ico` into
 `OrsrCompanyProfile.ico`, a `varchar(8)`. The RPO API returns the literal string
@@ -930,7 +930,65 @@ failure is the harmless version. The same file already knows the convention:
 `_person_to_structured` guards `person.identifier != "Neuvedené"` when writing a
 person's ICO. The entity ICO has no such guard, and no test covers it.
 
-Stored data is unaffected: these rows were never written. **Not fixed here** — it
-is outside the three findings this increment was approved for, and the repair
-involves a choice (fall back to `company.ico`, which is known-good, or widen the
-column) that belongs to whoever owns the RPO mapping.
+Stored data is unaffected: these rows were never written.
+
+### The repair, and the half that is not about width
+
+**Falling back, not widening.** The column is right and the mapping is wrong.
+Widening `ico` to `varchar(12)` would have made the write succeed and stored
+`"Neuvedené"` *as* an IČO — trading a lost profile for a corrupted one that
+nothing would ever flag. `OrsrCompanyProfile.save()` already states the
+convention, `if not self.ico: self.ico = self.company.ico`; the placeholder's
+truthiness was all that kept it from firing.
+
+`RpoSyncService._storable(value, field, ico=…)` now applies both rules to every
+column that is a verbatim copy of a source string:
+
+* **the sentinel becomes an absence**, on every such column — including
+  `pravna_forma` (`varchar(200)`), where `"Neuvedené"` fits comfortably and
+  would have been stored and read as a legal form. This is the half a width
+  check cannot reach, and it is the half that matters: the loud failure was the
+  harmless version of this defect;
+* **a value that does not fit its column is refused, not truncated** — the
+  61-character `oddiel` from company 36289's
+  `Ministerstvo školstva a národnej osvety v Bratislave No33.121/IV/1929`.
+  Truncating would store a string nobody wrote and leave a row that looks
+  complete. Widths come from `OrsrCompanyProfile._meta`, so the guard cannot
+  drift from the column it guards.
+
+A refusal logs a warning and leaves the raw `registration_number` whole in
+`raw_payload.source_register`. Parsing is where that information dies —
+`oddiel` is `parts[0]` of it, `vlozka_cislo` is `parts[1]` — so the refusal must
+not be the second loss.
+
+**Proved live on company 707** (`00314404`, Obec Bobrov), one of the
+profile-less `801` set: `RpoClient` returns `entity.ico == 'Neuvedené'` today,
+where the insert used to raise `DataError` and lose the profile. Through the
+real task path (`sync_company_orsr_data`) the profile was created for the first
+time — `ico = '00314404'`, `obchodne_meno = 'Miestny národný výbor v Bobrove'`,
+`oddiel = 'Pšn'`, `vlozka_cislo = '10039'` — with
+`raw_payload.source_register.registration_number == 'Pšn/10039/L'`.
+
+Then the whole recorded set was re-attempted, because a fix that works on the
+company you picked is not evidence that it works on the population. **11 of 11
+succeeded**, every one of them a first-ever profile, and the `DataError` rows
+went to **0**. One of the eleven is company 36289 — the `oddiel` overflow, not
+the IČO one — and it exercised the other half of the fix on the way through:
+
+```text
+WARNING registers.services.rpo_sync: RPO: refusing oddiel for IČO 31988067 --
+61 characters do not fit oddiel(50): 'Ministerstvo školstva a národnej
+osvety v Bratislave No33.121'
+INFO    registers.tasks: Company profile sync OK for company_id=36289 ico=31988067
+```
+
+The refusal is a warning and the profile is still written: the unrepresentable
+field is dropped, the rest of the profile is not.
+
+**The scraper path is bounded by construction and was left alone.** Its IČO
+comes from `OrsrScraper._normalize_ico`, which strips non-digits and zero-fills
+to eight; its `oddiel` comes from a `<span class="ra">` table cell matched by
+`\S+`. Verified rather than assumed: **0** companies carry an IČO longer than 8
+characters, and the widest `oddiel` ever stored is 34 characters against a
+column of 50. The defect is specific to RPO, which copies source strings
+verbatim.
