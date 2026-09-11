@@ -101,17 +101,24 @@ helm_k8s_validate:
         echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
       fi
   script:
-    - kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
-    - kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+    # Pozor: `kubectl apply --dry-run=client` NIE je offline operacia. RESTMapper
+    # si pred spracovanim manifestu vyziada discovery z API servera (kind ->
+    # resource). Bez klastra teda skonci na
+    #   unable to recognize ... dial tcp [::1]:8080: connection refused
+    # a to aj s --validate=false. Preto sa cele kubectl volanie spusta len
+    # vtedy, ked je klaster skutocne dosiahnutelny.
     - |
-      if [ -n "$KUBE_CONFIG" ] && kubectl cluster-info >/dev/null 2>&1; then
+      if kubectl cluster-info >/dev/null 2>&1; then
+        kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+        kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
         kubectl apply --dry-run=server -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
         kubectl apply --dry-run=server -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
       elif [ "$STRICT_K8S_VALIDATION" = "true" ]; then
         echo "STRICT_K8S_VALIDATION=true but no usable cluster context is available."
         exit 1
       else
-        echo "Skipping kubectl --dry-run=server (no KUBE_CONFIG/cluster context)."
+        echo "No reachable cluster -> skipping kubectl validation."
+        echo "Rendered manifests are still checked by 'helm lint' + 'helm template' in helm_render_validate."
       fi
 
 backend_tests:
