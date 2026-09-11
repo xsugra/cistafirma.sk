@@ -36,6 +36,24 @@ it declines to apply an unparseable date, so its rows carry no attempt count and
 no success, and a format change shows up as a flood of them. Those are rendered
 and judged on their own terms -- see `FIELD_REFUSAL_SOURCES`.
 
+**The table is built from the declared vocabulary, not from the rows that
+exist.** It used to group `CompanySyncStatus` by source and print whatever came
+back, so a source with no rows was not printed at all -- and a missing line
+reads exactly like a source that was checked and found healthy, which is the
+one thing it never means. Measured 2026-09-11: `make ops-check` listed
+`financials`, `social` and `vszp` and said nothing whatsoever about `ruz` or
+`orsr`, a silence in which a writer that did not exist and a task that had never
+run were both invisible. Every source in `CompanySyncStatus.SOURCE_CHOICES` now
+gets a line, including the ones with nothing to report, and the two that have no
+per-company attempts to give are declared as such (`SOURCES_WITHOUT_ATTEMPT_ROWS`)
+rather than left to be inferred from an absence.
+
+Silence is then judged per source rather than uniformly, because it does not
+mean the same thing everywhere: a source whose task draws from a due-list that
+cannot be empty is failing if it attempts nothing, while a source that only
+records what the registry reported as changed is merely quiet. See
+`SOURCES_THAT_MAY_BE_SILENT` and `SOURCES_PAUSED_BY_FOCUS_MODE`.
+
 Read-only: it issues SELECTs and writes nothing.
 """
 
@@ -49,7 +67,7 @@ from django.core.management.base import BaseCommand
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from registers.models import CompanySyncStatus
+from registers.models import CompanySyncStatus, SyncFocusModeState
 
 DEFAULT_WINDOW_HOURS = 24
 DEFAULT_MIN_ATTEMPTS = 200
@@ -79,6 +97,45 @@ AMOUNT_FIELDS = {
 FIELD_REFUSAL_SOURCES = {
     CompanySyncStatus.SOURCE_RUZ: "date field",
 }
+
+# Sources that never write per-company attempt rows, with the reason. They are
+# rendered as a line of their own rather than omitted, because an absence in
+# this table is read as health and this is the opposite: it is a source whose
+# freshness nothing here measures. `fs` is a bulk ingest -- `update_fs_data`
+# downloads the national dataset, matches it by ICO in one pass and
+# `bulk_update`s the matches -- so it has no per-company attempt to record, and
+# inventing one would be pretending to a precision that does not exist.
+SOURCES_WITHOUT_ATTEMPT_ROWS = {
+    CompanySyncStatus.SOURCE_FS: (
+        "bulk file ingest, matched by ICO -- it never visits a company, so it "
+        "records no per-company attempt and nothing here measures its freshness"
+    ),
+}
+
+# Sources whose silence in the window is a legitimate reading, with the reason.
+# Everything not listed here and not in `SOURCES_WITHOUT_ATTEMPT_ROWS` is
+# expected to attempt, and attempting nothing fails it.
+#
+# `ruz` is the one that would be a false alarm: `record_ruz_date_outcome` is
+# called per company the registry reported as *changed*, so a 24 h window in
+# which nothing changed produces zero rows on a run that worked perfectly. Its
+# absence from this table used to be indistinguishable from a dead task.
+SOURCES_THAT_MAY_BE_SILENT = {
+    CompanySyncStatus.SOURCE_RUZ: (
+        "it records only the companies the registry reported as changed, so a "
+        "quiet window means nothing changed upstream"
+    ),
+}
+
+# Sources whose periodic task Focus Mode switches off. Silence from these is not
+# judged *while Focus Mode is active*, because that state deliberately stops
+# their scheduling -- an operator entering it would otherwise turn this gate red
+# and learn to ignore it. `registers.services.focus_mode.FOCUS_KEEP_TASKS` is
+# the source of truth for what keeps running; these are the ones it excludes.
+SOURCES_PAUSED_BY_FOCUS_MODE = frozenset({
+    CompanySyncStatus.SOURCE_VSZP,
+    CompanySyncStatus.SOURCE_SOCIAL,
+})
 
 
 def _env_int(name: str, default: int) -> int:
@@ -132,8 +189,9 @@ class Command(BaseCommand):
         min_successes = options["min_successes"]
         window_start = timezone.now() - timedelta(hours=window_hours)
 
-        rows = list(
-            CompanySyncStatus.objects.values("source")
+        rows_by_source = {
+            row["source"]: row
+            for row in CompanySyncStatus.objects.values("source")
             .annotate(
                 attempts=Count("id", filter=Q(last_attempted_at__gte=window_start)),
                 succeeded=Count("id", filter=Q(last_succeeded_at__gte=window_start)),
@@ -152,24 +210,35 @@ class Command(BaseCommand):
                     ),
                 ),
             )
-            .order_by("source")
+        }
+
+        # Both tables are driven by the declared vocabulary rather than by the
+        # rows that came back, so a source with nothing to report is a line
+        # saying zero instead of a line that is not there. A zero-row source
+        # used to be absent from *both* tables -- including `ruz`, which is in
+        # `FIELD_REFUSAL_SOURCES`, so the refusal table could not tell "no
+        # company is refusing" from "the refusal counter is gone".
+        declared_sources = [value for value, _label in CompanySyncStatus.SOURCE_CHOICES]
+        attempt_rows = [
+            rows_by_source.get(source)
+            or {"source": source, "attempts": 0, "succeeded": 0, "refusing": 0}
+            for source in declared_sources
+        ]
+        refusal_rows = [
+            row for row in attempt_rows if row["source"] in FIELD_REFUSAL_SOURCES
+        ]
+
+        focus_mode_active = self._focus_mode_active()
+
+        self.stdout.write(
+            f"  {'source':<15} {'attempts':>8}  {'succeeded':>9}  "
+            f"{'found':>7}  {'no-record':>9}  ({window_hours}h window)"
         )
-
-        # Every source is an attempt source now; a source in
-        # `FIELD_REFUSAL_SOURCES` gets a second line as well. See the comment
-        # on that mapping.
-        refusal_rows = [r for r in rows if r["source"] in FIELD_REFUSAL_SOURCES]
-        attempt_rows = rows
-
-        if attempt_rows:
-            self.stdout.write(
-                f"  {'source':<15} {'attempts':>8}  {'succeeded':>9}  "
-                f"{'found':>7}  {'no-record':>9}  ({window_hours}h window)"
-            )
 
         unmet = 0
         below_threshold = []
         notes = []
+        unmeasured = []
         failed_sources: set[str] = set()
         for row in attempt_rows:
             source = row["source"]
@@ -189,7 +258,35 @@ class Command(BaseCommand):
                 reported is not None and succeeded >= min_successes
             )
 
-            if attempts < min_attempts:
+            if source in SOURCES_WITHOUT_ATTEMPT_ROWS:
+                # Nothing here is a reading about the source. Saying "OK" would
+                # claim a check that this command cannot make, so it says so.
+                verdict = "not measured"
+                unmeasured.append(
+                    f"source '{source}': {SOURCES_WITHOUT_ATTEMPT_ROWS[source]}"
+                )
+            elif attempts == 0:
+                reason = self._silence_reason(
+                    source, focus_mode_active=focus_mode_active
+                )
+                if reason is None:
+                    verdict = "FAIL"
+                    unmet += 1
+                    notes.append(
+                        f"source '{source}': no attempt at all in the last "
+                        f"{window_hours}h -- its task draws from a due-list that "
+                        f"is not empty, so silence means it did not run or did "
+                        f"not write"
+                    )
+                else:
+                    # A reading, not a lack of evidence -- and named, so a
+                    # reader cannot mistake it for one.
+                    verdict = "OK"
+                    notes.append(
+                        f"source '{source}': no attempt in the last "
+                        f"{window_hours}h, which is expected -- {reason}"
+                    )
+            elif attempts < min_attempts:
                 below_threshold.append((source, attempts))
                 verdict = "OK"
             elif succeeded == 0:
@@ -227,6 +324,12 @@ class Command(BaseCommand):
             )
 
         for note in notes:
+            self.stdout.write(f"  ({note})")
+
+        # Printed on every run, not only when something looks wrong: a line with
+        # no numbers needs its reason attached to it, or the next reader counts
+        # it as a source that was checked.
+        for note in unmeasured:
             self.stdout.write(f"  ({note})")
 
         # A source nobody has attempted recently is not evidence of health, and
@@ -276,6 +379,38 @@ class Command(BaseCommand):
 
         if unmet:
             sys.exit(1)
+
+    def _focus_mode_active(self) -> bool:
+        """Whether Focus Mode is on, read without creating the singleton row.
+
+        `SyncFocusModeState.load()` is `get_or_create`, so using it here would
+        make this command write on a fresh database -- and it says of itself
+        that it issues SELECTs and writes nothing.
+        """
+        return bool(
+            SyncFocusModeState.objects.filter(pk=1)
+            .values_list("active", flat=True)
+            .first()
+        )
+
+    def _silence_reason(self, source: str, *, focus_mode_active: bool) -> str | None:
+        """Why this source may legitimately have attempted nothing, or None.
+
+        `None` is the judgement, not a missing value: a source whose task draws
+        from a due-list that is never empty has no way to be idle by accident,
+        so silence there is a finding rather than a reading. Everything that can
+        be quiet for an ordinary reason is named in one of the two mappings
+        above, so the distinction is a fact written down rather than a guess
+        made per run.
+        """
+        if source in SOURCES_THAT_MAY_BE_SILENT:
+            return SOURCES_THAT_MAY_BE_SILENT[source]
+        if focus_mode_active and source in SOURCES_PAUSED_BY_FOCUS_MODE:
+            return (
+                "Focus Mode is active, which switches this source's periodic "
+                "task off until it is exited"
+            )
+        return None
 
     def _recorded_errors(self, source: str, window_start) -> str:
         """The error types actually recorded in the window, as a suffix.
