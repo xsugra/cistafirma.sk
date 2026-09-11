@@ -179,11 +179,12 @@ class Command(BaseCommand):
 
         from registers.services.sync_engine import set_job_outcome
 
-        # Nothing else beats this job's heart. Heartbeats come from
-        # `record_item`, which only the per-company `tracked_sync_task` tasks
-        # call, and this command never does -- so a multi-hour resync looked
-        # exactly like a dead job. That is why the watchdog could not be
-        # switched on until this existed.
+        # Nothing else beats this job's heart. Heartbeats were meant to come
+        # from `record_item`, called by the per-company `tracked_sync_task`
+        # tasks -- but that decorator was applied to no task and both are now
+        # deleted, so in practice nothing wrote a heartbeat at all and a
+        # multi-hour resync looked exactly like a dead job. That is why the
+        # watchdog could not be switched on until this explicit beat existed.
         job_row = SyncJob.objects.filter(pk=sync_job_id).first()
 
         def beat() -> None:

@@ -4,20 +4,26 @@ This module replaces ad-hoc per-task progress tracking with a unified API:
 
 - `enqueue_job(...)`: create a SyncJob row and dispatch the underlying Celery task.
 - `update_company_status(...)`: record the outcome of a per-company sync attempt.
-- `tracked_sync_task(...)`: decorator that wraps a Celery task to auto-update
-  SyncJob/SyncJobItem rows and CompanySyncStatus.
 
 Design principles:
 - Single source of truth: anything visible in the admin reads from these models.
 - Idempotent: retrying the same task does not double-count items.
 - Resilient: a worker crash leaves the job in a recoverable state (heartbeat
   watchdog flips it to `failed` after staleness, but data isn't corrupted).
+
+There was a third entry point here, `tracked_sync_task(...)`, a decorator meant
+to wrap a per-company Celery task and write `SyncJobItem` rows plus a
+`CompanySyncStatus` row for each attempt. It is gone, along with `record_item`
+and the `SyncJobItem` model: it was applied to **no task**, so its only writer
+never ran and the table it fed never held a row. The per-company tasks record
+their outcome directly (`ruz_financials_sync.sync_company_and_record` for
+financials, `record_orsr_outcome` for ORSR), which is both simpler and the thing
+that actually happens. Reinstating per-company item tracking is new work, not a
+repair: see `docs/OBSERVABILITY.md`.
 """
 
 from __future__ import annotations
 
-import functools
-import inspect
 import logging
 import os
 import random
@@ -34,7 +40,6 @@ from registers.models import (
     AuditLog,
     CompanySyncStatus,
     SyncJob,
-    SyncJobItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -365,174 +370,6 @@ def set_job_outcome(
     )
 
 
-def record_item(
-    *,
-    job: SyncJob,
-    item_key: str,
-    company_id: int | None = None,
-    status: str = "success",
-    error_message: str = "",
-    error_type: str = "",
-    duration_ms: int | None = None,
-) -> SyncJobItem:
-    """Append a SyncJobItem and bump the parent job's counters atomically."""
-    item = SyncJobItem.objects.create(
-        job=job,
-        item_key=item_key,
-        company_id=company_id,
-        status=status,
-        attempts=1,
-        error_message=(error_message or "")[:4000],
-        error_type=error_type or "",
-        duration_ms=duration_ms,
-        completed_at=timezone.now() if status in ("success", "failed", "skipped") else None,
-    )
-    update_kwargs: dict = {"last_heartbeat": timezone.now(), "processed_items": SyncJob._meta.get_field("processed_items").default}
-    # Bump counters via F() to avoid races.
-    from django.db.models import F
-
-    counter_updates: dict = {"processed_items": F("processed_items") + 1, "last_heartbeat": timezone.now()}
-    if status == "success":
-        counter_updates["succeeded_items"] = F("succeeded_items") + 1
-    elif status == "failed":
-        counter_updates["failed_items"] = F("failed_items") + 1
-    elif status == "skipped":
-        counter_updates["skipped_items"] = F("skipped_items") + 1
-    SyncJob.objects.filter(pk=job.pk).update(**counter_updates)
-    return item
-
-
-# ---------------------------------------------------------------------------
-# Decorator for Celery tasks
-# ---------------------------------------------------------------------------
-
-
-def _resolve_item_key(func, args: tuple, kwargs: dict, item_key_arg: str):
-    """Find the wrapped task's company-id argument, or refuse to guess.
-
-    Asks the function's own signature rather than assuming a position, because
-    the position depends on whether the task is bound: `functools.wraps` keeps
-    the wrapped signature, so `self` shows up in `parameters` exactly when the
-    task declared `bind=True`.
-
-    Raises `TypeError` when the argument cannot be found. That is deliberate:
-    the previous version fell back to `None`, the decorator then recorded
-    nothing, and the task ran untracked while appearing wired up. A decorator
-    that cannot do its job must say so at the first call, not quietly skip it.
-    """
-    if item_key_arg in kwargs:
-        return kwargs[item_key_arg]
-
-    params = list(inspect.signature(func).parameters)
-    offset = 1 if params and params[0] == "self" else 0
-    if item_key_arg not in params[offset:]:
-        raise TypeError(
-            f"tracked_sync_task(item_key_arg={item_key_arg!r}) wraps "
-            f"{getattr(func, '__name__', func)!r}, whose parameters are "
-            f"{params}. It cannot tell which argument carries the company id, "
-            f"and will not guess."
-        )
-
-    index = params.index(item_key_arg)
-    if index >= len(args):
-        raise TypeError(
-            f"{getattr(func, '__name__', func)!r} was called without "
-            f"{item_key_arg!r} (got {len(args)} positional argument(s)), so "
-            f"this attempt cannot be attributed to a company."
-        )
-    return args[index]
-
-
-def tracked_sync_task(*, source: str, item_key_arg: str = "company_id"):
-    """Decorator that wraps a per-company Celery task to auto-update sync state.
-
-    Usage:
-
-        @app.task(bind=True, queue="orsr")
-        @tracked_sync_task(source="orsr", item_key_arg="company_id")
-        def sync_company_orsr_data(self, company_id):
-            ...
-
-    The wrapped function still does its work; this decorator handles the
-    bookkeeping (CompanySyncStatus + SyncJobItem rows).
-
-    The wrapped function may raise to signal failure; the decorator will
-    record the error and re-raise (so Celery retry semantics still work).
-
-    **Nothing uses this today.** It is kept, and fixed, because the alternative
-    was leaving a trap: the old resolution was `args[1] if len(args) >= 2`,
-    which assumes `args[0]` is a bound task's `self`. Both tasks it was written
-    for -- `sync_company_orsr_data` and `sync_company_financials_from_ruz` --
-    are unbound, so it would have read the *second positional argument* as a
-    company id, resolved `None` on a single-argument call, and written nothing
-    while looking like it was tracking. Wiring it up would have produced a
-    silent no-op rather than an error, which is the same defect this module
-    keeps meeting.
-    """
-
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            company_id = _resolve_item_key(func, args, kwargs, item_key_arg)
-
-            # Optional job_id passed via kwargs lets us link this attempt to a parent job.
-            job_id = kwargs.pop("_sync_job_id", None)
-            job = SyncJob.objects.filter(pk=job_id).first() if job_id else None
-
-            started = time.time()
-            try:
-                result = func(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001 — re-raised below
-                duration_ms = int((time.time() - started) * 1000)
-                error_type = _classify_error(exc)
-                error_message = f"{type(exc).__name__}: {exc}"
-                # `Company.DoesNotExist` means the row this status would point
-                # at is gone. Writing it anyway raises on the foreign key, and
-                # that second exception replaces the first -- turning a clear
-                # "company 42 was deleted" into an opaque IntegrityError.
-                if company_id and not isinstance(exc, Company.DoesNotExist):
-                    update_company_status(
-                        company_id=company_id,
-                        source=source,
-                        success=False,
-                        error=error_message,
-                        error_type=error_type,
-                    )
-                if job:
-                    record_item(
-                        job=job,
-                        item_key=str(company_id) if company_id else "?",
-                        company_id=company_id,
-                        status="failed",
-                        error_message=error_message,
-                        error_type=error_type,
-                        duration_ms=duration_ms,
-                    )
-                logger.exception("tracked_sync_task[%s] failed for %s", source, company_id)
-                raise
-            else:
-                duration_ms = int((time.time() - started) * 1000)
-                if company_id:
-                    update_company_status(
-                        company_id=company_id,
-                        source=source,
-                        success=True,
-                    )
-                if job:
-                    record_item(
-                        job=job,
-                        item_key=str(company_id) if company_id else "?",
-                        company_id=company_id,
-                        status="success",
-                        duration_ms=duration_ms,
-                    )
-                return result
-
-        return wrapper
-
-    return decorator
-
-
 def _classify_error(exc: Exception) -> str:
     """Map an exception to a CompanySyncStatus.ERROR_TYPE_CHOICES value."""
     name = type(exc).__name__.lower()
@@ -652,8 +489,8 @@ def detect_and_fail_stuck_jobs() -> int:
 def heartbeat_loop(job: SyncJob, interval_seconds: int = 30):
     """Context manager that keeps the job's last_heartbeat fresh while iterating.
 
-    Use this around long-running loops where individual record_item() calls
-    might be too slow to count as a heartbeat.
+    Use this around long-running loops that pass long enough between natural
+    checkpoints for the watchdog's staleness threshold to be reached.
     """
     last = [time.time()]
 

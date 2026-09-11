@@ -4,7 +4,6 @@ from registers.models import (
     AuditLog,
     CompanySyncStatus,
     SyncJob,
-    SyncJobItem,
 )
 
 
@@ -39,25 +38,6 @@ class SyncJobSerializer(serializers.ModelSerializer):
             "last_error",
             "notes",
             "celery_task_id",
-        ]
-        read_only_fields = fields
-
-
-class SyncJobItemSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SyncJobItem
-        fields = [
-            "id",
-            "job",
-            "company",
-            "item_key",
-            "status",
-            "attempts",
-            "error_message",
-            "error_type",
-            "duration_ms",
-            "created_at",
-            "completed_at",
         ]
         read_only_fields = fields
 

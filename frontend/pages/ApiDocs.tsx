@@ -315,7 +315,7 @@ const SECTIONS: Section[] = [
       { method: 'POST', path: '/api/admin/sync/jobs/:id/pause/', description: 'Pozastavenie jobu', auth: true },
       { method: 'POST', path: '/api/admin/sync/jobs/:id/resume/', description: 'Obnovenie jobu', auth: true },
       { method: 'POST', path: '/api/admin/sync/jobs/:id/cancel/', description: 'Zrušenie jobu', auth: true },
-      { method: 'POST', path: '/api/admin/sync/jobs/:id/retry-failed/', description: 'Opakovanie zlyhaných položiek', auth: true },
+      { method: 'POST', path: '/api/admin/sync/jobs/:id/retry-failed/', description: 'Opätovné spustenie jobu (rovnaký typ a parametre)', auth: true },
       { method: 'GET', path: '/api/admin/sync/companies/', description: 'Sync stav per firma', auth: true },
       { method: 'GET', path: '/api/admin/sync/queues/', description: 'Hĺbka Celery frontov', auth: true },
       { method: 'GET', path: '/api/admin/sync/scheduled/', description: 'Zoznam plánovaných taskov', auth: true },

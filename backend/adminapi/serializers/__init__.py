@@ -2,7 +2,6 @@
 from .sync import (
     AuditLogSerializer,
     CompanySyncStatusSerializer,
-    SyncJobItemSerializer,
     SyncJobSerializer,
     SyncJobTriggerSerializer,
 )
@@ -14,7 +13,6 @@ from .subscriptions import AdminSubscriptionPlanSerializer
 __all__ = [
     "AuditLogSerializer",
     "CompanySyncStatusSerializer",
-    "SyncJobItemSerializer",
     "SyncJobSerializer",
     "SyncJobTriggerSerializer",
     "AdminUserSerializer",

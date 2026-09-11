@@ -7,7 +7,6 @@ from rest_framework.response import Response
 from adminapi.permissions import IsAdminStaff, IsSuperUser
 from adminapi.serializers import (
     CompanySyncStatusSerializer,
-    SyncJobItemSerializer,
     SyncJobSerializer,
     SyncJobTriggerSerializer,
 )
@@ -36,18 +35,6 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
         if job_type := params.get("job_type"):
             qs = qs.filter(job_type=job_type)
         return qs.order_by("-queued_at")
-
-    @action(detail=True, methods=["get"])
-    def items(self, request, pk=None):
-        job = self.get_object()
-        items_qs = job.items.all().order_by("-id")
-        if item_status := request.query_params.get("status"):
-            items_qs = items_qs.filter(status=item_status)
-        page = self.paginate_queryset(items_qs)
-        ser = SyncJobItemSerializer(page or items_qs, many=True)
-        if page is not None:
-            return self.get_paginated_response(ser.data)
-        return Response(ser.data)
 
     def create(self, request, *args, **kwargs):
         """POST /api/admin/sync/jobs/ → create + dispatch a new job."""
@@ -125,15 +112,30 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="retry-failed")
     def retry_failed(self, request, pk=None):
-        """Spawn a new job from the failed items of this one."""
+        """Re-run this job's type.
+
+        It used to read the failed `SyncJobItem` rows of this job and pass their
+        keys to the new job as `retry_keys`. Both halves were fiction: no task
+        ever wrote an item (its only writer was a decorator applied to nothing),
+        so the list was always empty, and **nothing has ever read `retry_keys`
+        anyway** -- the parameter was written into `parameters` and ignored by
+        every consumer. The endpoint therefore did exactly one real thing, and
+        it is the thing it still does: enqueue another job of the same type,
+        carrying this job's parameters.
+
+        The per-company failure record does exist, but it is keyed by source
+        rather than by job: `CompanySyncStatus.consecutive_failures`. Retrying
+        *those* is a real feature and a different one -- for `insurance_batch`
+        it would mean re-running tens of thousands of companies that the source
+        has already refused -- so it is not being introduced here by a rename.
+        """
         job = self.get_object()
-        failed_keys = list(job.items.filter(status="failed").values_list("item_key", flat=True))
         new_job = sync_engine.enqueue_job(
             job_type=job.job_type,
-            parameters={**(job.parameters or {}), "retry_keys": failed_keys},
+            parameters={**(job.parameters or {})},
             triggered_by_id=request.user.id,
             triggered_via="admin_ui",
-            notes=f"Retry of failed items from job #{job.pk}",
+            notes=f"Re-run of job #{job.pk} ({job.job_type})",
         )
         try:
             _dispatch_job(new_job)

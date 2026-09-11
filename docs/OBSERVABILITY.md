@@ -163,8 +163,11 @@ verdict instead of re-deriving it, so the gate cannot disagree with the watchdog
 had been a hard-coded 10-minute constant that nothing called, and it could not
 simply be switched on: `last_heartbeat` was written only by `record_item`, which
 only the per-company `tracked_sync_task` tasks (orsr / financials / insurance)
-call, so the RUZ management command never wrote it and a healthy multi-hour
-resync was indistinguishable from a dead one. `RuzApi` bounds the other side of
+called — and that decorator was applied to **no task at all**, so the field was
+in practice never written by anything, and a healthy multi-hour resync was
+indistinguishable from a dead one. Both the decorator and `record_item` have
+since been deleted; the RUZ management command now beats explicitly, which is
+what the watchdog rests on. `RuzApi` bounds the other side of
 that risk — explicit request timeouts (30 s for the changed-IDs page) plus a
 retry session with 4 attempts (`backend/registers/integrations/ruz_api.py:18-19`)
 — so a stalled run ends within minutes rather than hanging for ever.

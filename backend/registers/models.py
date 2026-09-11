@@ -697,50 +697,15 @@ class SyncJob(models.Model):
         SyncJob.objects.filter(pk=self.pk).update(last_heartbeat=timezone.now())
 
 
-class SyncJobItem(models.Model):
-    """Per-item record inside a SyncJob. Acts as a dead-letter queue for failures."""
-
-    STATUS_CHOICES = [
-        ("pending", "Čaká"),
-        ("running", "Spracováva sa"),
-        ("success", "Úspech"),
-        ("failed", "Zlyhalo"),
-        ("skipped", "Preskočené"),
-    ]
-
-    job = models.ForeignKey(SyncJob, on_delete=models.CASCADE, related_name="items")
-    company = models.ForeignKey(
-        "companies.Company",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="+",
-    )
-    item_key = models.CharField(max_length=64, verbose_name="Kľúč", help_text="ICO alebo RUZ ID")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
-    attempts = models.PositiveIntegerField(default=0)
-
-    error_message = models.TextField(blank=True, default="")
-    error_type = models.CharField(
-        max_length=20,
-        choices=CompanySyncStatus.ERROR_TYPE_CHOICES,
-        blank=True,
-        default="",
-    )
-    duration_ms = models.PositiveIntegerField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        verbose_name = "Položka sync úlohy"
-        verbose_name_plural = "Položky sync úloh"
-        indexes = [
-            models.Index(fields=["job", "status"], name="reg_sji_job_status_idx"),
-            models.Index(fields=["status", "company"], name="reg_sji_status_comp_idx"),
-        ]
-
-    def __str__(self):
-        return f"{self.job_id}/{self.item_key} [{self.status}]"
+# `SyncJobItem` used to live here: a per-item record inside a `SyncJob`, written
+# by `sync_engine.record_item` and read by the `sync/jobs/{pk}/items/` endpoint
+# and `retry-failed`. Both are gone, because nothing ever wrote one -- the only
+# caller was the `tracked_sync_task` decorator, which was applied to no task, so
+# the table never held a row and `retry-failed` always retried an empty list.
+# A per-company trace is not missing from the system, only from the `SyncJob`:
+# `CompanySyncStatus` carries one row per company per source, written by
+# `ruz_financials_sync.sync_company_and_record`, `record_ruz_date_outcome` and
+# `record_orsr_outcome`.
 
 
 # ============================================================================
