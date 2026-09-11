@@ -5,7 +5,10 @@ stages:
   - deploy
 
 variables:
-  DOCKER_TLS_CERTDIR: "/certs"
+  # TLS medzi job kontajnerom a DinD je VYPNUTE NASCHVAL. Vysvetlenie je
+  # v .build_template nizsie — kratka verzia: certy sa nemaju ako zdielat,
+  # takze zapnute TLS znamena, ze sa klient a demon nikdy nenajdu.
+  DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
   GIT_STRATEGY: clone  # Add this line to force a fresh clone
   BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
@@ -139,13 +142,36 @@ backend_tests:
 .build_template:
   stage: build
   tags: [macos]
-  image: docker:27.1.2
+  # Staci samotne CLI. Plny `docker:27.1.2` obsahuje aj dockerd a jeho
+  # entrypoint by sa pokusil spustit druhy demon v job kontajneri.
+  image: docker:27.1.2-cli
   services:
     # Registry bezi na HTTP (gitlab.home.arpa:5050), takze DinD musí vedieť,
     # že je "insecure". Týka sa to push/pull — tie idú cez démona.
     # (Na `docker login` to nestačí, viď before_script nižšie.)
     - name: docker:27.1.2-dind
       command: ["--insecure-registry=gitlab.home.arpa:5050"]
+  variables:
+    # POZOR, tu bola druha chyba. Obe strany (klient aj DinD) sa riadia
+    # vylucne touto premennou a kazda si ju vyklada sama:
+    #
+    #  * DinD: ak je nastavena, vygeneruje certy do /certs/server a pocuva
+    #    LEN na 2376 s TLS. Ak je prazdna, pocuva na 2375 bez TLS.
+    #  * Klient (docker-entrypoint.sh v docker image): DOCKER_HOST nastavi
+    #    na 2376 IBA ked funkcia _should_tls() najde vsetky tri subory
+    #    $DOCKER_TLS_CERTDIR/client/{ca,cert,key}.pem. Inak na 2375.
+    #
+    # Tie tri .pem subory ale vznikaju v DinD kontajneri, a runner medzi
+    # job a service kontajner tento adresar NEZDiela (v binarke runnera nie
+    # je ani jeden vyskyt "certs/client" ci "DOCKER_TLS_CERTDIR"). Vysledok
+    # pri zapnutom TLS: DinD na 2376, klient na 2375, a build vzdy spadne na
+    #   error during connect: ... dial tcp ...: connect: connection refused
+    #
+    # Preto je TLS vypnute a DOCKER_HOST je nastaveny natvrdo. Obe strany
+    # hovoria na 2375. Demon je pritom efemerny, zije len pocas jobu a je
+    # dosiahnutelny vyhradne z privatnej siete toho-ktorého jobu.
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: "tcp://docker:2375"
   before_script:
     # POZOR: `docker login` tu NEMOZE byt. Je to klientska operacia — ide
     # PRIAMO na registry a demona vobec nepouzije, takze --insecure-registry
@@ -155,6 +181,11 @@ backend_tests:
     # (overene: chyba je bez prefixu "Error response from daemon").
     # Zapiseme credentials rovno do docker configu. CLI ich pri pushi odovzda
     # demonovi a ten HTTP zvladne — ma --insecure-registry.
+    #
+    # Diagnostika: nech je v trace rovno vidiet, na co sa CLI pripaja a ci
+    # DinD vobec odpoveda. Pri mrtvom DinD padneme tu, s jasnou hlaskou.
+    - docker version
+    - docker info >/dev/null
     - mkdir -p ~/.docker
     - |
       AUTH=$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
