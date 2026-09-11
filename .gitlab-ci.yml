@@ -152,8 +152,23 @@ backend_tests:
     - name: docker:27.1.2-dind
       command: ["--insecure-registry=gitlab.home.arpa:5050"]
   variables:
-    # POZOR, tu bola druha chyba. Obe strany (klient aj DinD) sa riadia
-    # vylucne touto premennou a kazda si ju vyklada sama:
+    # TRETIA chyba, a bola to ta, ktora to drzala pokope. Bez tohto flagu
+    # runner pouzije defaultny "bridge" a spolieha sa na legacy `--link`.
+    # V tomto prostredi sa ale service kontajneru NEPRIDELI ziadny alias,
+    # takze sa neresolvuje ani v job kontajneri, ani v health-check
+    # kontajneri. Prejavy, ktore to sposobuje:
+    #   * health check 30 s dialuje <id>:2375 a <id>:2376 a nikdy sa
+    #     nepripoji -> "Service ... probably didn't start properly",
+    #   * v jobe padne `docker version` na
+    #       dial tcp: lookup docker on 192.168.65.7:53: no such host
+    #     (192.168.65.7 je DNS Docker Desktopu, nie embedded DNS — dokaz,
+    #      ze kontajner je na default bridge a ziadny alias neexistuje).
+    # S flagom runner vytvori pre job vlastnu user-defined siet, kde ma
+    # Docker embedded DNS (127.0.0.11) a service dostane alias "docker".
+    FF_NETWORK_PER_BUILD: "true"
+    #
+    # DRUHA chyba. Obe strany (klient aj DinD) sa riadia vylucne touto
+    # premennou a kazda si ju vyklada sama:
     #
     #  * DinD: ak je nastavena, vygeneruje certy do /certs/server a pocuva
     #    LEN na 2376 s TLS. Ak je prazdna, pocuva na 2375 bez TLS.
@@ -182,8 +197,14 @@ backend_tests:
     # Zapiseme credentials rovno do docker configu. CLI ich pri pushi odovzda
     # demonovi a ten HTTP zvladne — ma --insecure-registry.
     #
-    # Diagnostika: nech je v trace rovno vidiet, na co sa CLI pripaja a ci
-    # DinD vobec odpoveda. Pri mrtvom DinD padneme tu, s jasnou hlaskou.
+    # Diagnostika: nech je z trace rovno vidiet, ci sa service "docker"
+    # resolvne a na aku IP. `|| true` je tu preto, aby diagnostika sama
+    # nikdy nezhodila job — padnut ma az `docker version` nizsie.
+    - |
+      echo "--- /etc/hosts ---"; cat /etc/hosts
+      echo "--- /etc/resolv.conf ---"; cat /etc/resolv.conf
+      echo "--- getent hosts docker ---"
+      getent hosts docker || nslookup docker || echo "NEREZOLVUJE SA"
     - docker version
     - docker info >/dev/null
     - mkdir -p ~/.docker
