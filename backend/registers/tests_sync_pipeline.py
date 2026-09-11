@@ -1,11 +1,12 @@
 from datetime import date, timedelta
 from io import StringIO
 from unittest.mock import patch, MagicMock
+import requests
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from companies.models import Company
-from registers.models import SyncJob
+from registers.models import SyncJob, SyncProgress
 from registers.scrapers.debt_result import DebtCheckResult
 from registers.services import sync_engine
 
@@ -409,6 +410,95 @@ class RuzCommandHeartbeatTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.processed_items, 2)
         self.assertEqual(job.succeeded_items, 2)
+
+
+class RuzTransportFailureTests(TestCase):
+    """An unreachable registry must not read as an empty one.
+
+    The import loop ends on a falsy page, and `get_changed_company_ids` used to
+    answer `None` both for "nothing has changed" and for "we could not ask", so
+    a transport failure on the *first* call took the loop's success path: it
+    printed `No more company IDs to fetch.`, ran `progress.complete()` and
+    stored the whole run as `completed` with `processed_items=0`. Two beat runs
+    did exactly that on 2026-09-11 (jobs #13 and #14), each re-requesting the
+    same page and fetching nothing.
+    """
+
+    def _job(self):
+        return SyncJob.objects.create(
+            job_type="ruz_incremental",
+            status="running",
+            started_at=timezone.now(),
+            last_heartbeat=timezone.now(),
+        )
+
+    def test_the_client_raises_rather_than_answering_none(self):
+        """The value a caller reads as "nothing further" must not also mean
+        "could not ask" -- the two answers need two values."""
+        from registers.integrations.ruz_api import RuzApi
+
+        api = RuzApi()
+        with patch.object(
+            RuzApi,
+            "_get_json",
+            side_effect=requests.exceptions.ConnectionError("Failed to resolve host"),
+        ):
+            with self.assertRaises(requests.exceptions.RequestException):
+                api.get_changed_company_ids(zmenene_od="2026-08-04")
+
+    def test_a_transport_failure_on_the_first_call_fails_the_run(self):
+        """End to end, on the real client rather than a stub that raises for
+        us: if `get_changed_company_ids` went back to answering `None`, it is
+        this test -- not the loop's own failure handling -- that would notice.
+        """
+        from registers.integrations.ruz_api import RuzApi
+
+        job = self._job()
+        out = StringIO()
+
+        with patch.object(
+            RuzApi,
+            "_get_json",
+            side_effect=requests.exceptions.ConnectionError(
+                "Failed to resolve www.registeruz.sk"
+            ),
+        ), patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi",
+            return_value=RuzApi(),
+        ):
+            with self.assertRaises(requests.exceptions.RequestException):
+                call_command(
+                    "fetch_ruz_data",
+                    sync_job_id=job.pk,
+                    stdout=out,
+                    stderr=StringIO(),
+                )
+
+        self.assertNotIn("No more company IDs to fetch.", out.getvalue())
+        self.assertEqual(
+            SyncProgress.objects.get(sync_type="incremental").status, "failed"
+        )
+
+    def test_an_empty_page_still_ends_the_run_as_completed(self):
+        """The other half of the same rule, and the reason the fix is in the
+        client rather than in the loop: a registry with nothing new is a normal
+        run -- five beat runs a day look exactly like this -- and must not
+        start failing."""
+        job = self._job()
+        api = _FakeRuzApi([])
+        out = StringIO()
+
+        with patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi", return_value=api
+        ):
+            call_command(
+                "fetch_ruz_data", sync_job_id=job.pk, stdout=out, stderr=StringIO()
+            )
+
+        self.assertIn("No more company IDs to fetch.", out.getvalue())
+        self.assertEqual(
+            SyncProgress.objects.get(sync_type="incremental").status, "completed"
+        )
 
 
 class RuzDateGuardTests(TestCase):

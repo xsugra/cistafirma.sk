@@ -207,6 +207,11 @@ class Command(BaseCommand):
                 
                 id_data = api.get_changed_company_ids(zmenene_od=zmenene_od, pokracovat_za_id=pokracovat_za_id)
 
+                # A registry we cannot reach raises out of the call above and
+                # fails the run. Only a page that genuinely carries no IDs ends
+                # the loop, because an unreachable registry and an empty one
+                # used to arrive here as the same falsy value -- and that stored
+                # a transport failure as `completed`, processed_items=0.
                 if not id_data or not id_data.get('id'):
                     self.stdout.write(self.style.SUCCESS("No more company IDs to fetch."))
                     break

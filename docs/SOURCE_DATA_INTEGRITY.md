@@ -121,16 +121,16 @@ a second company-data import.
 RUZ jobs must not be force-cancelled or redispatched by the admin API. Those
 actions can interrupt an import after part of its data has been persisted.
 
-### A transport failure reads as the end of the list
+### An unreachable registry must not read as an empty one
 
-The RUZ import loop ends at `fetch_ruz_data.py:206`, on `if not id_data or not
-id_data.get('id')`, logging `No more company IDs to fetch.`.
+The RUZ import loop ends on `if not id_data or not id_data.get('id')`, logging
+`No more company IDs to fetch.`.
 
 Every `get_*` method in `backend/registers/integrations/ruz_api.py` catches
-`requests.exceptions.RequestException` and returns `None`, which is
-indistinguishable from a genuine "not found" at this point. A network failure
-therefore ends the loop, and the code below it then runs `progress.complete()`
-and `complete_job(job)` — marking the whole sync `completed` on a truncated run.
+`requests.exceptions.RequestException` and returns `None`, which at that point
+was indistinguishable from a genuine "nothing further". A network failure
+therefore ended the loop, and the code below it ran `progress.complete()` and
+`complete_job(job)` — marking the whole sync `completed` on a truncated run.
 
 This was first recorded here as **latent, not demonstrated**, on the strength of
 the fail-open line occurring **0 times** in the retained worker logs while the
@@ -152,9 +152,29 @@ judges a job type whose newest attempt ended `failed`, while these ended
 that reads sync jobs, and the row it leaves is indistinguishable from a run that
 found nothing new.
 
-It stays recorded and unfixed: making the two cases distinguishable changes what
-the import loop treats as an ending, which is a scope decision rather than a
-closed bug.
+**Fixed 2026-09-11.** `get_changed_company_ids` now lets the
+`RequestException` propagate instead of answering `None`, so the loop's
+`except Exception` runs `progress.fail()` and `_run_ruz_command` runs
+`fail_job()` — the run is stored `failed`, with the transport error as its
+`last_error`, and the Celery task fails audibly.
+
+The fix belongs in the client rather than in the loop, because the ambiguity is
+in the *value*: a caller cannot tell `None`-means-nothing from
+`None`-means-unreachable, and no amount of care at the call site can recover
+what the value no longer carries. The other `get_*` methods keep swallowing, and
+can: a company that cannot be read is counted as a failed item and stays
+visible, so their `None` is not read as a statement about the whole run.
+
+The two halves of the rule are pinned by `RuzTransportFailureTests` — a
+transport failure on the *first* call fails the run, and a page that genuinely
+carries no IDs still ends it `completed`. The second test is not decoration: a
+run that finds nothing new is the normal case (five beat runs a day look like
+this), so a fix that made empty pages fail would trade a silent failure for a
+constant alarm.
+
+Both repair commands call the same client and were reading the same ambiguous
+`None`; their loop now fails and records `progress.status='failed'` rather than
+printing `Koniec zoznamu` over a page it never received.
 
 ### The incremental cursor only ever moves forward
 

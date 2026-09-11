@@ -27,10 +27,21 @@ class RuzApi:
 
     def get_changed_company_ids(
         self, zmenene_od: str, pokracovat_za_id: int = None, max_zaznamov: int = 1000
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Gets a list of company IDs that have changed since a given date.
         Hits /api/uctovne-jednotky
+
+        Propagates `requests.exceptions.RequestException` instead of folding it
+        into `None`, which every other method here does and their callers can
+        live with -- a company that cannot be read is counted as a failed item
+        and stays visible. This one cannot: its caller reads a falsy answer as
+        "the registry has nothing further", so a transport failure on the first
+        call ended the import loop, ran `progress.complete()` and stored the run
+        as `completed` with `processed_items=0`. Two beat runs did exactly that
+        on 2026-09-11 (jobs #13 and #14), both re-requesting the same page. An
+        empty page and an unreachable registry must not arrive as the same
+        value.
         """
         url = f"{self.BASE_URL}/uctovne-jednotky"
         params = {
@@ -41,11 +52,10 @@ class RuzApi:
             params["pokracovat-za-id"] = pokracovat_za_id
 
         try:
-            data = self._get_json(url, params=params, timeout=30)
-            return data
+            return self._get_json(url, params=params, timeout=30)
         except requests.exceptions.RequestException as e:
             logger.error(f"Error fetching changed company IDs from RUZ: {e}")
-            return None
+            raise
 
     def get_company_id_by_ico(self, ico: str) -> Optional[int]:
         """
