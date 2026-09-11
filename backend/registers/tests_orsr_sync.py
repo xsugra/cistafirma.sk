@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -9,7 +9,12 @@ from companies.models import Company
 from registers.integrations.rpo_client import RpoApiError
 from registers.models import CompanySyncStatus, OrsrCompanyProfile
 from registers.scrapers.orsr_scraper import OrsrScraperError
-from registers.services.sync_engine import ANSWERED_RETRY_AFTER, companies_due_for_sync
+from registers.services.sync_engine import (
+    ANSWERED_RETRY_AFTER,
+    RETRY_SHARE,
+    companies_due_for_sync,
+)
+from registers.tasks import orsr_sync_batch, schedule_missing_orsr_sync
 
 
 def _profile(fetch_ok=True, last_error="", oddiel="Sro", vlozka_cislo="12345/B"):
@@ -228,3 +233,176 @@ class OrsrOutcomeRecordingViaCommandsTests(TestCase):
             call_command("sync_orsr_filtered", ico=[self.company.ico])
 
         self.assertEqual(self._status().consecutive_failures, 0)
+
+
+def _companies(count: int, *, start: int = 1, **kwargs) -> list[Company]:
+    default_form = kwargs.pop("pravna_forma", "112")
+    return [
+        Company.objects.create(
+            ruz_id=start + index,
+            ico=f"{start + index:08d}",
+            nazov_UJ=f"Firma {start + index}",
+            pravna_forma=default_form,
+            **kwargs,
+        )
+        for index in range(count)
+    ]
+
+
+def _profile_row(company, *, fetch_ok=True):
+    return OrsrCompanyProfile.objects.create(
+        company=company, ico=company.ico, fetch_ok=fetch_ok
+    )
+
+
+def _record(company_ids, *, retry_at=None, success=True):
+    """What a real attempt leaves behind. `orsr_sync_batch` has no cursor."""
+    for company_id in company_ids:
+        CompanySyncStatus.objects.update_or_create(
+            company_id=company_id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            defaults={
+                "last_attempted_at": timezone.now(),
+                "consecutive_failures": 0 if success else 1,
+                "next_retry_at": retry_at,
+            },
+        )
+
+
+class OrsrRotationTests(TestCase):
+    """The batch must not choose the same companies twice.
+
+    The previous selection was `orsr_profile__isnull=True ... order_by('id')
+    [:limit]`, which advanced only because an attempt usually creates a profile
+    row. A `RpoClient` transport failure writes nothing, so that company stayed
+    at the head of the queue and was re-dispatched every four hours, blocking
+    the rotation behind it -- for ever, and without a single row saying it had
+    ever been tried.
+    """
+
+    def test_consecutive_batches_never_repeat_themselves(self):
+        _companies(20)
+
+        first = orsr_sync_batch(5)
+        self.assertEqual(len(first), 5)
+        _record(first, retry_at=timezone.now() + ANSWERED_RETRY_AFTER)
+
+        second = orsr_sync_batch(5)
+        self.assertEqual(len(second), 5)
+        self.assertEqual(
+            set(first) & set(second),
+            set(),
+            "the second batch returned companies the first one had just synced",
+        )
+
+    def test_with_no_status_row_the_batch_returns_the_same_companies_again(self):
+        """Why C2b and C3 ship together: the status row *is* the cursor.
+
+        Before C2b no ORSR attempt wrote one, so this batch would have returned
+        the same companies on every run -- which is exactly what
+        `order_by('id')[:limit]` did whenever the attempt wrote no profile.
+        """
+        _companies(20)
+
+        self.assertEqual(orsr_sync_batch(5), orsr_sync_batch(5))
+
+    def test_a_company_that_already_has_a_profile_is_not_new_ground(self):
+        companies = _companies(10)
+        _profile_row(companies[0])
+
+        self.assertNotIn(companies[0].id, orsr_sync_batch(10))
+
+    def test_a_failure_that_did_leave_a_profile_is_still_reachable(self):
+        """The dead end this fixes.
+
+        `OrsrScraperError` writes `fetch_ok=False` onto the profile and re-raises,
+        so the company leaves the `orsr_profile__isnull` population and the old
+        selection could never pick it again. It is reachable now only through the
+        retry lane, which is why the two halves of this increment ship together.
+        """
+        companies = _companies(10)
+        _profile_row(companies[0], fetch_ok=False)
+        _record([companies[0].id], retry_at=timezone.now() - timedelta(minutes=1))
+
+        self.assertIn(companies[0].id, orsr_sync_batch(10))
+
+    def test_a_company_whose_retry_is_in_the_future_is_left_alone(self):
+        companies = _companies(10)
+        _profile_row(companies[0], fetch_ok=False)
+        _record([companies[0].id], retry_at=timezone.now() + timedelta(hours=1))
+
+        self.assertNotIn(companies[0].id, orsr_sync_batch(10))
+
+    def test_a_blocked_company_is_never_chosen(self):
+        companies = _companies(10)
+        _record([companies[0].id])
+        CompanySyncStatus.objects.filter(company=companies[0]).update(
+            is_blocked=True, next_retry_at=None
+        )
+
+        self.assertNotIn(companies[0].id, orsr_sync_batch(10))
+
+    def test_a_due_company_with_no_profile_is_not_handed_out_twice(self):
+        """ORSR's new ground is "no profile", not "no attempt", so the two
+        populations can overlap -- and a batch that returns one company twice
+        would dispatch it twice."""
+        companies = _companies(10)
+        _record([companies[0].id], retry_at=timezone.now() - timedelta(minutes=1))
+
+        batch = orsr_sync_batch(10)
+
+        self.assertEqual(len(batch), len(set(batch)))
+        self.assertIn(companies[0].id, batch)
+
+    def test_the_population_excludes_dissolved_and_ineligible_companies(self):
+        eligible = Company.objects.create(
+            ruz_id=9001, ico="00009001", nazov_UJ="Eligible s.r.o.", pravna_forma="112"
+        )
+        dissolved = Company.objects.create(
+            ruz_id=9002,
+            ico="00009002",
+            nazov_UJ="Zrusena s.r.o.",
+            pravna_forma="112",
+            datum_zrusenia=date(2020, 1, 1),
+        )
+        other_form = Company.objects.create(
+            ruz_id=9003, ico="00009003", nazov_UJ="Fyzicka osoba", pravna_forma="101"
+        )
+
+        batch = orsr_sync_batch(10)
+
+        self.assertIn(eligible.id, batch)
+        self.assertNotIn(dissolved.id, batch)
+        self.assertNotIn(other_form.id, batch)
+
+    def test_retries_never_spend_more_than_their_share_of_the_batch(self):
+        companies = _companies(40)
+        _record(
+            [company.id for company in companies],
+            retry_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        self.assertEqual(len(orsr_sync_batch(20)), 20 // RETRY_SHARE)
+
+    def test_new_ground_fills_whatever_the_retries_leave(self):
+        companies = _companies(40)
+        _record(
+            [company.id for company in companies[:3]],
+            retry_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        batch = orsr_sync_batch(20)
+
+        self.assertEqual(len(batch), 20)
+        self.assertEqual(set(batch[:3]), {company.id for company in companies[:3]})
+
+    def test_the_task_keeps_its_name_and_dispatches_what_was_chosen(self):
+        """`schedule_missing_orsr_sync` is in `FOCUS_KEEP_TASKS` and called by
+        name from the beat, the admin action and the legacy dashboard."""
+        _companies(10)
+
+        with patch("registers.tasks.sync_company_orsr_data") as mock_task:
+            result = schedule_missing_orsr_sync(5)
+
+        self.assertIn("5", result)
+        self.assertEqual(mock_task.delay.call_count, 5)

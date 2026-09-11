@@ -6,7 +6,8 @@ from django.utils import timezone
 from companies.models import Company
 from registers.models import CompanySyncStatus
 from registers.services.ruz_financials_sync import ANSWERED_RETRY_AFTER
-from registers.tasks import RETRY_SHARE, financials_sync_batch
+from registers.services.sync_engine import RETRY_SHARE
+from registers.tasks import financials_sync_batch
 
 
 def _companies(count: int, *, start: int = 1, **kwargs) -> list[Company]:

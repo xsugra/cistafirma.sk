@@ -1,5 +1,5 @@
 from celery import shared_task, chain, chord, group
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Q
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
@@ -19,13 +19,13 @@ from .models import CompanySyncStatus
 from .services.sync_engine import (
     _classify_error,
     claim_ruz_job,
-    companies_due_for_sync,
     complete_job,
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
     fail_job,
     record_orsr_outcome,
     record_ruz_date_outcome,
+    rotating_batch,
     update_company_status,
 )
 
@@ -647,18 +647,63 @@ def sync_company_orsr_data(company_id: int):
     return f"Company profile sync OK for {company.ico}"
 
 
+def _orsr_candidates():
+    """The population an ORSR rotation may draw from: eligible, not dissolved."""
+    return Company.objects.filter(
+        pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS,
+        datum_zrusenia__isnull=True,
+    )
+
+
+def orsr_sync_batch(limit: int) -> list[int]:
+    """Choose the company ids for one ORSR batch: retries, then missing profiles.
+
+    Retries come from `CompanySyncStatus(source='orsr')` -- which exists only
+    because the previous commit gave the source a writer. Before it, an ORSR
+    failure was recorded on the profile and nowhere else, so this population was
+    empty by construction and there was nothing to retry *with*.
+
+    The retry lane is also the only way back to a company whose attempt failed
+    into a profile: `OrsrScraperError` leaves a row behind with
+    `fetch_ok=False`, which takes the company out of the `orsr_profile__isnull`
+    population for good.
+
+    Split out from the task so the selection can be tested without dispatching
+    Celery work -- the same shape as `financials_sync_batch`.
+    """
+    return rotating_batch(
+        source=CompanySyncStatus.SOURCE_ORSR,
+        candidates=_orsr_candidates().filter(orsr_profile__isnull=True),
+        limit=limit,
+    )
+
+
 @shared_task(queue='orsr')
 def schedule_missing_orsr_sync(limit: int = 200):
-    """Naplánuje ORSR sync pre firmy, ktoré ešte nemajú ORSR profil."""
-    company_ids = list(
-        Company.objects.filter(
-            orsr_profile__isnull=True,
-            pravna_forma__in=ORSR_ELIGIBLE_LEGAL_FORMS,
-            datum_zrusenia__isnull=True,
-        )
-        .order_by('id')
-        .values_list('id', flat=True)[:limit]
-    )
+    """Naplánuje ORSR sync: najprv opakovania, potom firmy bez profilu.
+
+    The task name and signature stay put -- it is in
+    `registers.services.focus_mode.FOCUS_KEEP_TASKS`, called by the admin
+    `orsr_batch` action and by the legacy dashboard, and dispatched from the
+    beat by name. Only the selection changes.
+
+    It used to be `orsr_profile__isnull=True ... order_by('id')[:limit]`, which
+    advanced only because an attempt usually creates a profile row. Two kinds of
+    attempt do not, and each pinned a company to the head of the queue for ever,
+    re-dispatched every four hours and blocking the rotation behind it:
+
+    - a `RpoClient` transport failure, which writes nothing at all; and
+    - before the previous commit, every failure, since nothing recorded an
+      attempt. `OrsrScraperError` writes `fetch_ok=False` onto the profile, so
+      that company left this population entirely and was never selected again.
+
+    The rotation is now the shared `sync_engine.rotating_batch`: retries first,
+    drawn from `CompanySyncStatus(source='orsr')` -- which is what the previous
+    commit's writer made possible -- and new ground from the companies that
+    still have no profile. Because an attempt always writes a status row now,
+    the head advances even when the attempt fails for good.
+    """
+    company_ids = orsr_sync_batch(limit)
     for company_id in company_ids:
         sync_company_orsr_data.delay(company_id)
 
@@ -680,13 +725,6 @@ def sync_company_financials_from_ruz(company_id: int):
     )
 
 
-# How much of a batch may be spent on retries. The rest goes to companies that
-# have never been attempted, so a failing minority cannot hold the rotation in
-# place -- which is how the previous selection failed, except that it held the
-# *whole* rotation, permanently, and silently.
-RETRY_SHARE = 4
-
-
 def _financials_candidates(*, eligible_only: bool, missing_only: bool):
     """The population a financials batch may draw from, before ordering."""
     qs = Company.objects.all()
@@ -705,6 +743,11 @@ def financials_sync_batch(
 ) -> list[int]:
     """Choose the company ids for one financials batch: retries, then new ground.
 
+    The shape of the rotation itself is `sync_engine.rotating_batch`, which is
+    shared with `schedule_missing_orsr_sync` so the two cannot drift. What is
+    specific to this source is the population, and the measured history that
+    made the rotation necessary:
+
     The previous selection was `Company.objects.order_by('id')[:limit]` with a
     beat argument of 500, and it has no cursor, so **every run chose the same
     500 companies**. Measured 2026-09-11: 297 of the 309 companies holding any
@@ -714,58 +757,20 @@ def financials_sync_batch(
     never advances is this repository's recurring defect, and this is its
     clearest instance.
 
-    Two populations, in this order:
-
-    1. **Retries** -- `CompanySyncStatus(source='financials')` rows whose
-       `next_retry_at` has arrived: the companies that were tried and asked to
-       be tried again. Capped at `1 / RETRY_SHARE` of the batch, because a
-       failing minority must not be able to spend the whole batch on itself.
-    2. **New ground** -- companies with no `financials` status row at all,
-       ordered by `id`. An attempt always writes a row, so the head of this
-       queue moves after every batch: resumable and deterministic without
-       storing a cursor of its own.
-
     `eligible_only` (ORSR-eligible legal forms, not dissolved) is now the
     default. It is the same population `schedule_missing_orsr_sync` uses, and
     the beat calls this task with only `limit` -- whether to import statements
     for every company rather than the eligible subset is a separate decision
     from making the rotation advance, and it is not being made by default here.
     """
-    retry_budget = limit // RETRY_SHARE
-
-    retry_ids: list[int] = []
-    if retry_budget > 0:
-        due = companies_due_for_sync(
-            CompanySyncStatus.SOURCE_FINANCIALS, limit=retry_budget
-        )
-        if missing_only:
-            # `missing_only` needs a database condition, so the due rows are
-            # re-checked against the population rather than trusted as-is.
-            retry_ids = list(
-                _financials_candidates(
-                    eligible_only=eligible_only, missing_only=True
-                )
-                .filter(id__in=[status.company_id for status in due])
-                .order_by('id')
-                .values_list('id', flat=True)
-            )
-        else:
-            retry_ids = [status.company_id for status in due]
-
-    remaining = max(limit - len(retry_ids), 0)
-    if remaining == 0:
-        return retry_ids
-
-    attempted = CompanySyncStatus.objects.filter(
-        company_id=OuterRef('pk'), source=CompanySyncStatus.SOURCE_FINANCIALS
+    return rotating_batch(
+        source=CompanySyncStatus.SOURCE_FINANCIALS,
+        candidates=_financials_candidates(
+            eligible_only=eligible_only, missing_only=missing_only
+        ),
+        limit=limit,
+        restrict_retries_to_candidates=missing_only,
     )
-    new_ids = list(
-        _financials_candidates(eligible_only=eligible_only, missing_only=missing_only)
-        .exclude(Exists(attempted))
-        .order_by('id')
-        .values_list('id', flat=True)[:remaining]
-    )
-    return retry_ids + new_ids
 
 
 @shared_task(queue='financials')

@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from companies.models import Company
 from registers.services.ruz_financials_sync import FinancialsOutcome, sync_company_and_record
+from registers.tasks import financials_sync_batch
 
 
 class Command(BaseCommand):
@@ -55,7 +56,22 @@ class Command(BaseCommand):
                     )
                 )
         else:
-            companies = list(Company.objects.order_by("id")[:limit])
+            # The batch rotation, not `order_by("id")[:limit]`. The old selection
+            # had no cursor, so running this twice with the same `--limit`
+            # processed the same companies both times -- the same defect the
+            # beat had, on the path an operator uses to catch up by hand.
+            #
+            # This narrows the population to what the beat draws from:
+            # ORSR-eligible legal forms, not dissolved. That is
+            # `financials_sync_batch`'s default and therefore the backlog the
+            # scheduled run is working through, which is the one a manual
+            # catch-up should be helping with. `--ico` / `--ico-file` are
+            # unchanged and still reach any company at all.
+            company_ids = financials_sync_batch(limit)
+            by_id = Company.objects.in_bulk(company_ids)
+            # Rebuilt in the batch's order rather than the database's: retries
+            # first, which is the order they are about to be processed in.
+            companies = [by_id[pk] for pk in company_ids if pk in by_id]
 
         total = len(companies)
         self.stdout.write(

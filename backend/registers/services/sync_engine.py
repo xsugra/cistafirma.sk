@@ -33,6 +33,7 @@ from datetime import timedelta
 from typing import Any, Iterable
 
 from django.db import IntegrityError, transaction
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from companies.models import Company
@@ -571,8 +572,6 @@ def sync_due_q(next_retry_field: str, now):
     wants to stay out of the queue has to write a real timestamp rather than
     clearing the field.
     """
-    from django.db.models import Q
-
     return Q(**{f"{next_retry_field}__lte": now}) | Q(
         **{f"{next_retry_field}__isnull": True}
     )
@@ -596,3 +595,85 @@ def companies_due_for_sync(source: str, *, limit: int = 200) -> Iterable[Company
         .select_related("company")[:limit]
     )
     return qs
+
+
+# ---------------------------------------------------------------------------
+# Batch rotation
+# ---------------------------------------------------------------------------
+
+# How much of a batch may be spent on retries. A failing minority must not be
+# able to hold the whole rotation -- but it must also not be starved, because a
+# company that asked to be tried again is the one case where the work is known
+# to be needed.
+RETRY_SHARE = 4
+
+
+def rotating_batch(
+    *,
+    source: str,
+    candidates,
+    limit: int,
+    restrict_retries_to_candidates: bool = False,
+) -> list[int]:
+    """Choose one batch of company ids for a per-company source.
+
+    Two populations, in this order:
+
+    1. **Retries** -- `CompanySyncStatus(source=...)` rows whose `next_retry_at`
+       has arrived: the companies that were tried and asked to be tried again.
+       Capped at `1 / RETRY_SHARE` of the batch.
+    2. **New ground** -- rows of `candidates` with no status row for this source
+       at all, ordered by `id`. An attempt always writes a status row, so the
+       head of this queue moves after every batch: resumable and deterministic
+       without storing a cursor of its own.
+
+    `candidates` is the queryset of companies this source is allowed to touch,
+    and the two populations are kept disjoint on purpose -- new ground excludes
+    both the companies that have an attempt recorded *and* the ids already taken
+    as retries. The second exclusion is redundant when "has an attempt" and "is
+    a candidate" line up, and it is what keeps the guarantee true when they do
+    not: ORSR's new ground is "no profile", which a company can lack while
+    having a due attempt recorded, and the same company would otherwise be
+    handed out twice in one batch.
+
+    `restrict_retries_to_candidates` re-checks the due rows against
+    `candidates`. It exists because a caller can narrow the population for one
+    run (`missing_only`) and the due list knows nothing about that: without the
+    re-check the batch would dispatch companies the caller excluded. It costs a
+    query over the due ids, so it is off by default.
+
+    **This is the fix for a scheduled job that looks alive and never advances.**
+    The previous shape was `Company.objects.order_by('id')[:limit]` with a beat
+    argument of 500: no cursor, so every run chose the same 500 companies.
+    Measured 2026-09-11, 297 of the 309 companies holding any financial result
+    sat inside ids 202-701 after 32 runs of the 12-hour beat. Nothing failed and
+    nothing logged; coverage simply stopped at 309 of 251 598 and stayed there.
+    """
+    retry_budget = limit // RETRY_SHARE
+
+    retry_ids: list[int] = []
+    if retry_budget > 0:
+        due = companies_due_for_sync(source, limit=retry_budget)
+        if restrict_retries_to_candidates:
+            retry_ids = list(
+                candidates.filter(id__in=[status.company_id for status in due])
+                .order_by("id")
+                .values_list("id", flat=True)
+            )
+        else:
+            retry_ids = [status.company_id for status in due]
+
+    remaining = max(limit - len(retry_ids), 0)
+    if remaining == 0:
+        return retry_ids
+
+    attempted = CompanySyncStatus.objects.filter(
+        company_id=OuterRef("pk"), source=source
+    )
+    new_ids = list(
+        candidates.exclude(Exists(attempted))
+        .exclude(id__in=retry_ids)
+        .order_by("id")
+        .values_list("id", flat=True)[:remaining]
+    )
+    return retry_ids + new_ids

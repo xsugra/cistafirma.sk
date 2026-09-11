@@ -844,3 +844,65 @@ whose profile had been `fetch_ok=False` since before this change moved
 25 147. The 148 companies with a stored `fetch_ok=False` will each move
 `failing` the first time the rotation revisits them — correct, and no longer
 invisible.
+
+## The ORSR rotation selected from the head of the queue
+
+`schedule_missing_orsr_sync` chose `orsr_profile__isnull=True … order_by('id')
+[:limit]`, exactly as the financials scheduler did before it was fixed. It had
+no cursor of its own: it advanced *only* because a successful attempt creates an
+`OrsrCompanyProfile`, which removes the company from the population.
+
+So the population it never advanced past was the companies that fail. Measured
+over 24 h on the `orsr` worker: **4 626** tasks fetched a profile, **696** ended
+permanently failed — 595 RPO transport/DNS failures, 70 `DataError`, 31 scraper
+errors. Every one of those wrote no profile and therefore stayed at the head of
+an `order_by('id')` queue, re-attempted on every four-hourly run ahead of the
+companies nobody had tried yet. A 20-company live batch drew 12 of its 20 from
+this pinned set.
+
+The fix is the same shared core the financials rotation now uses,
+`sync_engine.rotating_batch`: retries first, capped at `1/RETRY_SHARE` of the
+batch, then new ground — and new ground excludes both the companies that have an
+attempt recorded *and* the ids already taken as retries, because ORSR's new
+ground ("no profile") and its retry lane ("due for a retry") can name the same
+company. The status row, not the profile, is the cursor, which is why this
+change depends on the section above: before `record_orsr_outcome` existed,
+nothing a failing attempt did could move the queue forward.
+
+`schedule_missing_orsr_sync` keeps its name and signature: it is in
+`FOCUS_KEEP_TASKS` and is called by name from the beat, the admin `orsr_batch`
+action and the legacy dashboard.
+
+**Proved live, not in a test.** Two consecutive batches against the running
+stack: the first recorded 20 of 20 attempts, and the second selected a set with
+**no overlap at all** with the first. The same canary on the same code before
+the worker was restarted recorded 1 of 20 and repeated all 19 — the running
+Celery worker still held the pre-change module, which is the trap recorded in
+`docs/OBSERVABILITY.md` about the bind mount not being a reload.
+
+## "Neuvedené" is a value, not an absence — recorded, not fixed
+
+`RpoSyncService.sync_company` writes `"ico": entity.ico or company.ico` into
+`OrsrCompanyProfile.ico`, a `varchar(8)`. The RPO API returns the literal string
+`'Neuvedené'` ("not stated") when an entity has no ICO of its own. That string is
+truthy, so the `or` never fires and the placeholder is written in place of the
+company's own ICO — which the caller already knows and which is always 8 digits.
+
+It fails loudly only by accident: `'Neuvedené'` is **9** characters, one too many
+for the column. Measured on two affected companies (`00314404`, `00314072`, both
+with a `Pšn/…` registration number): `entity.ico == 'Neuvedené'` and the insert
+raises `StringDataTruncation`. In the last 24 h that was **64** permanently
+failed tasks on `varying(8)` and **6** on `varying(50)`, where the same
+unvalidated mapping writes `_extract_oddiel` into a `varchar(50)`.
+
+Had the placeholder been eight characters or shorter it would have been stored
+as if it were data, silently overwriting a correct ICO with "not stated" and
+raising nothing — the reason this is worth writing down even though the loud
+failure is the harmless version. The same file already knows the convention:
+`_person_to_structured` guards `person.identifier != "Neuvedené"` when writing a
+person's ICO. The entity ICO has no such guard, and no test covers it.
+
+Stored data is unaffected: these rows were never written. **Not fixed here** — it
+is outside the three findings this increment was approved for, and the repair
+involves a choice (fall back to `company.ico`, which is known-good, or widen the
+column) that belongs to whoever owns the RPO mapping.
