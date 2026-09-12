@@ -10,55 +10,9 @@ import { CompanySummaryStrip } from '../components/company/CompanySummaryStrip';
 import { CompanyNav } from '../components/company/CompanyNav';
 import { SectionNotice } from '../components/company/SectionNotice';
 import { useCompanyProfile } from '../components/company/useCompanyProfile';
-import { OverviewSection } from '../components/company/sections/OverviewSection';
-import { RiskScoreSection } from '../components/company/sections/RiskScoreSection';
-import { FinancialAnalysisSection } from '../components/company/sections/FinancialAnalysisSection';
-import { BalanceSheetSection } from '../components/company/sections/BalanceSheetSection';
-import { ProfitLossSection } from '../components/company/sections/ProfitLossSection';
-import { PeopleOrgansSection } from '../components/company/sections/PeopleOrgansSection';
-import { RegisterSection } from '../components/company/sections/RegisterSection';
-import { ConnectionsSection } from '../components/company/sections/ConnectionsSection';
-import { ReportSection } from '../components/company/sections/ReportSection';
-import { DebtsSection } from '../components/company/sections/DebtsSection';
-import { PeerListSection } from '../components/company/sections/PeerListSection';
-import { ZaverkySection } from '../components/company/sections/ZaverkySection';
-import { UdalostiSection } from '../components/company/sections/UdalostiSection';
-import type { PeerScope } from '../types';
-
-/**
- * The five Databáza sections are one component asked five different questions,
- * so the section id and the scope it names are built together rather than
- * written twice and left to agree by hand.
- */
-const peer = (scope: PeerScope): React.FC<{ company: CompanyType }> =>
-    ({ company }) => <PeerListSection ico={company.ico} scope={scope} />;
-
-/**
- * Every section the registry calls `ready`, and nothing else.
- *
- * Typing this as a `Record` over the ready ids means the two cannot drift: mark
- * a section ready without writing its body and the typecheck fails here, rather
- * than the page quietly rendering a heading over nothing.
- */
-const BODIES: Record<ReadySectionId, React.FC<{ company: CompanyType }>> = {
-    prehlad: OverviewSection,
-    skore: RiskScoreSection,
-    register: RegisterSection,
-    report: ReportSection,
-    ukazovatele: FinancialAnalysisSection,
-    suvaha: BalanceSheetSection,
-    vykaz: ProfitLossSection,
-    dlhy: DebtsSection,
-    osoby: PeopleOrgansSection,
-    prepojenia: ({ company }) => <ConnectionsSection ico={company.ico} />,
-    zaverky: ZaverkySection,
-    udalosti: ({ company }) => <UdalostiSection ico={company.ico} />,
-    podobne: peer('podobne'),
-    'databaza-kraj': peer('kraj'),
-    'databaza-odvetvie': peer('odvetvie'),
-    'databaza-trzby': peer('trzby'),
-    'databaza-zamestnanci': peer('zamestnanci'),
-};
+// The body map lives below both presentations of a company, not in this one --
+// the inline tabbed view draws the same sections and used to keep its own list.
+import { BODIES } from '../components/company/sectionBodies';
 
 /**
  * The standalone company page: one section at a time, chosen from a rail.
