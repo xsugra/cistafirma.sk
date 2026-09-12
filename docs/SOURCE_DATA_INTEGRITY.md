@@ -108,11 +108,16 @@ The damage is in the aggregate rule. `registers.tasks.update_insurance_debt`
 advances `last_insurance_debt` only when **both** sources are authoritative, and
 `schedule_insurance_debt_checks` re-selects every company whose timestamp is
 still NULL. A source that can never say "no record" therefore keeps the majority
-of 441 714 companies due for ever, and the `insurance` queue refills itself
-indefinitely while draining at exactly its configured rate.
+of 441 714 companies due for ever — a due population that never shrinks, however
+fast the queue behind it drains.
 
 That is why `make ops-check` judges a source on **both** of its answers rather
 than only on whether it succeeds at all — see `docs/DATA_PROTECTION.md`.
+
+Measured on 2026-09-12, after that scraper defect was fixed, the aggregate rule
+was **no longer the binding cause**: of the 25 398 companies whose timestamp was
+stale, **0** carried a failed VŠZP attempt. The queue was still growing, for the
+reason in the next section.
 
 ### Throughput
 
@@ -126,6 +131,43 @@ from the state registries and is not a knob to raise casually — shortening the
 cycle means raising load on a third party, which is a decision, not a tweak.
 `make ops-check` reports queue depth and per-source success; `docs/ARCHITECTURE.md`
 summarises the schedule.
+
+**The enqueue side is bounded, and that is new.** Until 2026-09-12 the scheduler
+enqueued the *entire* due population every tick — 439 817 companies, measured
+that day — which no drain rate can absorb. The queue reached **5 108 434 pending
+messages, ~5 GB of Redis**, the largest single consumer in the stack, and the
+growth was unbounded rather than merely slow. Three things followed from it, and
+only the first is the one a queue-depth metric shows:
+
+- The backlog itself, re-created at every tick.
+- The worker only ever reached the *oldest* messages. Measured: its last
+  recorded attempt was 14:15 while it kept running past 15:20.
+- **The scheduler ran on the queue it floods.** Beat dispatched it at 07:50 and
+  a worker first ran it after 11:00; it then executed at 03:11, 04:17, 11:14,
+  11:49, 12:04, 13:55, 14:15, 14:19, 14:34, 14:39 and 14:53 — roughly **8.4
+  million messages enqueued in one day against 14 400 drained**. Each run builds
+  ~440 000 `delay()` calls, so with `--concurrency=2` the worker spent its time
+  scheduling instead of checking.
+
+Three changes, all in `registers/tasks.py` and `backend/settings.py`:
+
+1. The batch is capped at `INSURANCE_BATCH_PER_TICK`, derived from the rate limit
+   so the two cannot drift, and carried as `args: [14400]` on the beat entry so
+   it can be retuned without a deploy — the shape `schedule_ruz_financials_sync`
+   already had.
+2. The batch is ordered `nulls_first`. Postgres sorts NULLs *last* under a plain
+   ascending order, so without it the 25 398 stale companies would have been
+   re-chosen every tick while the 414 419 never-checked ones waited for ever.
+3. The scheduler runs on `celery`, not on the queue it fills.
+
+Where the routing actually lives is the trap worth recording: the admin-managed
+`PeriodicTask` row carries `queue` explicitly and `DatabaseScheduler` runs **the
+row**, so `CELERY_TASK_ROUTES` and `CELERY_BEAT_SCHEDULE.options.queue` are both
+inert for a task whose row exists. All three now agree; changing the settings
+dict alone would change nothing on a live system.
+
+The rate limit is unchanged, so one full pass is still ~15 days. What changed is
+that the queue is now bounded by that figure instead of ignoring it.
 
 ## Focus Mode
 

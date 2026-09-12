@@ -97,6 +97,13 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 > firmu a zámernom `rate_limit='20/m'` trvá jeden plný priechod **~15 dní**.
 > Detaily a dôvod, prečo sa rate limit nezvyšuje bez rozhodnutia:
 > `docs/SOURCE_DATA_INTEGRITY.md`.
+>
+> `schedule-insurance-debt-checks-every-12-hours` plánuje **dávku veľkosti
+> jedného intervalu** (`INSURANCE_BATCH_PER_TICK`, odvodená z `rate_limit`), nie
+> celú due populáciu, a **beží na queue `celery`, nie na `insurance`** — plánovač
+> na queue, ktorú sám zaplavuje, čaká za vlastným backlogom a potom sa spúšťa
+> opakovane. Všetky tri vrstvy (`CELERY_TASK_ROUTES`, `CELERY_BEAT_SCHEDULE`,
+> riadok `PeriodicTask`) musia súhlasiť; na živom systéme rozhoduje **riadok**.
 
 ### `SyncJob` vs `SyncProgress`
 
