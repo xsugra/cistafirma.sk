@@ -458,9 +458,14 @@ function buildFinancials(c: Company): string {
 
   // Key indicators
   let kpi = `<div class="section"><h2>Kľúčové ukazovatele ${latest.year}</h2><table><tbody>`;
+  // Two rows, because the statement has two. Both used to read `profit`, which
+  // held whichever of the two the parser picked by absolute value -- so the KPI
+  // block printed the operating result under the label "Zisk po zdanení" for
+  // 86 % of the rows where the question can be settled at all.
   const rows: [string, string][] = [
     ['Celkové výnosy', eurCompact(latest.totalRevenue ?? latest.revenue)],
-    ['Zisk po zdanení', eurCompact(latest.profit)],
+    ['Výsledok hospodárenia z hospodárskej činnosti', eurCompact(latest.profit)],
+    ['Zisk po zdanení', eurCompact(latest.profitAfterTax)],
   ];
   if (latest.assetsTotal != null) {
     rows.push(
@@ -478,12 +483,13 @@ function buildFinancials(c: Company): string {
   kpi += '</tbody></table></div>';
 
   // Financial history table
-  let hist = `<div class="section"><h2>Hospodárske výsledky</h2><table class="compact"><thead><tr><th>Rok</th><th class="r">Výnosy</th><th class="r">Zisk</th><th class="r">Náklady</th><th class="r">Aktíva</th><th class="r">Vlast. kap.</th><th class="r">Zadlž.</th><th class="r">Marža</th></tr></thead><tbody>`;
+  let hist = `<div class="section"><h2>Hospodárske výsledky</h2><table class="compact"><thead><tr><th>Rok</th><th class="r">Výnosy</th><th class="r">VH z hosp. č.</th><th class="r">Zisk po zd.</th><th class="r">Náklady</th><th class="r">Aktíva</th><th class="r">Vlast. kap.</th><th class="r">Zadlž.</th><th class="r">Marža</th></tr></thead><tbody>`;
   for (const f of sorted) {
     hist += `<tr>
       <td><b>${f.year}</b></td>
       <td class="r">${eurCompact(f.totalRevenue ?? f.revenue)}</td>
       <td class="r">${eurCompact(f.profit)}</td>
+      <td class="r">${eurCompact(f.profitAfterTax)}</td>
       <td class="r">${eurCompact(f.costs)}</td>
       <td class="r">${eurCompact(f.assetsTotal)}</td>
       <td class="r">${eurCompact(f.equity)}</td>

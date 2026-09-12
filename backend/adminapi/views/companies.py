@@ -84,7 +84,11 @@ class AdminCompanyViewSet(viewsets.ModelViewSet):
         ("debt_state", "Stav dlhov"),
         ("latest_financial_year", "Rok financií"),
         ("latest_revenue", "Tržby"),
-        ("latest_profit", "Zisk"),
+        # The column reads the operating result, so it is named for it. A bare
+        # "Zisk" on a figure that used to be whichever of the two profit rows
+        # the parser happened to pick is the same mislabelling the company page
+        # carried; the header now says which row it is.
+        ("latest_profit", "VH z hosp. činnosti"),
         ("lead_score", "Lead score"),
         ("lead_confidence", "Confidence"),
         ("sync_failures", "Sync chyby"),

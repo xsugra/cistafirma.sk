@@ -57,11 +57,18 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
         },
         {
             label: 'Zisk po zdanení',
-            value: latest.profit,
+            // `profitAfterTax`, not `profit`. This tile said "Zisk po zdanení"
+            // while reading a field that held the pre-tax operating result for
+            // 86 % of the rows where the two can be told apart, so the headline
+            // figure on a company page was a different quantity from the one
+            // named. `profit` is now the operating result and this is the
+            // after-tax row; a year that has not been re-read since the split
+            // has no after-tax figure and shows a dash rather than a stand-in.
+            value: latest.profitAfterTax,
             // `null` means the previous year filed no profit, so no arrow is
             // drawn -- `|| 0` would have shown one against a zero that is not
             // there.
-            prevValue: prev?.profit ?? null,
+            prevValue: prev?.profitAfterTax ?? null,
             format: 'currency' as const,
             icon: 'fa-chart-line',
             inverse: false,

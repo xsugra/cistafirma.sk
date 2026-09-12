@@ -15,6 +15,7 @@ const filed = (overrides: Partial<Financials>): Financials => ({
     year: 2023,
     revenue: null,
     profit: null,
+    profitAfterTax: null,
     totalRevenue: null,
     costs: null,
     incomeTax: null,
@@ -72,7 +73,8 @@ describe('FinancialIndicators', () => {
             <FinancialIndicators
                 data={[
                     filed({
-                        revenue: 0, totalRevenue: 0, profit: 0, assetsTotal: 0, equity: 0,
+                        revenue: 0, totalRevenue: 0, profit: 0, profitAfterTax: 0,
+                        assetsTotal: 0, equity: 0,
                         liabilitiesTotal: 0, debtRatio: 0, grossMargin: 0,
                     }),
                 ]}
@@ -89,9 +91,32 @@ describe('FinancialIndicators', () => {
     it('says a line was not filed instead of claiming it was zero', () => {
         renderWithProviders(<FinancialIndicators data={[filed({assetsTotal: 328, equity: 328})]} />);
 
-        // Revenue, profit, debt ratio and gross margin were all absent.
+        // Revenue, both profit rows, debt ratio and gross margin were all absent.
         expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
         expect(screen.queryByText(`0${NBSP}€`)).toBeNull();
+    });
+
+    it('reads the after-tax result for the tile that names it', () => {
+        // The tile said "Zisk po zdanení" while reading `profit`, which is the
+        // pre-tax operating result -- so for 86 % of the rows where a non-zero
+        // tax makes the two distinguishable the headline figure was a different
+        // quantity from the one named. The two rows must not be interchangeable.
+        renderWithProviders(
+            <FinancialIndicators data={[filed({profit: 300, profitAfterTax: 240})]} />
+        );
+
+        expect(screen.getByText(`240${NBSP}€`)).toBeInTheDocument();
+        expect(screen.queryByText(`300${NBSP}€`)).toBeNull();
+    });
+
+    it('shows a dash for a year that has no after-tax figure yet', () => {
+        // Not back-filled on purpose: a row written before the split carries no
+        // after-tax figure, and printing `profit` here would repeat the
+        // mislabelling this tile was just corrected for.
+        renderWithProviders(<FinancialIndicators data={[filed({profit: 300})]} />);
+
+        expect(screen.queryByText(`300${NBSP}€`)).toBeNull();
+        expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
     });
 
     it('shows the balance-sheet block for a statement that carried one', () => {
@@ -106,7 +131,9 @@ describe('FinancialIndicators', () => {
 
     it('hides the balance-sheet block when the statement carried none', () => {
         renderWithProviders(
-            <FinancialIndicators data={[filed({revenue: 1200, totalRevenue: 1200, profit: 90})]} />
+            <FinancialIndicators
+                data={[filed({revenue: 1200, totalRevenue: 1200, profit: 90, profitAfterTax: 72})]}
+            />
         );
 
         expect(screen.queryByText('Aktíva')).toBeNull();
@@ -120,8 +147,8 @@ describe('FinancialIndicators', () => {
         renderWithProviders(
             <FinancialIndicators
                 data={[
-                    filed({year: 2022, revenue: 1000, totalRevenue: 1000, profit: 100}),
-                    filed({year: 2023, revenue: 1500, totalRevenue: 1500, profit: 150}),
+                    filed({year: 2022, revenue: 1000, totalRevenue: 1000, profit: 100, profitAfterTax: 80}),
+                    filed({year: 2023, revenue: 1500, totalRevenue: 1500, profit: 150, profitAfterTax: 120}),
                 ]}
                 analysis={analysis}
             />
@@ -136,7 +163,10 @@ describe('FinancialIndicators', () => {
     it('draws no arrow against a previous year that filed no figure', () => {
         renderWithProviders(
             <FinancialIndicators
-                data={[filed({year: 2022}), filed({year: 2023, revenue: 1500, totalRevenue: 1500, profit: 150})]}
+                data={[
+                    filed({year: 2022}),
+                    filed({year: 2023, revenue: 1500, totalRevenue: 1500, profit: 150, profitAfterTax: 120}),
+                ]}
             />
         );
 

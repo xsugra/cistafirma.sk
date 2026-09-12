@@ -622,7 +622,29 @@ class CompanyFinancialResult(models.Model):
         decimal_places=2,
         null=True,
         blank=True,
-        verbose_name='Zisk',
+        verbose_name='Výsledok hospodárenia z hospodárskej činnosti',
+    )
+    # Two different accounting rows used to share `profit`, chosen between by
+    # `_pick_better` -- i.e. by whichever had the larger absolute value. Measured
+    # 2026-09-12 on the 4 383 rows where a non-zero tax makes the two
+    # distinguishable: 3 788 held the pre-tax operating result, 23 the after-tax
+    # result, and all 23 were loss-making (a loss grows once tax is deducted, so
+    # the absolute-value rule picked the post-tax row exactly there). The field
+    # was displayed as "Zisk po zdanení" throughout, so a pre-tax figure was
+    # being read as an after-tax one -- for 86 % of the rows where the question
+    # can be settled at all.
+    #
+    # `profit` is now the operating result and nothing else, and the after-tax
+    # row has its own field. Nullable, and deliberately not back-filled: a row
+    # that has not been re-read since this split genuinely does not carry the
+    # figure, and showing a `profit` value under this label would be the same
+    # substitution in a new place.
+    profit_after_tax = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Zisk po zdanení',
     )
 
     # Výkaz ziskov a strát — rozšírenie

@@ -142,6 +142,11 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 'year': r.year,
                 'revenue': revenue,
                 'profit': _amount(r.profit),
+                # The after-tax row, which `profit` used to be mistaken for. A
+                # row that has not been re-read since the two were split carries
+                # no value here, and `None` -- a dash on the screen -- is the
+                # honest answer for it.
+                'profitAfterTax': _amount(r.profit_after_tax),
                 'totalRevenue': _amount(r.total_revenue),
                 'costs': _amount(r.costs),
                 'incomeTax': _amount(r.income_tax),

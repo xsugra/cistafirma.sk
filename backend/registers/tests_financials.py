@@ -153,6 +153,52 @@ class FinancialsOutcomeTests(TestCase):
             Decimal("1000"),
         )
 
+    def test_both_profit_rows_reach_the_row_they_belong_to(self):
+        # End to end through the write path: the split is only real if
+        # `profit_after_tax` survives `_extract_financials_from_reports`, the
+        # write gate and `update_or_create(defaults=...)` to land in its column.
+        #
+        # Šablóna 699, not 1: `_get_template_tables` memoises templates in a
+        # module-level dict for the life of the process, so a template id
+        # another test has already fetched comes back as whatever that test
+        # scripted. The cache is keyed by id and never invalidated.
+        service = self._service(
+            detail={"idUctovnychZavierok": [77]},
+            statements={77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88], "idSablony": 699}},
+            reports={
+                88: {
+                    "idSablony": 699,
+                    "obsah": {
+                        "tabulky": [
+                            {
+                                "nazov": "Výkaz ziskov a strát",
+                                "data": ["60000", "55000", "48000", "44000"],
+                            }
+                        ]
+                    },
+                }
+            },
+            templates={
+                699: {
+                    "tabulky": [
+                        {
+                            "hlavicka": _income_statement_header(),
+                            "riadky": [
+                                {"text": {"sk": "Výsledok hospodárenia z hospodárskej činnosti (+/-)"}},
+                                {"text": {"sk": "Výsledok hospodárenia za účtovné obdobie po zdanení (+/-)"}},
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+
+        service.sync_company_detailed(self.company)
+
+        row = CompanyFinancialResult.objects.get(company=self.company, year=2023)
+        self.assertEqual(row.profit, Decimal("60000"))
+        self.assertEqual(row.profit_after_tax, Decimal("48000"))
+
     def test_a_company_with_no_statements_is_an_answer_not_a_failure(self):
         result = self._service(detail={"idUctovnychZavierok": []}).sync_company_detailed(
             self.company
@@ -723,6 +769,95 @@ class RuzFinancialsSyncServiceTests(SimpleTestCase):
         self.assertEqual(result.get("revenue"), Decimal("150000"))
         self.assertEqual(result.get("costs"), Decimal("90000"))
         self.assertEqual(result.get("profit"), Decimal("60000"))
+
+    def test_the_two_profit_rows_land_in_two_fields(self):
+        # Both rows used to feed `profit`, chosen between by larger absolute
+        # value. They are different accounting quantities and now have a field
+        # each: `profit` is the operating result, `profit_after_tax` the bottom
+        # line.
+        table = {
+            "data": [
+                "150000", "140000",  # revenue row current/previous
+                "90000", "85000",    # cost row current/previous
+                "60000", "55000",    # operating result
+                "48000", "44000",    # after-tax result
+            ]
+        }
+        template = {
+            "hlavicka": _income_statement_header(),
+            "riadky": [
+                {"text": {"sk": "Výnosy z hospodárskej činnosti spolu súčet (r. 02 až r. 07)"}},
+                {"text": {"sk": "Náklady na hospodársku činnosť spolu súčet (r. 09 až r. 17)"}},
+                {"text": {"sk": "Výsledok hospodárenia z hospodárskej činnosti (+/-)"}},
+                {"text": {"sk": "Výsledok hospodárenia za účtovné obdobie po zdanení (+/-)"}},
+            ],
+        }
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("profit"), Decimal("60000"))
+        self.assertEqual(result.get("profit_after_tax"), Decimal("48000"))
+
+    def test_a_loss_does_not_promote_the_after_tax_row_into_profit(self):
+        # The exact shape of the old defect. A loss *grows* once tax is
+        # deducted, so `_pick_better` -- which kept the larger absolute value --
+        # chose the after-tax row precisely on the loss-makers, while the field
+        # was displayed as "Zisk po zdanení". All 23 rows measured live on
+        # 2026-09-12 that held the after-tax figure were loss-making, which is
+        # this rule and nothing else.
+        table = {
+            "data": [
+                "-1000", "-900",   # operating result, a loss
+                "-1150", "-1000",  # after-tax result, a bigger loss
+            ]
+        }
+        template = {
+            "hlavicka": _income_statement_header(),
+            "riadky": [
+                {"text": {"sk": "Výsledok hospodárenia z hospodárskej činnosti (+/-)"}},
+                {"text": {"sk": "Výsledok hospodárenia za účtovné obdobie po zdanení (+/-)"}},
+            ],
+        }
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("profit"), Decimal("-1000"))
+        self.assertEqual(result.get("profit_after_tax"), Decimal("-1150"))
+
+    def test_an_after_tax_row_alone_does_not_fill_profit(self):
+        # A statement that the parser could only read down to the bottom line
+        # has no operating result, and `profit` must stay empty rather than
+        # take the after-tax figure -- a dash is the honest answer.
+        table = {"data": ["48000", "44000"]}
+        template = {
+            "hlavicka": _income_statement_header(),
+            "riadky": [
+                {"text": {"sk": "Výsledok hospodárenia za účtovné obdobie po zdanení (+/-)"}},
+            ],
+        }
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertIsNone(result.get("profit"))
+        self.assertEqual(result.get("profit_after_tax"), Decimal("48000"))
+
+    def test_the_computed_fallback_fills_profit_only(self):
+        # `revenue - costs` is the operating result -- that identity is what
+        # makes the fallback correct -- and it is not a tax-adjusted figure, so
+        # it must never be written to `profit_after_tax`.
+        table = {"data": ["200000", "190000", "150000", "140000"]}
+        template = {
+            "hlavicka": _income_statement_header(),
+            "riadky": [
+                {"text": {"sk": "Výnosy z hospodárskej činnosti spolu súčet (r. 02 až r. 07)"}},
+                {"text": {"sk": "Náklady na hospodársku činnosť spolu súčet (r. 09 až r. 17)"}},
+            ],
+        }
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("profit"), Decimal("50000"))
+        self.assertIsNone(result.get("profit_after_tax"))
 
     def test_extract_with_template_calculates_profit_when_missing(self):
         table = {

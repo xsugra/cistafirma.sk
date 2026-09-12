@@ -384,7 +384,10 @@ export function CompaniesBuilderPage() {
                 <Th>Stav</Th>
                 <Th>Dlhy</Th>
                 <Th>Tržby</Th>
-                <Th>Zisk</Th>
+                {/* The column reads `latest_profit`, which is the operating
+                    result -- a bare "Zisk" named a figure that used to be
+                    whichever of the two profit rows the parser picked. */}
+                <Th>VH z hosp. činnosti</Th>
                 <Th>Score</Th>
               </tr>
             </thead>

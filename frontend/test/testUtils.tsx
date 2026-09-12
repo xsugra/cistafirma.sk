@@ -30,6 +30,7 @@ export const DEFAULT_FINANCIALS: Financials = {
     year: 2023,
     revenue: null,
     profit: null,
+    profitAfterTax: null,
     totalRevenue: null,
     costs: null,
     addedValue: null,

@@ -79,7 +79,14 @@ export interface RiskScore {
 export interface Financials {
   year: number;
   revenue: number | null;
+  /** Výsledok hospodárenia z hospodárskej činnosti -- the operating result, pre-tax. */
   profit: number | null;
+  /**
+   * Zisk po zdanení. `null` until the year has been re-read since the two rows
+   * were split apart; before that, `profit` held whichever of the two the
+   * parser happened to pick, so the after-tax figure is simply not known.
+   */
+  profitAfterTax: number | null;
   totalRevenue: number | null;
   costs: number | null;
   addedValue?: number | null;

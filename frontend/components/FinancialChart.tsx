@@ -70,7 +70,14 @@ const CustomTooltip = ({ active, payload, label, colors }: any) => {
             </p>
             {entries.map((entry: any) => {
                 const nameMap: Record<string, string> = {
-                    revenue: 'Tržby', profit: 'Zisk', incomeTax: 'Daň z príjmu', incomeTaxPaid: 'Splatná daň',
+                    revenue: 'Tržby',
+                    // The series is `profit`, which is the operating result --
+                    // it was labelled "Zisk" while the field held the after-tax
+                    // row for the loss-makers, so the tooltip named a figure the
+                    // bar beside it did not always carry.
+                    profit: 'VH z hosp. činnosti',
+                    incomeTax: 'Daň z príjmu',
+                    incomeTaxPaid: 'Splatná daň',
                 };
                 const colorVal = entry.dataKey === 'profit'
                     ? (entry.value >= 0 ? colors.profitPositive : colors.profitNegative)
@@ -155,7 +162,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
                                       style={{ backgroundColor: profitIsPositive ? colors.profitPositive : colors.profitNegative }}></span>
                                 <div>
                                     <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                        Zisk {latestYear.year}
+                                        VH z hosp. činnosti {latestYear.year}
                                     </p>
                                     <div className="flex items-baseline gap-1.5">
                                         <span className={`text-base font-bold ${latestYear.profit == null
@@ -181,7 +188,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
                     {([
                         { id: 'both', label: 'Všetko' },
                         { id: 'revenue', label: 'Tržby' },
-                        { id: 'profit', label: 'Zisk' },
+                        { id: 'profit', label: 'VH z hosp. č.' },
                         ...(hasTaxData ? [{ id: 'tax' as const, label: 'Daň' }] : []),
                     ] as const).map(v => (
                         <button
@@ -258,7 +265,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
                                 strokeWidth={2.5}
                                 dot={{ r: 4, strokeWidth: 2, fill: isDark ? '#0f172a' : '#ffffff' }}
                                 activeDot={{ r: 6, strokeWidth: 2 }}
-                                name="Zisk"
+                                name="VH z hosp. činnosti"
                             />
                         )}
 

@@ -1,39 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import {screen} from '@testing-library/react';
 import {AssetsPieChart} from './AssetsPieChart';
-import {renderWithProviders} from '../../test/testUtils';
-import type {Financials} from '../../types';
+import {makeFinancials, renderWithProviders} from '../../test/testUtils';
 
-const base: Financials = {
-    year: 2023,
-    revenue: null,
-    profit: null,
-    totalRevenue: null,
-    costs: null,
-    incomeTax: null,
-    incomeTaxPaid: null,
-    assetsTotal: null,
-    assetsIntangible: null,
-    assetsTangible: null,
-    assetsFinancial: null,
-    assetsInventory: null,
-    assetsReceivablesLong: null,
-    assetsReceivablesShort: null,
-    assetsFinancialAccounts: null,
-    assetsAccruals: null,
-    equity: null,
-    equityBasic: null,
-    equityCapitalFunds: null,
-    equityProfitFunds: null,
-    equityRetained: null,
-    liabilitiesTotal: null,
-    liabilitiesReserves: null,
-    liabilitiesLong: null,
-    liabilitiesShort: null,
-    liabilitiesAccruals: null,
-    debtRatio: null,
-    grossMargin: null,
-};
+/** One statement row with every line absent — the shape the cases below vary. */
+const base = makeFinancials();
 
 describe('AssetsPieChart', () => {
     it('states the total it does have when the composition could not be read', () => {

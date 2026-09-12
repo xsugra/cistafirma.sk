@@ -61,16 +61,51 @@ describe('ProfitLossSection', () => {
     it('shows every filed line as a figure, dashes for the rest', () => {
         renderWithProviders(
             <ProfitLossSection
-                company={makeCompany({financials: [filed({revenue: 1500, profit: 300})]})}
+                company={makeCompany({
+                    financials: [filed({revenue: 1500, profit: 300, profitAfterTax: 240})],
+                })}
             />,
         );
 
         expect(screen.getByText('Tržby')).toBeInTheDocument();
+        expect(screen.getByText('Výsledok hospodárenia z hospodárskej činnosti')).toBeInTheDocument();
         expect(screen.getByText('Zisk po zdanení')).toBeInTheDocument();
         // Náklady was never filed, so its row is dropped rather than shown as
         // a column of dashes -- and no filed figure is rendered as zero.
         expect(screen.queryByText('Náklady')).not.toBeInTheDocument();
         expect(screen.queryByText('0 €')).not.toBeInTheDocument();
+    });
+
+    it('keeps the operating result and the after-tax result apart', () => {
+        // These are two rows of the statement and used to be one field, filled
+        // by whichever of them `_pick_better` liked -- the larger absolute
+        // value -- while the row was labelled "Zisk po zdanení". A statement
+        // whose two rows differ must show two different figures.
+        renderWithProviders(
+            <ProfitLossSection
+                company={makeCompany({
+                    financials: [filed({revenue: 1500, profit: 300, profitAfterTax: 240})],
+                })}
+            />,
+        );
+
+        expect(screen.getByText('300 €')).toBeInTheDocument();
+        expect(screen.getByText('240 €')).toBeInTheDocument();
+    });
+
+    it('drops the after-tax row for a year that has not been re-read since the split', () => {
+        // `profit_after_tax` is deliberately not back-filled: a row written
+        // before the two fields existed genuinely does not carry the figure,
+        // and repeating `profit` under this label would be the same
+        // substitution in a new place.
+        renderWithProviders(
+            <ProfitLossSection
+                company={makeCompany({financials: [filed({revenue: 1500, profit: 300})]})}
+            />,
+        );
+
+        expect(screen.queryByText('Zisk po zdanení')).not.toBeInTheDocument();
+        expect(screen.getByText('300 €')).toBeInTheDocument();
     });
 
     it('names why the section is empty instead of showing a blank panel', () => {

@@ -144,6 +144,7 @@ function mapCompanyResponse(data: any): Company {
           year: Number(item.year),
           revenue: toFiledAmount(item.revenue),
           profit: toFiledAmount(item.profit),
+          profitAfterTax: toFiledAmount(item.profitAfterTax),
           totalRevenue: toFiledAmount(item.totalRevenue),
           costs: toFiledAmount(item.costs),
           addedValue: toFiledAmount(item.addedValue),

@@ -701,12 +701,30 @@ class RuzFinancialsSyncService:
                 if value is not None:
                     extracted["costs"] = self._pick_better(extracted.get("costs"), value)
 
-            if (
-                "vysledok hospodarenia z hospodarskej cinnosti" in row_label
-                or "vysledok hospodarenia za uctovne obdobie po zdaneni" in row_label
-            ):
+            # Two rows, two fields -- and they used to be one field.
+            #
+            # Both labels fed `profit` and `_pick_better` chose between them by
+            # larger *absolute value*, a rule with no accounting meaning. It read
+            # as harmless because a profitable company's operating result is
+            # larger than its after-tax result, so the operating row won; but a
+            # loss grows once tax is deducted, so on every loss-making company
+            # the after-tax row won instead. The field was displayed as "Zisk po
+            # zdanení", so that substitution was invisible.
+            #
+            # Measured 2026-09-12 on the 4 383 rows where a non-zero tax makes
+            # the two distinguishable: 3 788 operating, 23 after-tax -- and all
+            # 23 of those loss-making. The rest of the picture, and what is
+            # deliberately not back-filled, is on `profit_after_tax` in
+            # `companies/models.py`.
+            if "vysledok hospodarenia z hospodarskej cinnosti" in row_label:
                 if value is not None:
                     extracted["profit"] = self._pick_better(extracted.get("profit"), value)
+
+            if "vysledok hospodarenia za uctovne obdobie po zdaneni" in row_label:
+                if value is not None:
+                    extracted["profit_after_tax"] = self._pick_better(
+                        extracted.get("profit_after_tax"), value
+                    )
 
             # P&L extended
             if "dan z prijmov" in row_label and "odlozena" not in row_label:

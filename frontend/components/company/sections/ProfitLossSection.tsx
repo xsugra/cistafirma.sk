@@ -29,9 +29,19 @@ const PL_ROWS: PlRow[] = [
     { label: 'Pridaná hodnota', value: (f) => f.addedValue },
     { label: 'Daň z príjmu', value: (f) => f.incomeTax },
     { label: 'Splatná daň', value: (f) => f.incomeTaxPaid },
+    // The statement's own order, and two rows because there are two rows in the
+    // statement. `profit` was labelled "Zisk po zdanení" here while holding the
+    // operating result for 86 % of the rows where a non-zero tax makes the two
+    // distinguishable -- so the table printed the same figure twice under
+    // different names, or printed a pre-tax number as the bottom line.
+    {
+        label: 'Výsledok hospodárenia z hospodárskej činnosti',
+        value: (f) => f.profit,
+        total: true,
+    },
     {
         label: 'Zisk po zdanení',
-        value: (f) => f.profit,
+        value: (f) => f.profitAfterTax,
         total: true,
     },
 ];

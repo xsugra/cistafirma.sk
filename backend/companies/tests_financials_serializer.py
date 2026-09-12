@@ -44,8 +44,39 @@ class FinancialsSerializerTests(TestCase):
         self.assertEqual(len(financials), 1)
         self.assertIsNone(financials[0]['revenue'])
         self.assertIsNone(financials[0]['profit'])
+        self.assertIsNone(financials[0]['profitAfterTax'])
         # ...while the lines that were filed survive as figures.
         self.assertEqual(financials[0]['assetsTotal'], 1000.0)
+
+    def test_the_two_profit_rows_are_two_figures_on_the_wire(self):
+        # `profit` is the operating result and `profit_after_tax` the bottom
+        # line. They were one field, chosen between by larger absolute value,
+        # and displayed under the after-tax name -- so the API has to keep them
+        # apart rather than let a client re-derive one from the other.
+        CompanyFinancialResult.objects.create(
+            company=self.company,
+            year=2024,
+            profit=-1000,
+            profit_after_tax=-1150,
+        )
+
+        row = self.read()[0]
+
+        self.assertEqual(row['profit'], -1000.0)
+        self.assertEqual(row['profitAfterTax'], -1150.0)
+
+    def test_a_row_not_re_read_since_the_split_has_no_after_tax_figure(self):
+        # Not back-filled on purpose: the value was never read, and repeating
+        # `profit` here would put a pre-tax figure under the after-tax name --
+        # the same substitution in a new place.
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2024, profit=300
+        )
+
+        row = self.read()[0]
+
+        self.assertEqual(row['profit'], 300.0)
+        self.assertIsNone(row['profitAfterTax'])
 
     def test_the_debt_ratio_needs_a_filed_liability_line(self):
         # Assets 1 000 and nothing said about what financed them.

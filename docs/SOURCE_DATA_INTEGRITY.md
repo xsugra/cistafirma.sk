@@ -1353,3 +1353,78 @@ answered outcome — including `NO_STATEMENTS`, which counts as a success becaus
 the registry *was* read. `updated_at` belongs to `CompanyFinancialResult` and is
 not what the rotation reads. A company with unreadable statements is therefore
 pushed out a year, exactly like a company with none.
+
+## Two P&L rows shared one field, and the rule that chose between them
+
+`CompanyFinancialResult.profit` was fed by two different rows of the income
+statement:
+
+* "Výsledok hospodárenia z hospodárskej činnosti" — the operating result, pre-tax
+* "Výsledok hospodárenia za účtovné obdobie po zdanení" — the bottom line, after tax
+
+Both were written with `_pick_better(current, candidate)`, which keeps whichever
+has the **larger absolute value**. That rule has no accounting meaning, but it
+looked harmless: a profitable company's operating result is larger than its
+after-tax result, so the operating row won. A loss, though, *grows* once tax is
+deducted — so on a loss-making company the after-tax row won instead.
+
+Meanwhile the field was displayed as **"Zisk po zdanení"** in four places
+(`FinancialIndicators.tsx`, `ProfitLossSection.tsx`, `pdfExport.ts`, and the
+model's own `verbose_name='Zisk'`). The substitution was therefore invisible.
+
+**Measured 2026-09-12** on the 4 383 rows where a non-zero `income_tax` makes
+the two rows distinguishable:
+
+| the row held | count | share |
+|---|---|---|
+| the pre-tax operating result | 3 788 | 86.4 % |
+| the after-tax result | 23 | 0.5 % |
+| neither | 572 | 13.1 % |
+
+**All 23 of the after-tax rows were loss-making** — which is the absolute-value
+rule, and nothing else. So for 86 % of the rows where the question can be
+settled at all, a pre-tax figure was being read as an after-tax one, and on the
+loss-makers the arithmetic ran the other way.
+
+### The split, and what is deliberately not back-filled
+
+`profit` is now the operating result and nothing else, and the after-tax row has
+its own field. `profit_after_tax` was added in migration
+`0016_companyfinancialresult_profit_after_tax`, nullable and **not back-filled**:
+a row that has not been re-read since the split genuinely does not carry the
+figure, and repeating `profit` under the after-tax label would be the same
+substitution in a new place. The screen draws a dash for it, which is the honest
+answer.
+
+Three things about the parser are unchanged on purpose, because changing them
+would move behaviour nobody asked to move:
+
+* the `PROFIT_KEYS` **table-name** fallback still writes `profit` — a table
+  named "Výsledok hospodárenia" is matched by name, not by row label, and it
+  gives the same figure the operating row would;
+* the computed fallback `profit = revenue - costs` still fills `profit` only.
+  That identity *is* the operating result, so it is correct there and must never
+  reach `profit_after_tax`;
+* `STATEMENT_HEADLINE_FIELDS` still lists `profit` and not `profit_after_tax`, so
+  the write gate behaves exactly as before.
+
+### The residual, and where it comes from
+
+The 572 "neither" rows are not explained by this defect. They are dominated by
+**pre-2015 statements**, whose older templates the row-label vocabulary does not
+match — the table-name fallback fires instead, which is a separate data-quality
+gap and is recorded here rather than conflated with the fix.
+
+`update_or_create(defaults={... if v is not None})` skips `None` values, so a
+re-sync **cannot** overwrite a row's `profit` with an empty reading, and equally
+cannot correct one whose re-parse reads no operating row. Any residue after the
+re-sync has to be measured and reported, not assumed away.
+
+### A note on the ratio engine
+
+`ROA` and `ROS` read `fr.profit`, i.e. now consistently the operating result.
+Whether they should read the after-tax figure — the conventional choice for a
+return ratio — is a **product decision, not taken here**. Switching them now
+would blank every ROA and ROS on the site, because `profit_after_tax` is NULL
+for every existing row until the re-sync has run. The question is worth
+revisiting once its coverage can be measured.
