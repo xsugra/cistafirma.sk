@@ -62,10 +62,11 @@ function pasivaTotal(f: Financials): number | null {
  *
  * `assets = equity + liabilities + accruals` is not a nice-to-have here: it is
  * the one check on this page that can be made from the data alone, without a
- * second source and without trusting the parser. Measured 2026-09-12, it holds
- * in 96 % of rows and held in 25 % before the asset-side reading was fixed --
- * so a reader who sees it fail is looking at a genuinely suspect row, and a
- * reader who sees it hold has a reason to believe the numbers above it.
+ * second source and without trusting the parser. Measured 2026-09-12 over every
+ * stored row carrying all four figures (11 796 of 14 184), it holds in 93.5 %
+ * and held in 25 % before the asset-side reading was fixed -- so a reader who
+ * sees it fail is looking at a genuinely suspect row, and a reader who sees it
+ * hold has a reason to believe the numbers above it.
  */
 export const BalanceSheetSection: React.FC<BalanceSheetSectionProps> = ({ company }) => {
     const years = [...company.financials].sort((a, b) => a.year - b.year).slice(-5);

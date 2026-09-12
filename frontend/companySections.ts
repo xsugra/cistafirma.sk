@@ -64,7 +64,7 @@ export const COMPANY_SECTIONS = [
     },
     {
         id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale', group: 'Financie', status: 'ready',
-        note: 'Aktíva a pasíva po rokoch, s kontrolou, že aktíva = vlastné imanie + záväzky + časové rozlíšenie. Kontrola sedí v 96 % načítaných riadkov (pred opravou čítania aktív v 25 %).',
+        note: 'Aktíva a pasíva po rokoch, s kontrolou, že aktíva = vlastné imanie + záväzky + časové rozlíšenie. Kontrola sedí v 93,5 % riadkov, ktoré majú všetky štyri čísla (pred opravou čítania aktív v 25 %).',
     },
     {
         id: 'vykaz', label: 'Výkaz ziskov a strát', icon: 'fa-chart-line', group: 'Financie', status: 'ready',
