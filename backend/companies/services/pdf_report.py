@@ -275,7 +275,7 @@ def generate_company_report(company: Company) -> bytes:
                 ratio_rows.append({
                     'label': row_def['label'],
                     'display': _fmt(val, row_def['unit']),
-                    'interpretation': interp.get(key, 'bad'),
+                    'interpretation': interp.get(key, 'unknown'),
                 })
 
     # Financial history rows
@@ -313,6 +313,13 @@ def generate_company_report(company: Company) -> bytes:
                 # beside a percentage median, which flattered almost every
                 # company. The filed debt ratio for the analysed year is the
                 # figure the sector median is a median *of*.
+                # `company_ratios` comes from `FinancialAnalysisService.to_dict`
+                # and is camelCase. Three of the six rows here asked for
+                # `current_ratio`, `self_financing_ratio` and `debt_to_equity`
+                # instead, which resolved to None every single time -- the
+                # company half of those rows printed "—" beside a real median,
+                # with no error anywhere. `roa`/`roe`/`ros` are spelled the same
+                # in both, which is what kept it invisible.
                 latest_fr = financial_results[-1]
                 filed_debt_ratio = _ratio_present(
                     _sum_present(
@@ -321,13 +328,22 @@ def generate_company_report(company: Company) -> bytes:
                     ),
                     _amount(latest_fr.assets_total),
                 )
+                # The same two expressions the API computes `debtRatio` and
+                # `grossMargin` with, so the printed figure and the one on the
+                # company page cannot drift apart.
+                filed_gross_margin = _ratio_present(
+                    _amount(latest_fr.added_value), _amount(latest_fr.revenue)
+                )
                 bench_metrics = [
                     ('ROA', company_ratios.get('roa'), _amount(bm.median_roa), '%'),
                     ('ROE', company_ratios.get('roe'), _amount(bm.median_roe), '%'),
                     ('ROS', company_ratios.get('ros'), _amount(bm.median_ros), '%'),
                     ('Zadĺženosť', filed_debt_ratio, _amount(bm.median_debt_ratio), '%'),
-                    ('L3 Likvidita', company_ratios.get('current_ratio'), _amount(bm.median_current_ratio), '×'),
-                    ('Samofinancovanie', company_ratios.get('self_financing_ratio'), _amount(bm.median_self_financing_ratio), '%'),
+                    # Was missing from the export entirely while the company page
+                    # carried it -- the one row a trade reader looks for first.
+                    ('Hrubá marža', filed_gross_margin, _amount(bm.median_gross_margin), '%'),
+                    ('L3 Likvidita', company_ratios.get('currentRatio'), _amount(bm.median_current_ratio), '×'),
+                    ('Samofinancovanie', company_ratios.get('selfFinancingRatio'), _amount(bm.median_self_financing_ratio), '%'),
                 ]
                 for label, cv, sv, unit in bench_metrics:
                     benchmark_rows.append({

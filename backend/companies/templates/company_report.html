@@ -130,6 +130,8 @@
         table .good { color: #16a34a; }
         table .warn { color: #d97706; }
         table .bad { color: #dc2626; }
+        /* No verdict: the statement did not carry the line. Neutral, not red. */
+        table .unknown { color: #94a3b8; }
 
         /* ── Z-score card ── */
         .zscore {
@@ -269,8 +271,8 @@
                 <td>{{ row.label }}</td>
                 <td class="num">{{ row.display }}</td>
                 <td class="num">
-                    <span class="{% if row.interpretation == 'good' %}good{% elif row.interpretation == 'warning' %}warn{% else %}bad{% endif %}">
-                        {% if row.interpretation == 'good' %}Priaznivá{% elif row.interpretation == 'warning' %}Uspokojivá{% else %}Riziková{% endif %}
+                    <span class="{% if row.interpretation == 'good' %}good{% elif row.interpretation == 'warning' %}warn{% elif row.interpretation == 'unknown' %}unknown{% else %}bad{% endif %}">
+                        {% if row.interpretation == 'good' %}Priaznivá{% elif row.interpretation == 'warning' %}Uspokojivá{% elif row.interpretation == 'unknown' %}—{% else %}Riziková{% endif %}
                     </span>
                 </td>
             </tr>

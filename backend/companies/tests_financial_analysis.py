@@ -23,6 +23,12 @@ def ratios(**fields):
     return FinancialAnalysisService._analyze_year(row, None).ratios
 
 
+def year(**fields):
+    """The whole analysed year, ratios and verdicts together."""
+    row = CompanyFinancialResult(year=2025, **fields)
+    return FinancialAnalysisService._analyze_year(row, None)
+
+
 class LiquidityRatioPresenceTests(SimpleTestCase):
     def test_a_balance_sheet_without_an_asset_detail_has_no_liquidity(self):
         # Assets and equity filed, no breakdown of the current assets at all.
@@ -90,3 +96,75 @@ class LiquidityRatioPresenceTests(SimpleTestCase):
 
         self.assertIsNone(year.z_score)
         self.assertIsNone(year.ratios.roa)
+
+
+class InterpretationVocabularyTests(SimpleTestCase):
+    """The four tokens, and which one an unmeasured ratio gets.
+
+    `interpretation` crosses three boundaries -- the API, the PDF template and
+    `frontend/types.ts` -- and each one has its own copy of the token set. A
+    token added here without them renders as an unstyled pill or a blank cell,
+    and a token *removed* here leaves the frontend's `?? 'unknown'` fallback as
+    the only thing standing between a missing verdict and `undefined` on screen.
+    So the set is asserted, not assumed.
+    """
+
+    RATIO_KEYS = (
+        'roa', 'roe', 'ros', 'current_ratio', 'quick_ratio',
+        'cash_ratio', 'asset_turnover', 'receivables_collection',
+        'debt_to_equity', 'self_financing_ratio',
+    )
+
+    def test_every_ratio_carries_a_verdict(self):
+        # A key missing from the dict is a key the frontend has to guess at.
+        analysed = year(assets_total=1000, equity=600, liabilities_total=400)
+
+        self.assertEqual(sorted(analysed.interpretation), sorted(self.RATIO_KEYS))
+
+    def test_the_vocabulary_is_closed(self):
+        # A balance sheet with every line present, so nothing is `unknown`.
+        measured = year(
+            assets_total=1000, equity=600, liabilities_total=400, profit=100,
+            total_revenue=2000, assets_inventory=100,
+            assets_receivables_short=100, assets_financial_accounts=50,
+            liabilities_short=200,
+        )
+
+        self.assertLessEqual(
+            set(measured.interpretation.values()), {'good', 'warning', 'bad'}
+        )
+
+    def test_an_unmeasured_ratio_is_not_given_a_verdict(self):
+        # The whole point: `bad` is the harshest word in the vocabulary and it
+        # used to be handed out for a line the filing never carried.
+        analysed = year(assets_total=1000, equity=600, liabilities_total=400)
+
+        self.assertEqual(analysed.interpretation['roa'], 'unknown')
+        self.assertEqual(analysed.interpretation['cash_ratio'], 'unknown')
+        for key, token in analysed.interpretation.items():
+            with self.subTest(key=key):
+                if getattr(analysed.ratios, key) is None:
+                    self.assertEqual(token, 'unknown')
+
+    def test_a_measured_ratio_that_is_bad_is_still_called_bad(self):
+        # `unknown` must not swallow the real verdict, or the fix trades a
+        # false alarm for a missing one.
+        analysed = year(
+            assets_total=1000, equity=100, liabilities_total=900,
+            profit=-50, total_revenue=1000,
+        )
+
+        self.assertEqual(analysed.interpretation['roa'], 'bad')
+
+    def test_the_serialized_year_keeps_the_fourth_token(self):
+        # `to_dict` is what the API and the PDF read; a vocabulary that stops
+        # at `_analyze_year` reaches nobody.
+        result = FinancialAnalysisService.analyze([
+            CompanyFinancialResult(
+                year=2025, assets_total=1000, equity=600, liabilities_total=400
+            )
+        ])
+
+        payload = FinancialAnalysisService.to_dict(result)
+
+        self.assertEqual(payload['latest']['interpretation']['roa'], 'unknown')

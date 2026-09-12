@@ -126,7 +126,10 @@ export interface RatioSet {
 export interface YearAnalysis {
   year: number;
   ratios: RatioSet;
-  interpretation: Record<string, 'good' | 'warning' | 'bad'>;
+  // `unknown` is a token, not a missing key: the backend answers it for a ratio
+  // the statement did not support, so the screen can say "not judged" instead of
+  // defaulting to a verdict.
+  interpretation: Record<string, 'good' | 'warning' | 'bad' | 'unknown'>;
   zScore: number | null;
   zScoreLabel: string | null;
 }

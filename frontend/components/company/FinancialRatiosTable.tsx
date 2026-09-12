@@ -56,12 +56,15 @@ const INTERPRETATION_LABELS: Record<string, string> = {
     good: 'Priaznivá',
     warning: 'Uspokojivá',
     bad: 'Riziková',
+    unknown: '—',
 };
 
 const INTERPRETATION_COLORS: Record<string, string> = {
     good: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20',
     warning: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
     bad: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
+    // Not judged: the statement did not carry the line.
+    unknown: 'text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-slate-800',
 };
 
 const TrendArrowMini: React.FC<{ current: number; previous: number; inverse?: boolean }> = ({
@@ -177,14 +180,12 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                                     {section.rows.map((row) => {
                                         const ratios = analysis.ratios as unknown as Record<string, number | null>;
                                         const value = ratios[row.key];
-                                        // A row with no figure gets no verdict. The
-                                        // backend answers `bad` for a value the
-                                        // statement never carried, which put a red
-                                        // "Riziková" badge beside a dash -- a claim
-                                        // about the company rather than the filing.
-                                        const interp = value == null
-                                            ? null
-                                            : (analysis.interpretation[row.key] || 'bad');
+                                        // One source of truth: the backend's token.
+                                        // It answers `unknown` for a ratio the
+                                        // statement did not support, so a row with no
+                                        // figure gets no verdict -- it used to get
+                                        // `bad`, a red "Riziková" beside a dash.
+                                        const interp = analysis.interpretation[row.key] ?? 'unknown';
                                         const prevVal = getPrevValue(row.key);
 
                                         return (
@@ -208,15 +209,11 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                                                     )}
                                                 </td>
                                                 <td className="px-4 py-2.5 text-right">
-                                                    {interp ? (
-                                                        <span
-                                                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${INTERPRETATION_COLORS[interp]}`}
-                                                        >
-                                                            {INTERPRETATION_LABELS[interp]}
-                                                        </span>
-                                                    ) : (
-                                                        <span className="text-gray-400 dark:text-gray-500">—</span>
-                                                    )}
+                                                    <span
+                                                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${INTERPRETATION_COLORS[interp]}`}
+                                                    >
+                                                        {INTERPRETATION_LABELS[interp]}
+                                                    </span>
                                                 </td>
                                             </tr>
                                         );

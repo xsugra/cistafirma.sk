@@ -126,9 +126,17 @@ def _simple_ratio(a: float, b: float) -> float | None:
 
 
 def _interpret(value: float | None, key: str) -> str:
-    """Return 'good', 'warning', or 'bad' based on threshold table."""
+    """Return 'good', 'warning', 'bad', or 'unknown' from the threshold table.
+
+    A ratio the filing did not support has no verdict, and `unknown` says that
+    out loud. It used to answer `bad`, which is the strongest claim in the
+    vocabulary: it told the reader a company was risky because a line was
+    missing from a form. `_interpret` is a closed vocabulary shared with the
+    PDF template and the frontend -- every one of them has to know the fourth
+    token, or `bad` reappears one layer up.
+    """
     if value is None:
-        return 'bad'
+        return 'unknown'
 
     thresholds = THRESHOLDS.get(key)
     if thresholds is None:
