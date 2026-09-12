@@ -18,6 +18,27 @@ logger = logging.getLogger(__name__)
 @api_view(['GET'])
 @perm_classes([permissions.AllowAny])
 def landing_stats(request):
+    """Three counts for the public landing page.
+
+    Two of these have names that describe something other than what they count,
+    and both mislead in the reassuring direction, so read this before renaming
+    either back:
+
+    * `dailyChecks` is **not** a count of checks we ran. `datum_poslednej_upravy`
+      is `Dátum a čas kontroly RUZ`, and it is filled from RUZ's own
+      `datumPoslednejUpravy` -- the date the *register* last modified the record.
+      So this counts companies whose register entry changed today. The RUZ
+      incremental sync runs every six hours (`fetch-ruz-data-every-6-hours`) and
+      legitimately changes nothing on most runs: measured 2026-09-12, 30 of the
+      previous 90 days had any change at all, so this figure is 0 on two days in
+      three. The frontend label says "Zmien v registri dnes" for that reason. The
+      key is kept for API compatibility; a rename is a contract decision, not a
+      cleanup.
+    * `riskyCompaniesDetected` has **no date filter at all**. It is every company
+      carrying any recorded debt -- cumulative, not daily. The frontend label says
+      "Firiem s evidovaným dlhom" rather than the "Odhalených rizík dnes" it used
+      to say, which claimed a window the query never had.
+    """
     today = timezone.now().date()
     companies_indexed = Company.objects.count()
     risky = Company.objects.filter(

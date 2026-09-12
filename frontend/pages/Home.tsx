@@ -79,10 +79,19 @@ export const Home: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
                     {[
                         {val: stats.companiesIndexed, label: 'Indexovaných firiem', icon: 'fa-database'},
-                        {val: stats.dailyChecks, label: 'Denných kontrol', icon: 'fa-sync'},
+                        // Both of the next two labels used to say something the
+                        // number does not. "Denných kontrol" counted companies
+                        // whose *RUZ record changed* today -- the date comes from
+                        // RUZ's own `datumPoslednejUpravy`, not from our checks --
+                        // and "Odhalených rizík dnes" counted every company with a
+                        // recorded debt, with no date filter anywhere in the
+                        // query. On the public homepage a false label is a false
+                        // claim about the register, so the labels now name the
+                        // window and the thing that is actually counted.
+                        {val: stats.dailyChecks, label: 'Zmien v registri dnes', icon: 'fa-sync'},
                         {
                             val: stats.riskyCompaniesDetected,
-                            label: 'Odhalených rizík dnes',
+                            label: 'Firiem s evidovaným dlhom',
                             icon: 'fa-shield-virus',
                             plus: true
                         }
