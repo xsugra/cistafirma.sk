@@ -1102,13 +1102,119 @@ a statement whose every table is unreadable contributes no field, counts as zero
 rows, and a *failed template fetch* would then arrive as "this company has no
 statements". That is the conflation `UNREACHABLE` was introduced to undo.
 
-### Still open: the write gate discards a balance sheet on its own
+### Still open: the write gate, now observed
 
-The gate above keeps a statement only if it carries `revenue` or `profit`. A
-statement carrying only a balance sheet is therefore discarded whole — and a
-company whose every statement is discarded never advances `updated_at`, so it
-stays at the head of the rotation. Two companies are in that state today:
-**00179027** (7 statements, none readable) and **00699349** (13 statements, none
-readable). Both were surfaced by the re-sync (`no_statements 2`) and neither was
-changed. Whether the gate should keep a balance-sheet-only row is a product
-decision, not a parser one.
+The gate above keeps a statement only if it carries `revenue` or `profit`. Read
+literally, that discards a statement carrying a readable balance sheet and no
+income statement. **Measured 2026-09-12 over 370 statements of 25 companies: the
+gate discarded nothing.** Measured again over the whole population in which the
+case can appear — every company the rotation attempted and stored no result for,
+79 of them — it discards **one**:
+
+* **00591653** (*PRO-GERS, v.o.s.*) — four statements (2013–2016), each of which
+  yields a balance sheet (`assets_total = 328`, `equity = 328`) and neither a
+  revenue nor a profit. All four are discarded, so the company stores nothing at
+  all. The refusal is the gate's, not the parser's.
+
+Still rare, and still left alone rather than changed on a reading of the code —
+but no longer unobserved.
+
+### Four causes, one string
+
+Both companies above were reported the same way, as `NO_STATEMENTS` with the
+detail *"N statement(s) present, none readable"*. That string is reached at
+`ruz_financials_sync.py:232` whenever `upserts == 0`, and it is the same whether
+
+1. the report bodies carry **no tables at all** (`00179027`, and nine of the
+   thirteen statements of `00699349`),
+2. the bodies carry a template with **every cell empty** (see the second
+   correction below),
+3. the bodies carry tables **with values**, and no key or column rule maps them
+   (`00681393`, `00699349`'s four 1164 statements), or
+4. the statements were **read**, and the write gate discarded them (`00591653`).
+
+The fourth is the one that misleads: it says "none readable" about statements
+the parser read. The distinction is not cosmetic — it is what decides where a
+reader looks. Cases 1 and 2 are the registry having nothing to give; case 3 is a
+parser gap; case 4 is a decision this code makes. All four are invisible from the
+outside, which is why investigating this took two wrong turns before the reports
+themselves were read: an outcome that cannot say *why* it is empty invites the
+reader to supply a reason, and the first one supplied was wrong.
+
+Separating the four needs two counts the loop does not keep today — whether any
+report body carried a table at all, and whether any table carried a filled cell —
+alongside `upserts` and the gate's own skip count, which are already in hand.
+None of that changes what is written: the extraction entry point has a single
+production caller (`_read_company:211`), and the same instinct is already in the
+file, where a table *named* like a revenue that yields no total is worth a
+warning rather than silence. It matters here because the outcome is
+`NO_STATEMENTS`, which counts as an answered sync and pushes the next attempt out
+by `ANSWERED_RETRY_AFTER`: the reason has to travel in the detail, because
+nothing else about the run survives.
+
+### The non-profit statement, measured
+
+`00699349` is *Katolícka jednota Slovenska* — not an obec but a civic body, and
+its statement is not Výnosy/Náklady but Príjmy/Výdavky with Majetok/Záväzky.
+Its four tables fail for **two different reasons**, and the distinction decides
+what a fix would cost:
+
+| table | shape | why it yields nothing |
+|---|---|---|
+| `Majetok`, `Záväzky` | resolves (`[2, 0]`) | vocabulary: `majetok` and `záväzky` are in neither `BALANCE_SHEET_KEYS` nor the total-label tuples, so recognised rows never become a field |
+| `Príjmy`, `Výdavky` | refused (`None`) | no header names the preceding period, so a two-column table has no locatable current period — the same refusal as the two templates above |
+
+The column rule is **not** what fails here, and that was verified against the
+header rather than assumed: for šablóna 699 the code picks the right column
+(`stlpec 4` = "bežné účtovné obdobie", `stlpec 5` = "bezprostredne
+predchádzajúce účtovné obdobie"), and the four-column asset side resolves to
+index 2, the cell labelled "netto 2".
+
+**How large it is, measured rather than inferred.** Of 445 626 companies,
+**69 906** carry a non-profit or public-sector legal form, and 834 of the 1 250
+companies the financials rotation has attempted are in that set — but 824 of
+those 834 hold a stored result, which means their statements **read fine**: they
+file the ordinary form the parser handles. The gap can only appear where nothing
+was stored, because a company that yields no field never gets a row. That
+population is **79 companies**, and measured across all of it on 2026-09-12:
+
+| what the 79 did | companies |
+|---|---|
+| have no statements in RUZ at all | 69 |
+| carry statements whose report bodies have no tables | 5 |
+| carry a template with every cell empty | 3 |
+| carry readable statements the write gate discarded | 1 |
+| **carry tables with values and yield no field** — the gap | **1** |
+
+So the gap is one company: `00681393` (*Združenie saleziánov spolupracovníkov*),
+four statements on šablóna 1164. That is what "824 of the companies with stored
+results are non-profit" does *not* mean, and an earlier version of this section
+implied it did. The family is large; the gap inside it is not.
+
+**A correction to an earlier version of this section.** It reported that
+`00699349`'s reports "do carry tables, and the parser reads none of them",
+implying one defect, and attributed it to the municipal vocabulary. Both halves
+are now measured and neither is the whole story: nine of its thirteen statements
+carry no tables at all, and the four that do fail for the two separate reasons
+in the table above.
+
+**A second correction.** An earlier sample counted a statement as a defect
+whenever its report bodies carried tables and the parser produced no field —
+"has tables" read as "has data". Measured 2026-09-12 over 920 statements of 60
+companies: of the 17 that yielded nothing, 12 carried no tables at all and 4
+carried a template with **every cell empty** (`neprázdnych = 0`), both correctly
+read as nothing. The last one (`00695904`, 2019, šablóna 699) keeps its numbers
+in the comparative column: the current-period column is genuinely empty and the
+header names the other one, so refusing is right. A body can carry tables and no
+data, and the classifier had no bucket for that — which is why the defect rate
+it reported (5 in 920) was not real.
+
+**A correction to an earlier version of this section.** It claimed that a
+company whose statements all yield nothing "stays at the head of the rotation".
+That is wrong twice over. The rotation selects on
+`CompanySyncStatus.next_retry_at` (`sync_engine.py:580`), and
+`sync_company_and_record` advances that by `ANSWERED_RETRY_AFTER` on every
+answered outcome — including `NO_STATEMENTS`, which counts as a success because
+the registry *was* read. `updated_at` belongs to `CompanyFinancialResult` and is
+not what the rotation reads. A company with unreadable statements is therefore
+pushed out a year, exactly like a company with none.
