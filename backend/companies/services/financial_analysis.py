@@ -514,6 +514,12 @@ class FinancialAnalysisService:
         #
         # X4 is `revenue_filed`, the same quantity the printed turnover row and
         # Altman's X5 take, so the three cannot disagree about what "tržby" was.
+        #
+        # `liabilities_short > 0` and not merely `is not None`: a filing that
+        # carries the line as a filed zero ("no short-term liabilities") is a
+        # real shape, and X1 divides by it. The ratio is then genuinely
+        # undefined -- infinite short-term-debt cover is not a measurement -- so
+        # the model is left unscored rather than crashed on.
         taffler_score = None
         taffler_label = None
         if (
@@ -522,6 +528,7 @@ class FinancialAnalysisService:
             and fr.profit is not None
             and revenue_filed is not None
             and liabilities_short is not None
+            and liabilities_short > 0
             and current_assets is not None
         ):
             t1 = profit / liabilities_short

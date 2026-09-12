@@ -374,6 +374,19 @@ class TafflerModelTests(SimpleTestCase):
         self.assertIsNone(y.taffler_zone)
         self.assertIsNone(y.taffler_label)
 
+    def test_a_filed_zero_short_term_liability_is_unscored_not_a_crash(self):
+        # "No short-term liabilities" is a real filing, and X1 divides by it.
+        # The ratio is genuinely undefined there, so the model is left unscored
+        # -- it must not raise, and it must not be handed the other three terms
+        # as if the first one were fine.
+        y = self._year(liabilities_short=0)
+        self.assertIsNone(y.taffler_score)
+        self.assertIsNone(y.taffler_zone)
+
+    def test_a_filed_zero_liability_total_is_unscored_not_a_crash(self):
+        y = self._year(liabilities_total=0)
+        self.assertIsNone(y.taffler_score)
+
     def test_a_filing_with_no_current_asset_line_is_not_a_zero(self):
         y = self._year(
             assets_inventory=None,
