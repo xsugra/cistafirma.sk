@@ -992,3 +992,123 @@ to eight; its `oddiel` comes from a `<span class="ra">` table cell matched by
 characters, and the widest `oddiel` ever stored is 34 characters against a
 column of 50. The defect is specific to RPO, which copies source strings
 verbatim.
+
+## The asset side read a four-column table as two
+
+The balance sheet's asset side (šablóna 699, "Strana aktív") has four data
+columns: **Brutto**, **Korekcia**, **Netto** for the current period, then the
+same for the preceding one. `_extract_with_template` decided how many columns a
+table had by asking whether the flattened values were *at least* twice the row
+count:
+
+```python
+if len(data) >= len(rows) * 2:
+    return data[idx * 2]      # "two columns"
+```
+
+For a four-column table that test is true and wrong at the same time. The code
+then read template row *i* as sheet row `i // 2`, column `2 * (i % 2)`, so
+`assets_total` held the **Brutto bežné** of one line and every asset line below
+it held another row's value entirely. The label and the number disagreed, and
+nothing in the system compared them.
+
+The correct width is not an inference, it is arithmetic: `data` is the table's
+values flattened row by row, so it is `rows x columns` long, and the template
+declares `pocetDatovychStlpcov`. Measured on 2026-09-12 across **38 tables of 25
+companies**: `len(data) == len(rows) * pocetDatovychStlpcov` in **38 of 38**.
+The guess was never needed.
+
+### The second instance, in the same file
+
+`_extract_table_total` returned `numbers[-1]` — the last numeric value anywhere
+in the flattened table, in whatever column it landed. The tables it serves are
+the ones whose *name* matches the revenue/cost/profit keys: "Výnosy" and
+"Náklady" (šablóny 696 and 727), four columns wide, where the current period
+occupies the first three and the fourth repeats the previous one. Those tables
+end in empty "Kontrolné číslo súčet" rows, so the last value found was the last
+filled row's **fourth** column — last year's figure, stored as this year's. For
+the companies using those templates those two tables are the *only* source of
+`revenue` and `costs`, so the wrong number had nothing beside it to contradict
+it. Reading down from the bottom for the last non-empty value **in the current
+period's column** keeps the original intent (the table's own total row) and
+drops the part that was arbitrary.
+
+### Why nothing noticed: a success schedules itself a year out
+
+`ANSWERED_RETRY_AFTER = timedelta(days=365)` (`sync_engine.py:72`): a company
+that answers is pushed a year away, so `rotating_batch` would never have
+re-read the 696 affected companies. The rotation was working exactly as
+designed — which is why the defect needed a deliberate re-sync, not a wait.
+
+The numbers were also wrong in a way no reader could catch. The write gate
+(`ruz_financials_sync.py:214`) keeps a statement only when it carries a
+`revenue` or a `profit`, so a balance sheet that read a neighbouring column
+still arrived as a complete-looking row; and `analysis` is computed on read
+(`companies/serializers.py:111`), so there was no stored figure to disagree
+with.
+
+### Measured before and after, 2026-09-12
+
+The identity is `assets = equity + liabilities + accruals`, over the rows whose
+equity is positive (7 343 before, 7 368 after — the reading changed whether some
+rows qualified at all, so both denominators are given).
+
+| | before | after |
+|---|---|---|
+| Rows where the identity holds | 1 849 / 7 343 = **25.2 %** | 7 104 / 7 368 = **96.4 %** |
+| Rows where assets exceed equity + liabilities | 5 458 | **4** |
+| Rows with no `assets_total` at all | 39 | **7** |
+| Rows more than 10 % of assets out | 66.6 % | **0.0 %** |
+| Worst absolute difference | 999 679.64 | **995.58** |
+| Worst relative discrepancy | 365 870 % | **2.643 %** |
+
+**Fixed 2026-09-12** (`edc5063`), proved on three levels: 25 unit tests
+(including against Postgres in the container), the 38/38 width measurement, and
+the live table above.
+
+### The re-sync, and what it cost the registry
+
+`fetch_ruz_financials --ico-file` runs `sync_company_and_record` synchronously —
+no Celery, no worker restart, no rate limiter on this path (the `rate_limit` on
+the task decorator does not apply). 696 companies: **694 recorded, 2 with no
+statements, 0 not in RUZ, 0 unreachable, 10 405 rows written, 0 errors.** No
+backup or restore was involved; the volume was not touched.
+
+The selection had to be fixed first: filtering `updated_at__lt=cutoff` *per row*
+re-selected forever any company holding one stale unreadable year, re-fetching
+its whole history from RUZ on every run. Selecting on
+`Max("updated_at")` per company is a correctness fix, not an optimisation —
+"we have already read this company" is a fact about the company, not about one
+of its years.
+
+### Two templates are now refused that used to be read
+
+`Výdavky` (8) and `Príjmy` (8) — 2 columns, internally consistent shapes — are
+refused because their templates carry no header naming the preceding period, so
+the current period's column cannot be located. This is a **pre-existing gap for
+obec and non-profit accounting**, whose statement is Príjmy/Výdavky rather than
+Výnosy/Náklady, and it has **zero field impact**: those names map to no key in
+`REVENUE_KEYS`/`COST_KEYS`/`PROFIT_KEYS`, so the old code read them and threw
+the result away. They went from read-but-unused to refused. Reported here rather
+than papered over.
+
+### Left alone deliberately
+
+A table with **no template at all** keeps the old `numbers[-1]` reading. That is
+a different population from the one measured — every table in the 38-table
+sample had its template, so nothing is known about how wide a template-less
+table is — and refusing there would move a documented outcome as a side effect:
+a statement whose every table is unreadable contributes no field, counts as zero
+rows, and a *failed template fetch* would then arrive as "this company has no
+statements". That is the conflation `UNREACHABLE` was introduced to undo.
+
+### Still open: the write gate discards a balance sheet on its own
+
+The gate above keeps a statement only if it carries `revenue` or `profit`. A
+statement carrying only a balance sheet is therefore discarded whole — and a
+company whose every statement is discarded never advances `updated_at`, so it
+stays at the head of the rotation. Two companies are in that state today:
+**00179027** (7 statements, none readable) and **00699349** (13 statements, none
+readable). Both were surfaced by the re-sync (`no_statements 2`) and neither was
+changed. Whether the gate should keep a balance-sheet-only row is a product
+decision, not a parser one.
