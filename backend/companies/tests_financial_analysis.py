@@ -16,8 +16,10 @@ from django.test import SimpleTestCase
 from companies.models import CompanyFinancialResult
 from companies.services.financial_analysis import (
     RATIO_WIRE_KEYS,
+    TAFFLER_ZONE_LABELS,
     Z_SCORE_ZONE_LABELS,
     FinancialAnalysisService,
+    taffler_zone,
     z_score_zone,
 )
 
@@ -306,6 +308,172 @@ class AltmanZoneTests(SimpleTestCase):
         self.assertIsNone(payload['latest']['zScoreZone'])
         self.assertIsNone(payload['latest']['zScoreLabel'])
 
+
+
+class TafflerModelTests(SimpleTestCase):
+    """The Taffler model, on a statement whose arithmetic was done by hand.
+
+    The whole risk of adding a second scoring model is that its constants are
+    transcribed wrongly and nothing notices, because a wrong score is still a
+    number in the right range. So the case below is computed from the published
+    weights -- ZT = 0,53·X1 + 0,13·X2 + 0,18·X3 + 0,16·X4 -- by hand, and the
+    assertion is against that arithmetic rather than against the code's output.
+
+        X1 = zisk pred zdanením / krátkodobé záväzky = 60 / 250   = 0,24
+        X2 = obežný majetok / cizí zdroje            = 350 / 400  = 0,875
+        X3 = krátkodobé záväzky / aktíva             = 250 / 1000 = 0,25
+        X4 = tržby / aktíva                          = 1200 / 1000 = 1,2
+        ZT = 0,53(0,24) + 0,13(0,875) + 0,18(0,25) + 0,16(1,2) = 0,47795
+    """
+
+    #: One statement, spelled once, so every case below differs from it in
+    #: exactly the field it is about.
+    FILED = dict(
+        year=2025,
+        assets_total=1000,
+        liabilities_total=400,
+        liabilities_short=250,
+        profit=60,
+        total_revenue=1200,
+        assets_inventory=100,
+        assets_receivables_short=150,
+        assets_receivables_long=50,
+        assets_financial_accounts=50,
+    )
+
+    def _year(self, **overrides):
+        fields = {**self.FILED, **overrides}
+        return FinancialAnalysisService._analyze_year(
+            CompanyFinancialResult(**fields), None
+        )
+
+    def test_the_score_is_the_published_arithmetic(self):
+        y = self._year()
+        # 0.47795 rounds to 0.48, not to 0.47: the service rounds half up.
+        self.assertEqual(y.taffler_score, 0.48)
+
+    def test_the_zone_is_derived_from_that_score(self):
+        y = self._year()
+        self.assertEqual(y.taffler_zone, taffler_zone(0.48))
+        self.assertEqual(y.taffler_label, TAFFLER_ZONE_LABELS['safe'])
+
+    def test_x4_takes_the_revenue_side_the_rest_of_the_module_takes(self):
+        # `revenue` alone, with no `total_revenue`, is the common shape (98,3 %
+        # of stored rows against 22,9 %). The score must be computable from it,
+        # and must equal the score with `total_revenue` set to the same figure.
+        self.assertEqual(
+            self._year(total_revenue=None, revenue=1200).taffler_score, 0.48
+        )
+
+    def test_a_missing_short_term_liability_line_is_not_a_zero(self):
+        # X1's denominator and X3's numerator. Read as 0, X1 divides by zero and
+        # X3 becomes "no short-term debt" -- a claim about the company from a
+        # line the filing never carried.
+        y = self._year(liabilities_short=None)
+        self.assertIsNone(y.taffler_score)
+        self.assertIsNone(y.taffler_zone)
+        self.assertIsNone(y.taffler_label)
+
+    def test_a_filing_with_no_current_asset_line_is_not_a_zero(self):
+        y = self._year(
+            assets_inventory=None,
+            assets_receivables_short=None,
+            assets_receivables_long=None,
+            assets_financial_accounts=None,
+        )
+        self.assertIsNone(y.taffler_score)
+
+    def test_a_filing_with_no_profit_is_not_a_zero(self):
+        self.assertIsNone(self._year(profit=None).taffler_score)
+
+    def test_a_filing_with_no_revenue_side_is_not_a_zero(self):
+        self.assertIsNone(self._year(total_revenue=None, revenue=None).taffler_score)
+
+    def test_a_filing_with_no_assets_is_not_scored(self):
+        self.assertIsNone(self._year(assets_total=None).taffler_score)
+        self.assertIsNone(self._year(assets_total=0).taffler_score)
+
+    def test_a_partial_current_asset_reading_still_scores(self):
+        # One line of the four is a partial reading, and a partial reading is
+        # what the current ratio and the sector medians take too. Refusing it
+        # would replace a slightly low figure with no figure at all.
+        y = self._year(
+            assets_receivables_short=None,
+            assets_receivables_long=None,
+            assets_financial_accounts=None,
+        )
+        self.assertIsNotNone(y.taffler_score)
+
+    def test_the_serialized_zone_and_label_are_the_same_verdict(self):
+        payload = FinancialAnalysisService.to_dict(
+            FinancialAnalysisService.analyze([CompanyFinancialResult(**self.FILED)])
+        )
+
+        latest = payload['latest']
+        self.assertEqual(latest['tafflerScore'], 0.48)
+        self.assertEqual(latest['tafflerZone'], taffler_zone(latest['tafflerScore']))
+        self.assertEqual(
+            latest['tafflerLabel'], TAFFLER_ZONE_LABELS[latest['tafflerZone']]
+        )
+
+    def test_a_year_with_no_readable_score_has_neither_zone_nor_label(self):
+        payload = FinancialAnalysisService.to_dict(
+            FinancialAnalysisService.analyze([
+                CompanyFinancialResult(year=2025, revenue=100),
+            ])
+        )
+
+        self.assertIsNone(payload['latest']['tafflerScore'])
+        self.assertIsNone(payload['latest']['tafflerZone'])
+        self.assertIsNone(payload['latest']['tafflerLabel'])
+
+    def test_the_two_models_are_scored_from_the_same_statement(self):
+        # Not a check on either number: a check that adding the second model
+        # did not cost the first one its inputs, which is what happens when a
+        # guard is tightened in one place and not the other.
+        y = self._year()
+        self.assertIsNotNone(y.z_score)
+        self.assertIsNotNone(y.taffler_score)
+
+
+class TafflerZoneTests(SimpleTestCase):
+    """The three Taffler zones, and the two scores that sit exactly on a bound.
+
+    Published for the *modified* form only: ZT > 0,3 is the safe zone, 0,2-0,3
+    is the grey zone, and below 0,2 the model expects trouble. The basic form
+    of the same model uses a single bound at zero, so these values mean nothing
+    read against it -- which is why the form is named in the code, not just in
+    a comment.
+    """
+
+    def test_a_score_above_the_upper_bound_is_safe(self):
+        self.assertEqual(taffler_zone(0.31), 'safe')
+
+    def test_the_upper_bound_itself_is_grey_and_not_safe(self):
+        self.assertEqual(taffler_zone(0.30), 'grey')
+
+    def test_a_score_between_the_bounds_is_grey(self):
+        self.assertEqual(taffler_zone(0.25), 'grey')
+
+    def test_the_lower_bound_itself_is_distress_and_not_grey(self):
+        self.assertEqual(taffler_zone(0.20), 'distress')
+
+    def test_a_score_below_the_lower_bound_is_distress(self):
+        self.assertEqual(taffler_zone(0.19), 'distress')
+
+    def test_no_score_has_no_zone(self):
+        self.assertIsNone(taffler_zone(None))
+
+    def test_every_zone_has_a_label(self):
+        for zone in ('safe', 'grey', 'distress'):
+            with self.subTest(zone=zone):
+                self.assertTrue(TAFFLER_ZONE_LABELS[zone])
+
+    def test_the_labels_are_not_the_altman_labels(self):
+        # The two models answer different questions with different words, and a
+        # copy-paste of the Altman labels would read as "Bezpečná zóna" beside a
+        # Taffler score -- right verdict, wrong model named.
+        self.assertNotEqual(TAFFLER_ZONE_LABELS, Z_SCORE_ZONE_LABELS)
 
 
 class TurnoverPresenceTests(SimpleTestCase):

@@ -271,6 +271,24 @@
     </div>
     {% endif %}
 
+    {% comment %}
+       The Taffler model, printed beside the Altman score rather than in a
+       section of its own: two scores that answer the same question belong on
+       the same line, and a reader comparing them should not have to find the
+       second one.
+
+       The wording comes from `tafflerLabel`, the backend's own label for the
+       zone, so there is no ladder here to disagree with the one in
+       `financial_analysis` -- which is exactly how the Altman caption above
+       went wrong before it was guarded.
+    {% endcomment %}
+    {% if analysis.latest.tafflerZone %}
+    <div class="zscore {% if analysis.latest.tafflerZone == 'safe' %}zscore-good{% elif analysis.latest.tafflerZone == 'grey' %}zscore-warn{% else %}zscore-bad{% endif %}">
+        <span class="score">{{ analysis.latest.tafflerScore|floatformat:2 }}</span>
+        <span class="label">Tafflerov model — {{ analysis.latest.tafflerLabel }}</span>
+    </div>
+    {% endif %}
+
     <table>
         <thead>
             <tr>

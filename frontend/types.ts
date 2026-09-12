@@ -145,6 +145,19 @@ export interface YearAnalysis {
   // renderer -- wrote the mirror of the backend's `> 2.90` / `> 1.23`, and a
   // mirror is not the same ladder.
   zScoreZone: 'safe' | 'grey' | 'distress' | null;
+  // The Taffler model (1977, modified form), scored on the same statement --
+  // and, like the Z-score, its zone is decided by the backend.
+  //
+  // Two models, not the six the plan named. The other four each need a line
+  // the registry's statement format can carry but this schema does not store:
+  // IN05 needs nákladové úroky (interest expense), and the Kralicek quick test
+  // plus both names for the Index bonity / Binkert model need cash flow. They
+  // are omitted rather than approximated -- an approximated score is still a
+  // number in the right range, which is the failure this codebase keeps
+  // finding. See `financial_analysis.py` for the per-model record.
+  tafflerScore: number | null;
+  tafflerLabel: string | null;
+  tafflerZone: 'safe' | 'grey' | 'distress' | null;
 }
 
 export interface FinancialAnalysis {

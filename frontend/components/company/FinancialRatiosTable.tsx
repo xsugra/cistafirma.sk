@@ -159,6 +159,38 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                 </div>
             )}
 
+            {/* Taffler model. Same shape as the banner above and no ladder of its
+                own: the chip is the backend's `tafflerLabel`, so the words and
+                the colour cannot disagree -- which is how the Altman banner
+                above printed a verdict the risk summary beside it did not
+                share. The colour comes from the token, never from the score.
+
+                No caption line, because the Altman caption is a second spelling
+                of a verdict the backend already sends. Where the caption earns
+                its place is as a plain-language gloss on a zone name; here the
+                backend's label *is* the plain language. */}
+            {analysis.tafflerScore != null && analysis.tafflerZone != null && (
+                <div className={`mb-4 p-4 rounded-xl border ${ZONE_STYLES[analysis.tafflerZone].banner}`}>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                Tafflerov model
+                            </p>
+                            <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">
+                                {analysis.tafflerScore.toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="text-right">
+                            <span
+                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${ZONE_STYLES[analysis.tafflerZone].chip}`}
+                            >
+                                {analysis.tafflerLabel}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Ratio sections */}
             <div className="space-y-5">
                 {SECTIONS.map((section) => (

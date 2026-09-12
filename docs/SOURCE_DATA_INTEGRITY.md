@@ -1428,3 +1428,61 @@ return ratio — is a **product decision, not taken here**. Switching them now
 would blank every ROA and ROS on the site, because `profit_after_tax` is NULL
 for every existing row until the re-sync has run. The question is worth
 revisiting once its coverage can be measured.
+
+### Scoring models: two computed, four omitted, and why the four are omitted
+
+The six models named for this repository were Altman, IN05, the Kralicek quick
+test, the Binkert index, the Index bonity and the Taffler model. Two are
+computed and published on the analysis payload; four are not, and the reason is
+the same in every case — **the input is not a field**.
+
+| Model | Published | Input it needs |
+|---|---|---|
+| Altman (1983, private-firm form) | yes | balance sheet, operating result, revenue |
+| Taffler (1977, modified form) | yes | the same, plus short-term liabilities and current assets |
+| IN05 (Neumaier 2005) | **no** | `nákladové úroky` — interest expense. Not stored. |
+| Kralicek quick test (1990) | **no** | cash flow (K2 and K4 are both built on it). Not stored. |
+| Index bonity / Binkert | **no** | cash flow (weight 1,5, the heaviest term) and `celkové výkony`. Neither stored. |
+
+The last two rows are **one model under two names**, listed separately because
+the plan listed them separately.
+
+This matters beyond a missing feature. IN05's second term is
+`EBIT / nákladové úroky`, and its published guidance caps that term at 9 for a
+*small* interest charge. That convention says nothing about a charge nobody
+read — so substituting the cap would print the most favourable value the term
+can take on **every row in this database** and attribute the choice to the
+authors. It would also bias every score in the direction of solvency, which is
+the dangerous direction for a creditworthiness figure. A constant presented as
+a measurement is the exact defect class this document exists to record, so the
+model is omitted instead.
+
+Unblocking any of the four is not a computation: it is a **parser and schema
+change plus another re-sync**, since interest expense, cash flow and výkony are
+read from the statement, not derived. That has not been done.
+
+The Taffler score is the **modified** form,
+`ZT = 0,53·X1 + 0,13·X2 + 0,18·X3 + 0,16·X4`, which is the form whose
+classification bounds are published (`> 0,3` safe, `0,2–0,3` grey, `< 0,2`
+distress). The basic form of the same model differs in X4 and uses a single
+bound at zero, so the two are not interchangeable and the score is only
+meaningful read as the modified one; the code names the form.
+
+Its X1 numerator is `profit`, the pre-tax operating result — the convention
+`financial_analysis` already uses for Altman's X3 (`profit (EBIT approx)`).
+Deriving EBT as `profit_after_tax + income_tax` would be arithmetically better
+and is deliberately not done: those two fields are only both populated since
+the two profit rows were split, so the better derivation would make the Taffler
+score unavailable on exactly the rows Altman still scores. **One approximation
+applied to both models, stated, beats a second one that is right on some rows
+and absent on others.**
+
+Its X2 numerator is the same partial current-asset sum the current ratio and the
+sector medians take (see *A note on the ratio engine* above and the field-coverage
+measurement below), not a second convention.
+
+Both models are guarded on their inputs being **measured**: an unfiled line
+makes the score `None`, never a zero. And both publish their zone as a token
+(`zScoreZone`, `tafflerZone`) so no client re-derives a boundary — which is how
+`< 1.23` / `< 2.90`, the mirror of the service's ladder, once put exactly 1.23
+and exactly 2.90 in the wrong zone on the company page and in the PDF.

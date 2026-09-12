@@ -50,6 +50,12 @@ class YearAnalysis:
     # never has to re-derive the boundary -- which it did, and got a different
     # answer at exactly 1.23 and exactly 2.90.
     z_score_zone: str | None = None
+    # The Taffler score, its label and its zone, shaped exactly like the three
+    # above and for the same reason: the zone is decided here and read by
+    # clients, never re-derived from the score.
+    taffler_score: float | None = None
+    taffler_label: str | None = None
+    taffler_zone: str | None = None
 
 
 @dataclass
@@ -89,6 +95,65 @@ def z_score_zone(z_score: float | None) -> str | None:
         return 'grey'
     return 'distress'
 
+
+# ---------------------------------------------------------------------------
+# Taffler model (1977)
+# ---------------------------------------------------------------------------
+
+# ZT = 0,53·X1 + 0,13·X2 + 0,18·X3 + 0,16·X4, the *modified* form -- the one
+# whose classification bounds are published; the basic form differs only in X4
+# and uses a single zero bound, so the two are not interchangeable and the
+# figure below is only meaningful read as the modified one.
+#
+#   X1 = zisk pred zdanením / krátkodobé záväzky
+#   X2 = obežný majetok / cizí zdroje
+#   X3 = krátkodobé záväzky / aktíva
+#   X4 = tržby / aktíva
+TAFFLER_SAFE_MIN = 0.3
+TAFFLER_GREY_MIN = 0.2
+
+TAFFLER_ZONE_LABELS = {
+    'safe': 'Nízka pravdepodobnosť bankrotu',
+    'grey': 'Nejednoznačná situácia',
+    'distress': 'Vysoká pravdepodobnosť bankrotu',
+}
+
+
+def taffler_zone(score: float | None) -> str | None:
+    """The Taffler zone for a score: `safe` | `grey` | `distress`, or None."""
+    if score is None:
+        return None
+    if score > TAFFLER_SAFE_MIN:
+        return 'safe'
+    if score > TAFFLER_GREY_MIN:
+        return 'grey'
+    return 'distress'
+
+
+# The five models the plan named for this repository, and what became of them.
+# Recorded here because the answer is not "they are all computable": the schema
+# decides, and four of the five are decided *against*.
+#
+#   Altman      computed (1983 private-firm form, above)
+#   Taffler     computed (modified form, above)
+#   IN05        NOT computed -- its second term is EBIT / nákladové úroky, and
+#               `CompanyFinancialResult` carries no interest-expense line. The
+#               authors' documented convention caps that term at 9 when the
+#               charge is *small*; it says nothing about a charge that was never
+#               read, so substituting the cap would print the most favourable
+#               value the term can take on every row in the database and
+#               attribute that choice to the authors. A constant dressed as a
+#               measurement is what this module exists to stop doing.
+#   Quick test  NOT computed -- K2 and K4 are both built on cash flow, which no
+#               field here carries. (Kralicek, 1990.)
+#   Index bonity NOT computed -- six weighted terms, the heaviest of which
+#   (= Binkert)  (1,5) is cash flow / cizí zdroje, and three more are built on
+#               celkové výkony. Neither cash flow nor výkony is a field here.
+#               These two names are one model, listed as the plan listed them.
+#
+# Cash flow, výkony and interest expense are all *parser* inputs, not
+# computations: reading them is a schema change plus a re-sync, which is why
+# the four are omitted rather than approximated.
 
 # ---------------------------------------------------------------------------
 # Thresholds for interpretation
@@ -430,6 +495,43 @@ class FinancialAnalysisService:
             zone = z_score_zone(z_score)
             z_score_label = Z_SCORE_ZONE_LABELS[zone]
 
+        # --- Taffler model, modified form ---
+        # Guarded on the same four facts the Z-score is guarded on, plus the two
+        # inputs only this model has: a filed `liabilities_short` (X1's
+        # denominator, X3's numerator) and at least one current-asset line
+        # (X2's numerator). An unfiled denominator is not a zero here for the
+        # same reason it is not one above -- it would score the company on a
+        # figure nobody read.
+        #
+        # X1's numerator is `profit`, the pre-tax operating result, which is the
+        # convention this module already uses for Altman's X3 (`profit (EBIT
+        # approx)`). It is an approximation of `zisk pred zdanením`, stated
+        # rather than assumed: the statement does carry `income_tax` and
+        # `profit_after_tax`, but only since the two profit rows were split, so
+        # deriving EBT as their sum would make the Taffler score unavailable on
+        # exactly the rows Altman still scores. One convention, applied to both
+        # models, is worth more than a second one that is right on some rows.
+        #
+        # X4 is `revenue_filed`, the same quantity the printed turnover row and
+        # Altman's X5 take, so the three cannot disagree about what "tržby" was.
+        taffler_score = None
+        taffler_label = None
+        if (
+            assets_total > 0
+            and liabilities_total > 0
+            and fr.profit is not None
+            and revenue_filed is not None
+            and liabilities_short is not None
+            and current_assets is not None
+        ):
+            t1 = profit / liabilities_short
+            t2 = current_assets / liabilities_total
+            t3 = liabilities_short / assets_total
+            t4 = revenue_filed / assets_total
+
+            taffler_score = round(0.53 * t1 + 0.13 * t2 + 0.18 * t3 + 0.16 * t4, 2)
+            taffler_label = TAFFLER_ZONE_LABELS[taffler_zone(taffler_score)]
+
         return YearAnalysis(
             year=fr.year,
             ratios=ratios,
@@ -437,6 +539,9 @@ class FinancialAnalysisService:
             z_score=z_score,
             z_score_label=z_score_label,
             z_score_zone=z_score_zone(z_score),
+            taffler_score=taffler_score,
+            taffler_label=taffler_label,
+            taffler_zone=taffler_zone(taffler_score),
         )
 
     @staticmethod
@@ -456,6 +561,9 @@ class FinancialAnalysisService:
                 'zScore': y.z_score,
                 'zScoreLabel': y.z_score_label,
                 'zScoreZone': y.z_score_zone,
+                'tafflerScore': y.taffler_score,
+                'tafflerLabel': y.taffler_label,
+                'tafflerZone': y.taffler_zone,
             }
 
         return {

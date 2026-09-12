@@ -32,6 +32,9 @@ const analysis: YearAnalysis = {
     zScore: null,
     zScoreLabel: null,
     zScoreZone: null,
+    tafflerScore: null,
+    tafflerLabel: null,
+    tafflerZone: null,
 };
 
 const benchmark: CompanyBenchmark = {
