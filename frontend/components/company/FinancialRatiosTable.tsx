@@ -15,6 +15,30 @@ interface RatioRow {
     inverse?: boolean;
 }
 
+// One entry per zone the backend can return, so the banner is painted from the
+// verdict rather than from the score. The ladder used to be written out here
+// three times -- and mirrored in `api.ts` -- which is four chances to disagree
+// with `financial_analysis.z_score_zone` and with each other. It did: a score
+// of exactly 1.23 is distress by the service's `> 1.23` and was grey by the
+// `< 1.23` written here.
+const ZONE_STYLES = {
+    safe: {
+        banner: 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20',
+        chip: 'text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30',
+        caption: 'Nízke riziko bankrotu',
+    },
+    grey: {
+        banner: 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20',
+        chip: 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/30',
+        caption: 'Nejednoznačná situácia',
+    },
+    distress: {
+        banner: 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20',
+        chip: 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30',
+        caption: 'Zvýšené riziko bankrotu',
+    },
+} as const;
+
 const SECTIONS: { title: string; icon: string; rows: RatioRow[] }[] = [
     {
         title: 'Rentabilita',
@@ -107,16 +131,8 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
     return (
         <InfoCard title={`Pomerové ukazovatele — ${analysis.year}`} icon="fa-calculator">
             {/* Altman Z-score banner */}
-            {analysis.zScore != null && (
-                <div
-                    className={`mb-4 p-4 rounded-xl border ${
-                        analysis.zScore > 2.90
-                            ? 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20'
-                            : analysis.zScore > 1.23
-                              ? 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20'
-                              : 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20'
-                    }`}
-                >
+            {analysis.zScore != null && analysis.zScoreZone != null && (
+                <div className={`mb-4 p-4 rounded-xl border ${ZONE_STYLES[analysis.zScoreZone].banner}`}>
                     <div className="flex items-center justify-between">
                         <div>
                             <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -128,22 +144,12 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                         </div>
                         <div className="text-right">
                             <span
-                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${
-                                    analysis.zScore > 2.90
-                                        ? 'text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30'
-                                        : analysis.zScore > 1.23
-                                          ? 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/30'
-                                          : 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30'
-                                }`}
+                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${ZONE_STYLES[analysis.zScoreZone].chip}`}
                             >
                                 {analysis.zScoreLabel}
                             </span>
                             <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">
-                                {analysis.zScore > 2.90
-                                    ? 'Nízke riziko bankrotu'
-                                    : analysis.zScore > 1.23
-                                      ? 'Nejednoznačná situácia'
-                                      : 'Zvýšené riziko bankrotu'}
+                                {ZONE_STYLES[analysis.zScoreZone].caption}
                             </p>
                         </div>
                     </div>

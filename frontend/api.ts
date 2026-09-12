@@ -199,15 +199,19 @@ function mapCompanyResponse(data: any): Company {
     : 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.';
 
   if (data.analysis?.latest) {
-    const { zScore, ratios } = data.analysis.latest;
+    const { zScore, zScoreZone, ratios } = data.analysis.latest;
     if (zScore != null) {
-      if (zScore < 1.23) {
+      // The zone, not the score: this used to re-derive the ladder as
+      // `< 1.23` / `< 2.90`, the mirror of the service's `> 1.23` / `> 2.90`.
+      // At exactly 1.23 the two disagreed about whether the company was in
+      // distress, and at exactly 2.90 about whether it was safe.
+      if (zScoreZone === 'distress') {
         riskScore = Math.max(5, riskScore - 20);
         riskSummary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.';
-      } else if (zScore < 2.90) {
+      } else if (zScoreZone === 'grey') {
         riskScore = Math.max(5, riskScore - 10);
         if (!hasDebt) riskSummary = 'Zvýšená opatrnosť — Z-score v šedej zóne.';
-      } else {
+      } else if (zScoreZone === 'safe') {
         if (!hasDebt) riskSummary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).';
       }
     }

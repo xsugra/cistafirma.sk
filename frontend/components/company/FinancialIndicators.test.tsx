@@ -63,6 +63,7 @@ const analysis: YearAnalysis = {
     interpretation: {},
     zScore: null,
     zScoreLabel: null,
+    zScoreZone: null,
 };
 
 describe('FinancialIndicators', () => {

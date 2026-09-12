@@ -31,6 +31,7 @@ const analysis: YearAnalysis = {
     interpretation: {},
     zScore: null,
     zScoreLabel: null,
+    zScoreZone: null,
 };
 
 const benchmark: CompanyBenchmark = {
