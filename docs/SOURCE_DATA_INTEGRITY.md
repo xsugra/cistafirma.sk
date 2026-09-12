@@ -1691,3 +1691,56 @@ alone because the per-company figure is compared against the *stored*
 the same pass — a wider change than this one, and one that would move a
 published median for every sector. The accruals-is-zero rule is applied where it
 verifies a statement, not yet where it feeds a comparison.
+
+## Two RUZ ID lists travelled to a client that read neither
+
+`CompanyDetailSerializer` declared `fields = '__all__'`, so the company payload
+carried `id_uctovnych_zavierok` and `id_vyrocnych_sprav` exactly as the register
+delivers them: arrays of RUZ's own identifiers. For ESET that is 28 + 18
+integers, for Tatra Asset Management 372, on a response that was already 41 896
+bytes — and no line of the frontend has ever read either field.
+
+**The claim this section exists to correct.** An earlier review recorded that
+both columns are *empty on every row*. That is false, and it was never written
+into this document, which is why the measurement is here rather than a
+correction. Across all **445 626** rows of `"Companies and SZCO"`:
+
+| | rows | share |
+|---|---|---|
+| `ID UZ` null | **0** | — |
+| `ID UZ` not an array | **0** | — |
+| `ID UZ` non-empty | **322 698** | 72,4 % |
+| `ID VS` non-empty | **18 621** | 4,2 % |
+| longest `ID UZ` / `ID VS` | 372 / 189 | — |
+
+The distinction matters beyond this field: "empty everywhere" would have
+justified dropping the columns, and the truth is that the data was real and
+being shipped in a shape nothing could use. VOLKSWAGEN SLOVAKIA, a.s. is the
+case that made it visible — **37** statement IDs, **15** annual-report IDs, and
+**0** years read — and it is why the Účtovné závierky section prints the RUZ
+count beside the count we parsed.
+
+**The change.** `Meta` now uses `exclude = ['id_uctovnych_zavierok',
+'id_vyrocnych_sprav']` and two `SerializerMethodField`s publish their lengths.
+`exclude` and not an explicit `fields` list, deliberately: a serializer may not
+set both, and an explicit list turns every future model field into a decision
+someone has to remember to make in a second place. A test asserts field by field
+that every other key still travels, so the switch cannot quietly narrow the
+public payload.
+
+**What a count is not.** `ruz_statements` is the length of the list RUZ sent us.
+It is not the number of statements that exist, and it does not correspond
+one-to-one to the years we read: there is no year on a RUZ ID and nothing joins
+the two lists. Measured, they agree exactly for **1 071** companies, RUZ lists
+more than we read for **1 024**, and fewer for **5**. The section therefore
+prints both counts and says that they are two counts. A `null` count renders as
+"we do not learn it from this response" and never as zero, because zero is a
+positive claim about the register.
+
+**Left in place, measured and recorded.** `bank_accounts` is the other raw
+JSONField on the same payload — three entries for IČO 00685399 — and the
+frontend reads no `bankAccounts` field anywhere either. It stays, and unlike the
+ID arrays it is not a join key but the content of a field a reader would
+eventually want on the page; it is small, and removing it would settle a product
+question (does the company page show accounts?) in a data-hygiene commit. The
+next person to touch this serializer should not have to re-measure it.
