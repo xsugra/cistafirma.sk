@@ -36,7 +36,14 @@ class WatchlistViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Watchlist.objects.filter(user=self.request.user).select_related('company')
+        # `company__financial_results` because `riskScore` is now the real
+        # score, and the real score reads the analysis. Without the prefetch
+        # that is one query per watched company.
+        return (
+            Watchlist.objects.filter(user=self.request.user)
+            .select_related('company')
+            .prefetch_related('company__financial_results')
+        )
 
     def create(self, request, *args, **kwargs):
         ico = request.data.get('ico', '').strip()

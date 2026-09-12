@@ -13,6 +13,7 @@ from .services.financial_analysis import (
     _sum_present,
 )
 from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
+from .services.risk_score import compute_risk_score, risk_score_for_company
 
 
 #: The closed vocabulary `financialsState` answers with -- a token, not a
@@ -54,11 +55,14 @@ class WatchlistSerializer(serializers.ModelSerializer):
         return 'Vymazaná' if obj.company.datum_zrusenia else 'Aktívna'
 
     def get_riskScore(self, obj):
-        c = obj.company
-        total_debt = float(c.debt_vszp or 0) + float(c.debt_soc_poist or 0) + float(c.tax_debt or 0)
-        if total_debt > 0:
-            return max(5, int(70 - min(total_debt / 5000, 50)))
-        return 100
+        """The same score the company's own page shows.
+
+        It used to read the three debts and nothing else, so a company in the
+        Altman bankruptcy zone with no debt was 100/100 here and 80/100 on its
+        page -- the list and the detail disagreeing about the same company,
+        with nothing on either screen to suggest which one was wrong.
+        """
+        return risk_score_for_company(obj.company)['score']
 
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
@@ -66,6 +70,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     financials = serializers.SerializerMethodField()
     financialsState = serializers.SerializerMethodField()
     analysis = serializers.SerializerMethodField()
+    riskScore = serializers.SerializerMethodField()
     benchmark = serializers.SerializerMethodField()
     executives = serializers.SerializerMethodField()
     connections = serializers.SerializerMethodField()
@@ -176,12 +181,38 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             })
         return out
 
+    def _analysis_payload(self, obj):
+        """`analysis`, computed once per object.
+
+        `get_analysis` and `get_riskScore` both need it, and DRF calls method
+        fields independently -- without this the service would walk the
+        company's financial results twice for every request.
+        """
+        cache = getattr(self, '_analysis_by_pk', None)
+        if cache is None:
+            cache = self._analysis_by_pk = {}
+        if obj.pk not in cache:
+            results = list(obj.financial_results.all().order_by('year'))
+            cache[obj.pk] = (
+                FinancialAnalysisService.to_dict(
+                    FinancialAnalysisService.analyze(results)
+                )
+                if results
+                else None
+            )
+        return cache[obj.pk]
+
     def get_analysis(self, obj):
-        results = list(obj.financial_results.all().order_by('year'))
-        if not results:
-            return None
-        analysis = FinancialAnalysisService.analyze(results)
-        return FinancialAnalysisService.to_dict(analysis)
+        return self._analysis_payload(obj)
+
+    def get_riskScore(self, obj):
+        """The one risk score -- see `services/risk_score.py`.
+
+        Published here rather than derived in the client because the client's
+        copy and this one disagreed: the same company was `distress` and 80/100
+        on its page while the watchlist, reading debt alone, called it 100/100.
+        """
+        return compute_risk_score(obj, self._analysis_payload(obj))
 
     def get_benchmark(self, obj):
         """Return sector benchmark for the company's NACE section."""

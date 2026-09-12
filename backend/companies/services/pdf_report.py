@@ -26,6 +26,7 @@ from .financial_analysis import (
     _sum_present,
 )
 from .nace import get_nace_info
+from .risk_score import compute_risk_score
 
 logger = logging.getLogger(__name__)
 
@@ -220,39 +221,14 @@ def generate_company_report(company: Company) -> bytes:
         debts.append({'source': 'Finančná správa', 'amount_eur': float(company.tax_debt)})
         total_debt += float(company.tax_debt)
 
-    # Risk score (same formula as frontend)
-    if total_debt > 0:
-        risk_score = max(5, 70 - min(total_debt / 5000, 50))
-        risk_summary = 'Spoločnosť vykazuje riziko z dôvodu existujúcich nedoplatkov.'
-    else:
-        risk_score = 100
-        risk_summary = 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.'
-
-    # Enhance with analysis data.
-    #
-    # The zone, not a ladder of its own. This asked whether the score was
-    # `< 1.23` and `< 2.90` -- the mirror of the service's `> 1.23` / `> 2.90`,
-    # which is not the same ladder: exactly 1.23 is distress to the service and
-    # grey here, exactly 2.90 is grey to the service and safe here. So the
-    # printed report could hand a company a different verdict from the one the
-    # API and the company page gave it, at the two values where the two
-    # spellings disagree. `zScoreZone` is published by `to_dict`, so reading it
-    # makes the paper and the screen answer from one decision.
-    if analysis and analysis.get('latest'):
-        zone = analysis['latest'].get('zScoreZone')
-        roa = analysis['latest']['ratios'].get('roa')
-        if zone == 'distress':
-            risk_score = max(5, risk_score - 20)
-            risk_summary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.'
-        elif zone == 'grey':
-            risk_score = max(5, risk_score - 10)
-            if total_debt == 0:
-                risk_summary = 'Zvýšená opatrnosť — Z-score v šedej zóne.'
-        elif zone == 'safe':
-            if total_debt == 0:
-                risk_summary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).'
-        if roa is not None and roa < 0:
-            risk_score = max(5, risk_score - 10)
+    # Risk score. This carried a comment saying "same formula as frontend",
+    # which was true of the line below and false of every adjustment under it:
+    # the ladder was spelled here, in `WatchlistSerializer` and in
+    # `frontend/api.ts`, and the three disagreed. It comes from one place now,
+    # and `risk_score` is deliberately not rounded here -- it already is.
+    risk = compute_risk_score(company, analysis)
+    risk_score = risk['score']
+    risk_summary = risk['summary']
 
     # NACE info
     nace_info = get_nace_info(company.sk_NACE)

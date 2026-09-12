@@ -192,34 +192,17 @@ function mapCompanyResponse(data: any): Company {
       }))
     : [];
 
-  // Enhanced risk score: debt-based + financial health adjustments
-  let riskScore = hasDebt ? Math.max(5, 70 - Math.min(totalDebt / 5000, 50)) : 100;
-  let riskSummary = hasDebt
-    ? 'Spoločnosť vykazuje riziko z dôvodu existujúcich nedoplatkov.'
-    : 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.';
-
-  if (data.analysis?.latest) {
-    const { zScore, zScoreZone, ratios } = data.analysis.latest;
-    if (zScore != null) {
-      // The zone, not the score: this used to re-derive the ladder as
-      // `< 1.23` / `< 2.90`, the mirror of the service's `> 1.23` / `> 2.90`.
-      // At exactly 1.23 the two disagreed about whether the company was in
-      // distress, and at exactly 2.90 about whether it was safe.
-      if (zScoreZone === 'distress') {
-        riskScore = Math.max(5, riskScore - 20);
-        riskSummary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.';
-      } else if (zScoreZone === 'grey') {
-        riskScore = Math.max(5, riskScore - 10);
-        if (!hasDebt) riskSummary = 'Zvýšená opatrnosť — Z-score v šedej zóne.';
-      } else if (zScoreZone === 'safe') {
-        if (!hasDebt) riskSummary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).';
-      }
-    }
-    if (ratios?.roa != null && ratios.roa < 0) {
-      riskScore = Math.max(5, riskScore - 10);
-      riskSummary = riskSummary.replace('.', '') + ' + záporná rentabilita aktív.';
-    }
-  }
+  // The risk score comes from the API. It used to be built here, and this
+  // copy is the one that made the phone and the desktop disagree with the
+  // watchlist about the same company: the backend's watchlist entry read the
+  // three debts and nothing else, so a company in the Altman bankruptcy zone
+  // with no debt was 100/100 in the list and 80/100 on its own page. One
+  // ladder, on the server, published by `CompanyDetailSerializer`.
+  const riskScore = {
+    score: data.riskScore?.score ?? 100,
+    summary: data.riskScore?.summary ?? '',
+    calculationDate: new Date().toISOString(),
+  };
 
   return {
     id: data.id,
@@ -243,11 +226,7 @@ function mapCompanyResponse(data: any): Company {
       reasonForDeregistration: data.vat_deleted_reason,
       lastCheckedAt: data.fs_update_date,
     },
-    riskScore: {
-      score: Math.round(riskScore),
-      summary: riskSummary,
-      calculationDate: new Date().toISOString(),
-    },
+    riskScore,
     financials,
     // The backend names why the statement sections are empty; without it every
     // one of the four reasons renders as the same "nie sú k dispozícii". The
