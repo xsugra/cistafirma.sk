@@ -122,3 +122,85 @@ class PdfBenchmarkRowsTests(TestCase):
         self.assertEqual(rows['Hrubá marža']['company_val'], '—')
         self.assertEqual(rows['Zadĺženosť']['company_val'], '55.0 %')
         self.assertNotIn('0.0 %', [r['company_val'] for r in rows.values()])
+
+
+class PdfRatioRowsTests(TestCase):
+    """The financial-analysis table prints every row it declares.
+
+    `RATIO_ROWS` names ten ratios and `ratio_rows` skips any whose value is
+    `None`. The lookup asked the camelCase `ratios` dict for snake_case names,
+    so seven rows were dropped for every company -- and a dropped row and a row
+    the company could not support look identical from outside. This is the same
+    failure as the benchmark block's, in the table directly above it.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=999202, ico='00999202', nazov_UJ='Ukazovateľová, a.s.',
+            sk_NACE='4610',
+        )
+        # A statement that supports all ten: both liquidity pairs, both
+        # activity rows and both debt rows need their own inputs.
+        CompanyFinancialResult.objects.create(
+            company=self.company,
+            year=2025,
+            revenue=2000,
+            added_value=500,
+            total_revenue=2000,
+            profit=150,
+            assets_total=1000,
+            equity=600,
+            liabilities_total=400,
+            assets_inventory=100,
+            assets_receivables_short=100,
+            assets_financial_accounts=50,
+            liabilities_short=200,
+        )
+
+    def rows(self):
+        context = benchmark_context(self.company)
+        return {row['label']: row for row in context['ratio_rows']}
+
+    def test_every_declared_row_is_rendered(self):
+        self.assertEqual(len(self.rows()), len(pdf_report.RATIO_ROWS))
+
+    def test_the_rows_a_missing_key_used_to_swallow_are_there(self):
+        # Named individually: these are the seven that never appeared, and a
+        # count alone would not say which one came back.
+        rows = self.rows()
+
+        for label in (
+            'L3 — Bežná likvidita',
+            'L2 — Pohotová likvidita',
+            'L1 — Okamžitá likvidita',
+            'Obrat aktív',
+            'Doba inkasa pohľadávok',
+            'Zadĺženosť (D/E)',
+            'Miera samofinancovania',
+        ):
+            with self.subTest(row=label):
+                self.assertIn(label, rows)
+
+    def test_each_row_carries_both_a_figure_and_a_verdict(self):
+        for label, row in self.rows().items():
+            with self.subTest(row=label):
+                self.assertNotEqual(row['display'], '—')
+                self.assertIn(
+                    row['interpretation'], ('good', 'warning', 'bad', 'unknown')
+                )
+
+    def test_a_ratio_the_statement_cannot_support_is_omitted_not_faked(self):
+        # No asset detail at all, so the three liquidity rows have no value.
+        # They are left out rather than drawn as zero -- and the rows that do
+        # have inputs are unaffected.
+        CompanyFinancialResult.objects.filter(company=self.company).delete()
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2025, revenue=2000, total_revenue=2000,
+            profit=150, assets_total=1000, equity=600, liabilities_total=400,
+        )
+
+        rows = self.rows()
+
+        self.assertNotIn('L3 — Bežná likvidita', rows)
+        self.assertIn('ROA (Rentabilita aktív)', rows)
+        self.assertEqual(rows['ROA (Rentabilita aktív)']['display'], '15.0 %')

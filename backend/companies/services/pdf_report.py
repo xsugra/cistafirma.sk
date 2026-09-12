@@ -33,18 +33,26 @@ REPORT_CACHE_TIMEOUT = 300
 REPORT_CACHE_LOCK_TIMEOUT = 120
 REPORT_CACHE_POLL_INTERVAL = 0.1
 
-# Ratio display configuration for PDF
+# Ratio display configuration for PDF.
+#
+# `key` is the name `FinancialAnalysisService.to_dict` publishes -- camelCase,
+# from `RATIO_WIRE_KEYS`. It used to be the snake_case attribute name, and
+# because a dict lookup for an absent key returns `None` and `if val is not
+# None` skips the row, this table quietly rendered three of its ten rows: both
+# liquidity pairs, both activity rows and both debt rows were dropped for every
+# company. `roa`, `roe` and `ros` are spelled the same in both vocabularies,
+# which is exactly why nobody noticed.
 RATIO_ROWS = [
     {'key': 'roa', 'label': 'ROA (Rentabilita aktív)', 'unit': '%'},
     {'key': 'roe', 'label': 'ROE (Rentabilita vlastného kapitálu)', 'unit': '%'},
     {'key': 'ros', 'label': 'ROS (Rentabilita tržieb)', 'unit': '%'},
-    {'key': 'current_ratio', 'label': 'L3 — Bežná likvidita', 'unit': '×'},
-    {'key': 'quick_ratio', 'label': 'L2 — Pohotová likvidita', 'unit': '×'},
-    {'key': 'cash_ratio', 'label': 'L1 — Okamžitá likvidita', 'unit': '×'},
-    {'key': 'asset_turnover', 'label': 'Obrat aktív', 'unit': '×'},
-    {'key': 'receivables_collection', 'label': 'Doba inkasa pohľadávok', 'unit': 'dní'},
-    {'key': 'debt_to_equity', 'label': 'Zadĺženosť (D/E)', 'unit': '×'},
-    {'key': 'self_financing_ratio', 'label': 'Miera samofinancovania', 'unit': '%'},
+    {'key': 'currentRatio', 'label': 'L3 — Bežná likvidita', 'unit': '×'},
+    {'key': 'quickRatio', 'label': 'L2 — Pohotová likvidita', 'unit': '×'},
+    {'key': 'cashRatio', 'label': 'L1 — Okamžitá likvidita', 'unit': '×'},
+    {'key': 'assetTurnover', 'label': 'Obrat aktív', 'unit': '×'},
+    {'key': 'receivablesCollection', 'label': 'Doba inkasa pohľadávok', 'unit': 'dní'},
+    {'key': 'debtToEquity', 'label': 'Zadĺženosť (D/E)', 'unit': '×'},
+    {'key': 'selfFinancingRatio', 'label': 'Miera samofinancovania', 'unit': '%'},
 ]
 
 

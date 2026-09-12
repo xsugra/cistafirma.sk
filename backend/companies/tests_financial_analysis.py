@@ -14,7 +14,10 @@ slightly low figure with no figure at all.
 from django.test import SimpleTestCase
 
 from companies.models import CompanyFinancialResult
-from companies.services.financial_analysis import FinancialAnalysisService
+from companies.services.financial_analysis import (
+    RATIO_WIRE_KEYS,
+    FinancialAnalysisService,
+)
 
 
 def ratios(**fields):
@@ -109,11 +112,7 @@ class InterpretationVocabularyTests(SimpleTestCase):
     So the set is asserted, not assumed.
     """
 
-    RATIO_KEYS = (
-        'roa', 'roe', 'ros', 'current_ratio', 'quick_ratio',
-        'cash_ratio', 'asset_turnover', 'receivables_collection',
-        'debt_to_equity', 'self_financing_ratio',
-    )
+    RATIO_KEYS = tuple(RATIO_WIRE_KEYS)
 
     def test_every_ratio_carries_a_verdict(self):
         # A key missing from the dict is a key the frontend has to guess at.
@@ -140,11 +139,11 @@ class InterpretationVocabularyTests(SimpleTestCase):
         analysed = year(assets_total=1000, equity=600, liabilities_total=400)
 
         self.assertEqual(analysed.interpretation['roa'], 'unknown')
-        self.assertEqual(analysed.interpretation['cash_ratio'], 'unknown')
-        for key, token in analysed.interpretation.items():
-            with self.subTest(key=key):
-                if getattr(analysed.ratios, key) is None:
-                    self.assertEqual(token, 'unknown')
+        self.assertEqual(analysed.interpretation['cashRatio'], 'unknown')
+        for wire, attr in RATIO_WIRE_KEYS.items():
+            with self.subTest(ratio=wire):
+                if getattr(analysed.ratios, attr) is None:
+                    self.assertEqual(analysed.interpretation[wire], 'unknown')
 
     def test_a_measured_ratio_that_is_bad_is_still_called_bad(self):
         # `unknown` must not swallow the real verdict, or the fix trades a
@@ -168,3 +167,55 @@ class InterpretationVocabularyTests(SimpleTestCase):
         payload = FinancialAnalysisService.to_dict(result)
 
         self.assertEqual(payload['latest']['interpretation']['roa'], 'unknown')
+
+
+class SerializedRatioKeysTests(SimpleTestCase):
+    """`ratios` and `interpretation` are keyed alike, in every year.
+
+    They were not. `_ratio_dict` renamed to camelCase and `interpretation` was
+    passed through under its snake_case attribute names, so a consumer holding
+    a ratio could only find its verdict when the two spellings happened to
+    agree -- which they do for `roa`, `roe` and `ros`, and for nothing else.
+    The frontend found three verdicts of ten and the PDF's ratio table silently
+    dropped seven rows.
+
+    Nothing errored, because a missing key in a dict of nullable numbers is a
+    `None` and `None` is a legal value. So this asserts the two key sets are
+    equal rather than that any particular key resolves.
+    """
+
+    def payload(self):
+        return FinancialAnalysisService.to_dict(
+            FinancialAnalysisService.analyze([
+                CompanyFinancialResult(
+                    year=2024, assets_total=1000, equity=600, liabilities_total=400
+                ),
+                CompanyFinancialResult(
+                    year=2025, assets_total=1000, equity=600, liabilities_total=400,
+                    profit=100, total_revenue=2000, assets_inventory=100,
+                    assets_receivables_short=100, assets_financial_accounts=50,
+                    liabilities_short=200,
+                ),
+            ])
+        )
+
+    def test_the_two_dicts_share_one_key_set(self):
+        payload = self.payload()
+
+        for label, year_payload in [('latest', payload['latest'])] + [
+            (f'history[{i}]', y) for i, y in enumerate(payload['history'])
+        ]:
+            with self.subTest(year=label):
+                self.assertEqual(
+                    sorted(year_payload['ratios']),
+                    sorted(year_payload['interpretation']),
+                )
+
+    def test_the_keys_are_the_ones_the_frontend_asks_for(self):
+        # `RatioSet` in `frontend/types.ts` and `RATIO_ROWS` in `pdf_report.py`
+        # both name these; a rename here without them is the original bug.
+        payload = self.payload()
+
+        self.assertEqual(
+            sorted(payload['latest']['ratios']), sorted(RATIO_WIRE_KEYS)
+        )

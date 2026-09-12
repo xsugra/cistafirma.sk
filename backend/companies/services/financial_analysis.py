@@ -38,7 +38,10 @@ class RatioSet:
 class YearAnalysis:
     year: int
     ratios: RatioSet
-    interpretation: dict[str, str]  # key -> good|warning|bad
+    # Keyed the way `RATIO_WIRE_KEYS` spells each ratio, so a verdict is
+    # findable by whoever holds the ratio. Values are `good` | `warning` |
+    # `bad` | `unknown`.
+    interpretation: dict[str, str]
     z_score: float | None
     z_score_label: str | None
 
@@ -65,6 +68,34 @@ THRESHOLDS: dict[str, tuple[float | None, float | None, float | None, float | No
     'receivables_collection': (None, 60,  60, 90),  # lower = better
     'debt_to_equity':         (None, 1.5, 1.5, 3.0),
     'self_financing_ratio':   (30, None,  15, 30),
+}
+
+# The ten ratios, spelled the one way the whole stack spells them: the attribute
+# on `RatioSet` (snake_case, what `THRESHOLDS` is keyed by) against the name the
+# API, the PDF and the frontend use (camelCase).
+#
+# One table, because two spellings of the same ten ratios is not a style
+# question. A dict lookup for a key that does not exist returns `None` here, and
+# `None` is a legal value for every one of these -- so the miss is invisible at
+# every layer. It had already produced three separate defects: the PDF's
+# benchmark block asked for `current_ratio`, `self_financing_ratio` and
+# `debt_to_equity` and drew a dash for the company half of three rows; the PDF's
+# ratio table asked the same way and dropped seven of its ten rows entirely; and
+# `interpretation` was emitted keyed by the snake_case name while `ratios` beside
+# it was keyed by the camelCase one, so the frontend found a verdict for
+# `roa`/`roe`/`ros` and nothing for the other seven. Those three are spelled
+# identically in both vocabularies, which is what kept the mismatch hidden.
+RATIO_WIRE_KEYS: dict[str, str] = {
+    'roa': 'roa',
+    'roe': 'roe',
+    'ros': 'ros',
+    'currentRatio': 'current_ratio',
+    'quickRatio': 'quick_ratio',
+    'cashRatio': 'cash_ratio',
+    'assetTurnover': 'asset_turnover',
+    'receivablesCollection': 'receivables_collection',
+    'debtToEquity': 'debt_to_equity',
+    'selfFinancingRatio': 'self_financing_ratio',
 }
 
 
@@ -280,13 +311,11 @@ class FinancialAnalysisService:
         )
 
         # --- interpretation ---
+        # Keyed the same way the ratios are, from the same table: the verdict
+        # for a ratio has to be findable by whoever holds that ratio.
         interpretation = {
-            key: _interpret(getattr(ratios, key), key)
-            for key in (
-                'roa', 'roe', 'ros', 'current_ratio', 'quick_ratio',
-                'cash_ratio', 'asset_turnover', 'receivables_collection',
-                'debt_to_equity', 'self_financing_ratio',
-            )
+            wire: _interpret(getattr(ratios, attr), attr)
+            for wire, attr in RATIO_WIRE_KEYS.items()
         }
 
         # --- Altman Z-score (simplified for private Slovak companies) ---
@@ -352,18 +381,7 @@ class FinancialAnalysisService:
             return None
 
         def _ratio_dict(r: RatioSet) -> dict:
-            return {
-                'roa': r.roa,
-                'roe': r.roe,
-                'ros': r.ros,
-                'currentRatio': r.current_ratio,
-                'quickRatio': r.quick_ratio,
-                'cashRatio': r.cash_ratio,
-                'assetTurnover': r.asset_turnover,
-                'receivablesCollection': r.receivables_collection,
-                'debtToEquity': r.debt_to_equity,
-                'selfFinancingRatio': r.self_financing_ratio,
-            }
+            return {wire: getattr(r, attr) for wire, attr in RATIO_WIRE_KEYS.items()}
 
         def _year_dict(y: YearAnalysis) -> dict:
             return {
