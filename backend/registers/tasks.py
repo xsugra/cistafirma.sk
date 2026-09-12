@@ -1,5 +1,5 @@
 from celery import shared_task, chain, chord, group
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
@@ -191,28 +191,82 @@ def update_insurance_debt(company_id: int):
         social_result.state,
     )
 
-@shared_task(queue='insurance')
-def schedule_insurance_debt_checks():
-    """
-    Naplanuje kontrolu dlhov pre vsetky firmy, ktore neboli skontrolovane za poslednych 12 hodin.
-    """
+# `update_insurance_debt` drains at `rate_limit='20/m'`, so one 12-hour tick can
+# absorb 20 * 60 * 12 = 14 400 tasks. The scheduler below enqueues no more.
+#
+# It previously enqueued the entire due population -- 439 817 companies on
+# 2026-09-12 -- which the queue could never absorb. Measured that day: 5 108 434
+# pending messages holding ~5 GB of Redis, the largest single consumer in the
+# stack.
+#
+# The backlog was the least of it. **The scheduler ran on the same queue it
+# floods**, so it waited behind its own backlog and then fired over and over:
+# beat dispatched it at 07:50 and a worker first ran it after 11:00, after which
+# it executed at 03:11, 04:17, 11:14, 11:49, 12:04, 13:55, 14:15, 14:19, 14:34,
+# 14:39 and 14:53 -- roughly 8.4 million messages enqueued in one day against
+# 14 400 drained. Each of those runs builds ~440 000 `delay()` calls, so with
+# `--concurrency=2` the worker spent its time scheduling rather than checking:
+# its last recorded attempt was 14:15 while it ran past 15:20.
+#
+# A scheduler must not share a queue with the work it schedules. This one no
+# longer does -- but note **which layer decides that**. The admin-managed
+# `PeriodicTask` row `schedule-insurance-debt-checks-every-12-hours` carries
+# `queue = 'insurance'` explicitly, and with `DatabaseScheduler` that row is what
+# runs: the `CELERY_TASK_ROUTES` entry below and the `options.queue` in
+# `CELERY_BEAT_SCHEDULE` are both inert for this task while the row exists. All
+# three are set to `celery` so they cannot disagree again, but the row is the one
+# that has to be changed on a live system.
+INSURANCE_RATE_PER_MINUTE = 20
+INSURANCE_TICK_HOURS = 12
+INSURANCE_BATCH_PER_TICK = INSURANCE_RATE_PER_MINUTE * 60 * INSURANCE_TICK_HOURS
 
-    # Vypocitame casovy limit 12hod dozadu
+
+@shared_task(queue='celery')
+def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
+    """Queue a bounded batch of insurance-debt checks for the companies that are due.
+
+    The selection is unchanged -- `last_insurance_debt` older than 12 hours, or
+    never checked -- and so is the rotation it implies: an attempt that both
+    sources answer advances the timestamp, so the head of the queue moves on and
+    a later tick cannot hand out the same companies again.
+
+    What is new is `limit`. The batch is capped at what `update_insurance_debt`
+    can drain before the next tick, so the queue stays bounded instead of
+    growing without limit. It is a task argument rather than a constant so it
+    can be retuned from the admin-managed `PeriodicTask` row without a deploy,
+    the way `schedule_ruz_financials_sync` already carries `args: [2000]`.
+
+    Ordering is `nulls_first`: never-checked companies come before the oldest
+    checked ones. Postgres sorts NULLs *last* under a plain ascending order, so
+    without it the 25 398 companies whose timestamp is merely stale would be
+    re-chosen every tick while the 414 419 never-checked ones waited behind them
+    for ever.
+    """
     time_threshold = timezone.now() - timedelta(hours=12)
 
-    # Ziskanie firiem, ktore mali kontrolu naposledy pred limitom, alebo neboli kontrolovane nikdy (null)
-    companies_to_check = Company.objects.filter(
+    due = Company.objects.filter(
         Q(last_insurance_debt__lte=time_threshold) | Q(last_insurance_debt__isnull=True)
     )
 
-    count = companies_to_check.count()
-    logger.info(f"Plánujem kontrolu dlhov pre {count} firiem.")
+    # Ids only, and only `limit` of them. Iterating the queryset itself would
+    # materialise every due company as a full model instance -- 439 817 of them
+    # at the time this was measured.
+    company_ids = list(
+        due.order_by(F("last_insurance_debt").asc(nulls_first=True), "id")
+        .values_list("id", flat=True)[:limit]
+    )
 
-    # Pre kazdu firmu naplanujeme samostatnu robotnicku ulohu cez celery
-    for company in companies_to_check:
-        update_insurance_debt.delay(company.id)
+    logger.info(
+        "Plánujem kontrolu dlhov pre %s z %s firiem, ktoré sú na rade.",
+        len(company_ids),
+        due.count(),
+    )
 
-    logger.info(f"Všetkých {count} úloh na kontrolu dlhov v poisťovniach bolo naplánovaných.")
+    for company_id in company_ids:
+        update_insurance_debt.delay(company_id)
+
+    logger.info("Naplánovaných %s kontrol dlhov v poisťovniach.", len(company_ids))
+    return f"Scheduled {len(company_ids)} insurance debt checks"
 
 
 @shared_task(queue='insurance')

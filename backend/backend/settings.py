@@ -365,7 +365,7 @@ CELERY_TASK_ROUTES = {
     'registers.tasks.sync_company_financials_from_ruz': {'queue': 'financials'},
     'registers.tasks.schedule_ruz_financials_sync': {'queue': 'financials'},
     'registers.tasks.update_insurance_debt': {'queue': 'insurance'},
-    'registers.tasks.schedule_insurance_debt_checks': {'queue': 'insurance'},
+    'registers.tasks.schedule_insurance_debt_checks': {'queue': 'celery'},
     'registers.tasks.force_check_all_companies_debts': {'queue': 'insurance'},
     'registers.tasks.update_fs_data_task': {'queue': 'celery'},
     'registers.tasks.sync_single_company_from_ruz': {'queue': 'celery'},
@@ -374,10 +374,20 @@ CELERY_TASK_ROUTES = {
 }
 
 CELERY_BEAT_SCHEDULE = {
+    # `queue: celery`, not `insurance`, and `args: [14400]` -- see the comment
+    # above `INSURANCE_BATCH_PER_TICK` in `registers/tasks.py` for the measured
+    # reason. The scheduler used to run on the queue it floods, so it waited
+    # behind its own backlog and then fired repeatedly.
+    #
+    # Note that `DatabaseScheduler` runs the `PeriodicTask` row, not this entry:
+    # while a row of the same name exists, everything here except the schedule
+    # itself is inert. The row was updated to match, and all three layers agree,
+    # but changing this dict alone would change nothing on a live system.
     'schedule-insurance-debt-checks-every-12-hours': {
         'task': 'registers.tasks.schedule_insurance_debt_checks',
         'schedule': 43200.0,
-        'options': {'expires': 43000.0, 'queue': 'insurance'},
+        'args': [14400],
+        'options': {'expires': 43000.0, 'queue': 'celery'},
     },
     'fetch-ruz-data-every-6-hours': {
         'task': 'registers.tasks.fetch_ruz_data_task',
