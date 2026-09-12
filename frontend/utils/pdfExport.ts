@@ -4,6 +4,7 @@ import { API_BASE_URL } from '../constants';
 import { getLegalFormProfile } from './legalFormProfile';
 import { normalizePeople, formatDate, normalizeAmountText } from '../components/company/helpers';
 import { formatNumber } from './format';
+import { vatStanding, vatReliability, VAT_STANDING_LABEL } from './vatStatus';
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -402,7 +403,7 @@ function buildHeader(c: Company): string {
     <tr><td>Sídlo</td><td colspan="3">${esc(address)}</td></tr>
     <tr><td>Dátum vzniku</td><td>${fmtDate(orsr?.den_zapisu || c.registrationDate)}</td><td>Stav</td><td>${esc(c.status)}</td></tr>
     ${reg ? `<tr><td>Register</td><td colspan="3">${esc(reg)}</td></tr>` : ''}
-    ${c.vatStatus.icDph ? `<tr><td>IČ DPH</td><td>${esc(c.vatStatus.icDph)}</td><td>Spoľahlivosť</td><td>${esc(c.vatStatus.taxReliabilityIndex)}</td></tr>` : ''}
+    ${c.vatStatus.icDph ? `<tr><td>IČ DPH</td><td>${esc(c.vatStatus.icDph)}</td><td>Spoľahlivosť</td><td>${esc(vatReliability(c.vatStatus.taxReliabilityIndex).label)}</td></tr>` : ''}
   </tbody></table>
 </div>`;
 }
@@ -427,8 +428,8 @@ function buildSummary(c: Company): string {
   </div>
   <div class="box">
     <div class="box-label">DPH status</div>
-    <div class="box-value">${c.vatStatus.isVatPayer ? 'Platiteľ' : 'Neplatiteľ'}</div>
-    <div class="box-sub">${esc(c.vatStatus.taxReliabilityIndex)}</div>
+    <div class="box-value">${esc(VAT_STANDING_LABEL[vatStanding(c.vatStatus)])}</div>
+    <div class="box-sub">${esc(vatReliability(c.vatStatus.taxReliabilityIndex).label)}</div>
   </div>
 </div>`;
 }

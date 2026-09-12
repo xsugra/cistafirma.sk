@@ -123,6 +123,16 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                                 <i className={`fas ${copied ? 'fa-check text-green-500' : 'fa-copy'} text-xs`}></i>
                             </button>
                         </div>
+                        {/* DIČ, under the IČO because they are the same kind of
+                            thing and a reader checking one is usually checking
+                            the other. Absent for 50 253 companies, which is why
+                            this line disappears rather than printing a label
+                            with nothing after it. */}
+                        {company.dic && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                DIČ <span className="font-medium text-gray-700 dark:text-gray-300">{company.dic}</span>
+                            </p>
+                        )}
                     </div>
                 </div>
                 <DetailItem label="Adresa"

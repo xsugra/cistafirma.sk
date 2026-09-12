@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {mapUserResponse} from './api';
+import {mapUserResponse, mapCompanyResponse} from './api';
 
 /**
  * The user mapper, tested because it is where two shapes meet.
@@ -65,5 +65,61 @@ describe('mapUserResponse', () => {
 
         expect(user.firstName).toBe('');
         expect(user.lastName).toBe('');
+    });
+});
+
+/**
+ * The company mapper, for the same reason and over the fields that were wrong.
+ *
+ * `CompanyDetailSerializer` uses `exclude`, so it publishes every model field —
+ * including the nullable ones. The mapper is the single place where "the API did
+ * not send this" can become a positive claim about a company, and the VAT block
+ * did it twice: `vat_payer || false` printed 302 713 unrated companies as
+ * "Neplatiteľ DPH", and `tax_reliability || 'Spoľahlivý'` printed 218 143 of
+ * them as *reliable*.
+ */
+describe('mapCompanyResponse — the VAT block', () => {
+    const base = {
+        id: 'c-1',
+        ico: '00685399',
+        nazov_UJ: 'Testovacia, a. s.',
+        datum_zalozenia: '1993-01-01',
+        ulica: 'Hlavná 1',
+        mesto: 'Bratislava',
+        psc: '811 01',
+    };
+
+    it('keeps an unrated company unrated instead of calling it a non-payer', () => {
+        const company = mapCompanyResponse({...base, vat_payer: null, tax_reliability: null});
+
+        expect(company.vatStatus.isVatPayer).toBeNull();
+        expect(company.vatStatus.taxReliabilityIndex).toBeNull();
+    });
+
+    it('tells a false apart from an absent', () => {
+        // `false` is set on 4 160 rows, all of them registered and later struck
+        // off. It is a fact, and it must survive the mapper as one.
+        const company = mapCompanyResponse({...base, vat_payer: false});
+
+        expect(company.vatStatus.isVatPayer).toBe(false);
+    });
+
+    it('carries the deregistration date, which used to be dropped', () => {
+        // The field decides whether a company left the VAT register, and most
+        // deregistrations have no `Platiteľ DPH` value to carry that fact.
+        const company = mapCompanyResponse({
+            ...base,
+            vat_payer: null,
+            vat_deleted_date: '2019-03-12',
+            vat_deleted_reason: 'Rok porušenia: 2018',
+        });
+
+        expect(company.vatStatus.deregisteredOn).toBe('2019-03-12');
+        expect(company.vatStatus.reasonForDeregistration).toBe('Rok porušenia: 2018');
+    });
+
+    it('carries DIČ, which the payload has always sent and nothing named', () => {
+        expect(mapCompanyResponse({...base, dic: '2020297950'}).dic).toBe('2020297950');
+        expect(mapCompanyResponse(base).dic).toBeNull();
     });
 });

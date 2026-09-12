@@ -184,7 +184,16 @@ function mapPeerListResponse(data: any): PeerList {
   };
 }
 
-function mapCompanyResponse(data: any): Company {
+/**
+ * Exported for its own spec.
+ *
+ * This is where two shapes meet, and it has already produced three wrong
+ * screens by defaulting a field the API did not send: `riskScore ?? 100`, and
+ * in the VAT block `vat_payer || false` plus `tax_reliability || 'Spoľahlivý'`.
+ * A mapper is the one place where "absent" can quietly become a positive
+ * claim, so it is tested directly rather than through a page.
+ */
+export function mapCompanyResponse(data: any): Company {
   const toAmount = (value: any): number => {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
@@ -278,6 +287,8 @@ function mapCompanyResponse(data: any): Company {
   return {
     id: data.id,
     ico: data.ico,
+    // The tax number, sent from the beginning and named nowhere until now.
+    dic: data.dic ?? null,
     name: data.nazov_UJ,
     legalForm: data.legal_form || 'Neznáma forma',
     status: data.datum_zrusenia ? 'Vymazaná' : 'Aktívna',
@@ -292,8 +303,19 @@ function mapCompanyResponse(data: any): Company {
     debts,
     vatStatus: {
       icDph: data.ic_dph,
-      isVatPayer: data.vat_payer,
-      taxReliabilityIndex: data.tax_reliability || 'Spoľahlivý',
+      // No `|| false`. The column is nullable, 302 713 rows hold nothing, and
+      // the fallback turned every one of them into "Neplatiteľ DPH" -- a
+      // negative claim about a company the tax office simply did not mention.
+      isVatPayer: data.vat_payer ?? null,
+      // No `|| 'Spoľahlivý'` either. That fallback printed half the register as
+      // *reliable* on no evidence, which is the reassuring direction of the
+      // same mistake and the worse one in a risk tool.
+      taxReliabilityIndex: data.tax_reliability ?? null,
+      registeredOn: data.datum_reg_dph ?? null,
+      // Was dropped on the floor. It is also the only field that tells a
+      // company struck off the register from one that was never on it, since
+      // most deregistrations carry no `Platiteľ DPH` value at all.
+      deregisteredOn: data.vat_deleted_date ?? null,
       reasonForDeregistration: data.vat_deleted_reason,
       lastCheckedAt: data.fs_update_date,
     },

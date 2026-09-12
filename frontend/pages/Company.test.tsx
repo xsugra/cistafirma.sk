@@ -19,6 +19,7 @@ vi.mock('../api', () => ({api: mocks.api}));
 /** Only the fields CompanyHeader and CompanySummaryStrip read. */
 const company = {
     ico: '12345678',
+    dic: '1234567890',
     name: 'Testovacia, s.r.o.',
     legalForm: 'Spoločnosť s ručením obmedzeným',
     status: 'Aktívna',
@@ -32,7 +33,15 @@ const company = {
     usesIfrs: false,
     rozPortalUrl: null,
     debts: [],
-    vatStatus: {isVatPayer: true, icDph: 'SK1234567890', taxReliabilityIndex: 'Spoľahlivý', lastCheckedAt: null},
+    vatStatus: {
+        isVatPayer: true,
+        icDph: 'SK1234567890',
+        taxReliabilityIndex: 'spoľahlivý',
+        registeredOn: '2010-01-01',
+        deregisteredOn: null,
+        reasonForDeregistration: null,
+        lastCheckedAt: null,
+    },
     riskScore: {score: 70, summary: 'Nízke riziko', breakdown: null},
 } as unknown as CompanyType;
 
@@ -136,5 +145,39 @@ describe('Company page', () => {
         );
 
         expect(await screen.findByText(/neexistuje/)).toBeInTheDocument();
+    });
+
+    it('shows the DIČ, which the payload has always carried and no line named', async () => {
+        // 395 373 of 445 626 rows. It travelled in the response from the first
+        // day and the header printed only the IČO.
+        renderWithProviders(
+            <Routes>
+                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+            </Routes>,
+            {route: '/firma/12345678/prehlad'},
+        );
+
+        expect(await screen.findByText('1234567890')).toBeInTheDocument();
+        expect(screen.getByText(/DIČ/)).toBeInTheDocument();
+    });
+
+    it('leaves the DIČ line out entirely for a company that has none', async () => {
+        // The other 50 253 rows. A label with nothing after it reads as a
+        // failed lookup; an absent line reads as a field the register does not
+        // keep, which is what it is.
+        mocks.api.getCompany.mockResolvedValue({...company, dic: null});
+
+        renderWithProviders(
+            <Routes>
+                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+            </Routes>,
+            {route: '/firma/12345678/prehlad'},
+        );
+
+        // Waited on the name, not the IČO: the IČ DPH in the strip below is
+        // `SK1234567890` and contains the IČO as a substring, so an IČO match
+        // finds two elements.
+        expect(await screen.findByText('Testovacia, s.r.o.')).toBeInTheDocument();
+        expect(screen.queryByText(/DIČ/)).not.toBeInTheDocument();
     });
 });

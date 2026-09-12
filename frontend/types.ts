@@ -19,6 +19,14 @@ export type FinancialsState =
 export interface Company {
   id: string;
   ico: string;
+  /**
+   * DIČ — the tax identification number, which is not the IČO.
+   *
+   * Measured 2026-09-12: 395 373 of 445 626 rows carry one, so this is an
+   * ordinary field of a company record and not a bonus. It travelled in the
+   * payload from the beginning and no line of this application named it.
+   */
+  dic: string | null;
   name: string;
   legalForm: string;
   status: 'Aktívna' | 'V likvidácii' | 'V konkurze' | 'Vymazaná';
@@ -67,10 +75,53 @@ export interface Debt {
   dateOfRecord: string;
 }
 
+/**
+ * The bands Finančná správa publishes for the tax-reliability index, spelled
+ * the way it spells them.
+ *
+ * Measured 2026-09-12 over all 445 626 rows of `"Companies and SZCO"`:
+ * `vysoko spoľahlivý` 92 320, `spoľahlivý` 84 543, `menej spoľahlivý` 50 620,
+ * and no index at all for 218 143.
+ *
+ * This type used to read `'Vysoko spoľahlivý' | 'Spoľahlivý' | 'Nespoľahlivý'`
+ * — capitalised, and matching none of the three values the register actually
+ * holds. So `isUnreliable = (index === 'Nespoľahlivý')`, the branch that was
+ * supposed to flag the worst band, could never fire: a company the tax office
+ * rates `menej spoľahlivý` was drawn in the same calm colour as one it rates
+ * `vysoko spoľahlivý`, and the warning was code that ran and did nothing.
+ */
+export type TaxReliability = 'vysoko spoľahlivý' | 'spoľahlivý' | 'menej spoľahlivý';
+
 export interface VatStatus {
   icDph: string | null;
-  isVatPayer: boolean;
-  taxReliabilityIndex: 'Vysoko spoľahlivý' | 'Spoľahlivý' | 'Nespoľahlivý';
+  /**
+   * `null` is not `false`. The column is nullable and 302 713 of 445 626 rows
+   * hold no value, because Finančná správa publishes none for them — and this
+   * field used to be declared `boolean`, so every one of those rendered as
+   * "Neplatiteľ DPH", a claim no source ever made.
+   */
+  isVatPayer: boolean | null;
+  /**
+   * The index as the register spells it, or `null` when it published none.
+   *
+   * Typed `string` and not the `TaxReliability` union on purpose: the union is
+   * what we have *measured*, and a value outside it must render as itself
+   * rather than be forced into a band we cannot justify. `vatReliability()`
+   * is the only reader, and it has an explicit branch for a value it does not
+   * recognise.
+   */
+  taxReliabilityIndex: string | null;
+  /** When the company entered the VAT register. 142 913 rows carry one. */
+  registeredOn: string | null;
+  /**
+   * When it was struck off, and the one field that decides the state.
+   *
+   * 32 050 rows carry a date, and 27 857 of those carry no `Platiteľ DPH`
+   * value at all — so deriving "is it still a payer" from the flag alone
+   * misreads most deregistrations. The date is the fact; the flag is a hint.
+   */
+  deregisteredOn: string | null;
+  /** Why, in the register's own words — `Rok porušenia: 2018` for 32 023 rows. */
   reasonForDeregistration: string | null;
   lastCheckedAt: string;
 }

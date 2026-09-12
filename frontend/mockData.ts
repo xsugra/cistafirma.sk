@@ -3,6 +3,7 @@ import type {Company} from './types';
 export const mockCompanyData: Company = {
   id: 'a1b2c3d4-e5f6-7890-1234-567890abcdef',
   ico: '50059959',
+  dic: '2120159999',
   name: 'Quantum Solutions s. r. o.',
   legalForm: 'Spoločnosť s ručením obmedzeným',
   status: 'Aktívna',
@@ -21,7 +22,12 @@ export const mockCompanyData: Company = {
   vatStatus: {
     icDph: 'SK2120159999',
     isVatPayer: true,
-    taxReliabilityIndex: 'Spoľahlivý',
+    // Spelled the way the register spells it — lowercase, and one of the three
+    // values it actually holds. The fixture used to say 'Spoľahlivý', a
+    // capitalised form that appears in no row of `"Companies and SZCO"`.
+    taxReliabilityIndex: 'spoľahlivý',
+    registeredOn: '2010-03-01',
+    deregisteredOn: null,
     reasonForDeregistration: null,
     lastCheckedAt: new Date().toISOString(),
   },

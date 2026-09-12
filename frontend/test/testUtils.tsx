@@ -75,10 +75,15 @@ export const DEFAULT_COMPANY: Company = {
     address: {street: 'Hlavná 1', city: 'Bratislava', zipCode: '811 01', country: 'SK'},
     lastUpdatedFromSource: '2026-01-01T00:00:00Z',
     debts: [],
+    dic: '1234567890',
     vatStatus: {
         icDph: 'SK1234567890',
         isVatPayer: true,
-        taxReliabilityIndex: 'Spoľahlivý',
+        // Lowercase, as the register spells it. A fixture that mirrors the
+        // source is the only kind that can catch the source's spelling.
+        taxReliabilityIndex: 'vysoko spoľahlivý',
+        registeredOn: '2010-01-01',
+        deregisteredOn: null,
         reasonForDeregistration: null,
         lastCheckedAt: '2026-01-01T00:00:00Z',
     },
