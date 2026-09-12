@@ -42,10 +42,18 @@ const ZONE_STYLES = {
     },
 } as const;
 
-const SECTIONS: { title: string; icon: string; rows: RatioRow[] }[] = [
+const SECTIONS: { title: string; icon: string; note?: string; rows: RatioRow[] }[] = [
     {
         title: 'Rentabilita',
         icon: 'fa-chart-line',
+        // The basis, named once for the three rows under it rather than
+        // repeated inside each label. All three divide `profit`, which is
+        // "VH z hospodárskej činnosti" -- the operating result, before tax --
+        // and not the net result a reader would otherwise assume from a bare
+        // "ROA". ROS divides it by the operating revenue for the same reason:
+        // a numerator and a denominator from different activity scopes are not
+        // a ratio. See `companies/services/financial_analysis.py`.
+        note: 'Počítané z výsledku hospodárenia z hospodárskej činnosti (pred zdanením); ROS ho delí výnosmi z hospodárskej činnosti.',
         rows: [
             { section: 'Rentabilita', key: 'roa', label: 'ROA (Rentabilita aktív)', unit: '%' },
             { section: 'Rentabilita', key: 'roe', label: 'ROE (Rentabilita vlastného kapitálu)', unit: '%' },
@@ -195,10 +203,17 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
             <div className="space-y-5">
                 {SECTIONS.map((section) => (
                     <div key={section.title}>
-                        <h4 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                            <i className={`fas ${section.icon} text-blue-500 dark:text-blue-400 text-xs`}></i>
-                            {section.title}
-                        </h4>
+                        <div className="mb-2">
+                            <h4 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <i className={`fas ${section.icon} text-blue-500 dark:text-blue-400 text-xs`}></i>
+                                {section.title}
+                            </h4>
+                            {section.note && (
+                                <p className="mt-1 ml-5 text-xs text-gray-400 dark:text-gray-500">
+                                    {section.note}
+                                </p>
+                            )}
+                        </div>
                         <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-slate-800">
                             <table className="w-full text-sm">
                                 <thead>

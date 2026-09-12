@@ -113,7 +113,11 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
         // with two filed years.
         ...(analysisRatios ? [
             {
-                label: 'ROA',
+                // "hosp. činnosť" because the tile would otherwise read as the
+                // net return every reader assumes a bare "ROA" means. It is the
+                // operating result over total assets -- the ratio table below
+                // says the same thing in full.
+                label: 'ROA (hosp. činnosť)',
                 value: analysisRatios.roa,
                 prevValue: null,
                 format: 'percent' as const,
@@ -121,7 +125,7 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
                 inverse: false,
             },
             {
-                label: 'ROE',
+                label: 'ROE (hosp. činnosť)',
                 value: analysisRatios.roe,
                 prevValue: null,
                 format: 'percent' as const,

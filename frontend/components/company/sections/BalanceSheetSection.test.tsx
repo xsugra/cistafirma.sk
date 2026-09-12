@@ -46,37 +46,77 @@ describe('BalanceSheetSection', () => {
         expect(screen.getByText(/^50/)).toBeInTheDocument();
     });
 
-    it('refuses to call a statement wrong when it cannot be checked', () => {
-        // Accruals never filed. Summing the three parts that are present would
-        // produce a total that looks authoritative and is not one, and the
-        // control row would then report a balance error that does not exist.
+    it('reads an absent accruals line as a zero, because the filings say it is one', () => {
+        // Measured 2026-09-12: of the 2 336 stored rows carrying assets, equity
+        // and liabilities and no accruals line, 2 326 satisfy
+        // `assets = equity + liabilities` exactly. An accruals line the filer
+        // left out is a line with nothing in it -- and counting it as unread
+        // made this control refuse to judge 2 336 rows it can judge.
         renderWithProviders(
             <BalanceSheetSection
                 company={makeCompany({
-                    financials: [filed({assetsTotal: 1000, equity: 400, liabilitiesTotal: 500})],
+                    financials: [filed({assetsTotal: 900, equity: 400, liabilitiesTotal: 500})],
                 })}
             />,
         );
 
-        // The card says it cannot be checked rather than drawing a table whose
-        // every row repeats that. And it makes no claim in either direction.
+        expect(screen.getByText('sedí')).toBeInTheDocument();
+        expect(screen.queryByText('nedá sa overiť')).not.toBeInTheDocument();
+        // The total is a real figure now, not withheld: 400 + 500 + 0 = 900,
+        // which is what the assets side says too -- so 900 appears twice, once
+        // per side, and nowhere else. Withheld it appeared once.
+        expect(screen.getAllByText(/900/)).toHaveLength(2);
+    });
+
+    it('refuses to judge a statement missing a figure the identity needs, and names it', () => {
+        // Equity absent. This one genuinely cannot be evaluated -- no
+        // measurement says an absent equity line is a zero -- and summing the
+        // parts that happen to be present would compare a real figure against a
+        // partial one and call the statement wrong.
+        renderWithProviders(
+            <BalanceSheetSection
+                company={makeCompany({
+                    financials: [filed({assetsTotal: 1000, liabilitiesTotal: 500})],
+                })}
+            />,
+        );
+
         expect(screen.getByText(/nemožno overiť/)).toBeInTheDocument();
         expect(screen.queryByText('sedí')).not.toBeInTheDocument();
         expect(screen.queryByText('nesedí')).not.toBeInTheDocument();
-        // Pasíva spolu is deliberately absent rather than showing 900 €.
-        expect(screen.queryByText('900 €')).not.toBeInTheDocument();
+        // The complaint was that this sentence named nothing. It names the
+        // figure and the year, so a reader knows what to go and look at.
+        expect(screen.getByText(/Chýba: vlastné imanie \(2023\)/)).toBeInTheDocument();
+    });
+
+    it('lists each absent figure with the years that are missing it', () => {
+        renderWithProviders(
+            <BalanceSheetSection
+                company={makeCompany({
+                    financials: [
+                        filed({year: 2021, assetsTotal: 1000, liabilitiesTotal: 500}),
+                        filed({year: 2022, assetsTotal: 1000, equity: 400}),
+                    ],
+                })}
+            />,
+        );
+
+        expect(
+            screen.getByText(/Chýba: vlastné imanie \(2021\); záväzky spolu \(2022\)/),
+        ).toBeInTheDocument();
     });
 
     it('marks the years it can check and the years it cannot, side by side', () => {
-        // One year complete, one missing its accruals. The table is drawn, and
-        // the two verdicts have to be told apart in it -- this is the case that
-        // would otherwise let a missing line read as a balance error.
+        // One year complete, one missing a figure the identity needs. The table
+        // is drawn, and the two verdicts have to be told apart in it -- this is
+        // the case that would otherwise let a missing line read as a balance
+        // error.
         renderWithProviders(
             <BalanceSheetSection
                 company={makeCompany({
                     financials: [
                         balanced(2022),
-                        filed({year: 2023, assetsTotal: 1000, equity: 400, liabilitiesTotal: 500}),
+                        filed({year: 2023, assetsTotal: 1000, liabilitiesTotal: 500}),
                     ],
                 })}
             />,

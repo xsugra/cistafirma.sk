@@ -349,12 +349,18 @@ class FinancialAnalysisService:
         # turnover row is the same quantity and the two must not disagree.
         #
         # It is a fallback and not a preference: `total_revenue` is populated on
-        # 22.9 % of the 14 236 stored rows against 98.1 % for `revenue`, so a
-        # P&L that resolved the operating line without the financial-revenue
-        # line is the common shape, not the exception.
+        # 3 458 of the 15 275 stored rows (22.6 %) against 14 999 (98.2 %) for
+        # `revenue`, so a P&L that resolved the operating line without the
+        # financial-revenue line is the common shape, not the exception.
         revenue_filed = _amount(fr.total_revenue)
         if revenue_filed is None:
             revenue_filed = _amount(fr.revenue)
+
+        # The *operating* revenue line on its own, which is what `profit` is
+        # measured against in ROS below. Kept separate from `revenue_filed`
+        # because that one is a total-with-fallback for the turnover row, and a
+        # ratio whose two sides are different activity scopes is not a ratio.
+        operating_revenue_filed = _amount(fr.revenue)
 
         # `_safe_float` maps an absent figure to 0.0, which is right for an
         # arithmetic term and wrong for a *ratio*: a company whose statement
@@ -419,7 +425,31 @@ class FinancialAnalysisService:
         ratios = RatioSet(
             roa=_ratio(profit, assets_total) if profit_filed else None,
             roe=_ratio(profit, equity) if profit_filed else None,
-            ros=_ratio(profit, total_revenue) if profit_filed else None,
+            # The numerator and the denominator are the same activity here:
+            # both are the *operating* side of the statement ("VH z
+            # hospodárskej činnosti" over "Výnosy z hospodárskej činnosti
+            # spolu"). It divided operating profit by `total_revenue`, which
+            # adds the financial revenues the numerator excludes -- so a company
+            # earning on its financial side had its ROS understated by a
+            # denominator its profit never competed in.
+            #
+            # It is also the difference between a ratio for most companies and a
+            # ratio for a few: `total_revenue` is populated on 3 458 of the
+            # 15 275 stored rows (22.6 %) against 14 999 (98.2 %) for `revenue`,
+            # so four of five companies had no ROS at all. `median_ros` moves
+            # with it -- `benchmarking._compute_section_metrics` divides the
+            # same two lines, because the company page prints them side by side,
+            # and all 15 stored rows were regenerated in the same pass.
+            #
+            # It moves a long way in the non-market sections, where it is real:
+            # a municipality's grants sit on Príjmy/Výdavky, which this codebase
+            # deliberately does not map to `revenue`, so its operating costs run
+            # ~32x its operating revenues and the section median is extreme.
+            # Section O measured 2026-09-12: median ROS -1 159 % over 714 rows.
+            # The ratio is right over the lines we hold; the fix is reading the
+            # public-sector statement, not another denominator. See
+            # docs/SOURCE_DATA_INTEGRITY.md.
+            ros=_ratio_present(profit, operating_revenue_filed) if profit_filed else None,
             current_ratio=_simple_ratio_present(current_assets, liabilities_short),
             quick_ratio=_simple_ratio_present(
                 _sum_present(receivables_short, financial_accounts), liabilities_short

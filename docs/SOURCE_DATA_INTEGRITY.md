@@ -1565,3 +1565,129 @@ short-term liability line (1 378 rows lack `liabilities_short` entirely) or no
 current-asset line at all. A grep of the model's own fields for interest
 expense, cash flow and depreciation returns **nothing** — the four omitted
 models have no input to read, which is the finding recorded in the table above.
+
+*The corpus counts in this section were taken at 14 236 rows. The beat-scheduled
+incremental financials sync resumed with the stack restart on 2026-09-12, so the
+corpus is larger in the two sections below (14 818 and 15 275 at their own
+measurement times). Every count here is "as of" and none of them is a ceiling.*
+
+## One ROS denominator, and the sectors where no denominator helps
+
+ROS divided the operating result by **total** revenues. `profit` is "VH z
+hospodárskej činnosti" and `revenue` is "Výnosy z hospodárskej činnosti spolu",
+so the numerator excluded the financial activity that the denominator included —
+and a company earning on its financial side had its ROS understated by whatever
+that side contributed. `total_revenue` is also the rarer line by a factor of
+four: populated on **3 458** of 15 275 rows against **14 999** for `revenue`.
+
+Both sides of the fraction now read the operating lines, in
+`financial_analysis._analyze_year` and in `benchmarking._compute_section_metrics`
+— both, because the company's ratio is printed beside `median_ros` and two
+different formulas side by side are not a comparison. **11 539 rows gain an
+ROS.** At most **22** lose one they had: rows carrying a `total_revenue` with no
+operating revenue line under it, which is the scope mismatch this change is
+about anyway.
+
+The `SectorBenchmark` rows for 2025 (all 15 of them; the table holds one year)
+were regenerated, because they are stored rather than derived on read. All 15
+medians moved:
+
+| section | before | after | | section | before | after |
+|---|---|---|---|---|---|---|
+| A | 2.69 | 3.63 | | N | 1.02 | −3.37 |
+| C | 1.85 | 1.64 | | O | — | **−1 159.32** |
+| E | — | −679.53 | | P | — | **−1 341.87** |
+| F | −32.80 | −11.44 | | Q | 0.84 | −342.91 |
+| G | 3.16 | 3.33 | | R | — | −357.60 |
+| I | 4.53 | −326.51 | | S | 7.06 | −459.34 |
+| J | 21.15 | 21.43 | | H | — | −4.52 |
+| L | 1.95 | 1.53 | | M | 4.50 | 1.73 |
+
+**The extreme values are real, and they are confined to the non-market
+sections** — E (water), I (accommodation), O (public administration), P
+(education), Q (health), R (arts), S (other services). Measured on section O for
+2025: 707 rows, **median revenue 18 740 €**, **median costs 604 184 €**, median
+`profit` **−578 308 €** — the median entity's operating costs are 32× its
+operating revenues. Section O's median ROS is −1 159 % over a sample of 714
+companies, so this is not a small-sample artifact, and a denominator floor does
+not touch it either (`|revenue| ≥ 100 000 €` leaves the median at −904 %).
+
+The cause is deliberate and already documented in the parser: `Príjmy` and
+`Výdavky`, the public-sector statement's two sides, are **not** mapped to
+`revenue`/`costs`, so a municipality's grants and transfers never reach
+`revenue` while the whole of its operating cost reaches `costs`. *Mesto Prešov*
+is the shape in one line: `revenue` 1 074 721 € against `costs` 91 535 664 €.
+The ratio is arithmetically right over the lines we hold, and it says what a
+company-style ROS says about a body whose income is not company income.
+
+**Left as it is, deliberately.** The alternatives are worse. Reverting to
+`total_revenue` restores a knowingly-mismatched formula and gives up 11 539 rows
+to make seven sections quieter. Suppressing the ratio where the statement looks
+non-market needs a plausibility heuristic — "costs more than N× revenue" — which
+is a guess wearing the same clothes as a measurement, and this file exists to
+refuse those. The values reported before were not good either: four of the seven
+sections published a dash, and Q, I and S published a median over the handful of
+their rows that happened to carry both lines.
+
+What would actually fix it is reading the public-sector statement, which is the
+same parser project recorded in *The non-profit statement, measured* above, and
+it is not a ratio change.
+
+## The balance-sheet control, measured a second time
+
+The company page's one check that needs no second source is the identity
+`assets = equity + liabilities + accruals`, with a tolerance of one euro. The
+instinct on reading it is that an absolute euro is absurdly strict for a balance
+sheet in the millions, and that a relative rule (`max(1 €, 0.1 % of assets)`)
+would be the professional choice. **Measured, that instinct is wrong**, and the
+distribution is what says so. Over the 14 652 rows carrying the figures the
+identity needs:
+
+| | rows |
+|---|---|
+| balances **exactly** | **13 816** (94.3 %) |
+| off by under one euro | 1 |
+| flagged as not balancing | 835 (5.7 %) |
+
+There is no rounding band. The 835 are not a population of filing-rounding
+residuals with a tail: only **276** of them fall within 0.1 % of assets, and
+those include a **215 905 €** gap on assets of 347 M € — 0.06 %. A balance sheet
+is a list of totals the filer already added up, so its parts match its own total
+to the cent; a relative band would launder real errors as rounding and clear a
+third of the flags for nothing. The tolerance is unchanged, and the reasoning is
+now in the code beside it.
+
+**The defect was elsewhere: an absent "Časové rozlíšenie" made the check
+refuse.** `pasivaTotal` returned null unless all four figures were filed, so
+2 477 rows reported "Súvahu nemožno overiť". Measured: of the **2 336** rows
+carrying assets, equity and liabilities and no accruals line, **2 326 balance
+exactly** when the absent accruals count as zero. A line the filer left out of
+the template is a line with nothing in it, not a line we failed to read. The
+unverifiable set falls from 2 477 to **166** rows:
+
+| missing figure | rows |
+|---|---|
+| `liabilities_total` | 122 |
+| `equity` | 70 |
+| `assets_total` | 7 |
+| more than one of the three | 30 |
+
+Eight of the 2 336 now get judged and do not balance (0.3 %), which is a smaller
+error than the 5.7 % the control already flags outright — and withholding 2 326
+correct verdicts to spare 8 is the wrong trade.
+
+The empty state also stopped naming nothing. It printed one flat sentence
+listing all four figures including the accruals line; it now names the missing
+figure and the years — *"Chýba: vlastné imanie (2021); záväzky spolu (2022)"* —
+and the per-year "nedá sa overiť" badge carries the same detail in its tooltip.
+
+**Deliberately not changed, and why it is recorded here instead.**
+`debt_ratio` is computed by `_sum_present(liabilities_total,
+liabilities_accruals)` in three places (`serializers`, `benchmarking`,
+`pdf_report`), so it still answers "unknown" for those same 2 336 rows even
+though the same measurement says the absent line is a zero there too. It is left
+alone because the per-company figure is compared against the *stored*
+`median_debt_ratio`, so changing it means regenerating every benchmark row in
+the same pass — a wider change than this one, and one that would move a
+published median for every sector. The accruals-is-zero rule is applied where it
+verifies a statement, not yet where it feeds a comparison.

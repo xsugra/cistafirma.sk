@@ -158,7 +158,9 @@ describe('FinancialIndicators', () => {
             />
         );
 
-        expect(screen.getByText('ROA')).toBeInTheDocument();
+        // The tile names its basis: the ratio is the operating result, so a
+        // bare "ROA" would be read as the net return.
+        expect(screen.getByText('ROA (hosp. činnosť)')).toBeInTheDocument();
         expect(screen.queryByText('nový')).toBeNull();
         // The year-over-year arrows that *can* be computed are still drawn.
         expect(screen.getAllByText('50.0%').length).toBeGreaterThan(0);

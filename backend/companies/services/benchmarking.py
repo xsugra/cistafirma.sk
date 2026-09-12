@@ -192,7 +192,15 @@ def _compute_section_metrics(fr_list: list[CompanyFinancialResult], section: str
         # leaves the median instead of voting for zero.
         roa = _ratio_present(profit, assets_total)
         roe = _ratio_present(profit, equity)
-        ros = _ratio_present(profit, total_revenue)
+        # Operating revenue, not `total_revenue`: the numerator is operating
+        # profit, and dividing it by a denominator that also carries the
+        # financial revenues the numerator excludes is not a ratio. It is also
+        # the difference between a median for most companies and one for a few
+        # -- `total_revenue` is populated on 3 458 of 15 275 rows (22.6 %)
+        # against 14 999 (98.2 %) for `revenue`. The per-company ratio set
+        # divides the same two lines, and the company page prints the two
+        # figures side by side.
+        ros = _ratio_present(profit, revenue)
         debt_ratio = _ratio_present(
             _sum_present(liabilities_total, liabilities_accruals), assets_total
         )

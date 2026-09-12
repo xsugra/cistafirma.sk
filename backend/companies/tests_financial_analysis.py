@@ -126,9 +126,16 @@ class InterpretationVocabularyTests(SimpleTestCase):
 
     def test_the_vocabulary_is_closed(self):
         # A balance sheet with every line present, so nothing is `unknown`.
+        #
+        # `revenue` is filed as well as `total_revenue`, and it has to be: ROS
+        # divides the operating revenue, so a fixture carrying only the total
+        # has no ROS denominator and this test would read `unknown` where it
+        # means to read a verdict. That is the ratio behaving correctly -- a
+        # total that includes the financial side is not the base an operating
+        # profit is measured against -- so the fixture is what had to change.
         measured = year(
             assets_total=1000, equity=600, liabilities_total=400, profit=100,
-            total_revenue=2000, assets_inventory=100,
+            revenue=2000, total_revenue=2000, assets_inventory=100,
             assets_receivables_short=100, assets_financial_accounts=50,
             liabilities_short=200,
         )
@@ -574,11 +581,13 @@ class ProfitabilityGuardTests(SimpleTestCase):
     not "some income line was read". The looser test let a filing that carried
     `revenue` and no profit row through, and `0 / assets` then arrived as an
     ROA, an ROE and an ROS of 0.0: three adverse verdicts about a line nobody
-    had read. Measured 2026-09-12, no stored row is in that state, so these pin
-    the path shut rather than a leak.
+    had read. Measured 2026-09-12 after the full re-sync: 2 of the 15 275 stored
+    rows are in that state, so these pin the general path shut rather than
+    those two in particular -- both would have been spared by `_ratio`'s own
+    zero-denominator guard.
 
-    Each case files `total_revenue` as well, so ROS's denominator is present and
-    the only thing missing is the profit line -- which is the claim under test.
+    Each case files `revenue` as well, so ROS's denominator is present and the
+    only thing missing is the profit line -- which is the claim under test.
     """
 
     def test_revenue_and_costs_without_a_profit_row_yield_no_ratio(self):
@@ -613,3 +622,77 @@ class ProfitabilityGuardTests(SimpleTestCase):
 
         self.assertEqual(r.roa, 0.0)
         self.assertEqual(r.ros, 0.0)
+
+
+class RosDenominatorTests(SimpleTestCase):
+    """ROS divides the *operating* revenue, the same side the profit is on.
+
+    It divided by `total_revenue` -- operating revenue plus financial revenue --
+    so the numerator was the operating result and the denominator included an
+    activity the numerator excluded. A company earning on its financial side had
+    its ROS understated by however much that side contributed.
+
+    Coverage is the larger half of the argument: measured 2026-09-12 over the
+    15 275 stored rows, `total_revenue` is populated on 3 458 of them against
+    14 999 for `revenue`. So the old denominator withheld the ratio from four of
+    every five companies that had one -- 11 539 rows gain an ROS here, and at
+    most 22 lose the ratio they had (a `total_revenue` with no operating line
+    under it, which is the scope mismatch this class is about anyway).
+    """
+
+    def test_the_denominator_is_the_operating_revenue(self):
+        # Operating revenue 1 000, financial revenue another 1 000, operating
+        # profit 100. ROS is 10 %, not the 5 % a total-revenue denominator
+        # reported -- the profit did not compete in the financial side.
+        r = ratios(assets_total=1000, equity=500, revenue=1000, total_revenue=2000, profit=100)
+
+        self.assertEqual(r.ros, 10.0)
+
+    def test_total_revenue_alone_is_not_a_denominator(self):
+        # A row where only the total was written. There is no operating revenue
+        # to measure the operating profit against, so there is no ROS -- an
+        # absence, not a zero.
+        r = ratios(assets_total=1000, equity=500, total_revenue=2000, profit=100)
+
+        self.assertIsNone(r.ros)
+        # The other two do not move: their denominators are on the balance sheet.
+        self.assertEqual(r.roa, 10.0)
+
+    def test_a_filed_zero_operating_revenue_yields_no_ros(self):
+        # Zero operating revenue is a measurement, and the ratio over it is
+        # undefined rather than infinite or zero.
+        r = ratios(assets_total=1000, equity=500, revenue=0, total_revenue=500, profit=100)
+
+        self.assertIsNone(r.ros)
+
+    def test_the_sector_median_is_the_median_of_this_ratio(self):
+        # The company page prints the company's ROS beside `median_ros`, so the
+        # two have to come from the same expression -- a comparison between two
+        # formulas is not a comparison. This is the property, not the spelling:
+        # the published median equals the median of the per-company ratios, on
+        # rows where the two candidate denominators differ, so a drift back to
+        # `total_revenue` on either side fails here.
+        from companies.services.benchmarking import _compute_section_metrics
+
+        def row(revenue, total_revenue, profit):
+            # Unsaved and unattached: `_compute_section_metrics` reads only the
+            # statement's own lines, so this stays a `SimpleTestCase`.
+            return CompanyFinancialResult(
+                year=2025, assets_total=1000, equity=500,
+                revenue=revenue, total_revenue=total_revenue, profit=profit,
+            )
+
+        # Financial revenue is a third of the total in every case, so an ROS
+        # over `total_revenue` would be uniformly lower than these.
+        rows = [row(1000, 1500, 100), row(2000, 3000, 300), row(500, 750, 25)]
+        metrics = _compute_section_metrics(rows, 'J')
+
+        per_company = sorted(
+            ratios(
+                assets_total=1000, equity=500,
+                revenue=r.revenue, total_revenue=r.total_revenue, profit=r.profit,
+            ).ros
+            for r in rows
+        )
+        self.assertEqual(per_company, [5.0, 10.0, 15.0])
+        self.assertEqual(float(metrics['median_ros']), 10.0)

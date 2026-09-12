@@ -43,6 +43,10 @@ REPORT_CACHE_POLL_INTERVAL = 0.1
 # liquidity pairs, both activity rows and both debt rows were dropped for every
 # company. `roa`, `roe` and `ros` are spelled the same in both vocabularies,
 # which is exactly why nobody noticed.
+#: The three profitability rows divide `profit`, which is "VH z hospodárskej
+#: činnosti" -- the operating result, before tax -- and not the net result the
+#: labels alone would be read as. `RATIO_BASIS_NOTE` says so once under the
+#: table rather than lengthening three labels.
 RATIO_ROWS = [
     {'key': 'roa', 'label': 'ROA (Rentabilita aktív)', 'unit': '%'},
     {'key': 'roe', 'label': 'ROE (Rentabilita vlastného kapitálu)', 'unit': '%'},
@@ -55,6 +59,15 @@ RATIO_ROWS = [
     {'key': 'debtToEquity', 'label': 'Zadĺženosť (D/E)', 'unit': '×'},
     {'key': 'selfFinancingRatio', 'label': 'Miera samofinancovania', 'unit': '%'},
 ]
+
+#: Rendered under the ratio table, and the same sentence the company page shows
+#: above its own. A bare "ROA" reads as the net return; this one is the
+#: operating result, and ROS divides it by the operating revenue rather than
+#: the total -- the same activity scope on both sides of the fraction.
+RATIO_BASIS_NOTE = (
+    'Ukazovatele rentability sú počítané z výsledku hospodárenia z hospodárskej '
+    'činnosti (pred zdanením); ROS ho delí výnosmi z hospodárskej činnosti.'
+)
 
 
 def _report_cache_key(company: Company) -> str:
@@ -398,6 +411,7 @@ def generate_company_report(company: Company) -> bytes:
         'total_debt': total_debt,
         'analysis': analysis,
         'ratio_rows': ratio_rows,
+        'ratio_basis_note': RATIO_BASIS_NOTE,
         'financial_history': financial_history,
         'executives': executives,
         'benchmark': benchmark_data,
