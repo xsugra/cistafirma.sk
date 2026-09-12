@@ -1486,3 +1486,82 @@ makes the score `None`, never a zero. And both publish their zone as a token
 (`zScoreZone`, `tafflerZone`) so no client re-derives a boundary — which is how
 `< 1.23` / `< 2.90`, the mirror of the service's ladder, once put exactly 1.23
 and exactly 2.90 in the wrong zone on the company page and in the PDF.
+
+### What the re-sync actually filled, measured
+
+Measured **2026-09-12**, after the full re-sync drained (queue at 0, 17:43 UTC).
+The corpus is **14 236** `CompanyFinancialResult` rows across **1 173**
+companies and **445 626** `Company` rows. Every figure below is a count over
+that corpus, reproducible by walking it; none is an estimate.
+
+**`profit_after_tax`.** The field was added by migration `0016` with no
+backfill, so before this re-sync it was NULL on every row.
+
+| | rows | share |
+|---|---|---|
+| after-tax figure filled | **3 661** | 25.7 % |
+| `profit` present, after-tax still NULL | **10 521** | 73.9 % |
+| neither figure present | 54 | 0.4 % |
+| after-tax present, `profit` absent | 0 | — |
+
+The 3 661 are what the re-sync recovered. **The 10 521 are the residual, and
+they are the point of this section:** they are not statements without a profit
+row — every one of them has `profit` — they are statements whose after-tax row
+was not resolved. The split is flat across every year (2019–2025 each land
+between 801 and 819 missing against 284–298 filled), which is the signature of
+a systematic parse gap rather than of an older template generation.
+
+The stored data cannot say whether the after-tax row is *absent from the
+filing* or *present and unmatched by the parser*. That needs a sample of raw
+statements, and it has not been done. It is recorded here as the open question
+rather than answered by assumption.
+
+**`asset_turnover`.** The row used to be fabricated on any statement whose
+`total_revenue` was unread — `_simple_ratio` sent it through `_safe_float` as
+`0.0`, and `0.0` falls under the row's `bad` threshold.
+
+| | rows |
+|---|---|
+| rows where the old code rendered "0.00" | **10 924** (76.7 %) |
+| … of those, now showing the filed figure | 10 704 |
+| … of those, now showing nothing | 185 |
+| … of those, still 0.00 — a *filed* zero revenue | 35 |
+| old path produced a number / new path produced a number | 14 144 / 13 959 |
+
+The 35 that still read 0.00 are the distinction this change exists to make: a
+filed zero is a measurement and must render, an unread line must not.
+
+**`current_ratio`.** 12 271 rows produce a ratio; 790 rows carry none of the
+four current-asset lines. The distribution of how many of the four each row
+carries is the finding:
+
+| lines present | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| rows | 790 | 3 455 | **8 851** | 1 070 | **70** |
+
+Only **70 rows (0.5 %)** carry all four lines. The partial sum is therefore not
+an edge case — it is how 99.5 % of these ratios are built. That is why it is
+documented as deliberate and mirrored in `benchmarking._compute_section_metrics`
+rather than tightened unilaterally: the benchmark median beside a company's
+ratio is built the same way, so the two agree. Making it strict would blank
+almost every current ratio on the site.
+
+**Pre-2015 residual.** 2 132 rows (15.0 %) have `year < 2015`, and 2 127 of
+them carry `assets_total`. None is pre-2000. These are the rows whose older
+statement templates the row-label vocabulary does not match; they are where the
+"neither figure present" 54 and a large part of the after-tax residual live.
+
+**Statements read as a single number.** `00681393` ("Združenie saleziánov
+spolupracovníkov na Slovensku") was an open finding: four stored years, each
+carrying `assets_total` and nothing else. Measured, it is **35 rows across 16
+companies** (0.25 %), spanning 2014–2025, and it is current — 3 rows in 2025.
+So it is not one odd company, and it is not a data-model defect: the statement
+was read for its headline total and no other line resolved. It is the same
+parser gap as the after-tax residual, seen from the other side.
+
+**Scoring-model coverage**, from the same sweep: Altman scores **13 876** rows,
+Taffler **12 267**. The 609-row gap between them is the rows that carry no
+short-term liability line (1 378 rows lack `liabilities_short` entirely) or no
+current-asset line at all. A grep of the model's own fields for interest
+expense, cash flow and depreciation returns **nothing** — the four omitted
+models have no input to read, which is the finding recorded in the table above.

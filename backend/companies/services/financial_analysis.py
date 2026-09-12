@@ -427,10 +427,14 @@ class FinancialAnalysisService:
             #
             # It used to be a fabricated one. `_simple_ratio` sent an unread
             # `total_revenue` through `_safe_float` as 0.0, and 0.0 falls under
-            # this row's `bad` threshold -- so 10 909 of the 14 204 rows in the
+            # this row's `bad` threshold -- so 10 924 of the 14 236 rows in the
             # database (77 %) rendered "Obrat aktív 0.00" with the verdict
             # "Riziková": an adverse claim about a company, from a line nobody
-            # had read.
+            # had read. Of those 10 924, re-measured 2026-09-12 after the full
+            # re-sync: 10 704 now show the figure the statement actually
+            # supports, 185 show nothing at all, and 35 still show 0.00 --
+            # those 35 filed a real zero revenue, which is a measurement and
+            # not a fabrication.
             asset_turnover=_simple_ratio_present(revenue_filed, assets_filed),
             receivables_collection=_simple_ratio(
                 receivables_short / max(total_revenue, 1) * 365, 1
