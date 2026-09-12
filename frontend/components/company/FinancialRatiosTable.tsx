@@ -17,10 +17,13 @@ interface RatioRow {
 
 // One entry per zone the backend can return, so the banner is painted from the
 // verdict rather than from the score. The ladder used to be written out here
-// three times -- and mirrored in `api.ts` -- which is four chances to disagree
-// with `financial_analysis.z_score_zone` and with each other. It did: a score
-// of exactly 1.23 is distress by the service's `> 1.23` and was grey by the
-// `< 1.23` written here.
+// three times -- banner, chip and caption -- as `> 2.90` / `> 1.23`, which is
+// the same rule `financial_analysis` applies, so nothing here was ever the
+// wrong colour. The problem was that it was a copy: `api.ts` and the PDF
+// renderer held two more, both the *mirror* (`< 1.23` / `< 2.90`), and at
+// exactly 1.23 or exactly 2.90 that is a different verdict. So this file's
+// banner and the risk summary printed beside it could disagree with each other
+// and with the paper. One zone from the backend leaves nothing to disagree.
 const ZONE_STYLES = {
     safe: {
         banner: 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20',

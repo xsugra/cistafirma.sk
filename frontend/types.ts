@@ -140,9 +140,10 @@ export interface YearAnalysis {
   zScore: number | null;
   zScoreLabel: string | null;
   // The Altman zone the backend put the score in, and the only thing a client
-  // may use to colour or describe it. Deriving it here from `zScore` is what
-  // put 1.23 and 2.90 in the wrong zone: the backend's ladder is `> 2.90` /
-  // `> 1.23` and the mirror of it is not the same ladder.
+  // may use to colour or describe it. Re-deriving it from `zScore` is what put
+  // 1.23 and 2.90 in the wrong zone: two of the copies -- `api.ts` and the PDF
+  // renderer -- wrote the mirror of the backend's `> 2.90` / `> 1.23`, and a
+  // mirror is not the same ladder.
   zScoreZone: 'safe' | 'grey' | 'distress' | null;
 }
 
