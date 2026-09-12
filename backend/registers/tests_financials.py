@@ -1069,8 +1069,12 @@ class CurrentAssetsTests(SimpleTestCase):
     the live corpus 2026-09-12: `assets_financial_accounts` holds a value for
     547 of the 2 576 filings of 2013 and for **0 of every year from 2015 on**.
 
-    The tests below pin the labels of *both* templates, because a fix that
-    matches only the new one trades a 2014+ hole for a pre-2014 one.
+    The tests below pin the labels of *every* template family, because a fix
+    that matches only the new one trades a 2014+ hole for a pre-2014 one -- and
+    because the first attempt at this fix replaced the key with a *bare*
+    `financne ucty`, which šablóna 687's r.23 "Ostatné finančné účty" contains.
+    That put one line's figure in another line's field, under that field's
+    label: the same defect, one template further along.
     """
 
     def setUp(self):
@@ -1126,12 +1130,15 @@ class CurrentAssetsTests(SimpleTestCase):
 
         self.assertEqual(result.get("assets_current"), Decimal("3194728"))
 
-    def test_financne_ucty_survives_both_spellings_of_the_row(self):
-        # Both spellings, in one test, because the whole defect was that only
-        # one of them matched: "súčet" before 2014, a bare formula after.
+    def test_financne_ucty_survives_every_spelling_of_the_row(self):
+        # Every spelling the corpus uses, in one test, because the whole defect
+        # was that only some of them matched: "súčet" before 2014, a bare
+        # formula from 2014 on, and the `r. 052 až r. 056` form in the
+        # non-business statement (templates 17, 385, 1180).
         for label, value in (
             ("Finančné účty súčet (r. 056 až r. 060)", "158700"),
             ("Finančné účty r. 72 + r. 73", "176879"),
+            ("Finančné účty r. 052 až r. 056", "91234"),
         ):
             with self.subTest(label=label):
                 table, template = self._assets_table([label], [value])
@@ -1177,10 +1184,8 @@ class CurrentAssetsTests(SimpleTestCase):
 
     def test_a_note_row_does_not_shadow_the_cash_line(self):
         # "Náklady na krátkodobý finančný majetok (566)" is a profit-and-loss
-        # row that shares the phrase. The bare `financne ucty` key must not
-        # reach it, and it must not reach r.71 either -- r.71 is the only row
-        # carrying that phrase in the asset table, which is what makes the bare
-        # key safe there.
+        # row that shares the phrase. The key is the `súčet` row, so it must
+        # not reach this one.
         table, template = self._assets_table(
             ["Náklady na krátkodobý finančný majetok (566)"], ["15933"]
         )
@@ -1188,6 +1193,78 @@ class CurrentAssetsTests(SimpleTestCase):
         result = self.service._extract_with_template(table, template)
 
         self.assertIsNone(result.get("assets_financial_accounts"))
+        self.assertIsNone(result.get("assets_financial_short"))
+
+    def test_an_other_row_is_not_the_row_whose_name_it_contains(self):
+        # Šablóna 687 names r.23 "Ostatné finančné účty (251, 252, 253, 256,
+        # 257, 25X, 259, 314A)". A *bare* `financne ucty` key is a substring of
+        # that, so it read the short-term-financial-assets line into r.71's
+        # field -- a figure printed under a label that claims it is the cash
+        # total. "Ostatné" is not decoration: it is what makes this a different
+        # line, and 687 keeps them apart on purpose, r.21 "Finančný majetok"
+        # being r.22 "Peniaze a účty v bankách" + r.23.
+        table, template = self._assets_table(
+            ["Ostatné finančné účty (251, 252, 253, 256, 257, 25X, 259, 314A) - /291, 29X/"],
+            ["480000"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_financial_short"), Decimal("480000"))
+        self.assertIsNone(result.get("assets_financial_accounts"))
+
+    def test_the_687_cash_row_is_read(self):
+        # The same merged line 699 splits in two: "Peniaze a účty v bankách"
+        # carries r.72's accounts (211, 213, 21X) and r.73's (221A, 22XA,
+        # +/- 261) in one row, so it is r.71's figure under one label.
+        table, template = self._assets_table(
+            ["Peniaze a účty v bankách (211, 213, 21X, 221A, 22XA, +/- 261)"],
+            ["52482"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_financial_accounts"), Decimal("52482"))
+
+    def test_the_687_current_assets_total_is_read(self):
+        # Four terms, and the first of them is the row 687 leaves without a
+        # `súčet`: "Zásoby (112, 119, 11X, …)". The total is read from the
+        # statement's own row, so the unread component cannot shrink it.
+        table, template = self._assets_table(
+            [
+                "Neobežný majetok r. 03 + r. 04 + r. 09",
+                "Obežný majetok r. 15 + r. 16 + r. 17 + r. 21",
+                "Zásoby (112, 119, 11X, 121, 122, 123, 124, 12X, 132, 133, 13X, 139, 314A)",
+                "Dlhodobé pohľadávky (311A, 312A, 313A, 314A, 315A, 316A, 31XA)",
+                "Krátkodobé pohľadávky súčet (r. 18 až r. 20)",
+                "Finančný majetok r. 22 + r. 23",
+                "Peniaze a účty v bankách (211, 213, 21X, 221A, 22XA, +/- 261)",
+                "Ostatné finančné účty (251, 252, 253, 256, 257, 25X, 259, 314A) - /291, 29X/",
+            ],
+            [
+                "900000",
+                "1310000",
+                "200000",
+                "30000",
+                "230000",
+                "850000",
+                "52482",
+                "480000",
+            ],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_current"), Decimal("1310000"))
+        self.assertEqual(result.get("assets_financial_accounts"), Decimal("52482"))
+        self.assertEqual(result.get("assets_financial_short"), Decimal("480000"))
+        self.assertEqual(result.get("assets_receivables_short"), Decimal("230000"))
+        # The two rows 687 leaves unread, still unread: this fix claims the two
+        # lines whose 687 spelling names them exactly, and no more. Reading
+        # "Zásoby (…)" would need a key that also matches 699's "Poskytnuté
+        # preddavky na zásoby (314A)" -- advances, not inventory.
+        self.assertIsNone(result.get("assets_inventory"))
+        self.assertIsNone(result.get("assets_receivables_long"))
 
 
 class _CountingRuzApi(_ScriptedRuzApi):

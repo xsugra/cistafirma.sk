@@ -121,14 +121,33 @@ ASSETS_LABELS = {
     # matched nothing -- pointing at `assets_financial_accounts`, the field r.71
     # already owns. Two different lines had been given one destination.
     "kratkodoby financny majetok sucet": "assets_financial_short",
-    # `financne ucty` alone, not `financne ucty sucet`/`spolu`. ŠÚ SR template
-    # 699 (MF/18009/2014-74, platné od 2014-01-01) reformulated r.71 as
-    # "Finančné účty r. 72 + r. 73", which neither old key is a substring of.
-    # Measured 2026-09-12: `assets_financial_accounts` holds a value for 547 of
-    # the 2 576 filings of 2013 and for **0 of every year from 2015 on** -- the
-    # line stopped being read at the template change and nothing said so. No
-    # other asset row contains this phrase, so it cannot shadow one.
-    "financne ucty": "assets_financial_accounts",
+    # r.71, the cash total. ŠÚ SR template 699 (MF/18009/2014-74, platné od
+    # 2014-01-01) reformulated it as "Finančné účty r. 72 + r. 73", which the
+    # `sucet`/`spolu` keys are not substrings of. Measured 2026-09-12:
+    # `assets_financial_accounts` holds a value for 547 of the 2 576 filings of
+    # 2013 and for **0 of every year from 2015 on** -- the line stopped being
+    # read at the template change and nothing said so.
+    #
+    # Two keys, not the bare `financne ucty`: that phrase is *contained* in
+    # šablóna 687's r.23 "Ostatné finančné účty (251, 252, 253, 256, 257, 25X,
+    # 259, 314A)" -- a different line, the 251/253/256/257 family that r.66
+    # holds in 699 -- so the bare key read one line's figure into another
+    # line's field. Both spellings the corpus uses are totals that *begin* the
+    # row, which is what makes the two keys below exact: `sucet (r. 056 az
+    # r. 060)` in templates 2, 3, 9, 20, 21, 522, 684, 690, and `r. 052 az
+    # r. 056` / `r. 72 + r. 73` in 17, 385, 1180, 699. Verified against all 245
+    # templates served by `/sablony`; a template this app has never seen would
+    # leave the line unread rather than read the wrong one.
+    "financne ucty sucet": "assets_financial_accounts",
+    "financne ucty r.": "assets_financial_accounts",
+    # Šablóna 687 (MF/18008/2014, bytové družstvá and the non-business
+    # statements) names the same two lines differently and has no r.66 row at
+    # all: r.22 "Peniaze a účty v bankách (211, 213, 21X, 221A, 22XA, +/- 261)"
+    # is what 699 splits into "Peniaze" + "Účty v bankách", and r.23 "Ostatné
+    # finančné účty" is its r.66. Each phrase occurs in exactly one row of the
+    # whole template corpus, so neither can shadow another line.
+    "peniaze a ucty v bankach": "assets_financial_accounts",
+    "ostatne financne ucty": "assets_financial_short",
 }
 
 # `Obežný majetok` (r.33) is a *substring* of `Neobežný majetok` (r.2), so the

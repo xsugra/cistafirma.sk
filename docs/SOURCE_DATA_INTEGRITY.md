@@ -2095,10 +2095,28 @@ majetok`, and the non-current row comes first in the template — so the `in` te
 every other key in that dict uses would have read non-current assets into the
 current-assets total and stopped there. That is the largest single misstatement
 available in the table and it is one character wide, so r.33 is matched by
-`startswith`. `financne ucty` is deliberately bare rather than `… sucet`, which
-is what makes it match both spellings; verified against the live templates that
-it is the only row in the asset table carrying that phrase, so the bare key
-cannot shadow another line.
+`startswith`.
+
+**The first version of this fix was wrong in the same way, one template along.**
+The cash key was made *bare* — `financne ucty` rather than `… sucet` — on the
+strength of a check that no other asset row contained that phrase. The check had
+been run against the templates met so far, not against all of them. Sweeping
+`/sablony`, which returns every template the registry serves (245), turned up a
+second row containing it: šablóna 687's r.23, `Ostatné finančné účty (251, 252,
+253, 256, 257, 25X, 259, 314A) - /291, 29X/`. That is not the cash line — it is
+the 251/253/256/257 family that r.66 holds in the 2014 template, and 687 keeps
+the two apart deliberately: its r.21 `Finančný majetok` is r.22 `Peniaze a účty
+v bankách` **+** r.23. The bare key would therefore have read one statement
+line's figure into another line's field and printed it under that field's label
+— the same defect this section is about, reintroduced by its own repair.
+
+Both spellings the corpus actually uses are totals that *begin* the row, which
+is what makes the replacement exact rather than merely narrower: `financne ucty
+sucet` (9 templates, incl. 2, 3, 9, 20, 21, 522, 684, 690) and `financne ucty
+r.` (17, 385, 1180, 699). Anchoring *every* key at the start of the row was
+tried and rejected: šablóna 9 writes its non-current receivables total as
+`III Dlhodobé pohľadávky súčet (r. 051 až 061)`, and a blanket anchor would
+have silently dropped that line — trading a wrong number for a missing one.
 
 **Planned repair for the stored corpus.** A filing already in the database keeps
 its old reading until it is read again — the fix changes the parser, not the
@@ -2108,3 +2126,68 @@ companies, every one of which re-syncs through the existing
 `fetch_ruz_financials --ico-file` path. The selection is self-clearing — a row
 leaves the population when it is successfully re-read — so an interrupted run
 resumes by being run again, with no cursor to keep.
+
+## The statement for bytové družstvá, and why its rows are absent rather than wrong
+
+Šablóna 687 (`MF/18008/2014`, `Úč MUJ`, platné od 2014-01-01) is a third asset
+vocabulary, alongside 699 (companies, from 2014) and 21 (companies, before it).
+It is the statement for bytové družstvá and the non-business accounting units,
+and its asset side is 23 rows × 2 columns — current period and prior, with no
+gross/correction split, so `_data_column_shape` sees a different shape from the
+same table name.
+
+Its line names are its own, and three of them do not contain the words the
+parser was looking for:
+
+| row | label as filed | before |
+|---|---|---|
+| r.15 | `Zásoby (112, 119, 11X, 121, …)` | unread — no `súčet` in the label |
+| r.16 | `Dlhodobé pohľadávky (311A, 312A, …) - 391A` | unread — no `súčet` in the label |
+| r.22 | `Peniaze a účty v bankách (211, 213, 21X, 221A, 22XA, +/- 261)` | unread — no key named it |
+| r.23 | `Ostatné finančné účty (251, 252, 253, 256, 257, 25X, 259, 314A)` | read into the *cash* field, by the bare-key mistake above |
+
+The first two are still unread, deliberately. The last two are now read: r.22
+into `assets_financial_accounts` (it is exactly what 699 splits into r.72
+`Peniaze` and r.73 `Účty v bankách`) and r.23 into `assets_financial_short` (its
+r.66). Reading `Zásoby (…)` needs a key that does **not** also match 699's
+`Poskytnuté preddavky na zásoby (314A)` — advances, not inventory — which is why
+the obvious `zasoby (` is wrong and the row is left absent for now.
+
+**Why an unread row here does not misstate anything.** 687 reports its
+current-assets total outright at r.13 (`Obežný majetok r. 15 + r. 16 + r. 17 +
+r. 21`), and that row *is* read. `current_assets_of` prefers a reported total
+over a component sum, so the fallback never runs on a 687 filing and no ratio,
+Z-score term or sector median built from one inherits a missing component. The
+gap is confined to the balance-sheet breakdown, which lists fewer components
+than the statement carries — the honest direction, and the opposite of the 2014
+break, where the total was re-derived and so came out quietly smaller.
+
+**A signature made of absences is contaminated by blank cells.** The first
+attempt to size this population looked for `year >= 2014 AND assets_current IS
+NOT NULL AND assets_inventory IS NULL AND assets_financial_accounts IS NULL` and
+returned 2 433 rows across 316 companies. That is wrong by two orders of
+magnitude: a *blank* cell and an *unread* row leave the same trace in the
+database, and that signature also matches 690 and the municipal statements,
+whose inventory line is empty because the filer had none. Adding the rows that
+687 uniquely leaves unread — long-term receivables present-and-unread alongside
+short-term receivables read — narrows it to **25 rows**. Absence is not evidence
+of a parser gap unless the row was there and carried a value.
+
+**Verified against the registry**, IČO 00176940 (`ruz_id` 13046, a bytové
+družstvo filing on 687 from 2015 on):
+
+- 2022: r.13 = 73 483 = 69 172 (r.22 `Peniaze a účty v bankách`) + 4 311 (r.17
+  `Krátkodobé pohľadávky`). Both terms zero-cost to reproduce from the API
+  response, and both now stored.
+- 2016: r.13 = 267 896 against r.22 = 269 331. The statement reconciles exactly
+  — r.17, `Krátkodobé pohľadávky`, is **−1 435** in that filing (a correction
+  carried as a negative receivable) — so cash exceeds current assets and the
+  filing says so. The app reads it faithfully; nothing here needs smoothing.
+
+**What was repaired in the corpus.** The parser fix alone leaves already-stored
+rows on their old reading, so the population above is re-synced through
+`fetch_ruz_financials --ico-file`. The run in progress is the same 2 771-company
+list, split so that the companies already re-read once under the bare key are
+re-read again: a bare-key write is only possible where 687's r.23 carries a
+value, and among the first 43 companies processed the 687 rows all had r.23
+empty, so no stored figure had to be withdrawn.
