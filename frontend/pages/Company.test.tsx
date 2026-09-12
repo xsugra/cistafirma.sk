@@ -67,13 +67,34 @@ describe('Company page', () => {
             <Routes>
                 <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
             </Routes>,
+            {route: '/firma/12345678/zaverky'},
+        );
+
+        expect(await screen.findByText('Zatiaľ nemáme')).toBeInTheDocument();
+        expect(screen.getByText(/správu audítora/)).toBeInTheDocument();
+    });
+
+    it('names which of the four reasons left the balance sheet empty', async () => {
+        // The section is built now, so the interesting failure is no longer
+        // "there is no table" but "the table has nothing to draw, and the page
+        // does not say which of the four reasons applies". `nothing_recorded`
+        // promises the opposite of `not_fetched`: one says come back later,
+        // the other says we already asked.
+        mocks.api.getCompany.mockResolvedValue({
+            ...company,
+            financials: [],
+            financialsState: 'nothing_recorded',
+        });
+
+        renderWithProviders(
+            <Routes>
+                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+            </Routes>,
             {route: '/firma/12345678/suvaha'},
         );
 
-        // The balance sheet reads correctly since 2026-09-12, but the section
-        // has no table yet, so it says that rather than drawing a blank panel.
-        expect(await screen.findByText('Zatiaľ nemáme')).toBeInTheDocument();
-        expect(screen.getByText(/Tabuľku súvahy/)).toBeInTheDocument();
+        expect(await screen.findByText(/pokus je uzavretý/)).toBeInTheDocument();
+        expect(screen.queryByText(/ešte nečítali/)).not.toBeInTheDocument();
     });
 
     it('marks a section whose source costs money as such', async () => {

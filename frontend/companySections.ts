@@ -63,12 +63,12 @@ export const COMPANY_SECTIONS = [
         note: 'Ukazovatele a medziročné porovnanie.',
     },
     {
-        id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale', group: 'Financie', status: 'planned',
-        note: 'Strana aktív sa načítavala nesprávne — hodnoty patrili iným riadkom, než pod ktorými boli uložené. Od 12. 9. 2026 je to opravené a súvaha sa číta správne (kontrola: aktíva = vlastné imanie + záväzky + časové rozlíšenie sedí v 96 % riadkov, pred opravou v 25 %). Tabuľku súvahy ako sekciu ešte nemáme postavenú — čísla sú medzitým v Prehľade a v ukazovateľoch.',
+        id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale', group: 'Financie', status: 'ready',
+        note: 'Aktíva a pasíva po rokoch, s kontrolou, že aktíva = vlastné imanie + záväzky + časové rozlíšenie. Kontrola sedí v 96 % načítaných riadkov (pred opravou čítania aktív v 25 %).',
     },
     {
-        id: 'vykaz', label: 'Výkaz ziskov a strát', icon: 'fa-chart-line', group: 'Financie', status: 'partial',
-        note: 'Hodnoty po rokoch máme prečítané správne — tržby, náklady aj výsledok hospodárenia. Tabuľku po rokoch zatiaľ nezobrazujeme; graf je v Prehľade.',
+        id: 'vykaz', label: 'Výkaz ziskov a strát', icon: 'fa-chart-line', group: 'Financie', status: 'ready',
+        note: 'Tržby, náklady, pridaná hodnota, dane a výsledok hospodárenia po rokoch, s medziročnou zmenou.',
     },
     {
         id: 'zaverky', label: 'Účtovné závierky', icon: 'fa-file-invoice', group: 'Financie', status: 'planned',

@@ -12,6 +12,8 @@ import { SectionNotice } from '../components/company/SectionNotice';
 import { useCompanyProfile } from '../components/company/useCompanyProfile';
 import { OverviewSection } from '../components/company/sections/OverviewSection';
 import { FinancialAnalysisSection } from '../components/company/sections/FinancialAnalysisSection';
+import { BalanceSheetSection } from '../components/company/sections/BalanceSheetSection';
+import { ProfitLossSection } from '../components/company/sections/ProfitLossSection';
 import { PeopleOrgansSection } from '../components/company/sections/PeopleOrgansSection';
 import { RegisterSection } from '../components/company/sections/RegisterSection';
 import { ConnectionsSection } from '../components/company/sections/ConnectionsSection';
@@ -30,6 +32,8 @@ const BODIES: Record<ReadySectionId, React.FC<{ company: CompanyType }>> = {
     register: RegisterSection,
     report: ReportSection,
     ukazovatele: FinancialAnalysisSection,
+    suvaha: BalanceSheetSection,
+    vykaz: ProfitLossSection,
     dlhy: DebtsSection,
     osoby: PeopleOrgansSection,
     prepojenia: ({ company }) => <ConnectionsSection ico={company.ico} />,

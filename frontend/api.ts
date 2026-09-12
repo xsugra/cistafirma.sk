@@ -244,6 +244,11 @@ function mapCompanyResponse(data: any): Company {
       calculationDate: new Date().toISOString(),
     },
     financials,
+    // The backend names why the statement sections are empty; without it every
+    // one of the four reasons renders as the same "nie sú k dispozícii". The
+    // fallback is `not_fetched`, which is the only honest default: it is what a
+    // missing field means, and it is the reason that promises a later attempt.
+    financialsState: data.financialsState || 'not_fetched',
     executives,
     connections,
     orsr_profile: mapOrsrProfileResponse(data.orsr_profile),

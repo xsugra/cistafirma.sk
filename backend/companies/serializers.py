@@ -4,6 +4,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
 from core.constants import PERSON_SKIP_PREFIXES
+from registers.models import CompanySyncStatus
 from .models import Company, Watchlist, SectorBenchmark, SearchHistory
 from .services.financial_analysis import FinancialAnalysisService
 from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
@@ -17,6 +18,18 @@ def _amount(value):
     income statement is a normal row now, not a corner case.
     """
     return None if value is None else float(value)
+
+
+#: The closed vocabulary `financialsState` answers with -- a token, not a
+#: sentence. The words belong to the screen (`frontend/companySections.ts`
+#: already owns every other "why this section is thin" note), and the
+#: operator-facing reason stays on the admin page, where
+#: `CompanySyncStatus.last_detail` is written for someone who can act on it.
+FINANCIALS_STATE_READY = "ready"
+FINANCIALS_STATE_NOT_FETCHED = "not_fetched"
+FINANCIALS_STATE_BLOCKED = "blocked"
+FINANCIALS_STATE_FAILED = "failed"
+FINANCIALS_STATE_NOTHING_RECORDED = "nothing_recorded"
 
 
 class CompanyListSerializer(serializers.ModelSerializer):
@@ -56,6 +69,7 @@ class WatchlistSerializer(serializers.ModelSerializer):
 class CompanyDetailSerializer(serializers.ModelSerializer):
     legal_form = serializers.CharField(source='get_legal_form_display', read_only=True)
     financials = serializers.SerializerMethodField()
+    financialsState = serializers.SerializerMethodField()
     analysis = serializers.SerializerMethodField()
     benchmark = serializers.SerializerMethodField()
     executives = serializers.SerializerMethodField()
@@ -66,6 +80,37 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Company
         fields = '__all__'
+
+    def get_financialsState(self, obj):
+        """Why the financial sections are empty, when they are.
+
+        The page used to answer every one of these with "nie sú k dispozícii",
+        which is one sentence for four different facts -- and a reader cannot
+        tell from it whether waiting would help, or whether asking again is
+        pointless. The sync engine already knows which one it is, so it is
+        named here rather than collapsed again one layer further out.
+
+        Deliberately coarse in one place: the registry answering "this company
+        has no statements" and the registry answering with statements, none of
+        which could be read, both store zero rows, and the only thing that
+        separates them is the wording of `last_detail` -- a sentence written
+        for an operator. Both are `nothing_recorded`, which is the part that is
+        certainly true of both, and the exact reason is one click away on the
+        admin Stav synchronizácie page.
+        """
+        if obj.financial_results.exists():
+            return FINANCIALS_STATE_READY
+
+        status = obj.sync_statuses.filter(
+            source=CompanySyncStatus.SOURCE_FINANCIALS
+        ).first()
+        if status is None:
+            return FINANCIALS_STATE_NOT_FETCHED
+        if status.is_blocked:
+            return FINANCIALS_STATE_BLOCKED
+        if status.consecutive_failures > 0:
+            return FINANCIALS_STATE_FAILED
+        return FINANCIALS_STATE_NOTHING_RECORDED
 
     def get_financials(self, obj):
         """Year rows with absent figures as `None`, never as 0.

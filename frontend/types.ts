@@ -1,4 +1,21 @@
 
+/**
+ * Why the financial sections have nothing to draw.
+ *
+ * A token, not a sentence -- the words live in `EmptyFinancialsNotice`, next to
+ * the screens that show them. The backend derives it (`financialsState` on
+ * `CompanyDetailSerializer`) because only it can see the sync status, and
+ * collapses one distinction on purpose: "the registry says there are no
+ * statements" and "there are statements and none was readable" both leave zero
+ * rows, and telling them apart would mean publishing an operator's sentence.
+ */
+export type FinancialsState =
+  | 'ready'
+  | 'not_fetched'
+  | 'nothing_recorded'
+  | 'failed'
+  | 'blocked';
+
 export interface Company {
   id: string;
   ico: string;
@@ -12,6 +29,7 @@ export interface Company {
   vatStatus: VatStatus;
   riskScore: RiskScore;
   financials: Financials[];
+  financialsState: FinancialsState;
   executives: Executive[];
   connections: Connection[];
   orsr_profile?: OrsrProfile;
