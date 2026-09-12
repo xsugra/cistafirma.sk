@@ -58,7 +58,15 @@ const SCOPE_COPY: Record<PeerScope, ScopeCopy> = {
  * deliberately the *larger* number, placed second so it reads as the frame and
  * not as the result.
  */
-export function populationSentence(payload: PeerList, scopeLabel: string): string {
+export function populationSentence(
+    payload: PeerList,
+    scopeLabel: string,
+    // Whether this section is about to draw the rows it is counting. The
+    // fallback branch below counts a ranking it deliberately does not render,
+    // and "Zobrazujeme prvých 10" over no table is a promise the section does
+    // not keep.
+    {showing = true}: {showing?: boolean} = {}
+): string {
     const ranked = payload.total_ranked;
     const inScope = payload.total_in_scope;
 
@@ -69,11 +77,11 @@ export function populationSentence(payload: PeerList, scopeLabel: string): strin
         );
     }
 
-    const shown = ranked > SHOWN ? ` Zobrazujeme prvých ${SHOWN}.` : ' Zobrazujeme všetky.';
+    const tail = !showing ? '' : ranked > SHOWN ? ` Zobrazujeme prvých ${SHOWN}.` : ' Zobrazujeme všetky.';
     return (
         `V rozsahu ${scopeLabel} máme ${formatNumber(inScope)} firiem. ` +
         `Zverejnenú závierku s tržbami má ${formatNumber(ranked)} z nich, ` +
-        `a práve tie sa dajú zoradiť.${shown}`
+        `a práve tie sa dajú zoradiť.${tail}`
     );
 }
 
@@ -231,6 +239,51 @@ export const PeerListSection: React.FC<PeerListSectionProps> = ({ico, scope}) =>
     // revenue of its own to be similar to.
     const fellBack = scope === 'podobne' && payload.ranked_by === 'revenue';
 
+    if (fellBack) {
+        // The fallback used to draw the industry ranking here, under this
+        // heading. It is the *same queryset in the same order* as
+        // `databaza-odvetvie` -- measured 2026-09-12, `podobne` falls back for
+        // every company without a filed revenue figure, which is 323 267 of the
+        // 325 337 active ones (99,4 %), and for all of them the two rail entries
+        // rendered ten identical rows under two different headings. A reader who
+        // clicked both saw the page repeat itself, which makes both sections
+        // look broken rather than one of them look honest.
+        //
+        // So this state no longer draws a table. It says why the question cannot
+        // be answered, and points at the section that answers the neighbouring
+        // one -- where the same rows appear under the heading that actually
+        // describes them.
+        return (
+            <InfoCard title={copy.title} icon={copy.icon}>
+                <p className="text-gray-700 dark:text-gray-300 leading-relaxed">{copy.intro}</p>
+
+                <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                    <i className="fas fa-circle-info mr-2"/>
+                    Táto firma nemá zverejnenú závierku s tržbami, takže nemáme obrat, ku
+                    ktorému by sme blízkosť prirovnali. Podobné firmy jej preto určiť
+                    nevieme.
+                </p>
+
+                <p className="mt-3 text-sm leading-relaxed text-gray-600 dark:text-gray-400">
+                    {populationSentence(payload, label, {showing: false})}
+                </p>
+
+                <p className="mt-3 text-sm leading-relaxed text-gray-700 dark:text-gray-300">
+                    To isté, čo sa o tomto odvetví povedať dá, je zoznam najväčších firiem
+                    v ňom — a ten má vlastnú sekciu, aby tie isté riadky nestáli na dvoch
+                    miestach.
+                </p>
+
+                <Link
+                    to={companyPath(ico, 'databaza-odvetvie')}
+                    className="btn btn-primary mt-4 inline-flex"
+                >
+                    <i className="fas fa-industry"/> Firmy v odvetví
+                </Link>
+            </InfoCard>
+        );
+    }
+
     return (
         <InfoCard title={copy.title} icon={copy.icon}>
             <p className="text-gray-700 dark:text-gray-300 leading-relaxed">{copy.intro}</p>
@@ -238,15 +291,6 @@ export const PeerListSection: React.FC<PeerListSectionProps> = ({ico, scope}) =>
             <p className="mt-3 text-sm leading-relaxed text-gray-600 dark:text-gray-400">
                 {populationSentence(payload, label)}
             </p>
-
-            {fellBack && (
-                <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                    <i className="fas fa-circle-info mr-2"/>
-                    Táto firma nemá zverejnenú závierku s tržbami, takže ju nemáme s čím
-                    pomerať. Zoznam preto nie je zoradený podľa podobnosti, ale podľa
-                    veľkosti — od najväčšej.
-                </p>
-            )}
 
             {payload.results.length > 0 && (
                 <>

@@ -107,7 +107,7 @@ export const COMPANY_SECTIONS = [
 
     {
         id: 'podobne', label: 'Podobné spoločnosti', icon: 'fa-clone', group: 'Databáza', status: 'ready',
-        note: 'Firmy v tej istej divízii SK NACE, zoradené podľa toho, ako blízko je ich obrat k obratu tejto firmy. Blízkosť sa počíta v pomere — firma s dvojnásobným obratom je bližšie než firma s desaťnásobným, hoci v eurách môže byť ďalej.',
+        note: 'Firmy v tej istej divízii SK NACE, zoradené podľa toho, ako blízko je ich obrat k obratu tejto firmy. Blízkosť sa počíta v pomere — firma s dvojnásobným obratom je bližšie než firma s desaťnásobným, hoci v eurách môže byť ďalej. Odpovedať sa dá len firme, ktorá má zverejnenú závierku s tržbami: k 12. 9. 2026 ich má 2 070 z 325 337 aktívnych firiem (0,6 %). Zvyšku sekcia povie, že podobné firmy určiť nevie, a odkáže na „Firmy v odvetví" — kedysi tam totiž vykresľovala ten istý zoznam v tom istom poradí, takže pre 99,4 % firiem boli obe sekcie na nerozoznanie.',
     },
     {
         id: 'databaza-kraj', label: 'Firmy v kraji', icon: 'fa-map-marker-alt', group: 'Databáza', status: 'ready',
@@ -115,7 +115,7 @@ export const COMPANY_SECTIONS = [
     },
     {
         id: 'databaza-odvetvie', label: 'Firmy v odvetví', icon: 'fa-industry', group: 'Databáza', status: 'ready',
-        note: 'Najväčšie firmy v tej istej divízii SK NACE, teda podľa prvého dvojčíslia kódu.',
+        note: 'Najväčšie firmy v tej istej divízii SK NACE, teda podľa prvého dvojčíslia kódu. Aj tu sekcia vypíše, koľko firiem v divízii máme a koľko z nich má zverejnenú závierku s tržbami — v divízii 46 je to 48 z 20 488, takže rebríček „najväčšie v odvetví" je rebríčkom zlomku odvetvia a bez toho druhého čísla by to tak nevyzeralo.',
     },
     {
         id: 'databaza-zamestnanci', label: 'Firmy podľa zamestnancov', icon: 'fa-user-friends', group: 'Databáza', status: 'planned',

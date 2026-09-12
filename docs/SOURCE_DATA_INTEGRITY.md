@@ -1799,3 +1799,60 @@ BY-SA 4.0 is share-alike, and the catalogue flags personal data; a commercial
 product that ingests either needs a licensing answer before an engineering one.
 That question is the user's, and it is recorded here rather than settled in a
 commit.
+
+## Two of the four "who else is here" sections were the same section
+
+The company page has four Databáza sections that share one query shape:
+*Podobné spoločnosti*, *Firmy v kraji*, *Firmy v odvetví* and *Firmy podľa
+tržieb*. Three of them rank by revenue; `podobne` ranks by **similarity**, which
+is why it exists as a separate entry at all — it is the only one that reads the
+subject's own figures.
+
+It needs a size to be similar to. Measured 2026-09-12:
+
+| | companies |
+|---|---|
+| active (not struck off) | 325 337 |
+| have any financial statement | 2 628 |
+| have a latest statement with `revenue > 0` | **2 070** (0,64 %) |
+
+So the similarity ranking is computable for **0,64 % of the register**, and the
+service degrades rather than failing: with no revenue of its own, `podobne` falls
+back to the industry list ordered by size. That degradation is disclosed —
+`ranked_by: 'revenue'` reaches the reader as an amber notice — and the disclosure
+was right. The problem was what it disclosed *underneath*.
+
+The fallback branch and the `odvetvie` branch build **the same queryset in the
+same order**:
+
+```python
+in_division.order_by('-revenue', 'company__nazov_UJ')   # odvetvie
+in_division.order_by('-revenue', 'company__nazov_UJ')   # podobne, no revenue of its own
+```
+
+Verified against the live API on IČO 36719927 (`NACE` 46430): both scopes
+returned `subject: '46'`, `total_in_scope: 20488`, `total_ranked: 48`, and the
+**same ten rows in the same order**. For 323 267 of 325 337 active companies —
+99,4 % — two adjacent rail entries rendered ten identical rows under two headings
+that promise different things. A reader who clicked both saw the page repeat
+itself, which makes *both* sections read as broken rather than one of them read
+as honest.
+
+**The section no longer draws that table.** It says why the question cannot be
+answered, keeps the population sentence — 48 of 20 488 is the reason, so it is
+evidence here, not decoration — and links to *Firmy v odvetví*, where the same
+rows appear under the heading that actually describes them. One section per
+answer.
+
+The population sentence grew a `showing` flag for this: its tail reads
+"Zobrazujeme prvých 10", which over no table is a promise the section does not
+keep. The 0,77 % of companies where similarity *does* work still get the ranked
+table, and the `ranked_by: 'revenue'` fallback is still reported.
+
+**Not chosen, and why it is recorded.** Hiding the *Podobné spoločnosti* rail
+entry entirely for companies that cannot be ranked would also remove the
+duplicate, and it is what a directory site would do. It was rejected because
+this page's whole established discipline is the opposite: a section that cannot
+be filled says so — `SectionNotice`, every empty state, `financialsState` — and a
+rail whose entries appear and disappear per company would be the one place that
+rule was broken.

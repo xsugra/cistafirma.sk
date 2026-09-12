@@ -123,20 +123,45 @@ describe('PeerListSection', () => {
         expect(screen.queryByRole('table')).not.toBeInTheDocument();
     });
 
-    it('admits when "similar" was answered by size instead', async () => {
-        // `podobne` falls back to revenue order when the subject has no filed
-        // revenue. Same rows, different meaning -- and the section is the only
-        // place that difference can reach the reader.
+    it('does not draw the industry table under a "similar companies" heading', async () => {
+        // The regression this pins. `podobne` falls back to revenue order when
+        // the subject has no filed revenue, and that fallback is the *same
+        // queryset in the same order* as `databaza-odvetvie`. It applies to 99,4
+        // % of active companies, so for almost every firm the two rail entries
+        // used to render ten identical rows -- the same table, twice, under two
+        // headings that promise different things.
         render('podobne', payload({scope: 'podobne', ranked_by: 'revenue'}));
 
-        expect(await screen.findByText(/nie je zoradený podľa podobnosti/)).toBeInTheDocument();
+        expect(await screen.findByText(/nemáme obrat, ku ktorému by sme blízkosť/)).toBeInTheDocument();
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+        expect(screen.queryByText('ESET, spol. s r.o.')).not.toBeInTheDocument();
+    });
+
+    it('sends the reader to the section that does answer the neighbouring question', async () => {
+        render('podobne', payload({scope: 'podobne', ranked_by: 'revenue'}));
+
+        const link = await screen.findByRole('link', {name: /Firmy v odvetví/});
+        expect(link).toHaveAttribute('href', '/firma/12345678/databaza-odvetvie');
+    });
+
+    it('does not promise rows it is not going to draw', async () => {
+        // The fallback branch still prints how many firms in the industry filed
+        // a revenue figure -- that number is the reason the question cannot be
+        // answered -- but the sentence's tail assumes a table follows it.
+        render('podobne', payload({scope: 'podobne', ranked_by: 'revenue', total_ranked: 48, total_in_scope: 20_488}));
+
+        await screen.findByText(/20 488 firiem/);
+        expect(bodyText()).toContain('48 z nich');
+        expect(screen.queryByText(/Zobrazujeme/)).not.toBeInTheDocument();
     });
 
     it('does not claim a fallback it did not make', async () => {
         render('podobne', payload({scope: 'podobne', ranked_by: 'similarity'}));
 
         await screen.findByText('ESET, spol. s r.o.');
-        expect(screen.queryByText(/nie je zoradený podľa podobnosti/)).not.toBeInTheDocument();
+        expect(screen.getByRole('table')).toBeInTheDocument();
+        expect(screen.queryByText(/nemáme obrat/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', {name: /Firmy v odvetví/})).not.toBeInTheDocument();
     });
 
     it('falls back to the register itself when the whole register is the scope', async () => {
