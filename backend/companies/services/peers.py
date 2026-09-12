@@ -7,13 +7,19 @@ views each spelling out its own ordering, because the interesting part is not
 the filter but the *population*: what a reader is being shown the top of.
 
 That population is the honest difficulty. Only companies with a filed RUZ
-statement have any revenue at all -- around 1 400 of 445 000 in the local
+statement have any revenue at all -- under two thousand of 445 000 in the local
 database -- so a "largest companies" list is a ranking of a fraction of a
 percent of the register. Returning rows without saying so would read as "these
 are the biggest firms in the country" when it means "these are the biggest
 firms that have filed". Every scope therefore reports both the count it ranked
 (`total_ranked`) and the count it ranked *within* (`total_in_scope`), and the
 frontend prints the pair.
+
+Neither count is written down anywhere as a constant, deliberately: the
+financials sync is still filling the table, so the ranked population grew by
+about a hundred in a single afternoon. A frozen number in a comment or a
+section note would go stale and start contradicting the figure the section
+prints from the same query.
 
 Two consequences of reading the figure rather than the register:
 

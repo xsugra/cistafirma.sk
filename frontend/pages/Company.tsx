@@ -20,6 +20,16 @@ import { RegisterSection } from '../components/company/sections/RegisterSection'
 import { ConnectionsSection } from '../components/company/sections/ConnectionsSection';
 import { ReportSection } from '../components/company/sections/ReportSection';
 import { DebtsSection } from '../components/company/sections/DebtsSection';
+import { PeerListSection } from '../components/company/sections/PeerListSection';
+import type { PeerScope } from '../types';
+
+/**
+ * The four Databáza sections are one component asked four different questions,
+ * so the section id and the scope it names are built together rather than
+ * written twice and left to agree by hand.
+ */
+const peer = (scope: PeerScope): React.FC<{ company: CompanyType }> =>
+    ({ company }) => <PeerListSection ico={company.ico} scope={scope} />;
 
 /**
  * Every section the registry calls `ready`, and nothing else.
@@ -39,6 +49,10 @@ const BODIES: Record<ReadySectionId, React.FC<{ company: CompanyType }>> = {
     dlhy: DebtsSection,
     osoby: PeopleOrgansSection,
     prepojenia: ({ company }) => <ConnectionsSection ico={company.ico} />,
+    podobne: peer('podobne'),
+    'databaza-kraj': peer('kraj'),
+    'databaza-odvetvie': peer('odvetvie'),
+    'databaza-trzby': peer('trzby'),
 };
 
 /**

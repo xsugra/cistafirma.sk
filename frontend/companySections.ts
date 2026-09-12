@@ -106,24 +106,24 @@ export const COMPANY_SECTIONS = [
     },
 
     {
-        id: 'podobne', label: 'Podobné spoločnosti', icon: 'fa-clone', group: 'Databáza', status: 'planned',
-        note: 'Filter na to existuje a vie kraj, okres, odvetvie, tržby aj dlhy — ale má jediného volajúceho, admina. Ide o sprístupnenie, nie o stavbu.',
+        id: 'podobne', label: 'Podobné spoločnosti', icon: 'fa-clone', group: 'Databáza', status: 'ready',
+        note: 'Firmy v tej istej divízii SK NACE, zoradené podľa toho, ako blízko je ich obrat k obratu tejto firmy. Blízkosť sa počíta v pomere — firma s dvojnásobným obratom je bližšie než firma s desaťnásobným, hoci v eurách môže byť ďalej.',
     },
     {
-        id: 'databaza-kraj', label: 'Firmy v kraji', icon: 'fa-map-marker-alt', group: 'Databáza', status: 'planned',
-        note: 'Ten istý filter, obmedzený na kraj sídla firmy.',
+        id: 'databaza-kraj', label: 'Firmy v kraji', icon: 'fa-map-marker-alt', group: 'Databáza', status: 'ready',
+        note: 'Najväčšie firmy v kraji sídla tejto firmy. Sekcia vždy vypíše, koľko firiem v kraji máme a koľko z nich má zverejnenú závierku s tržbami — bez toho druhého čísla by sa „najväčšie v kraji" dalo čítať ako „zo všetkých firiem v kraji".',
     },
     {
-        id: 'databaza-odvetvie', label: 'Firmy v odvetví', icon: 'fa-industry', group: 'Databáza', status: 'planned',
-        note: 'Ten istý filter, obmedzený na SK NACE.',
+        id: 'databaza-odvetvie', label: 'Firmy v odvetví', icon: 'fa-industry', group: 'Databáza', status: 'ready',
+        note: 'Najväčšie firmy v tej istej divízii SK NACE, teda podľa prvého dvojčíslia kódu.',
     },
     {
-        id: 'databaza-zamestnanci', label: 'Firmy podľa zamestnancov', icon: 'fa-user-friends', group: 'Databáza', status: 'paid',
-        note: 'Číselný počet zamestnancov nemáme — v registri je len kód kategórie, a ten sa navyše nedá spoľahlivo prečítať. Najprv musí existovať mapovanie kódu na pásmo.',
+        id: 'databaza-zamestnanci', label: 'Firmy podľa zamestnancov', icon: 'fa-user-friends', group: 'Databáza', status: 'planned',
+        note: 'Číselný počet zamestnancov nemáme. V registri je len kód pásma, a to „00" má vyše 70 % firiem, takže ide o nevyplnené pole a nie o kategóriu. Nikde v projekte neexistuje mapovanie kódu na pásmo — admin filter ponúka „mikro/small/medium/large", čo nezodpovedá žiadnej hodnote v dátach — takže nemáme ani ako zistiť, čo tie kódy znamenajú. Najprv musí existovať to mapovanie.',
     },
     {
-        id: 'databaza-trzby', label: 'Firmy podľa tržieb', icon: 'fa-coins', group: 'Databáza', status: 'planned',
-        note: 'Dáta na to máme, ale filter pozná len „má / nemá tržby". Prahová hodnota je nová práca — a týkala by sa zatiaľ zlomku firiem.',
+        id: 'databaza-trzby', label: 'Firmy podľa tržieb', icon: 'fa-coins', group: 'Databáza', status: 'ready',
+        note: 'Najväčšie firmy v celom registri podľa poslednej zverejnenej závierky. Aj tu sekcia vypíše, koľko aktívnych firiem register má a koľko z nich vôbec zverejnilo tržby — je to zlomok registra a bez toho čísla by rebríček vyzeral ako rebríček všetkých.',
     },
 ] as const satisfies readonly CompanySection[];
 

@@ -221,6 +221,56 @@ export interface CompanyBenchmark {
   medians: BenchmarkMedians;
 }
 
+// --- PEERS ---
+
+/**
+ * The four questions a company page can ask about its neighbours.
+ *
+ * Closed on purpose: the backend rejects anything else with a 400 rather than
+ * falling back to a default, because each value answers a different question
+ * and a silent default would put one ranking under another one's heading.
+ */
+export type PeerScope = 'podobne' | 'kraj' | 'odvetvie' | 'trzby';
+
+/** How a scope ordered its rows. `similarity` means closeness in *ratio*. */
+export type PeerRanking = 'revenue' | 'similarity';
+
+/**
+ * Why a scope could not rank the subject at all.
+ *
+ * `no_region` and `no_nace` are the two the register can produce: a company
+ * with no region, or no readable NACE code, has no boundary to be ranked
+ * inside. A code and not a sentence -- the Slovak text is built here.
+ */
+export type PeerReason = 'no_region' | 'no_nace' | null;
+
+export interface PeerRow {
+    ico: string;
+    name: string;
+    city: string;
+    nace_code: string;
+    nace_name: string | null;
+    /** The year of *this* company's most recent statement, which is not the
+     * same year for every row -- the section prints it for exactly that. */
+    year: number;
+    revenue: number | null;
+    profit: number | null;
+}
+
+export interface PeerList {
+    scope: PeerScope;
+    /** The narrowing value (`SK010`, `62`), or null for the whole register. */
+    subject: string | null;
+    subject_label: string | null;
+    reason: PeerReason;
+    ranked_by: PeerRanking;
+    /** How many companies could be ranked, i.e. have a filed revenue. */
+    total_ranked: number;
+    /** How many companies the question was asked about, filers or not. */
+    total_in_scope: number;
+    results: PeerRow[];
+}
+
 export interface Executive {
     name: string;
     role: string;

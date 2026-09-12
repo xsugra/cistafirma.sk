@@ -7,6 +7,8 @@ import type {
   NotificationEvent,
   NotificationPreferences,
   OrsrProfile,
+  PeerList,
+  PeerScope,
   User,
   WatchlistEntry,
 } from './types';
@@ -108,6 +110,44 @@ function mapOrsrProfileResponse(profile: any): OrsrProfile | undefined {
   };
 }
 
+// Financial figures keep their absence. `toAmount` below collapses a missing
+// value to 0, which is correct for a debt -- a company with no recorded debt
+// owes nothing -- and wrong for a filed statement, where a missing line means
+// the statement did not carry it. The backend sends `null` for those, and it
+// has to survive to the render, or an unread revenue shows as "0 €".
+const toFiledAmount = (value: any): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+function mapPeerListResponse(data: any): PeerList {
+  return {
+    scope: data.scope,
+    subject: data.subject ?? null,
+    subject_label: data.subject_label ?? null,
+    // Whitelisted rather than passed through: the frontend switches on this
+    // value to choose a sentence, and an unrecognised one from a newer
+    // backend should read as the common case rather than render nothing.
+    reason: data.reason === 'no_region' || data.reason === 'no_nace' ? data.reason : null,
+    ranked_by: data.ranked_by === 'similarity' ? 'similarity' : 'revenue',
+    total_ranked: Number(data.total_ranked) || 0,
+    total_in_scope: Number(data.total_in_scope) || 0,
+    results: Array.isArray(data.results)
+      ? data.results.map((item: any) => ({
+          ico: item.ico,
+          name: item.name || '',
+          city: item.city || '',
+          nace_code: item.nace_code || '',
+          nace_name: item.nace_name ?? null,
+          year: Number(item.year),
+          revenue: toFiledAmount(item.revenue),
+          profit: toFiledAmount(item.profit),
+        }))
+      : [],
+  };
+}
+
 function mapCompanyResponse(data: any): Company {
   const toAmount = (value: any): number => {
     const n = Number(value);
@@ -126,17 +166,6 @@ function mapCompanyResponse(data: any): Company {
 
   const totalDebt = debtVszp + debtSocPoist + debtTax;
   const hasDebt = totalDebt > 0;
-
-  // Financial figures keep their absence. `toAmount` above collapses a missing
-  // value to 0, which is correct for a debt -- a company with no recorded debt
-  // owes nothing -- and wrong for a filed statement, where a missing line means
-  // the statement did not carry it. The backend sends `null` for those, and it
-  // has to survive to the render, or an unread revenue shows as "0 €".
-  const toFiledAmount = (value: any): number | null => {
-    if (value === null || value === undefined || value === '') return null;
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  };
 
   const financials = Array.isArray(data.financials)
     ? data.financials
@@ -318,6 +347,51 @@ export const api = {
     }
     const data = await apiRequest<any>(`/companies/${ico}/`);
     return mapCompanyResponse(data);
+  },
+
+  /**
+   * Companies ranked next to this one. Four sections read this.
+   *
+   * The scope travels as a query parameter and is not defaulted here: each
+   * value answers a different question, and a client-side default would hide
+   * a caller that forgot to name one behind the wrong ranking.
+   */
+  getPeers: async (ico: string, scope: PeerScope): Promise<PeerList> => {
+    if (ENABLE_MOCK_DATA) {
+      return new Promise((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              scope,
+              // Both halves of the pair move together: a label with no subject
+              // would be a narrowing that names nothing, which is the one
+              // combination the real backend never sends.
+              subject: scope === 'trzby' ? null : scope === 'kraj' ? 'SK010' : '62',
+              subject_label:
+                scope === 'trzby' ? null
+                  : scope === 'kraj' ? 'Bratislavský kraj'
+                    : '62 — Počítačové programovanie',
+              reason: null,
+              ranked_by: scope === 'podobne' ? 'similarity' : 'revenue',
+              total_ranked: 3,
+              total_in_scope: 1250,
+              results: [1, 2, 3].map((n) => ({
+                ico: `5005995${n}`,
+                name: `Mock Firma ${n}, s. r. o.`,
+                city: 'Bratislava',
+                nace_code: '62010',
+                nace_name: 'Počítačové programovanie',
+                year: 2023,
+                revenue: 1_000_000 * n,
+                profit: 50_000 * n,
+              })),
+            }),
+          500,
+        ),
+      );
+    }
+    const data = await apiRequest<any>(`/companies/${ico}/peers/?scope=${encodeURIComponent(scope)}`);
+    return mapPeerListResponse(data);
   },
 
   login: async (identifier: string, password: string): Promise<LoginResult> => {

@@ -308,7 +308,7 @@ Nevyžaduje JWT.
   "subject_label": "Bratislavský kraj",
   "reason": null,
   "ranked_by": "revenue",
-  "total_ranked": 187,
+  "total_ranked": 199,
   "total_in_scope": 105760,
   "results": [
     {"ico": "31333532", "name": "ESET, spol. s r.o.", "city": "Bratislava",
@@ -320,10 +320,16 @@ Nevyžaduje JWT.
 
 **Dvojica počtov je podstatná.** `total_ranked` je počet firiem, ktoré sa dali
 zaradiť — teda majú uloženú závierku s tržbami. `total_in_scope` je počet
-firiem, na ktoré sa otázka vôbec pýtala. V celom registri je to približne
-1 900 z 325 000, takže „najväčšie firmy“ znamená „najväčšie firmy, ktoré
-zverejnili závierku“. Sekcia musí zobrazovať obe čísla; jedno bez druhého
-je nepodložené tvrdenie.
+firiem, na ktoré sa otázka vôbec pýtala. V celom registri sú to zatiaľ
+necelé dve tisíc z 325 000, takže „najväčšie firmy“ znamená „najväčšie firmy,
+ktoré zverejnili závierku“. Sekcia musí zobrazovať obe čísla; jedno bez
+druhého je nepodložené tvrdenie.
+
+Čísla v príklade vyššie sú odmerané, nie zaručené: synchronizácia závierok
+beží, takže `total_ranked` rastie rádovo o stovky za deň. Zámerne preto nie je
+nikde v kóde ani v texte sekcie zapísané ako konštanta — sekcia vypisuje to,
+čo práve vrátila tá istá query, a komentár so zamrznutým číslom by jej začal
+odporovať na tej istej stránke.
 
 **`reason`** je `null`, alebo `no_region` / `no_nace` — firma nemá v registri
 kraj sídla, respektíve čitateľný kód NACE, takže ju v tom rozsahu nemožno
