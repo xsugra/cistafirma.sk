@@ -8,6 +8,8 @@ from django.http import HttpResponse
 from .models import Company, Watchlist, SearchHistory
 from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer, SearchHistorySerializer
 from .services.pdf_report import get_company_report
+from .services.peers import PEER_SCOPES, peers_for
+from .throttles import PeersThrottle, ReportThrottle
 
 import logging
 logger = logging.getLogger(__name__)
@@ -113,6 +115,21 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             return CompanyDetailSerializer
         return CompanyListSerializer
 
+    def get_throttles(self):
+        """Limit the two actions that cost real work, and only those.
+
+        `report` renders a PDF and `peers` counts across the whole register;
+        both are reachable without an account. Listing, searching and
+        retrieving a single company are unchanged -- a limit fitted to an
+        endpoint nobody has abused yet is a limit that breaks a working page
+        for the sake of a diagram. See `companies.throttles`.
+        """
+        if self.action == 'report':
+            return [ReportThrottle()]
+        if self.action == 'peers':
+            return [PeersThrottle()]
+        return []
+
     def retrieve(self, request, *args, **kwargs):
         ico = kwargs.get('ico')
         logger.info(f"Retrieving company with ICO: {ico}")
@@ -203,3 +220,44 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+    @action(detail=True, methods=['get'], url_path='peers')
+    def peers(self, request, ico=None):
+        """Companies ranked next to this one, in one scope.
+
+        Four company-page sections read this. `scope` is required and closed:
+        an unknown value is a 400 rather than a default, because every scope
+        answers a different question and silently picking one would put the
+        wrong ranking under the wrong heading.
+
+        The rows are returned as the service built them rather than through a
+        serializer. `CompanyDetailSerializer` exists to walk a model graph; a
+        peer row is ten fields assembled by hand in `services/peers.py`, and a
+        second declaration of that shape here is a second thing to update --
+        `_row` is the one place it is defined.
+        """
+        scope = request.query_params.get('scope', '').strip()
+        if scope not in PEER_SCOPES:
+            return Response(
+                {'detail': f'Neznámy rozsah "{scope}". Povolené: {", ".join(PEER_SCOPES)}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            company = Company.objects.get(ico=ico)
+        except Company.DoesNotExist:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            return Response(peers_for(company, scope))
+        except Exception:
+            # Same contract as `retrieve`, `search` and `report` above: the
+            # sentence goes to the caller, the traceback to the log.
+            logger.exception(f"Peer ranking error for ICO {ico}, scope {scope}")
+            return Response(
+                {"detail": "Podobné firmy sa nepodarilo načítať. Skúste to prosím znova."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

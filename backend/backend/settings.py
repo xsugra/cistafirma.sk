@@ -59,6 +59,16 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = ["*"]
 
+# How many proxies sit between the client and gunicorn, for DRF's throttling.
+# It decides which entry of `X-Forwarded-For` is treated as the caller: DRF
+# takes the `n`-th from the right, so `1` means "the address the nearest proxy
+# saw", which is the only entry a client cannot forge. Locally that nearest
+# proxy is the Vite dev server (or `frontend/nginx.conf`), so `1` is right.
+# A deployment with an extra ingress hop needs `2` -- with `1` there, every
+# caller shares the ingress's address and one bucket, which limits harder than
+# intended rather than not at all. Override with `THROTTLE_NUM_PROXIES`.
+_num_proxies = os.getenv('THROTTLE_NUM_PROXIES', '1').strip()
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -66,6 +76,14 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "NUM_PROXIES": int(_num_proxies) if _num_proxies else None,
+    # Only the scopes named here exist; every other endpoint is unlimited, as
+    # it was before. `companies.views.CompanyViewSet.get_throttles` is what
+    # attaches them, and only to the two actions that cost real work.
+    "DEFAULT_THROTTLE_RATES": {
+        "report": os.getenv('REPORT_THROTTLE_RATE', '30/hour'),
+        "peers": os.getenv('PEERS_THROTTLE_RATE', '120/hour'),
+    },
 }
 
 SIMPLE_JWT = {

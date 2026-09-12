@@ -280,7 +280,79 @@ je otvorené rozhodnutie, nie hotová vec.
 nie to, čo obsluhuje tlačidlo v aplikácii — pozri `docs/SOURCE_DATA_INTEGRITY.md`.
 
 **Spotreba:** vykreslenie je CPU-náročné a endpoint je `AllowAny`, preto je
-naň nasadený throttle (pozri `REPORT_THROTTLE_RATE` v `companies/views.py`).
+naň nasadený throttle — `REPORT_THROTTLE_RATE` (predvolene `30/hour`) čítaný v
+`backend/backend/settings.py` a priradený v `CompanyViewSet.get_throttles`.
+Limit je na účet, ak je volajúci prihlásený, inak na adresu.
+
+---
+
+### `GET /api/companies/<ico>/peers/?scope=<scope>`
+
+Firmy zoradené vedľa tejto — podklad pre štyri sekcie firemnej stránky
+(Podobné spoločnosti, Firmy v kraji, Firmy v odvetví, Firmy podľa tržieb).
+Nevyžaduje JWT.
+
+| `scope` | Otázka | Zoradené podľa |
+|---|---|---|
+| `podobne` | ktorá firma je veľkosťou najbližšie | `similarity` (pozri nižšie) |
+| `kraj` | kto je najväčší v kraji sídla | `revenue` |
+| `odvetvie` | kto je najväčší v odvetví (divízia NACE, 2 číslice) | `revenue` |
+| `trzby` | kto je najväčší v celom registri | `revenue` |
+
+**Response `200`:**
+
+```json
+{
+  "scope": "kraj",
+  "subject": "SK010",
+  "subject_label": "Bratislavský kraj",
+  "reason": null,
+  "ranked_by": "revenue",
+  "total_ranked": 187,
+  "total_in_scope": 105760,
+  "results": [
+    {"ico": "31333532", "name": "ESET, spol. s r.o.", "city": "Bratislava",
+     "nace_code": "62010", "nace_name": "Počítačové programovanie…",
+     "year": 2021, "revenue": "571637176.00", "profit": "…"}
+  ]
+}
+```
+
+**Dvojica počtov je podstatná.** `total_ranked` je počet firiem, ktoré sa dali
+zaradiť — teda majú uloženú závierku s tržbami. `total_in_scope` je počet
+firiem, na ktoré sa otázka vôbec pýtala. V celom registri je to približne
+1 900 z 325 000, takže „najväčšie firmy“ znamená „najväčšie firmy, ktoré
+zverejnili závierku“. Sekcia musí zobrazovať obe čísla; jedno bez druhého
+je nepodložené tvrdenie.
+
+**`reason`** je `null`, alebo `no_region` / `no_nace` — firma nemá v registri
+kraj sídla, respektíve čitateľný kód NACE, takže ju v tom rozsahu nemožno
+zaradiť. Kód, nie veta: slovenské texty skladá frontend, rovnako ako pri
+`financialsState`.
+
+**Zoradenie `similarity`** je `|ln(tržby) − ln(tržby subjektu)|`, teda blízkosť
+v pomere a nie v eurách — 10 000 € od firmy s obratom 50 000 € je iná firma
+než 10 000 € od firmy s obratom 50 000 000 €. Zahŕňa len riadky s kladnými
+tržbami (`ln(0)` v Postgrese zlyhá, nie vráti `null`). Ak subjekt sám závierku
+nemá alebo má nulové tržby, rozsah sa namiesto zlyhania prepne na `revenue`
+a `ranked_by` to povie.
+
+**Každý rozsah vynecháva subjekt** — firma nie je svojím vlastným susedom.
+
+**Response `400`:** `{"detail": "Neznámy rozsah \"\". Povolené: podobne, kraj,
+odvetvie, trzby."}` — neznámy `scope` je chyba, nie predvolená hodnota; každý
+rozsah odpovedá na inú otázku a tichý výber by dal jedno poradie pod druhý
+nadpis.
+
+**Response `404`:** `{"detail": "Firma s týmto IČO nebola nájdená."}`
+
+**Response `500`:** `{"detail": "Podobné firmy sa nepodarilo načítať…"}`
+
+**Frontend volajúci:** `frontend/components/company/sections/PeerListSection.tsx`
+cez `api.getPeers()`.
+
+**Spotreba:** počty nad 445 000 riadkov; throttle `PEERS_THROTTLE_RATE`
+(predvolene `120/hour`).
 
 ---
 
