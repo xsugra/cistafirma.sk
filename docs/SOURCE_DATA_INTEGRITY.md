@@ -1047,6 +1047,10 @@ still arrived as a complete-looking row; and `analysis` is computed on read
 (`companies/serializers.py:111`), so there was no stored figure to disagree
 with.
 
+The gate was widened later the same day — see *The write gate, closed* below.
+That changes which statements are **stored**, not how the statements that are
+stored are read, so this measurement stands as it was taken.
+
 ### Measured before and after, 2026-09-12
 
 The identity is `assets = equity + liabilities + accruals`, over the rows whose
@@ -1102,22 +1106,55 @@ a statement whose every table is unreadable contributes no field, counts as zero
 rows, and a *failed template fetch* would then arrive as "this company has no
 statements". That is the conflation `UNREACHABLE` was introduced to undo.
 
-### Still open: the write gate, now observed
+### The write gate, closed 2026-09-12
 
-The gate above keeps a statement only if it carries `revenue` or `profit`. Read
+The gate above kept a statement only if it carried `revenue` or `profit`. Read
 literally, that discards a statement carrying a readable balance sheet and no
 income statement. **Measured 2026-09-12 over 370 statements of 25 companies: the
 gate discarded nothing.** Measured again over the whole population in which the
 case can appear — every company the rotation attempted and stored no result for,
-79 of them — it discards **one**:
+79 of them — it discarded **one**:
 
 * **00591653** (*PRO-GERS, v.o.s.*) — four statements (2013–2016), each of which
   yields a balance sheet (`assets_total = 328`, `equity = 328`) and neither a
   revenue nor a profit. All four are discarded, so the company stores nothing at
   all. The refusal is the gate's, not the parser's.
 
-Still rare, and still left alone rather than changed on a reading of the code —
-but no longer unobserved.
+**Changed the same day.** The gate now keeps a statement that yielded *any* of
+five headline fields — `revenue`, `profit`, `assets_total`, `equity`,
+`liabilities_total` (`STATEMENT_HEADLINE_FIELDS`) — rather than a revenue or a
+profit specifically. A balance sheet that was read is a measurement, and
+discarding it says something about the registry that is not true. `costs` and
+`total_revenue` are deliberately not in the tuple: a statement whose `Náklady`
+total resolves while `Výnosy` does not is a fragment, and the gate has always
+discarded it. The `gated` cause survives, reachable now only by a statement
+yielding none of the five.
+
+**Measured after, on the same 79 companies** (`fetch_ruz_financials --ico-file`,
+79 selected, 0 not in RUZ, 0 unreachable, 0 errors, 8 rows written):
+
+| the 79 companies | before | after |
+|---|---|---|
+| store at least one row | 0 | **2** |
+| rows stored | 0 | **8** |
+| — the gate's doing (`00591653`) | 0 | **4** (2013–2016) |
+| — the vocabulary's doing (`00681393`) | 0 | **4** (2022–2025) |
+| report `no_statements` | 79 | **77** |
+
+The 77 are the counts the section above already gives: 69 with no statements in
+RUZ at all, 5 whose report bodies carry no tables, 3 whose template is entirely
+empty. Both companies that moved are the ones that section named by hand — the
+gate case and the vocabulary case — which is what makes this a closure rather
+than a new measurement.
+
+**One residual, deliberately not claimed as fixed.** `last_detail` is written on
+every attempt, but a statement that was read with nothing skipped records an
+**empty** string, because the column explains what was *skipped* (two tests hold
+that: `registers/tests_financials.py`). So `00591653` — a company that now
+stores four rows — carries no detail, exactly as a company never attempted does.
+The fact that distinguishes it is in the rows themselves. Making a clean read
+persist its own `N of M statement(s) readable` sentence is a one-line change and
+a separate decision.
 
 ### Four causes, one string
 
@@ -1173,9 +1210,14 @@ It matters that this travels in the detail because the outcome is
 by `ANSWERED_RETRY_AFTER`: the reason has to ride along, since nothing else about
 the run survives — `sync_company_and_record` keeps the detail only for failures
 and `CompanySyncStatus.last_error` is therefore empty for every company in this
-section. The Celery task now logs it (`tasks.py`, `sync_company_financials_from_ruz`),
-which is where a scheduled run's reason is visible at all; storing it durably is
-a migration and a separate decision.
+section. The Celery task logs it (`tasks.py`, `sync_company_financials_from_ruz`), which
+is where a scheduled run's reason is visible at all. **Stored durably
+2026-09-12** as well: `CompanySyncStatus.last_detail` (migration
+`registers/0014`) is written on every attempt — success included, which
+`last_error` never is, because a successful attempt blanks it — and read back by
+the admin *Stav synchronizácie* page and the `has_detail` filter. Measured after
+the 79-company re-sync: 1 250 financials statuses, 78 of them carrying a detail;
+the one without is `00591653`, and the reason is in the section above.
 
 ### The non-profit statement, measured
 
@@ -1215,6 +1257,24 @@ So the gap is one company: `00681393` (*Združenie saleziánov spolupracovníkov
 four statements on šablóna 1164. That is what "824 of the companies with stored
 results are non-profit" does *not* mean, and an earlier version of this section
 implied it did. The family is large; the gap inside it is not.
+
+**Closed 2026-09-12.** `majetok` and `zavazky` joined `BALANCE_SHEET_KEYS`,
+which is the whole of what was missing: both tables already resolved their
+column shape and were discarded before reaching the balance-sheet block that
+would have read them. On the 79-company re-sync, `00681393` stored **4 rows**
+(2022–2025) where it had stored none:
+
+| year | 2022 | 2023 | 2024 | 2025 |
+|---|---|---|---|---|
+| `assets_total` | 265 582.44 | 249 170.60 | 280 263.63 | 239 479.88 |
+
+**The asset side reads and the liability side still does not.** All four rows
+carry `assets_total` alone — `equity` and `liabilities_total` are `None`, so
+each row is a balance sheet with one side of it. The rows are honest (the API
+serves `null` and the page draws `—`), and no ratio is computed from a missing
+input, but this is a partial reading and not the statement. What remains is the
+`Záväzky` table's own row labels, which yield no total. Recorded here rather
+than described as complete.
 
 Two notes on that table. The classification behind it is the measuring script's
 own, not the service's — as of 2026-09-12 the service counts the same four causes
