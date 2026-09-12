@@ -247,12 +247,26 @@
 <div class="section">
     <h2>Finančná analýza — {{ analysis.latest.year }}</h2>
 
-    {% if analysis.latest.z_score != None %}
-    <div class="zscore {% if analysis.latest.z_score > 2.90 %}zscore-good{% elif analysis.latest.z_score > 1.23 %}zscore-warn{% else %}zscore-bad{% endif %}">
-        <span class="score">{{ analysis.latest.z_score|floatformat:2 }}</span>
-        <span class="label">Altman Z-score — {{ analysis.latest.z_score_label }}</span>
+    {% comment %}
+       The zone, not the score, and the camelCase keys `to_dict` actually emits.
+       This block asked for `z_score` and `z_score_label` against a camelCase
+       dict, so every lookup resolved to the empty string; `'' != None` is true,
+       so the card rendered for every company, both `>` comparisons failed, and
+       it fell to its `else` branch -- an empty score, a red badge, and the
+       words "Zvýšené riziko bankrotu" printed over every company in the
+       registry, whatever its actual Z-score. Guarding on the zone also makes a
+       missing value falsy rather than unequal-to-None.
+
+       `{% comment %}` and not `{# #}`: the latter is a *single-line* tag in
+       Django, so a comment written across lines is not a comment at all -- it
+       is body text, and these blocks printed themselves into the report.
+    {% endcomment %}
+    {% if analysis.latest.zScoreZone %}
+    <div class="zscore {% if analysis.latest.zScoreZone == 'safe' %}zscore-good{% elif analysis.latest.zScoreZone == 'grey' %}zscore-warn{% else %}zscore-bad{% endif %}">
+        <span class="score">{{ analysis.latest.zScore|floatformat:2 }}</span>
+        <span class="label">Altman Z-score — {{ analysis.latest.zScoreLabel }}</span>
         <span style="font-size:8pt;color:inherit;margin-left:16px;">
-            {% if analysis.latest.z_score > 2.90 %}Nízke riziko bankrotu{% elif analysis.latest.z_score > 1.23 %}Nejednoznačná situácia{% else %}Zvýšené riziko bankrotu{% endif %}
+            {% if analysis.latest.zScoreZone == 'safe' %}Nízke riziko bankrotu{% elif analysis.latest.zScoreZone == 'grey' %}Nejednoznačná situácia{% else %}Zvýšené riziko bankrotu{% endif %}
         </span>
     </div>
     {% endif %}
@@ -290,20 +304,30 @@
         <thead>
             <tr>
                 <th>Rok</th>
-                <th class="num">Tržby</th>
-                <th class="num">Zisk</th>
+                {% comment %}
+                   "Výnosy", not "Tržby": the figure is `revenue`, which is
+                   "Výnosy z hospodárskej činnosti spolu".
+                {% endcomment %}
+                <th class="num">Výnosy</th>
+                <th class="num">VH z hosp. č.</th>
+                <th class="num">Zisk po zd.</th>
                 <th class="num">Aktíva</th>
                 <th class="num">Vlastný kapitál</th>
             </tr>
         </thead>
         <tbody>
             {% for row in financial_history %}
+            {% comment %}
+               `_fmt_eur` already ends an amount with its currency, so the " €"
+               this cell used to add printed "1 234 € €" on every figure.
+            {% endcomment %}
             <tr>
                 <td>{{ row.year }}</td>
-                <td class="num">{{ row.revenue }} €</td>
-                <td class="num" style="color:{% if row.profit >= 0 %}#16a34a{% else %}#dc2626{% endif %};">{{ row.profit }} €</td>
-                <td class="num">{{ row.assets }} €</td>
-                <td class="num">{{ row.equity }} €</td>
+                <td class="num">{{ row.revenue }}</td>
+                <td class="num"{% if row.profit_is_filed %} style="color:{% if row.profit_is_positive %}#16a34a{% else %}#dc2626{% endif %};"{% endif %}>{{ row.profit }}</td>
+                <td class="num"{% if row.profit_after_tax_is_filed %} style="color:{% if row.profit_after_tax_is_positive %}#16a34a{% else %}#dc2626{% endif %};"{% endif %}>{{ row.profit_after_tax }}</td>
+                <td class="num">{{ row.assets }}</td>
+                <td class="num">{{ row.equity }}</td>
             </tr>
             {% endfor %}
         </tbody>

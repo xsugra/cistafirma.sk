@@ -44,12 +44,50 @@ class YearAnalysis:
     interpretation: dict[str, str]
     z_score: float | None
     z_score_label: str | None
+    # The same verdict as `z_score_label`, as a token: `safe` | `grey` |
+    # `distress`, or None when no Z-score could be computed. The label is for a
+    # reader; this is for a program. Both come from `z_score_zone` so a client
+    # never has to re-derive the boundary -- which it did, and got a different
+    # answer at exactly 1.23 and exactly 2.90.
+    z_score_zone: str | None = None
 
 
 @dataclass
 class AnalysisResult:
     latest: YearAnalysis | None
     history: list[YearAnalysis] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Altman Z-score
+# ---------------------------------------------------------------------------
+
+# The Altman (1983) thresholds for a private, non-manufacturing firm. They are
+# stated once, here, and every surface reads the zone -- the API, the company
+# page and both PDF generators. The rule is a strict `>` ladder, so a score of
+# exactly 1.23 is distress and exactly 2.90 is grey; a client that wrote the
+# mirror image (`< 1.23` / `< 2.90`) put both boundary values in the other
+# zone, which is a one-in-a-thousand disagreement that no test could see until
+# the boundary was exercised by name.
+Z_SCORE_SAFE_MIN = 2.90
+Z_SCORE_GREY_MIN = 1.23
+
+Z_SCORE_ZONE_LABELS = {
+    'safe': 'Bezpečná zóna',
+    'grey': 'Šedá zóna',
+    'distress': 'Pásmo bankrotu',
+}
+
+
+def z_score_zone(z_score: float | None) -> str | None:
+    """The Altman zone for a score: `safe` | `grey` | `distress`, or None."""
+    if z_score is None:
+        return None
+    if z_score > Z_SCORE_SAFE_MIN:
+        return 'safe'
+    if z_score > Z_SCORE_GREY_MIN:
+        return 'grey'
+    return 'distress'
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +277,20 @@ class FinancialAnalysisService:
         assets_filed = _amount(fr.assets_total)
         equity_filed = _amount(fr.equity)
 
+        # The revenue side of the statement as it was actually filed:
+        # "Celkové výnosy" when that line was read, the operating-revenue line
+        # otherwise. This is the fallback X5 of the Z-score has always taken
+        # (see the note above the formula), named once here because the printed
+        # turnover row is the same quantity and the two must not disagree.
+        #
+        # It is a fallback and not a preference: `total_revenue` is populated on
+        # 22.9 % of the 14 204 stored rows against 98.3 % for `revenue`, so a
+        # P&L that resolved the operating line without the financial-revenue
+        # line is the common shape, not the exception.
+        revenue_filed = _amount(fr.total_revenue)
+        if revenue_filed is None:
+            revenue_filed = _amount(fr.revenue)
+
         # `_safe_float` maps an absent figure to 0.0, which is right for an
         # arithmetic term and wrong for a *ratio*: a company whose statement
         # carries a balance sheet and no income statement has no ROA, it does
@@ -251,10 +303,15 @@ class FinancialAnalysisService:
         # "no debt" because liabilities were never read rather than because
         # there are none. Both are then *displayed* -- the PDF omits a `None`
         # ratio and prints the badge beside a real one.
-        has_income = any(
-            getattr(fr, name) is not None
-            for name in ("revenue", "profit", "total_revenue", "costs")
-        )
+        #
+        # The guard is `profit` itself, not "some income line was filed". The
+        # three profitability ratios divide by `profit`, so the looser test
+        # (`any` of revenue/profit/total_revenue/costs) let a filing that
+        # carried `revenue` and no profit row through, and `0 / assets` then
+        # became an ROA, an ROE and an ROS of 0.0 -- three verdicts, all of them
+        # about a line nobody read. Measured 2026-09-12: no row in the database
+        # is in that state today, so this closes the path rather than a leak.
+        profit_filed = fr.profit is not None
 
         # Assets detail. None-preserving, because each of these becomes a
         # liquidity ratio below: `_safe_float` would turn an unfiled line into
@@ -290,19 +347,30 @@ class FinancialAnalysisService:
 
         # --- ratios ---
         ratios = RatioSet(
-            roa=_ratio(profit, assets_total) if has_income else None,
-            roe=_ratio(profit, equity) if has_income else None,
-            ros=_ratio(profit, total_revenue),
+            roa=_ratio(profit, assets_total) if profit_filed else None,
+            roe=_ratio(profit, equity) if profit_filed else None,
+            ros=_ratio(profit, total_revenue) if profit_filed else None,
             current_ratio=_simple_ratio_present(current_assets, liabilities_short),
             quick_ratio=_simple_ratio_present(
                 _sum_present(receivables_short, financial_accounts), liabilities_short
             ),
             cash_ratio=_simple_ratio_present(financial_accounts, liabilities_short),
-            asset_turnover=_simple_ratio(total_revenue, assets_total) if has_income else None,
+            # X5 of the Z-score, printed as a row: the statement's revenue side
+            # over its assets, from the same `revenue_filed` the score uses, so
+            # the turnover on the page and the one inside the score are one
+            # number.
+            #
+            # It used to be a fabricated one. `_simple_ratio` sent an unread
+            # `total_revenue` through `_safe_float` as 0.0, and 0.0 falls under
+            # this row's `bad` threshold -- so 10 909 of the 14 204 rows in the
+            # database (77 %) rendered "Obrat aktív 0.00" with the verdict
+            # "Riziková": an adverse claim about a company, from a line nobody
+            # had read.
+            asset_turnover=_simple_ratio_present(revenue_filed, assets_filed),
             receivables_collection=_simple_ratio(
                 receivables_short / max(total_revenue, 1) * 365, 1
             ) if total_revenue and receivables_short is not None else None,
-            # Guarded on the balance-sheet lines themselves, not on `has_income`:
+            # Guarded on the balance-sheet lines themselves, not on `profit_filed`:
             # this one is fabricated by an absent *liability* figure.
             debt_to_equity=_simple_ratio(liabilities_total, equity)
             if fr.liabilities_total is not None and fr.equity is not None
@@ -331,40 +399,36 @@ class FinancialAnalysisService:
         # sheet and no income statement would otherwise be scored with
         # `x3 = x5 = 0` and labelled `Pásmo bankrotu` -- a bankruptcy verdict
         # printed into the PDF, from a figure nobody read. The two are what the
-        # relaxed write gate stopped guaranteeing. X5 falls back to `revenue`
-        # when `total_revenue` is unset, because a P&L that resolved the
-        # operating-revenue line without the financial-revenue line is a real and
-        # common shape, and refusing there would remove scores that are sound.
+        # relaxed write gate stopped guaranteeing. X5 takes `revenue_filed`,
+        # which falls back to `revenue` when `total_revenue` is unset, because a
+        # P&L that resolved the operating-revenue line without the
+        # financial-revenue line is a real and common shape, and refusing there
+        # would remove scores that are sound.
         #
         # X1, X2 and X4 still read an absent component as 0, as they always have.
         # That understates rather than fabricates, and tightening it belongs to
         # whoever revisits the formula -- it is not a consequence of this gate.
         z_score = None
         z_score_label = None
-        z_revenue = fr.total_revenue if fr.total_revenue is not None else fr.revenue
         if (
             assets_total > 0
             and liabilities_total > 0
             and fr.profit is not None
-            and z_revenue is not None
+            and revenue_filed is not None
         ):
             x1 = working_capital / assets_total
             x2 = equity_retained / assets_total
             x3 = profit / assets_total
             x4 = equity / liabilities_total
-            x5 = float(z_revenue) / assets_total
+            x5 = revenue_filed / assets_total
 
             z_score = round(
                 0.717 * x1 + 0.847 * x2 + 3.107 * x3 + 0.420 * x4 + 0.998 * x5,
                 2,
             )
 
-            if z_score > 2.90:
-                z_score_label = 'Bezpečná zóna'
-            elif z_score > 1.23:
-                z_score_label = 'Šedá zóna'
-            else:
-                z_score_label = 'Pásmo bankrotu'
+            zone = z_score_zone(z_score)
+            z_score_label = Z_SCORE_ZONE_LABELS[zone]
 
         return YearAnalysis(
             year=fr.year,
@@ -372,6 +436,7 @@ class FinancialAnalysisService:
             interpretation=interpretation,
             z_score=z_score,
             z_score_label=z_score_label,
+            z_score_zone=z_score_zone(z_score),
         )
 
     @staticmethod
@@ -390,6 +455,7 @@ class FinancialAnalysisService:
                 'interpretation': y.interpretation,
                 'zScore': y.z_score,
                 'zScoreLabel': y.z_score_label,
+                'zScoreZone': y.z_score_zone,
             }
 
         return {

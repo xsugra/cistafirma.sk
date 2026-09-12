@@ -170,6 +170,11 @@ def _fmt(value: float | None, unit: str) -> str:
         return f'{value:.1f} %'
     if unit == 'dní':
         return f'{value:.0f}'
+    # A euro row in the benchmark table is an amount, not a ratio, and without
+    # this branch it printed a bare number -- `1 234.00` beside a sector median
+    # that carries its unit. `_fmt_eur` is the one place that spells an amount.
+    if unit == '€':
+        return _fmt_eur(value)
     return f'{value:.2f}'
 
 
@@ -223,21 +228,29 @@ def generate_company_report(company: Company) -> bytes:
         risk_score = 100
         risk_summary = 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.'
 
-    # Enhance with analysis data
+    # Enhance with analysis data.
+    #
+    # The zone, not a ladder of its own. This asked whether the score was
+    # `< 1.23` and `< 2.90` -- the mirror of the service's `> 1.23` / `> 2.90`,
+    # which is not the same ladder: exactly 1.23 is distress to the service and
+    # grey here, exactly 2.90 is grey to the service and safe here. So the
+    # printed report could hand a company a different verdict from the one the
+    # API and the company page gave it, at the two values where the two
+    # spellings disagree. `zScoreZone` is published by `to_dict`, so reading it
+    # makes the paper and the screen answer from one decision.
     if analysis and analysis.get('latest'):
-        zs = analysis['latest'].get('zScore')
+        zone = analysis['latest'].get('zScoreZone')
         roa = analysis['latest']['ratios'].get('roa')
-        if zs is not None:
-            if zs < 1.23:
-                risk_score = max(5, risk_score - 20)
-                risk_summary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.'
-            elif zs < 2.90:
-                risk_score = max(5, risk_score - 10)
-                if total_debt == 0:
-                    risk_summary = 'Zvýšená opatrnosť — Z-score v šedej zóne.'
-            else:
-                if total_debt == 0:
-                    risk_summary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).'
+        if zone == 'distress':
+            risk_score = max(5, risk_score - 20)
+            risk_summary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.'
+        elif zone == 'grey':
+            risk_score = max(5, risk_score - 10)
+            if total_debt == 0:
+                risk_summary = 'Zvýšená opatrnosť — Z-score v šedej zóne.'
+        elif zone == 'safe':
+            if total_debt == 0:
+                risk_summary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).'
         if roa is not None and roa < 0:
             risk_score = max(5, risk_score - 10)
 
@@ -286,15 +299,29 @@ def generate_company_report(company: Company) -> bytes:
                     'interpretation': interp.get(key, 'unknown'),
                 })
 
-    # Financial history rows
+    # Financial history rows. Every amount goes through `_amount`, which is None
+    # for a line the filing did not carry -- `float(x or 0)` printed a confident
+    # "0 €" for a line nobody filed, and it did so on the document a reader is
+    # most likely to take at face value.
     financial_history = []
     for fr in financial_results[-6:]:  # Last 6 years
         financial_history.append({
             'year': fr.year,
-            'revenue': _fmt_eur(float(fr.revenue or 0)),
-            'profit': _fmt_eur(float(fr.profit or 0)),
-            'assets': _fmt_eur(float(fr.assets_total or 0)),
-            'equity': _fmt_eur(float(fr.equity or 0)),
+            'revenue': _fmt_eur(_amount(fr.revenue)),
+            'profit': _fmt_eur(_amount(fr.profit)),
+            'profit_after_tax': _fmt_eur(_amount(fr.profit_after_tax)),
+            'assets': _fmt_eur(_amount(fr.assets_total)),
+            'equity': _fmt_eur(_amount(fr.equity)),
+            # The sign is decided here, on the raw value. A template cannot do
+            # it: `_fmt_eur` returns a string, and Django swallows the TypeError
+            # a string-vs-number comparison raises and calls the comparison
+            # False -- so every profit cell rendered red, dashes included.
+            'profit_is_filed': fr.profit is not None,
+            'profit_is_positive': fr.profit is not None and fr.profit >= 0,
+            'profit_after_tax_is_filed': fr.profit_after_tax is not None,
+            'profit_after_tax_is_positive': (
+                fr.profit_after_tax is not None and fr.profit_after_tax >= 0
+            ),
         })
 
     # Benchmark rows
@@ -343,6 +370,13 @@ def generate_company_report(company: Company) -> bytes:
                     _amount(latest_fr.added_value), _amount(latest_fr.revenue)
                 )
                 bench_metrics = [
+                    # The two size medians first, because every ratio below is
+                    # read against the size of the firm that produced it, and
+                    # both were stored and never printed -- the table showed
+                    # nine ratios with no hint of the balance sheet they came
+                    # from.
+                    ('Aktíva', _amount(latest_fr.assets_total), _amount(bm.median_assets_total), '€'),
+                    ('Vlastný kapitál', _amount(latest_fr.equity), _amount(bm.median_equity), '€'),
                     ('ROA', company_ratios.get('roa'), _amount(bm.median_roa), '%'),
                     ('ROE', company_ratios.get('roe'), _amount(bm.median_roe), '%'),
                     ('ROS', company_ratios.get('ros'), _amount(bm.median_ros), '%'),

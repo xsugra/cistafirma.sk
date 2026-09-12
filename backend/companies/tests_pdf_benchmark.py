@@ -70,6 +70,8 @@ class PdfBenchmarkRowsTests(TestCase):
             nace_section='G',
             year=2025,
             company_count=30,
+            median_assets_total=1800,
+            median_equity=700,
             median_debt_ratio=55,
             median_gross_margin=8,
             median_current_ratio=1.5,
@@ -87,11 +89,45 @@ class PdfBenchmarkRowsTests(TestCase):
         # It was absent from the export while the company page carried it.
         self.assertIn('Hrubá marža', self.rows())
 
+    def test_the_two_size_medians_are_printed(self):
+        # Both were stored and never shown, so the table listed nine ratios
+        # with no hint of the balance sheet they came from.
+        rows = self.rows()
+
+        # `_fmt_eur` separates thousands with a non-breaking space and joins
+        # the currency with no space at all.
+        self.assertEqual(rows['Aktíva']['company_val'], '2 000€')
+        self.assertEqual(rows['Aktíva']['sector_val'], '1 800€')
+        self.assertEqual(rows['Vlastný kapitál']['company_val'], '800€')
+        self.assertEqual(rows['Vlastný kapitál']['sector_val'], '700€')
+        # They are euro amounts, not bare ratios: `_fmt` had no `€` branch and
+        # printed "1 800.00" beside medians that carry their unit.
+        self.assertNotIn('1800.00', rows['Aktíva']['sector_val'])
+
+    def test_the_size_rows_lead_the_table(self):
+        # Order is the only thing that says these two set up every ratio below.
+        context = benchmark_context(self.company)
+        labels = [row['label'] for row in context['benchmark_rows']]
+
+        self.assertEqual(labels[:2], ['Aktíva', 'Vlastný kapitál'])
+
+    def test_a_median_no_one_computed_is_a_dash_not_a_zero(self):
+        SectorBenchmark.objects.filter(nace_section='G', year=2025).update(
+            median_assets_total=None, median_equity=None
+        )
+
+        rows = self.rows()
+
+        self.assertEqual(rows['Aktíva']['sector_val'], '—')
+        self.assertEqual(rows['Vlastný kapitál']['sector_val'], '—')
+        # The company side is unaffected -- it comes from the filing.
+        self.assertEqual(rows['Aktíva']['company_val'], '2 000€')
+
     def test_every_row_carries_a_company_figure_not_a_dash(self):
-        # The filed statement supports all seven: a dash here means a lookup
+        # The filed statement supports all nine: a dash here means a lookup
         # that never resolved, which is what the snake_case keys did.
         rows = self.rows()
-        self.assertEqual(len(rows), 7)
+        self.assertEqual(len(rows), 9)
 
         for label, row in rows.items():
             with self.subTest(label=label):
@@ -122,6 +158,96 @@ class PdfBenchmarkRowsTests(TestCase):
         self.assertEqual(rows['Hrubá marža']['company_val'], '—')
         self.assertEqual(rows['Zadĺženosť']['company_val'], '55.0 %')
         self.assertNotIn('0.0 %', [r['company_val'] for r in rows.values()])
+
+
+class PdfFinancialHistoryTests(TestCase):
+    """The history table's rows, cell by cell.
+
+    Every amount here went through `float(fr.revenue or 0)`, so a line the
+    filing did not carry printed "0 €" -- a confident figure in place of an
+    absent one, on the document a reader is most likely to take at face value.
+    The sign was decided in the template, where `_fmt_eur`'s string met a `> 0`
+    comparison, and Django swallows the `TypeError` that raises and calls the
+    comparison False -- so every profit cell rendered red, dashes included.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=999203, ico='00999203', nazov_UJ='Historická, s.r.o.',
+        )
+
+    def history(self):
+        return benchmark_context(self.company)['financial_history']
+
+    def test_a_line_the_filing_lacked_is_a_dash_not_a_zero(self):
+        # A balance sheet with no income statement: the shape 00681393 has.
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2025, assets_total=328, equity=328,
+        )
+
+        row = self.history()[0]
+
+        self.assertEqual(row['revenue'], '—')
+        self.assertEqual(row['profit'], '—')
+        self.assertEqual(row['profit_after_tax'], '—')
+        self.assertEqual(row['assets'], '328€')
+        self.assertNotIn('0€', [row['revenue'], row['profit'], row['profit_after_tax']])
+
+    def test_a_filed_zero_still_prints_as_a_zero(self):
+        # The other half of the distinction: a statement can genuinely file
+        # zeros, and a dash there would be its own lie.
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2025, revenue=0, profit=0, total_revenue=0,
+        )
+
+        row = self.history()[0]
+
+        self.assertEqual(row['revenue'], '0€')
+        self.assertTrue(row['profit_is_filed'])
+
+    def test_the_two_profit_rows_are_different_quantities(self):
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2025, revenue=5000, profit=300,
+            profit_after_tax=240,
+        )
+
+        row = self.history()[0]
+
+        self.assertEqual(row['profit'], '300€')
+        self.assertEqual(row['profit_after_tax'], '240€')
+
+    def test_the_sign_is_decided_on_the_raw_value_not_on_the_rendered_string(self):
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2024, revenue=1000, profit=-50,
+            profit_after_tax=-80,
+        )
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2025, revenue=1000, profit=90,
+            profit_after_tax=70,
+        )
+
+        loss, gain = self.history()
+
+        self.assertTrue(loss['profit_is_filed'])
+        self.assertFalse(loss['profit_is_positive'])
+        self.assertFalse(loss['profit_after_tax_is_positive'])
+        self.assertTrue(gain['profit_is_positive'])
+        self.assertTrue(gain['profit_after_tax_is_positive'])
+
+    def test_an_absent_profit_is_not_flagged_as_filed_at_all(self):
+        CompanyFinancialResult.objects.create(
+            company=self.company, year=2025, assets_total=328, equity=328,
+        )
+
+        row = self.history()[0]
+
+        # Both flags False is what tells the template to leave the cell
+        # uncoloured. `is_positive` alone cannot: "not positive" and "not
+        # filed" are the same answer, and a dash would have gone red.
+        self.assertFalse(row['profit_is_filed'])
+        self.assertFalse(row['profit_is_positive'])
+        self.assertFalse(row['profit_after_tax_is_filed'])
+        self.assertFalse(row['profit_after_tax_is_positive'])
 
 
 class PdfRatioRowsTests(TestCase):
