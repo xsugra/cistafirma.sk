@@ -127,36 +127,47 @@ function mapCompanyResponse(data: any): Company {
   const totalDebt = debtVszp + debtSocPoist + debtTax;
   const hasDebt = totalDebt > 0;
 
+  // Financial figures keep their absence. `toAmount` above collapses a missing
+  // value to 0, which is correct for a debt -- a company with no recorded debt
+  // owes nothing -- and wrong for a filed statement, where a missing line means
+  // the statement did not carry it. The backend sends `null` for those, and it
+  // has to survive to the render, or an unread revenue shows as "0 €".
+  const toFiledAmount = (value: any): number | null => {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
   const financials = Array.isArray(data.financials)
     ? data.financials
         .map((item: any) => ({
           year: Number(item.year),
-          revenue: toAmount(item.revenue),
-          profit: toAmount(item.profit),
-          totalRevenue: toAmount(item.totalRevenue),
-          costs: toAmount(item.costs),
-          addedValue: toAmount(item.addedValue),
-          incomeTax: toAmount(item.incomeTax),
-          incomeTaxPaid: toAmount(item.incomeTaxPaid),
-          assetsTotal: toAmount(item.assetsTotal),
-          assetsIntangible: toAmount(item.assetsIntangible),
-          assetsTangible: toAmount(item.assetsTangible),
-          assetsFinancial: toAmount(item.assetsFinancial),
-          assetsInventory: toAmount(item.assetsInventory),
-          assetsReceivablesLong: toAmount(item.assetsReceivablesLong),
-          assetsReceivablesShort: toAmount(item.assetsReceivablesShort),
-          assetsFinancialAccounts: toAmount(item.assetsFinancialAccounts),
-          assetsAccruals: toAmount(item.assetsAccruals),
-          equity: toAmount(item.equity),
-          equityBasic: toAmount(item.equityBasic),
-          equityCapitalFunds: toAmount(item.equityCapitalFunds),
-          equityProfitFunds: toAmount(item.equityProfitFunds),
-          equityRetained: toAmount(item.equityRetained),
-          liabilitiesTotal: toAmount(item.liabilitiesTotal),
-          liabilitiesReserves: toAmount(item.liabilitiesReserves),
-          liabilitiesLong: toAmount(item.liabilitiesLong),
-          liabilitiesShort: toAmount(item.liabilitiesShort),
-          liabilitiesAccruals: toAmount(item.liabilitiesAccruals),
+          revenue: toFiledAmount(item.revenue),
+          profit: toFiledAmount(item.profit),
+          totalRevenue: toFiledAmount(item.totalRevenue),
+          costs: toFiledAmount(item.costs),
+          addedValue: toFiledAmount(item.addedValue),
+          incomeTax: toFiledAmount(item.incomeTax),
+          incomeTaxPaid: toFiledAmount(item.incomeTaxPaid),
+          assetsTotal: toFiledAmount(item.assetsTotal),
+          assetsIntangible: toFiledAmount(item.assetsIntangible),
+          assetsTangible: toFiledAmount(item.assetsTangible),
+          assetsFinancial: toFiledAmount(item.assetsFinancial),
+          assetsInventory: toFiledAmount(item.assetsInventory),
+          assetsReceivablesLong: toFiledAmount(item.assetsReceivablesLong),
+          assetsReceivablesShort: toFiledAmount(item.assetsReceivablesShort),
+          assetsFinancialAccounts: toFiledAmount(item.assetsFinancialAccounts),
+          assetsAccruals: toFiledAmount(item.assetsAccruals),
+          equity: toFiledAmount(item.equity),
+          equityBasic: toFiledAmount(item.equityBasic),
+          equityCapitalFunds: toFiledAmount(item.equityCapitalFunds),
+          equityProfitFunds: toFiledAmount(item.equityProfitFunds),
+          equityRetained: toFiledAmount(item.equityRetained),
+          liabilitiesTotal: toFiledAmount(item.liabilitiesTotal),
+          liabilitiesReserves: toFiledAmount(item.liabilitiesReserves),
+          liabilitiesLong: toFiledAmount(item.liabilitiesLong),
+          liabilitiesShort: toFiledAmount(item.liabilitiesShort),
+          liabilitiesAccruals: toFiledAmount(item.liabilitiesAccruals),
           debtRatio: item.debtRatio ?? null,
           grossMargin: item.grossMargin ?? null,
         }))

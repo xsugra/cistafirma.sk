@@ -11,8 +11,12 @@ export const formatNumber = (value: number | null | undefined): string => {
     }
 };
 
+// An absent figure is not a zero. `null` here means the statement did not carry
+// this line, and it renders as the same dash the rest of the app uses -- an
+// empty string leaves a hole in the row that reads as a layout bug rather than
+// as a statement that said nothing.
 export const formatCurrency = (value: number | null | undefined): string => {
-    if (value === null || value === undefined) return '';
+    if (value === null || value === undefined) return '—';
     return `${formatNumber(value)}${NBSP}€`;
 };
 

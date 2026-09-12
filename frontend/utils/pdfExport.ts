@@ -15,7 +15,10 @@ function eur(amount: number): string {
   return `${formatNumber(amount)} €`;
 }
 
-function eurCompact(amount: number): string {
+function eurCompact(amount: number | null): string {
+  // A figure the statement did not carry is not a zero, and printing `0 €` in
+  // an exported document is a claim about the company that nothing supports.
+  if (amount == null) return '—';
   if (Math.abs(amount) >= 1_000_000) return (amount / 1_000_000).toFixed(1) + 'M €';
   if (Math.abs(amount) >= 1_000) return Math.round(amount / 1_000) + 'k €';
   return `${formatNumber(amount)} €`;
@@ -436,6 +439,17 @@ function buildDebts(c: Company): string {
   return `<div class="section"><h2>Dlhy a nedoplatky</h2><table><thead><tr><th>Zdroj</th><th class="r">Suma</th><th>K dátumu</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+/** Does this year's statement carry a composition, not just the two totals? */
+function hasBreakdown(f: Financials): boolean {
+  return [
+    f.assetsIntangible, f.assetsTangible, f.assetsFinancial, f.assetsInventory,
+    f.assetsReceivablesLong, f.assetsReceivablesShort, f.assetsFinancialAccounts,
+    f.assetsAccruals, f.equityBasic, f.equityCapitalFunds, f.equityProfitFunds,
+    f.equityRetained, f.liabilitiesReserves, f.liabilitiesLong, f.liabilitiesShort,
+    f.liabilitiesAccruals,
+  ].some(v => v != null);
+}
+
 function buildFinancials(c: Company): string {
   if (c.financials.length === 0) return `<div class="section"><h2>Finančné údaje</h2><p class="empty">Finančné údaje nie sú k dispozícii.</p></div>`;
 
@@ -445,10 +459,10 @@ function buildFinancials(c: Company): string {
   // Key indicators
   let kpi = `<div class="section"><h2>Kľúčové ukazovatele ${latest.year}</h2><table><tbody>`;
   const rows: [string, string][] = [
-    ['Celkové výnosy', eurCompact(latest.totalRevenue || latest.revenue)],
+    ['Celkové výnosy', eurCompact(latest.totalRevenue ?? latest.revenue)],
     ['Zisk po zdanení', eurCompact(latest.profit)],
   ];
-  if (latest.assetsTotal > 0) {
+  if (latest.assetsTotal != null) {
     rows.push(
       ['Celkové aktíva', eurCompact(latest.assetsTotal)],
       ['Vlastný kapitál', eurCompact(latest.equity)],
@@ -468,20 +482,23 @@ function buildFinancials(c: Company): string {
   for (const f of sorted) {
     hist += `<tr>
       <td><b>${f.year}</b></td>
-      <td class="r">${eurCompact(f.totalRevenue || f.revenue)}</td>
+      <td class="r">${eurCompact(f.totalRevenue ?? f.revenue)}</td>
       <td class="r">${eurCompact(f.profit)}</td>
       <td class="r">${eurCompact(f.costs)}</td>
-      <td class="r">${f.assetsTotal ? eurCompact(f.assetsTotal) : '—'}</td>
-      <td class="r">${f.equity ? eurCompact(f.equity) : '—'}</td>
+      <td class="r">${eurCompact(f.assetsTotal)}</td>
+      <td class="r">${eurCompact(f.equity)}</td>
       <td class="r">${pct(f.debtRatio)}</td>
       <td class="r">${pct(f.grossMargin)}</td>
     </tr>`;
   }
   hist += '</tbody></table></div>';
 
-  // Assets & liabilities breakdown for latest year with balance sheet
+  // Assets & liabilities breakdown for the latest year that has one. The
+  // breakdown is only worth a page when there is a breakdown to print: a
+  // statement can file `Aktíva celkom` with no readable composition, and that
+  // would render sixteen rows of dashes into the exported document.
   let balance = '';
-  const bal = sorted.find(f => f.assetsTotal > 0);
+  const bal = sorted.find(hasBreakdown);
   if (bal) {
     balance = `<div class="section"><h2>Štruktúra majetku a záväzkov ${bal.year}</h2>
     <div class="cols-2">

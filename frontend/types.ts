@@ -49,34 +49,43 @@ export interface RiskScore {
   calculationDate: string;
 }
 
+/**
+ * One year's figures, as filed.
+ *
+ * Every amount is `number | null`, and the distinction is load-bearing rather
+ * than defensive: a statement may carry a balance sheet and no income
+ * statement, so `revenue` and `profit` are legitimately absent. `null` means
+ * "this line is not in the statement", which is not the same fact as `0` --
+ * render it as `—`, never as `0 €`.
+ */
 export interface Financials {
   year: number;
-  revenue: number;
-  profit: number;
-  totalRevenue: number;
-  costs: number;
-  addedValue?: number;
-  incomeTax: number;
-  incomeTaxPaid: number;
-  assetsTotal: number;
-  assetsIntangible: number;
-  assetsTangible: number;
-  assetsFinancial: number;
-  assetsInventory: number;
-  assetsReceivablesLong: number;
-  assetsReceivablesShort: number;
-  assetsFinancialAccounts: number;
-  assetsAccruals: number;
-  equity: number;
-  equityBasic: number;
-  equityCapitalFunds: number;
-  equityProfitFunds: number;
-  equityRetained: number;
-  liabilitiesTotal: number;
-  liabilitiesReserves: number;
-  liabilitiesLong: number;
-  liabilitiesShort: number;
-  liabilitiesAccruals: number;
+  revenue: number | null;
+  profit: number | null;
+  totalRevenue: number | null;
+  costs: number | null;
+  addedValue?: number | null;
+  incomeTax: number | null;
+  incomeTaxPaid: number | null;
+  assetsTotal: number | null;
+  assetsIntangible: number | null;
+  assetsTangible: number | null;
+  assetsFinancial: number | null;
+  assetsInventory: number | null;
+  assetsReceivablesLong: number | null;
+  assetsReceivablesShort: number | null;
+  assetsFinancialAccounts: number | null;
+  assetsAccruals: number | null;
+  equity: number | null;
+  equityBasic: number | null;
+  equityCapitalFunds: number | null;
+  equityProfitFunds: number | null;
+  equityRetained: number | null;
+  liabilitiesTotal: number | null;
+  liabilitiesReserves: number | null;
+  liabilitiesLong: number | null;
+  liabilitiesShort: number | null;
+  liabilitiesAccruals: number | null;
   debtRatio: number | null;
   grossMargin: number | null;
 }

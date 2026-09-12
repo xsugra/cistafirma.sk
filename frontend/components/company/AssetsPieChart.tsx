@@ -33,24 +33,44 @@ const CustomTooltip = ({ active, payload }: any) => {
 };
 
 export const AssetsPieChart: React.FC<AssetsPieChartProps> = ({ data }) => {
+    // A pie draws only positive slices, so a line the statement did not carry
+    // and a line it filed as zero land in the same place here. The total below
+    // keeps the distinction, because `Aktíva celkom` is a figure the statement
+    // either filed or did not.
     const segments = [
-        { name: 'Nehmotný majetok', value: data.assetsIntangible },
-        { name: 'Hmotný majetok', value: data.assetsTangible },
-        { name: 'Finančný majetok', value: data.assetsFinancial },
-        { name: 'Zásoby', value: data.assetsInventory },
-        { name: 'Dlhodobé pohľadávky', value: data.assetsReceivablesLong },
-        { name: 'Krátkodobé pohľadávky', value: data.assetsReceivablesShort },
-        { name: 'Finančné účty', value: data.assetsFinancialAccounts },
-        { name: 'Časové rozlíšenie', value: data.assetsAccruals },
+        { name: 'Nehmotný majetok', value: data.assetsIntangible ?? 0 },
+        { name: 'Hmotný majetok', value: data.assetsTangible ?? 0 },
+        { name: 'Finančný majetok', value: data.assetsFinancial ?? 0 },
+        { name: 'Zásoby', value: data.assetsInventory ?? 0 },
+        { name: 'Dlhodobé pohľadávky', value: data.assetsReceivablesLong ?? 0 },
+        { name: 'Krátkodobé pohľadávky', value: data.assetsReceivablesShort ?? 0 },
+        { name: 'Finančné účty', value: data.assetsFinancialAccounts ?? 0 },
+        { name: 'Časové rozlíšenie', value: data.assetsAccruals ?? 0 },
     ];
 
-    const total = data.assetsTotal || segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
+    const total = data.assetsTotal ?? segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
     const negative = segments.filter(s => s.value < 0);
     const filtered = segments
         .filter(s => s.value > 0)
         .map(s => ({ ...s, percent: total ? s.value / total : 0 }));
 
-    if (filtered.length === 0) return null;
+    // We have the total and nothing to break it into: template 1164 lists its
+    // asset lines without the "súčet" suffix the vocabulary matches on, so a
+    // filed balance sheet can arrive with no readable composition. Saying so
+    // beats an absent card, which reads as "this company filed nothing".
+    if (filtered.length === 0) {
+        if (data.assetsTotal == null) return null;
+        return (
+            <InfoCard title={`Aktíva ${data.year}`} icon="fa-chart-pie">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Celkom: <span className="text-gray-900 dark:text-white font-bold">{formatCurrency(total)}</span>
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    Rozpis na jednotlivé položky sa z tejto závierky nepodarilo prečítať.
+                </p>
+            </InfoCard>
+        );
+    }
 
     return (
         <InfoCard title={`Aktíva ${data.year}`} icon="fa-chart-pie">

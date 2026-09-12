@@ -28,47 +28,65 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
 
     if (!latest) return null;
 
-    const hasBalanceSheet = latest.assetsTotal > 0;
+    // The balance-sheet block shows when the statement carried one of its
+    // totals -- not when assets happen to be positive. `> 0` hid the block for a
+    // dormant association whose filed balance sheet totals 25.88 €, and 0 is a
+    // filed figure like any other.
+    const hasBalanceSheet =
+        latest.assetsTotal != null || latest.equity != null || latest.liabilitiesTotal != null;
 
     const valueColor = (value: number) =>
         value >= 0 ? 'text-gray-900 dark:text-white' : 'text-red-600 dark:text-red-400';
 
     const analysisRatios = analysis?.ratios;
 
+    // `inverse` is spelled out on every entry rather than left off the ones that
+    // do not use it: TypeScript stops giving the absent property an implicit
+    // `undefined` once the array's element types stop being uniform, and
+    // `ind.inverse` below then fails to compile.
     const indicators = [
         {
             label: 'Celkové výnosy',
-            value: latest.totalRevenue || latest.revenue,
-            prevValue: prev ? (prev.totalRevenue || prev.revenue) : 0,
+            // `??`, not `||`: a filed total revenue of 0 fell through to the
+            // turnover line under a label that says "total".
+            value: latest.totalRevenue ?? latest.revenue,
+            prevValue: prev ? (prev.totalRevenue ?? prev.revenue) : null,
             format: 'currency' as const,
             icon: 'fa-coins',
+            inverse: false,
         },
         {
             label: 'Zisk po zdanení',
             value: latest.profit,
-            prevValue: prev?.profit || 0,
+            // `null` means the previous year filed no profit, so no arrow is
+            // drawn -- `|| 0` would have shown one against a zero that is not
+            // there.
+            prevValue: prev?.profit ?? null,
             format: 'currency' as const,
             icon: 'fa-chart-line',
+            inverse: false,
         },
         ...(hasBalanceSheet ? [
             {
                 label: 'Aktíva',
                 value: latest.assetsTotal,
-                prevValue: prev?.assetsTotal || 0,
+                prevValue: prev?.assetsTotal ?? null,
                 format: 'currency' as const,
                 icon: 'fa-building',
+                inverse: false,
             },
             {
                 label: 'Vlastný kapitál',
                 value: latest.equity,
-                prevValue: prev?.equity || 0,
+                prevValue: prev?.equity ?? null,
                 format: 'currency' as const,
                 icon: 'fa-shield-halved',
+                inverse: false,
             },
             {
                 label: 'Celková zadlženosť',
                 value: latest.debtRatio,
-                prevValue: prev?.debtRatio || 0,
+                prevValue: prev?.debtRatio ?? null,
                 format: 'percent' as const,
                 icon: 'fa-percent',
                 inverse: true,
@@ -76,17 +94,21 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
             {
                 label: 'Hrubá marža',
                 value: latest.grossMargin,
-                prevValue: prev?.grossMargin || 0,
+                prevValue: prev?.grossMargin ?? null,
                 format: 'percent' as const,
                 icon: 'fa-chart-bar',
+                inverse: false,
             },
         ] : []),
-        // Additional KPIs from analysis
+        // Additional KPIs from analysis. `prevValue: null`, not 0: these ratios
+        // are only computed for the year being looked at, and a zero here made
+        // `TrendArrow` print "nový" beside every one of them for any company
+        // with two filed years.
         ...(analysisRatios ? [
             {
                 label: 'ROA',
                 value: analysisRatios.roa,
-                prevValue: 0,
+                prevValue: null,
                 format: 'percent' as const,
                 icon: 'fa-chart-line',
                 inverse: false,
@@ -94,7 +116,7 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
             {
                 label: 'ROE',
                 value: analysisRatios.roe,
-                prevValue: 0,
+                prevValue: null,
                 format: 'percent' as const,
                 icon: 'fa-chart-pie',
                 inverse: false,
@@ -102,7 +124,7 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
             {
                 label: 'L3 Likvidita',
                 value: analysisRatios.currentRatio,
-                prevValue: 0,
+                prevValue: null,
                 format: 'ratio' as const,
                 icon: 'fa-droplet',
                 inverse: false,
