@@ -1744,3 +1744,58 @@ ID arrays it is not a join key but the content of a field a reader would
 eventually want on the page; it is small, and removing it would settle a product
 question (does the company page show accounts?) in a data-hygiene commit. The
 next person to touch this serializer should not have to re-measure it.
+
+## The court open data, read before trusting the note that described it
+
+Two sections of the company page carried a reason for not being built, and the
+user asked for the reasons to be checked rather than assumed: *"trebalo by
+zistit co je obsahom a ako je to dobre spracovane, aby nebol problem so
+spracovanim tych dat (napr nekonzistencia)"*. Both reasons were wrong. This is
+what replaces them, measured on 2026-09-12 against the live portal, the national
+catalogue's SPARQL endpoint, and two real bulk archives (385 KB and 47 MB) whose
+records were read field by field.
+
+**What we said and what is true.**
+
+| Our note said | Measured |
+|---|---|
+| "Bez API" (no API) | A public, unauthenticated, OpenAPI-documented REST API is live at `obcan.justice.sk/pilot/api/ress-isu-service/v3/api-docs` — `numFound` 4 690 793, newest decision issued 11. 9. 2026 |
+| "čerstvosť je nerovnomerná" (uneven freshness) | Worse and more specific: the **bulk files stop dead at 2024-05**, and the 7,58 GB aggregate has been frozen since 29. 4. 2019. It is the API that is current, not the files |
+| "bez príznaku «toto je platobný rozkaz» … klasifikácia textu" | `forma_rozhodnutia` is a faceted structured field. **Platobný rozkaz: 594 608** records, plus Zmenkový 11 997, Rozkaz na plnenie 1 157, Európsky 55, Šekový 3. One filtered call returns a named company's orders |
+
+The licence claim survived: **CC BY-SA 4.0**, confirmed through the catalogue's
+own terms resource (also `personalDataContainmentType = 2`, i.e. the catalogue
+flags the dataset as containing personal data). The portal page itself states no
+licence at all; the legal basis is vyhláška MS SR č. 482/2011 Z. z.
+
+**The processing problem is not the one we expected.** Both sections were
+blocked on a guess about text; they are actually blocked on *identity*. A
+decision record has **no IČO and no party field**. `predmet_konania` — the thing
+the case is about — exists only inside the full text. Matching a decision to a
+company therefore means full-text name matching, and a search for "Slovnaft"
+returns 4 472 hits including decisions that merely mention the company. For an
+application whose every other join is keyed on IČO, that is the whole difficulty:
+we could fill both sections tomorrow and every row would be a claim we cannot
+verify. That is the defect class this document exists to catalogue, so the
+sections stay empty and now say why.
+
+**Traps recorded so the next attempt does not pay for them again.** The bulk
+files and the API publish **two divergent schemas for the same dataset** — bulk
+in Slovak snake_case, API in camelCase — and nothing anywhere documents the
+correspondence. `datum_vydania_rozhodnutia` is local midnight rendered in UTC
+(`2022-06-01T22:00:00Z` for a decision whose own text says 02. 06. 2022), so
+naive parsing shifts every date back one day — the same defect class as Finding
+C in this repository. `nadpis_rozhodnutia` is empty in 100 % of records read, a
+dead field. `oblast_pravnej_upravy` is empty in 28–36 %. Eight records carry
+impossible dates, two of them before 1993. The API's date filters **silently
+no-op** when given dotted dates (`vydaniaOd=01.01.2020` returns all 4 690 793
+records rather than filtering), an invalid `sortProperty` returns HTTP 500, and
+the 2016–2018 archives are nested ZIPs while 2019+ are flat shards. The payloads
+themselves are clean UTF-8 with no mojibake — the one encoding defect found was
+on the ministry's index page, not in the data.
+
+**Left undone deliberately, and it is a product decision, not hygiene.** CC
+BY-SA 4.0 is share-alike, and the catalogue flags personal data; a commercial
+product that ingests either needs a licensing answer before an engineering one.
+That question is the user's, and it is recorded here rather than settled in a
+commit.

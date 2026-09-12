@@ -85,11 +85,11 @@ export const COMPANY_SECTIONS = [
     },
     {
         id: 'platobne-rozkazy', label: 'Platobné rozkazy', icon: 'fa-file-signature', group: 'Riziká a súdy', status: 'planned',
-        note: 'Sú v otvorených dátach, ale bez príznaku „toto je platobný rozkaz" — pomiešané v prúde súdnych rozhodnutí. Nebola by to integrácia, ale klasifikácia textu.',
+        note: 'Nie je to problém klasifikácie textu, ako sme si mysleli: rozhodnutia majú štruktúrované pole „forma rozhodnutia" a hodnotu „Platobný rozkaz" nesie 594 608 z nich. Blokuje niečo iné — rozhodnutie neobsahuje IČO ani účastníka, takže priradiť rozkaz firme sa dá len hľadaním mena v plnom texte a „Slovnaft" sa tak vráti 4 472-krát, aj ako zmienka. Kým sa to nevyrieši, sekcia by tvrdila príbuzenstvo, ktoré nevieme overiť.',
     },
     {
         id: 'sudne-rozhodnutia', label: 'Súdne rozhodnutia', icon: 'fa-gavel', group: 'Riziká a súdy', status: 'planned',
-        note: 'Otvorené dáta na obcan.justice.sk, licencia CC BY-SA 4.0. Bez API, najväčší súbor má ~7,6 GB a čerstvosť je nerovnomerná.',
+        note: 'Otvorené dáta MS SR pod licenciou CC BY-SA 4.0, s katalogizovaným príznakom, že obsahujú osobné údaje. Naša pôvodná poznámka „bez API" bola nesprávna — popri hromadných súboroch, ktoré sú zmrazené na máj 2024, beží nezverejnený REST API na obcan.justice.sk/pilot/api a je aktuálny k dnešnému dňu. Rovnaká prekážka ako pri platobných rozkazoch: chýba IČO a pole účastníka.',
     },
     {
         id: 'exekucie', label: 'Exekúcie', icon: 'fa-user-slash', group: 'Riziká a súdy', status: 'paid',
