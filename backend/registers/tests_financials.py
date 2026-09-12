@@ -13,6 +13,7 @@ from registers.services.ruz_financials_sync import (
     ANSWERED_RETRY_AFTER,
     FinancialsOutcome,
     RuzFinancialsSyncService,
+    clear_template_cache,
     sync_company_and_record,
 )
 from registers.services.sync_engine import update_company_status
@@ -116,7 +117,30 @@ class _ScriptedRuzApi:
         return self._answer(self.templates.get(template_id))
 
 
-class FinancialsOutcomeTests(TestCase):
+class TemplateCacheTestCase(TestCase):
+    """Base for every test here that scripts a report template.
+
+    `_get_template_tables` memoises templates in a module-level dict for the
+    life of the process, and `_ScriptedRuzApi` answers a template id with
+    whatever a *test* scripted under it. Two tests that script the same id
+    therefore share one answer: the first to run wins and the second reads a
+    template it never wrote -- silently, because a template that yields no
+    tables is not an error here, it is an empty list.
+
+    Cleared in `_pre_setup`, which Django calls before every test, and not in a
+    mixin's `setUp`: a subclass that defines its own `setUp` would skip a
+    mixin's without a word, and a guard against silent state has to hold
+    whether or not the next test remembers it exists. This is the same hook
+    Django uses for its own per-test setup, so it cannot be skipped by
+    accident. It costs one dict clear per test.
+    """
+
+    def _pre_setup(self):
+        super()._pre_setup()
+        clear_template_cache()
+
+
+class FinancialsOutcomeTests(TemplateCacheTestCase):
     """`rows=0` used to mean four different things. It now means one."""
 
     def setUp(self):
@@ -158,10 +182,14 @@ class FinancialsOutcomeTests(TestCase):
         # `profit_after_tax` survives `_extract_financials_from_reports`, the
         # write gate and `update_or_create(defaults=...)` to land in its column.
         #
-        # Šablóna 699, not 1: `_get_template_tables` memoises templates in a
-        # module-level dict for the life of the process, so a template id
+        # Šablóna 699, not 1, because `_get_template_tables` memoises templates
+        # in a module-level dict for the life of the process: a template id
         # another test has already fetched comes back as whatever that test
-        # scripted. The cache is keyed by id and never invalidated.
+        # scripted. That is no longer a hazard for the empty templates the rest
+        # of this file scripts -- an answer with no tables is not cached at all
+        # now -- but this one carries real rows, so it would be, and it keeps
+        # its own id. `TemplateCacheTestCase` clears the cache between tests
+        # for the same reason.
         service = self._service(
             detail={"idUctovnychZavierok": [77]},
             statements={77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88], "idSablony": 699}},
@@ -266,7 +294,7 @@ class FinancialsOutcomeTests(TestCase):
         self.assertEqual(result.detail, "")
 
 
-class NoStatementsReasonTests(TestCase):
+class NoStatementsReasonTests(TemplateCacheTestCase):
     """One sentence covered four different facts, and named the wrong one.
 
     Measured 2026-09-12 over the 79 companies the rotation answered with nothing:
@@ -539,7 +567,7 @@ class NoStatementsReasonTests(TestCase):
         self.assertEqual(row.liabilities_reserves, Decimal("50"))
 
 
-class SyncCompanyAndRecordTests(TestCase):
+class SyncCompanyAndRecordTests(TemplateCacheTestCase):
     """The single outcome -> CompanySyncStatus rule."""
 
     def setUp(self):
@@ -1029,3 +1057,105 @@ class RuzFinancialsSyncServiceTests(SimpleTestCase):
         }
 
         self.assertEqual(self.service._extract_with_template(table, template), {})
+
+
+class _CountingRuzApi(_ScriptedRuzApi):
+    """`_ScriptedRuzApi` that remembers which templates it was asked for.
+
+    The template cache is a module-level dict, so "did this read hit the cache"
+    is only visible from outside as "did the api get asked". Counting is
+    therefore not a proxy for the behaviour under test -- it *is* the
+    behaviour, and it needs no private name imported to observe it.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.template_ids = []
+
+    def get_report_template_details(self, template_id):
+        self.template_ids.append(template_id)
+        return super().get_report_template_details(template_id)
+
+
+class TemplateCacheTests(TemplateCacheTestCase):
+    """A template is remembered only once RUZ has answered with one."""
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=4821,
+            ico="48210000",
+            nazov_UJ="Šablóna s.r.o.",
+        )
+
+    def _company_with_two_reports_of_one_form(self, api):
+        """One statement carrying two reports that share a template id."""
+        api.detail = {"idUctovnychZavierok": [77]}
+        api.statements = {
+            77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88, 89]}
+        }
+        api.reports = {
+            88: {"idSablony": 7, "obsah": {"tabulky": [{"nazov": "Vynosy", "data": ["1000"]}]}},
+            89: {"idSablony": 7, "obsah": {"tabulky": [{"nazov": "Vynosy", "data": ["2000"]}]}},
+        }
+        return api
+
+    def test_a_template_that_answers_nothing_is_asked_again(self):
+        # The failed fetch must not become the remembered answer. `templates={}`
+        # makes the getter answer None -- one transport blip, or a form the
+        # registry has not got. Caching that pins "no tables" for this form for
+        # the life of the worker process: every later company using it reads
+        # nothing, and the run reports a clean success, because a statement
+        # whose tables yield nothing is a legitimate outcome. The api is asked
+        # once per report, and asked again next time.
+        api = self._company_with_two_reports_of_one_form(
+            _CountingRuzApi(detail=None, templates={})
+        )
+
+        RuzFinancialsSyncService(api=api).sync_company_detailed(self.company)
+
+        self.assertEqual(api.template_ids, [7, 7])
+
+    def test_a_template_with_no_tables_is_asked_again(self):
+        # The shape every scripted test in this file uses for its templates.
+        # An empty `tabulky` is also what a form with no rows looks like, so
+        # there is nothing here worth remembering either.
+        api = self._company_with_two_reports_of_one_form(
+            _CountingRuzApi(detail=None, templates={7: {"tabulky": []}})
+        )
+
+        RuzFinancialsSyncService(api=api).sync_company_detailed(self.company)
+
+        self.assertEqual(api.template_ids, [7, 7])
+
+    def test_two_reports_of_one_form_read_the_template_once(self):
+        # The other half of the contract, and the reason the cache exists: a
+        # company filing up to thirteen reports of the same form must not mean
+        # thirteen requests to a registry that times out. A fix that stopped
+        # caching anything would pass the two tests above and fail this one.
+        api = self._company_with_two_reports_of_one_form(
+            _CountingRuzApi(
+                detail=None, templates={7: {"tabulky": [{"nazov": "Vynosy"}]}}
+            )
+        )
+
+        RuzFinancialsSyncService(api=api).sync_company_detailed(self.company)
+
+        self.assertEqual(api.template_ids, [7])
+
+    def test_z_a_later_test_starts_from_an_empty_cache(self):
+        """Runs last in this class, after the test above cached template 7.
+
+        Template 7 is scripted here with *no* tables, and the previous test
+        scripted it with one. If the cache survived between tests, this read
+        returns the earlier test's tables and never asks the api -- which is
+        the leak, reproduced. Read through the private method rather than a
+        whole sync because the cache is the unit under test and a sync would
+        bury the distinction in a parsed row.
+
+        The name is sorted to run last on purpose; the assertion is about what
+        the *previous* test left behind, so it cannot be order-independent.
+        """
+        api = _CountingRuzApi(detail=None, templates={7: {"tabulky": []}})
+
+        self.assertEqual(RuzFinancialsSyncService(api=api)._get_template_tables(7), [])
+        self.assertEqual(api.template_ids, [7])

@@ -179,6 +179,22 @@ PL_EXTENDED_LABELS = {
 
 _template_cache: Dict[int, Dict] = {}
 
+
+def clear_template_cache() -> None:
+    """Forget every memoised report template. For tests, not for the sync.
+
+    Keyed by template id for the life of the process, which is right in
+    production: a form is the same form for every company, so a run reads each
+    one once instead of once per company. It is wrong inside a test run, where
+    a scripted api answers a template id with whatever the *current* test
+    wrote under it -- a second test then reads a template it never scripted,
+    and reads it silently, because a template that yields no tables is an
+    empty list rather than an error. Tests that script templates call this
+    from `_pre_setup`.
+    """
+    _template_cache.clear()
+
+
 # The templates name the two accounting periods in one of two vocabularies,
 # both read live from RUZ on 2026-09-12: the words ("Bezprostredne predchádzajúce
 # účtovné obdobie", šablóny 687 and 699) or the form's own placeholder pair
@@ -597,8 +613,18 @@ class RuzFinancialsSyncService:
             return []
         if template_id not in _template_cache:
             template = self.api.get_report_template_details(template_id) or {}
-            _template_cache[template_id] = template
-        return _template_cache[template_id].get("tabulky", []) or []
+            # Only a usable answer is worth remembering. This getter answers
+            # `None` for a fetch that failed as readily as for a form the
+            # registry has not got, and the cache is keyed by template id for
+            # the life of the process -- so caching the result unconditionally
+            # pinned "this form has no tables" for as long as the worker ran.
+            # Every later company filing it read nothing, and nothing said so:
+            # a statement whose tables yield no rows is a legitimate outcome,
+            # so the run still reported a clean success. An empty answer is
+            # left out of the cache and the next company retries the fetch.
+            if template.get("tabulky"):
+                _template_cache[template_id] = template
+        return _template_cache.get(template_id, {}).get("tabulky", []) or []
 
     def _extract_with_template(self, table: Dict, template_table: Optional[Dict]) -> Dict[str, Optional[Decimal]]:
         extracted: Dict[str, Optional[Decimal]] = {}
