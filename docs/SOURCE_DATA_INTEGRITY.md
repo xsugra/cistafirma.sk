@@ -1122,8 +1122,9 @@ but no longer unobserved.
 ### Four causes, one string
 
 Both companies above were reported the same way, as `NO_STATEMENTS` with the
-detail *"N statement(s) present, none readable"*. That string is reached at
-`ruz_financials_sync.py:232` whenever `upserts == 0`, and it is the same whether
+detail *"N statement(s) present, none readable"*. That string was reached at
+`ruz_financials_sync.py` `_read_company` whenever `upserts == 0`, and it was the
+same whether
 
 1. the report bodies carry **no tables at all** (`00179027`, and nine of the
    thirteen statements of `00699349`),
@@ -1141,16 +1142,40 @@ outside, which is why investigating this took two wrong turns before the reports
 themselves were read: an outcome that cannot say *why* it is empty invites the
 reader to supply a reason, and the first one supplied was wrong.
 
-Separating the four needs two counts the loop does not keep today — whether any
-report body carried a table at all, and whether any table carried a filled cell —
-alongside `upserts` and the gate's own skip count, which are already in hand.
-None of that changes what is written: the extraction entry point has a single
-production caller (`_read_company:211`), and the same instinct is already in the
-file, where a table *named* like a revenue that yields no total is worth a
-warning rather than silence. It matters here because the outcome is
+**Separated 2026-09-12.** The same sentence reaching all four was itself the
+defect, and it is now fixed: `_extract_financials_from_reports` returns an
+`ExtractionOutcome` carrying whether any report body had a table (`tables_seen`)
+and whether any table held a number this reader could have used (`filled_cells`,
+measured with `_to_decimal`, so a cell of prose is not a figure the parser lost),
+and `_read_company` splits `skipped` across the four causes. Nothing about what
+is *written* changed — the gate, the key vocabulary and the column rules are
+untouched — which is why the same four companies produce no stored result after
+the change as before it. What changed is that the sentence now names the cause,
+and each of the four was verified against the live registry:
+
+| cause | measured company | detail as of 2026-09-12 |
+|---|---|---|
+| no tables in the bodies | `00179027` | `7 statement(s) present, none recorded (7 with no tables in the report bodies)` |
+| template, every cell empty | `00199338` | `1 statement(s) present, none recorded (1 with tables but no filled cell)` |
+| values, no field | `00681393`, `00699349` | `13 statement(s) present, none recorded (4 carrying values that yielded no field, 9 with no tables in the report bodies)` |
+| read, then gated | `00591653` | `4 statement(s) present, none recorded (4 readable but carrying neither a revenue nor a profit)` |
+
+Three observations from that run are worth keeping. `00699349` and `00681393`
+were expected to be different cases and are the **same** one — the sentence
+sorted them correctly and the earlier expectation did not, which is the whole
+point of the change. The gate case no longer says "none readable" about
+statements that were read. And the accounting is per statement but reported per
+cause: `00699349`'s one line covers thirteen statements of two different kinds,
+which is why the reasons are listed rather than a single cause named.
+
+It matters that this travels in the detail because the outcome is
 `NO_STATEMENTS`, which counts as an answered sync and pushes the next attempt out
-by `ANSWERED_RETRY_AFTER`: the reason has to travel in the detail, because
-nothing else about the run survives.
+by `ANSWERED_RETRY_AFTER`: the reason has to ride along, since nothing else about
+the run survives — `sync_company_and_record` keeps the detail only for failures
+and `CompanySyncStatus.last_error` is therefore empty for every company in this
+section. The Celery task now logs it (`tasks.py`, `sync_company_financials_from_ruz`),
+which is where a scheduled run's reason is visible at all; storing it durably is
+a migration and a separate decision.
 
 ### The non-profit statement, measured
 
@@ -1190,6 +1215,14 @@ So the gap is one company: `00681393` (*Združenie saleziánov spolupracovníkov
 four statements on šablóna 1164. That is what "824 of the companies with stored
 results are non-profit" does *not* mean, and an earlier version of this section
 implied it did. The family is large; the gap inside it is not.
+
+Two notes on that table. The classification behind it is the measuring script's
+own, not the service's — as of 2026-09-12 the service counts the same four causes
+itself, so a re-measurement can read them off the run rather than re-deriving
+them. And `00699349` is **not** one of the 79: it already holds one stored result,
+so it sits in the population above this table (companies with stored results),
+which is exactly why its four unreadable statements were visible only by reading
+the reports themselves.
 
 **A correction to an earlier version of this section.** It reported that
 `00699349`'s reports "do carry tables, and the parser reads none of them",
