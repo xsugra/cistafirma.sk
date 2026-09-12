@@ -379,20 +379,21 @@ export function CompaniesBuilderPage() {
               <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80">
                 <Th>ICO</Th>
                 <Th>Názov</Th>
-                <Th>Mesto</Th>
-                <Th>PSČ</Th>
+                <Th>Sídlo</Th>
                 <Th>NACE</Th>
                 <Th>Stav</Th>
                 <Th>Dlhy</Th>
+                <Th>Tržby</Th>
+                <Th>Zisk</Th>
                 <Th>Score</Th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-400">Načítavam...</td></tr>
+                <tr><td colSpan={9} className="text-center py-12 text-slate-400">Načítavam...</td></tr>
               ) : companies.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center">
+                  <td colSpan={9} className="px-4 py-12 text-center">
                     <p className="text-slate-400">Žiadne výsledky</p>
                     {zeroDiagnosis.length > 0 ? (
                       <div className="mx-auto mt-4 max-w-2xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-left dark:border-amber-900/50 dark:bg-amber-900/20">
@@ -420,12 +421,47 @@ export function CompaniesBuilderPage() {
               ) : companies.map(company => (
                 <tr key={company.id} className="border-b border-slate-100 dark:border-slate-700/50">
                   <td className="px-4 py-3 font-mono text-xs text-blue-600 dark:text-blue-400">{company.ico}</td>
-                  <td className="px-4 py-3 font-medium text-slate-900 dark:text-white max-w-xs truncate">{company.nazov_UJ}</td>
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{company.mesto || '—'}</td>
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{company.psc || '—'}</td>
+                  <td className="px-4 py-3 font-medium text-slate-900 dark:text-white max-w-xs truncate">
+                    {company.nazov_UJ}
+                    {/* Two data-quality signals the row used to hide. A blocked
+                        source has stopped retrying; consecutive failures mean the
+                        figures beside it are older than they look. Both are
+                        reasons not to trust the row at a glance, so they sit on
+                        the name rather than in a column nobody scans. */}
+                    {company.is_blocked ? (
+                      <i
+                        className="fas fa-ban ml-1.5 text-[10px] text-red-500"
+                        title="Synchronizácia zdroja je pozastavená — údaje môžu byť neaktuálne"
+                      />
+                    ) : company.sync_failures > 0 ? (
+                      <i
+                        className="fas fa-exclamation-triangle ml-1.5 text-[10px] text-amber-500"
+                        title={`${company.sync_failures} neúspešných synchronizácií za sebou`}
+                      />
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{locationLabel(company.psc, company.mesto)}</td>
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{company.sk_NACE || '—'}</td>
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{company.datum_zrusenia ? 'Zrušená' : 'Aktívna'}</td>
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{company.debt_state === 'debt_free' ? 'Bez dlhov' : 'S dlhmi'}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{debtLabel(company.debt_state, company.tax_debt, company.debt_vszp, company.debt_soc_poist)}</td>
+                  {/* The year travels with the figure: a filing lags, and "12 345 €"
+                      from 2019 is a different proposition from the same number
+                      from 2025. */}
+                  <td className="px-4 py-3 text-right font-mono text-xs text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                    {money(company.latest_revenue)}
+                    {company.latest_financial_year != null && (
+                      <span className="ml-1 text-[10px] text-slate-400 dark:text-slate-500">{company.latest_financial_year}</span>
+                    )}
+                  </td>
+                  <td className={`px-4 py-3 text-right font-mono text-xs whitespace-nowrap ${
+                    company.latest_profit === null
+                      ? 'text-slate-400 dark:text-slate-500'
+                      : Number(company.latest_profit) < 0
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                  }`}>
+                    {money(company.latest_profit)}
+                  </td>
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{formatMaybeInt(company.lead_score)}</td>
                 </tr>
               ))}
@@ -718,16 +754,11 @@ function debtLabel(state: 'debt_free' | 'has_debt', taxDebt: string | null, debt
   return `Dlhy (${parts})`;
 }
 
-function profitLabel(value: string | null) {
-  if (value === null || value === undefined) return '—';
-  const n = Number(value);
-  if (Number.isNaN(n)) return value;
-  if (n > 0) return `Zisk ${formatNumber(n)}`;
-  if (n < 0) return `Strata ${formatNumber(Math.abs(n))}`;
-  return 'Na nule';
-}
-
-function money(value: string | number) {
+function money(value: string | number | null | undefined) {
+  // `Number(null)` is 0, so an unguarded `money` prints "0 €" for a company
+  // that filed no such line -- the same collapse `toAmountOrNull` exists to
+  // prevent elsewhere. An absent figure is a dash.
+  if (value === null || value === undefined || value === '') return '—';
   const n = Number(value);
   return Number.isNaN(n) ? String(value) : `${formatNumber(n)} €`;
 }

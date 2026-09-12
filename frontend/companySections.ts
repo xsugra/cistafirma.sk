@@ -149,6 +149,12 @@ export const STATUS_DOT: Record<SectionStatus, string> = {
     paid: 'bg-purple-500',
 };
 
+/** No section is marked `unreliable` today, and that is a judgement rather than
+ * an oversight: it means "we have the data and it is bad", which is a different
+ * claim from `partial` ("we have some of it"). Nothing currently earns it --
+ * each source either reads cleanly or is refused at the parser. The status is
+ * kept because the alternative, when a source does start lying, is to notice it
+ * and have nowhere to say so. */
 export const STATUS_LABEL: Record<SectionStatus, string> = {
     ready: 'Máme dáta',
     partial: 'Máme časť',
