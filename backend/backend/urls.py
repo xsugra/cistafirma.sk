@@ -37,11 +37,26 @@ def healthz(request):
     Returns HTTP 503 when a critical dependency is unreachable so that
     orchestrators (Docker healthchecks, K8s probes) treat a degraded app as
     unhealthy instead of reporting a healthy process against a dead datastore.
+
+    The body names *which* dependency is down and nothing more, unless the
+    caller is on a private or loopback address. It used to interpolate the
+    exception itself, and a Redis connection error's text carries the DSN it
+    failed to reach -- `redis://:password@host:6379/0`. No probe reads this
+    body; a human debugging a degraded stack reads the container log, where
+    `logger.exception` has already put the traceback. So the detail cost
+    nothing to withhold here and had a credential in it. In-cluster probes and
+    the Docker healthcheck both arrive from private addresses, so they keep the
+    full text; see `core.metrics.is_internal_client`.
     """
+    import logging
     import time
 
     from django.core.cache import cache
 
+    from core.metrics import is_internal_client
+
+    logger = logging.getLogger(__name__)
+    verbose = is_internal_client(request.META.get("REMOTE_ADDR"))
     status_code = 200
     health = {"status": "ok", "db": "unknown", "redis": "unknown"}
 
@@ -53,7 +68,8 @@ def healthz(request):
             cur.fetchone()
         health["db"] = "ok"
     except Exception as exc:
-        health["db"] = f"error: {exc}"
+        logger.exception("healthz: database check failed")
+        health["db"] = f"error: {exc}" if verbose else "error"
         status_code = 503
 
     try:
@@ -63,7 +79,8 @@ def healthz(request):
         cache.get("__healthz__")
         health["redis"] = f"ok ({time.monotonic() - start:.0f}ms)"
     except Exception as exc:
-        health["redis"] = f"error: {exc}"
+        logger.exception("healthz: redis check failed")
+        health["redis"] = f"error: {exc}" if verbose else "error"
         status_code = 503
 
     if status_code != 200:

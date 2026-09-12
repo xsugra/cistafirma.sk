@@ -157,6 +157,74 @@ class CompanyReportCacheTests(TestCase):
 		generate_report_mock.assert_called_once_with(self.company)
 
 
+class CompanyViewErrorDisclosureTests(TestCase):
+	"""A 500 must not hand the caller the exception's own text.
+
+	Both endpoints are AllowAny, so an unauthenticated caller reaches them and
+	an exception's message names tables, columns and file paths. The response
+	carries a sentence instead; the traceback goes to the log.
+	"""
+
+	def setUp(self):
+		self.company = Company.objects.create(
+			ruz_id=999005,
+			ico='12345681',
+			nazov_UJ='Error Disclosure Company',
+		)
+
+	@patch('companies.views.CompanyDetailSerializer')
+	def test_retrieve_keeps_the_exception_text_out_of_the_response(self, serializer_mock):
+		serializer_mock.side_effect = RuntimeError(
+			'relation "companies_secret_table" does not exist'
+		)
+
+		with self.assertLogs('companies.views', level='ERROR') as captured:
+			response = self.client.get(reverse('company-detail', args=[self.company.ico]))
+
+		self.assertEqual(response.status_code, 500)
+		body = response.content.decode()
+		self.assertNotIn('companies_secret_table', body)
+		self.assertNotIn('RuntimeError', body)
+		# Not discarded -- moved to the log, which is where it belongs.
+		self.assertIn('companies_secret_table', '\n'.join(captured.output))
+
+	@patch('companies.views.CompanyListSerializer')
+	def test_search_keeps_the_exception_text_out_of_the_response(self, serializer_mock):
+		serializer_mock.side_effect = RuntimeError(
+			'column companies_company.internal_note does not exist'
+		)
+
+		with self.assertLogs('companies.views', level='ERROR') as captured:
+			response = self.client.get(reverse('company-search'), {'q': 'Error Disclosure'})
+
+		self.assertEqual(response.status_code, 500)
+		body = response.content.decode()
+		self.assertNotIn('internal_note', body)
+		self.assertNotIn('RuntimeError', body)
+		self.assertIn('internal_note', '\n'.join(captured.output))
+
+	@patch('companies.views.get_company_report')
+	def test_report_keeps_the_exception_text_out_of_the_response(self, report_mock):
+		# The renderer wraps its own failure in a RuntimeError whose text *is*
+		# the underlying exception, so this endpoint used to answer an anonymous
+		# caller with the module path of a missing import, or with whatever
+		# weasyprint said.
+		report_mock.side_effect = RuntimeError(
+			'PDF generation failed: No module named weasyprint (secrets.py line 41)'
+		)
+
+		with self.assertLogs('companies.views', level='ERROR') as captured:
+			response = self.client.get(
+				reverse('company-report', args=[self.company.ico])
+			)
+
+		self.assertEqual(response.status_code, 500)
+		body = response.content.decode()
+		self.assertNotIn('weasyprint', body)
+		self.assertNotIn('secrets.py', body)
+		self.assertIn('secrets.py', '\n'.join(captured.output))
+
+
 class CompanyDetailSerializerProkuraTests(TestCase):
 	def setUp(self):
 		self.company = Company.objects.create(

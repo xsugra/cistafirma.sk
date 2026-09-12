@@ -123,9 +123,16 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
                 {"detail": "Firma s týmto IČO nebola nájdená v našej databáze."},
                 status=status.HTTP_404_NOT_FOUND
             )
-        except Exception as e:
-            logger.error(f"Error in retrieve: {str(e)}", exc_info=True)
-            return Response({"detail": str(e)}, status=500)
+        except Exception:
+            # The traceback goes to the log and nowhere else. This endpoint is
+            # public, and an exception's own text names tables, columns, file
+            # paths and library internals -- a 500 is not a reason to hand a
+            # reader the inside of the process.
+            logger.exception(f"Error in retrieve for ICO {ico}")
+            return Response(
+                {"detail": "Pri načítaní firmy došlo k chybe. Skúste to prosím znova."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=False, methods=['get'])
     def search(self, request):
@@ -149,9 +156,14 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             logger.info(f"Found {len(companies)} results for name search, serializing...")
             serializer = CompanyListSerializer(companies, many=True)
             return Response({"results": serializer.data})
-        except Exception as e:
-            logger.error(f"Error in search: {str(e)}", exc_info=True)
-            return Response({"detail": str(e)}, status=500)
+        except Exception:
+            # Same reason as `retrieve` above: the client gets a sentence, the
+            # log gets the traceback.
+            logger.exception(f"Error in search for {query!r}")
+            return Response(
+                {"detail": "Vyhľadávanie zlyhalo. Skúste to prosím znova."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=['get'], url_path='report')
     def report(self, request, ico=None):
@@ -167,10 +179,16 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
 
         try:
             pdf_bytes = get_company_report(company)
-        except Exception as e:
-            logger.error(f"PDF generation error for ICO {ico}: {e}", exc_info=True)
+        except Exception:
+            # Third site of the same shape as `retrieve` and `search` above, and
+            # the one that leaked the most: the renderer wraps its own failure in
+            # a `RuntimeError` whose text is the underlying exception, so this
+            # endpoint answered an anonymous caller with an ImportError's module
+            # path or a weasyprint traceback sentence. `CompanyViewSet` is
+            # AllowAny, so there was no login between the two.
+            logger.exception(f"PDF generation error for ICO {ico}")
             return Response(
-                {"detail": f"Nepodarilo sa vygenerovať PDF: {e}"},
+                {"detail": "Report sa nepodarilo vygenerovať. Skúste to prosím znova."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

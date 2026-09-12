@@ -1,4 +1,6 @@
 """Sync management endpoints: jobs, per-company status, focus mode, queues."""
+import logging
+
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -19,6 +21,8 @@ from registers.services.focus_mode import (
     exit_focus_mode,
     focus_mode_status,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
@@ -257,8 +261,15 @@ def queue_depths_view(request):
                     depths[q] = count
                 except Exception:
                     depths[q] = None
-    except Exception as exc:
-        return Response({"error": str(exc), "queues": depths}, status=status.HTTP_502_BAD_GATEWAY)
+    except Exception:
+        # A broker connection failure carries the connection URL in its own
+        # message, and REDIS_URL may embed a password -- so the detail goes to
+        # the log. The client is told which dependency is down, not its DSN.
+        logger.exception("queue_depths_view: could not reach the broker")
+        return Response(
+            {"error": "Nepodarilo sa spojiť s brokerom frontu.", "queues": depths},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
     return Response({"queues": depths})
 
 

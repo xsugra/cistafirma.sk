@@ -170,7 +170,14 @@ def record_request(method: str, path: str, status: int,
 
 
 # --- Endpoint access control -------------------------------------------------
-def _is_internal_client(remote_addr: str | None) -> bool:
+def is_internal_client(remote_addr: str | None) -> bool:
+    """Whether a request came from loopback, a private or a link-local address.
+
+    Public because it is the repo's answer to "may this caller be told what
+    broke" -- `/metrics` uses it to decide whether to exist, and `/healthz`
+    uses it to decide whether the body may name the exception behind a
+    degraded dependency. One place decides that, so the two cannot drift.
+    """
     if not remote_addr:
         return False
     try:
@@ -189,7 +196,7 @@ def _is_authorized(request) -> bool:
         if not header.startswith(prefix):
             return False
         return hmac.compare_digest(header[len(prefix):].strip(), token)
-    return _is_internal_client(request.META.get("REMOTE_ADDR"))
+    return is_internal_client(request.META.get("REMOTE_ADDR"))
 
 
 def metrics_view(request):
