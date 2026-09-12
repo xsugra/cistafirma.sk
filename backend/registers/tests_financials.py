@@ -15,6 +15,7 @@ from registers.services.ruz_financials_sync import (
     RuzFinancialsSyncService,
     sync_company_and_record,
 )
+from registers.services.sync_engine import update_company_status
 
 
 class RuzApiTransportErrorTests(SimpleTestCase):
@@ -271,10 +272,16 @@ class NoStatementsReasonTests(TestCase):
     def test_tables_carrying_values_that_yield_no_field_say_so(self):
         """The gap that is this code's doing, as opposed to the registry's.
 
-        `Majetok` is the measured shape: the table holds a figure, resolves its
-        column shape, and no key names the row -- so the parser loses a number
-        that was there. Only `filled_cells > 0` with an empty result separates
-        this from the two cases above.
+        A table with **no template at all** is not scanned for any label: the
+        report holds a figure and nothing reads it. Only `filled_cells > 0` with
+        an empty result separates this from the two cases above.
+
+        The `Majetok` name here is incidental -- this test does *not* exercise
+        the balance-sheet vocabulary, because `templates={1: {"tabulky": []}}`
+        means no template table is ever matched and `_extract_with_template`
+        returns immediately. (Before the vocabulary change the name made the
+        docstring read as evidence that `Majetok` was still unmapped, which it
+        no longer is -- see `test_a_majetok_table_is_read_as_a_balance_sheet`.)
         """
         result = self._service(
             **self._one_statement(
@@ -286,14 +293,15 @@ class NoStatementsReasonTests(TestCase):
         self.assertEqual(result.outcome, FinancialsOutcome.NO_STATEMENTS)
         self.assertIn("1 carrying values that yielded no field", result.detail)
 
-    def test_a_readable_statement_the_gate_discarded_is_not_called_unreadable(self):
+    def test_a_statement_carrying_only_a_balance_sheet_is_now_recorded(self):
         """The measured falsehood: `00591653` filed four balance sheets.
 
         The parser read assets and equity out of each of them and the write gate
-        dropped all four for carrying neither a revenue nor a profit. The old
-        sentence called those "none readable" -- untrue about the statements and
-        misleading about where to look, since the reason was this code's own
-        decision, not the registry's filing.
+        dropped all four for carrying neither a revenue nor a profit. Inkrement D
+        named that as this code's own decision rather than the registry's filing;
+        this is the increment that stopped making it. A balance sheet on its own
+        is now a row -- with `revenue` and `profit` left NULL rather than
+        invented, which is what the frontend's `—` renders.
         """
         template = {
             "tabulky": [
@@ -315,14 +323,174 @@ class NoStatementsReasonTests(TestCase):
             templates={555: template},
         ).sync_company_detailed(self.company)
 
+        self.assertEqual(result.outcome, FinancialsOutcome.RECORDED)
+        self.assertEqual(result.rows, 1)
+        self.assertEqual(result.detail, "", "nothing was skipped, so nothing to explain")
+
+        row = CompanyFinancialResult.objects.get(company=self.company, year=2023)
+        self.assertEqual(row.assets_total, Decimal("328"))
+        self.assertEqual(row.equity, Decimal("328"))
+        self.assertIsNone(row.revenue)
+        self.assertIsNone(row.profit)
+
+    def test_a_statement_whose_only_fields_are_details_is_still_gated(self):
+        """The gate keeps a witness: the headline fields, not "any field at all".
+
+        A row whose sole content is `assets_inventory` or `income_tax` is a
+        detail *of* a year's accounts, never a year on its own -- it would render
+        as a chart of zeros with one number in it, and answer `has_financials` =
+        true. Keeping the allow-list explicit is also what keeps this branch
+        reachable at all, and with it the only clause naming a decision this code
+        makes rather than a fact about the registry.
+        """
+        template = {
+            "tabulky": [
+                {
+                    "nazov": "Strana aktív",
+                    "pocetDatovychStlpcov": 1,
+                    "hlavicka": [],
+                    "riadky": [
+                        {"text": {"sk": "Zásoby súčet"}},
+                        {"text": {"sk": "Daň z príjmov"}},
+                    ],
+                }
+            ]
+        }
+        result = self._service(
+            **self._one_statement(
+                {"idSablony": 556, "obsah": {"tabulky": [{"nazov": "Strana aktív", "data": ["16", "3"]}]}}
+            ),
+            templates={556: template},
+        ).sync_company_detailed(self.company)
+
         self.assertEqual(result.outcome, FinancialsOutcome.NO_STATEMENTS)
-        self.assertIn("1 readable but carrying neither a revenue nor a profit", result.detail)
-        self.assertNotIn(
-            "none readable",
-            result.detail,
-            "the statement was read; the gate is what discarded it",
-        )
+        self.assertIn("1 readable but carrying none of a revenue", result.detail)
         self.assertFalse(CompanyFinancialResult.objects.exists())
+
+    def test_a_majetok_table_is_read_as_a_balance_sheet(self):
+        """The non-profit vocabulary: `Majetok` and `Záväzky` are the two sides.
+
+        Šablóna 1163/1164 names them that way instead of `Strana aktív` /
+        `Strana pasív`, so neither name reached `BALANCE_SHEET_KEYS` and the
+        whole balance-sheet block -- which is gated on `is_balance_sheet` -- was
+        skipped. Measured on `00681393`.
+        """
+        template = {
+            "tabulky": [
+                {
+                    "nazov": "Majetok",
+                    "pocetDatovychStlpcov": 2,
+                    "hlavicka": [
+                        {"text": {"sk": "Bežné účtovné obdobie"}, "riadok": 1, "stlpec": 1},
+                        {
+                            "text": {"sk": "Bezprostredne predchádzajúce účtovné obdobie"},
+                            "riadok": 1,
+                            "stlpec": 2,
+                        },
+                    ],
+                    "riadky": [
+                        {"text": {"sk": "Majetok spolu"}},
+                        {"text": {"sk": "Dlhodobý hmotný majetok súčet"}},
+                    ],
+                }
+            ]
+        }
+        result = self._service(
+            **self._one_statement(
+                {"idSablony": 557, "obsah": {"tabulky": [{"nazov": "Majetok", "data": ["500", "400", "300", "200"]}]}}
+            ),
+            templates={557: template},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.RECORDED)
+        row = CompanyFinancialResult.objects.get(company=self.company, year=2023)
+        self.assertEqual(row.assets_total, Decimal("500"))
+        self.assertEqual(row.assets_tangible, Decimal("300"))
+
+    def test_a_total_with_a_parenthetical_note_is_still_a_total(self):
+        """Šablóna 1164 writes its totals as `Majetok celkom (súčet r. 01 až r. 10)`.
+
+        Measured on `00681393` and `00699349` 2026-09-12, after the table names
+        were already recognised: read literally the remainder is
+        `(sucet r. 01 az r. 10)`, which is none of the accepted forms, so both
+        totals were dropped with their values sitting in the table. The
+        parenthesis is a note about how the row was arrived at, not part of the
+        label's identity.
+        """
+        template = {
+            "tabulky": [
+                {
+                    "nazov": "Majetok",
+                    "pocetDatovychStlpcov": 2,
+                    "hlavicka": [
+                        {"text": {"sk": "Bežné účtovné obdobie"}, "riadok": 1, "stlpec": 1},
+                        {
+                            "text": {"sk": "Bezprostredne predchádzajúce účtovné obdobie"},
+                            "riadok": 1,
+                            "stlpec": 2,
+                        },
+                    ],
+                    "riadky": [
+                        {"text": {"sk": "Peniaze"}},
+                        {"text": {"sk": "Majetok celkom (súčet r. 01 až r. 10)"}},
+                    ],
+                }
+            ]
+        }
+        result = self._service(
+            **self._one_statement(
+                {
+                    "idSablony": 560,
+                    "obsah": {
+                        "tabulky": [
+                            {
+                                "nazov": "Majetok",
+                                "data": ["", "", "25.88", "559.95"],
+                            }
+                        ]
+                    },
+                }
+            ),
+            templates={560: template},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.RECORDED)
+        row = CompanyFinancialResult.objects.get(company=self.company, year=2023)
+        self.assertEqual(row.assets_total, Decimal("25.88"))
+
+    def test_a_zavazky_table_reaches_its_total_through_the_celkom_form(self):
+        """`Záväzky celkom` needs its own entry: `_is_summary_row` is anchored.
+
+        The bare `zavazky` prefix matches the label but rejects the remainder
+        (`celkom` is neither empty nor `súčet`/`spolu`), and `celkom` is the form
+        this app uses everywhere else. It is why the dead `LIABILITIES_TOTAL_
+        LABELS` has always listed it -- the constant was written for this call
+        site and never wired to it.
+        """
+        template = {
+            "tabulky": [
+                {
+                    "nazov": "Záväzky",
+                    "pocetDatovychStlpcov": 1,
+                    "hlavicka": [],
+                    "riadky": [
+                        {"text": {"sk": "Záväzky celkom"}},
+                        {"text": {"sk": "Rezervy súčet"}},
+                    ],
+                }
+            ]
+        }
+        result = self._service(
+            **self._one_statement(
+                {"idSablony": 558, "obsah": {"tabulky": [{"nazov": "Záväzky", "data": ["700", "50"]}]}}
+            ),
+            templates={558: template},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.RECORDED)
+        row = CompanyFinancialResult.objects.get(company=self.company, year=2023)
+        self.assertEqual(row.liabilities_total, Decimal("700"))
+        self.assertEqual(row.liabilities_reserves, Decimal("50"))
 
 
 class SyncCompanyAndRecordTests(TestCase):
@@ -394,6 +562,94 @@ class SyncCompanyAndRecordTests(TestCase):
         result = self._run(detail=None, unreachable=True)
 
         self.assertEqual(result.outcome, FinancialsOutcome.UNREACHABLE)
+
+    def test_an_answered_attempt_keeps_its_sentence(self):
+        """The reason `last_detail` exists: `last_error` is blanked on success.
+
+        The population this is for is the one that *succeeded* -- the registry
+        answered, the statements were there, and none of them produced a row.
+        `error` is written only on failure, so that sentence used to survive only
+        in the task's log line, and `ANSWERED_RETRY_AFTER` pushes the next
+        attempt out a year. Nothing could recover it.
+        """
+        result = self._run(
+            detail={"idUctovnychZavierok": [77]},
+            statements={
+                77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88], "idSablony": 1}
+            },
+            reports={88: {"idSablony": 1, "obsah": {"tabulky": []}}},
+            templates={1: {"tabulky": []}},
+        )
+
+        self.assertTrue(result.succeeded)
+        status = self._status()
+        self.assertEqual(status.last_error, "", "an answered attempt has no error")
+        self.assertIn("1 statement(s) present, none recorded", status.last_detail)
+        self.assertIn("1 with no tables in the report bodies", status.last_detail)
+
+    def test_a_partly_readable_company_records_both_halves(self):
+        """A partly-readable company says how much was read, not only what was not.
+
+        One readable statement and one with no tables at all: the sentence has to
+        carry the count *and* the reason, which is what makes it worth storing.
+        (A company where nothing was skipped gets `detail=""` on purpose -- there
+        is no silent branch to report.)
+        """
+        template = {
+            "tabulky": [
+                {
+                    "nazov": "Výnosy",
+                    "pocetDatovychStlpcov": 1,
+                    "hlavicka": [],
+                    "riadky": [
+                        {"text": {"sk": "Výnosy z hospodárskej činnosti spolu súčet"}},
+                    ],
+                }
+            ]
+        }
+        result = self._run(
+            detail={"idUctovnychZavierok": [77, 78]},
+            statements={
+                77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88], "idSablony": 559},
+                78: {"obdobieDo": "2022-12-31", "idUctovnychVykazov": [89], "idSablony": 559},
+            },
+            reports={
+                88: {
+                    "idSablony": 559,
+                    "obsah": {"tabulky": [{"nazov": "Výnosy", "data": ["1200"]}]},
+                },
+                89: {"idSablony": 559, "obsah": {"tabulky": []}},
+            },
+            templates={559: template},
+        )
+
+        self.assertEqual(result.outcome, FinancialsOutcome.RECORDED)
+        status = self._status()
+        self.assertEqual(status.last_error, "")
+        self.assertIn("1 of 2 statement(s) readable", status.last_detail)
+        self.assertIn("1 with no tables in the report bodies", status.last_detail)
+
+    def test_a_caller_with_nothing_to_say_leaves_the_column_alone(self):
+        """`detail=None` means "nothing to say", not "the reason is empty".
+
+        That distinction is the whole reason the parameter defaults to `None`
+        rather than `""`: the four sources that pass nothing (ORSR, VZP,
+        Sociálna poisťovňa, RUZ dates) would otherwise blank a sentence they
+        never had an opinion about. Asserted on the *same* row, because two
+        sources are two rows and comparing across them would pass regardless.
+        """
+        common = dict(company_id=self.company.id, source=CompanySyncStatus.SOURCE_FINANCIALS)
+
+        update_company_status(**common, success=True, detail="1 statement(s) present")
+        self.assertEqual(self._status().last_detail, "1 statement(s) present")
+
+        update_company_status(**common, success=True)
+
+        self.assertEqual(
+            self._status().last_detail,
+            "1 statement(s) present",
+            "a caller that said nothing must not erase what one that spoke left",
+        )
 
 
 def _income_statement_header():

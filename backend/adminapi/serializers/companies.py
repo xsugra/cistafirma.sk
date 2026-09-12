@@ -127,6 +127,7 @@ class _SyncStatusMiniSerializer(serializers.ModelSerializer):
             "last_succeeded_at",
             "consecutive_failures",
             "last_error_type",
+            "last_detail",
             "is_blocked",
             "next_retry_at",
         ]

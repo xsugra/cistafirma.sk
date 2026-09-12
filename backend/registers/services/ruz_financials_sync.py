@@ -81,7 +81,30 @@ class ExtractionOutcome(NamedTuple):
     filled_cells: int
 
 
-BALANCE_SHEET_KEYS = ("suvaha", "bilancia", "balance sheet", "strana aktiv", "strana pasiv", "assets", "liabilities")
+_TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)\s*$")
+
+BALANCE_SHEET_KEYS = (
+    "suvaha",
+    "bilancia",
+    "balance sheet",
+    "strana aktiv",
+    "strana pasiv",
+    "assets",
+    "liabilities",
+    # The non-profit / municipal statement (šablóna 1163/1164, measured on
+    # `00681393` 2026-09-12) names its two sides `Majetok` and `Záväzky` instead
+    # of `Strana aktív` / `Strana pasív`. Both tables resolve their column shape
+    # and yielded nothing, because neither name reached this tuple and the whole
+    # balance-sheet block below is gated on `is_balance_sheet`.
+    #
+    # `zavazky` also prefixes note tables such as "Záväzky po lehote
+    # splatnosti", which now enter that block; `_is_summary_row`'s anchoring is
+    # what keeps them from producing a total (its remainder is neither empty nor
+    # `sucet`/`spolu`). Same mechanism the existing `assets` / `liabilities`
+    # keys already rely on.
+    "majetok",
+    "zavazky",
+)
 
 ASSETS_LABELS = {
     "dlhodoby nehmotny majetok sucet": "assets_intangible",
@@ -98,7 +121,14 @@ ASSETS_LABELS = {
     "krabezny financny majetok": "assets_financial_accounts",
 }
 
-ASSETS_TOTAL_LABELS = ("majetok spolu", "aktiva celkom", "spolu majetok")
+# The three totals, as prefixes for `_is_summary_row`, which anchors at the
+# start of the label and then accepts an empty remainder or `r.` / `sucet` /
+# `spolu`. "Majetok celkom" and "Záväzky celkom" therefore need their own entry:
+# the bare `zavazky` prefix cannot match a `celkom` remainder, and `celkom` is
+# the form this app uses everywhere else (`frontend/utils/pdfExport.ts`,
+# `components/company/LiabilitiesPieChart.tsx`) -- which is why
+# `LIABILITIES_TOTAL_LABELS` has always listed it.
+ASSETS_TOTAL_LABELS = ("majetok spolu", "aktiva celkom", "spolu majetok", "majetok celkom")
 
 LIABILITIES_LABELS = {
     "zakladne imanie sucet": "equity_basic",
@@ -117,8 +147,30 @@ LIABILITIES_LABELS = {
     "kratkodobe zavazky spolu": "liabilities_short",
 }
 
-EQUITY_TOTAL_LABELS = ("vlastne imanie sucet", "vlastne imanie spolu", "vlastny kapital")
-LIABILITIES_TOTAL_LABELS = ("cudzie zdroje", "zavazky celkom", "cudzie zdroje spolu")
+# Bare prefixes, not the full labels: `_is_summary_row` already accepts the
+# `sucet` and `spolu` remainders, so "vlastne imanie" covers "Vlastné imanie",
+# "Vlastné imanie súčet" and "Vlastné imanie spolu" at once.
+EQUITY_TOTAL_LABELS = ("vlastne imanie", "vlastny kapital")
+LIABILITIES_TOTAL_LABELS = ("zavazky", "cudzie zdroje", "zavazky celkom")
+
+# Which fields make a statement worth a row: the five headline aggregates.
+# Explicit rather than "any mapped field", and the difference is not academic.
+# `financials` only ever receives non-`None` values, so a gate of "anything at
+# all" would store a row whose sole content is `income_tax` or `added_value` --
+# details *of* a year's accounts, never a year on their own. Such a row renders
+# as a chart of zeros with one number in it, and it answers `has_financials` =
+# true. It would also make the `gated` counter in `_read_company` unreachable,
+# deleting the only clause that names a decision this code makes rather than a
+# fact about the registry. `costs` and `total_revenue` are deliberately out: a
+# statement whose "Náklady" total resolves while "Výnosy" does not is a
+# fragment, and the gate has always discarded it.
+STATEMENT_HEADLINE_FIELDS = (
+    "revenue",
+    "profit",
+    "assets_total",
+    "equity",
+    "liabilities_total",
+)
 
 PL_EXTENDED_LABELS = {
     "pridana hodnota": "added_value",
@@ -217,7 +269,7 @@ class RuzFinancialsSyncService:
         no_tables = 0      # the report bodies carry no tables
         empty_tables = 0   # tables exist and hold no number
         unmapped = 0       # tables hold numbers, and no key or column rule reads them
-        gated = 0          # read fine, discarded for carrying neither revenue nor profit
+        gated = 0          # read fine, discarded for carrying no headline figure
         found_ifrs = False
         for statement_id in statement_ids[:max_statements]:
             statement = self.api.get_financial_statement_details(statement_id)
@@ -239,7 +291,10 @@ class RuzFinancialsSyncService:
             if extraction.is_ifrs:
                 found_ifrs = True
             financials = extraction.financials
-            if financials.get("revenue") is None and financials.get("profit") is None:
+            if not any(
+                financials.get(field) is not None
+                for field in STATEMENT_HEADLINE_FIELDS
+            ):
                 if extraction.tables_seen == 0:
                     no_tables += 1
                 elif extraction.filled_cells == 0:
@@ -324,7 +379,10 @@ class RuzFinancialsSyncService:
         """
         clauses = []
         if gated:
-            clauses.append(f"{gated} readable but carrying neither a revenue nor a profit")
+            clauses.append(
+                f"{gated} readable but carrying none of a revenue, a profit "
+                f"or a balance-sheet total"
+            )
         if unmapped:
             clauses.append(f"{unmapped} carrying values that yielded no field")
         if empty_tables:
@@ -588,8 +646,18 @@ class RuzFinancialsSyncService:
         )
         is_balance_sheet = any(k in table_name for k in BALANCE_SHEET_KEYS) if table_name else False
 
-        is_assets_table = any(k in table_name for k in ("strana aktiv", "assets")) if table_name else False
-        is_liabilities_table = any(k in table_name for k in ("strana pasiv", "liabilities")) if table_name else False
+        # `in_liabilities_section` starts the row loop on the right side. The
+        # per-row check further down corrects it, but only once it has seen a
+        # row containing `zavazky` -- so a `Záväzky` table whose first row is
+        # `Rezervy súčet` would read that row as an asset. The blast radius is
+        # bounded (`ASSETS_LABELS` and `LIABILITIES_LABELS` are disjoint, so a
+        # wrong flag yields no field rather than a wrong one), but the flag
+        # should still be right.
+        is_liabilities_table = (
+            any(k in table_name for k in ("strana pasiv", "liabilities", "zavazky"))
+            if table_name
+            else False
+        )
 
         in_liabilities_section = is_liabilities_table
 
@@ -600,6 +668,21 @@ class RuzFinancialsSyncService:
             value = get_row_value(idx)
 
             # P&L extraction (revenue, cost, profit)
+            #
+            # Note what is absent: `Príjmy` and `Výdavky`, the non-profit and
+            # municipal statement's two sides. They are *not* mapped to
+            # `revenue`/`costs`, and that is a decision rather than an oversight
+            # (docs/SOURCE_DATA_INTEGRITY.md). A municipality's grant income is
+            # not a company's turnover, and `revenue` is a denominator across
+            # this codebase -- the sector benchmark's median revenue and gross
+            # margin, `latest_revenue`, the admin's "Má tržby" facet, the lead
+            # score's growth points. One village in a NACE section would move
+            # that section's benchmark for every ordinary firm in it.
+            #
+            # Mapping them would also require *guessing*: `Príjmy`/`Výdavky`
+            # carry no readable data-column shape, so `_current_period_column`
+            # refuses before any vocabulary question is asked -- the same
+            # refusal, for the same reason, as the four-column asset side.
             if ("vynosy z hospodarskej cinnosti spolu" in row_label) or ("trzby z predaja" in row_label and "revenue" not in extracted):
                 if value is not None:
                     extracted["revenue"] = self._pick_better(extracted.get("revenue"), value)
@@ -644,17 +727,17 @@ class RuzFinancialsSyncService:
             if any(k in row_label for k in ("vlastne imanie", "vlastny kapital", "pasiva", "zavazky")):
                 in_liabilities_section = True
 
-            if self._is_summary_row(row_label, ("spolu majetok", "aktiva celkom", "majetok spolu")):
+            if self._is_summary_row(row_label, ASSETS_TOTAL_LABELS):
                 if value is not None:
                     extracted["assets_total"] = self._pick_better(extracted.get("assets_total"), value)
                 continue
 
-            if self._is_summary_row(row_label, ("vlastne imanie", "vlastny kapital")):
+            if self._is_summary_row(row_label, EQUITY_TOTAL_LABELS):
                 if value is not None:
                     extracted["equity"] = self._pick_better(extracted.get("equity"), value)
                 continue
 
-            if self._is_summary_row(row_label, ("zavazky", "cudzie zdroje")):
+            if self._is_summary_row(row_label, LIABILITIES_TOTAL_LABELS):
                 if value is not None:
                     extracted["liabilities_total"] = self._pick_better(extracted.get("liabilities_total"), value)
                 continue
@@ -683,6 +766,23 @@ class RuzFinancialsSyncService:
         return extracted
 
     def _is_summary_row(self, label: str, prefixes: tuple) -> bool:
+        """Whether a normalised row label is the total for one of `prefixes`.
+
+        A trailing parenthetical is dropped first, and that is the whole reason
+        the non-profit totals were being lost. Šablóna 1164 writes its totals as
+        `Majetok celkom (súčet r. 01 až r. 10)` and
+        `Záväzky celkom (súčet r. 12 a r.15)`: the parenthesis is a note about
+        how the row was arrived at, so the label's identity is everything before
+        it. Read literally the remainder is `(sucet r. 01 az r. 10)`, which is
+        none of the accepted forms, so both totals were discarded with their
+        values sitting in the table -- measured on `00681393` and `00699349`
+        2026-09-12, after the table names themselves were already recognised.
+
+        Only this predicate strips it. The `ASSETS_LABELS` / `LIABILITIES_LABELS`
+        lookups below still match against the full label, so a note row cannot
+        start producing a line item.
+        """
+        label = _TRAILING_PARENTHETICAL.sub("", label).strip()
         for prefix in prefixes:
             if not label.startswith(prefix):
                 continue
@@ -832,5 +932,9 @@ def sync_company_and_record(
         error="" if result.succeeded else result.detail,
         error_type="" if result.succeeded else "network",
         retry_after=ANSWERED_RETRY_AFTER if result.succeeded else None,
+        # On **both** branches. The answered path is the one that needs it:
+        # `error` is blanked there, so this is the only place the sentence
+        # survives past the task's log line.
+        detail=result.detail,
     )
     return result

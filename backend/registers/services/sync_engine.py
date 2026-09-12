@@ -113,6 +113,7 @@ def update_company_status(
     error: str = "",
     error_type: str = "",
     retry_after: timedelta | None = None,
+    detail: str | None = None,
 ) -> CompanySyncStatus:
     """Upsert the per-company, per-source status after a sync attempt.
 
@@ -124,6 +125,14 @@ def update_company_status(
 
     A failure ignores it: how long to wait after a failure is
     `compute_next_retry`'s decision, and it is backoff, not a fixed delay.
+
+    `detail` is the attempt's own sentence, and is written on success too --
+    which `error` never is, because a successful attempt blanks it. `None`
+    means "this caller has nothing to say about the reason", which is not the
+    same as "the reason is empty": the four sources that pass nothing (ORSR,
+    VZP, Sociálna poisťovňa, RUZ dates) leave the column at whatever the last
+    caller that did pass one wrote. They are different `source` rows, so
+    nothing is overwritten.
     """
     now = timezone.now()
     with transaction.atomic():
@@ -143,6 +152,8 @@ def update_company_status(
             status.last_error = (error or "")[:4000]
             status.last_error_type = error_type or "unknown"
             status.next_retry_at = compute_next_retry(status.consecutive_failures)
+        if detail is not None:
+            status.last_detail = detail[:4000]
         status.save()
     return status
 

@@ -543,6 +543,16 @@ class CompanySyncStatus(models.Model):
         default="",
         verbose_name="Typ chyby",
     )
+    # What the last attempt had to say about itself, on an *answered* attempt --
+    # where `last_error` is empty by construction, because an answered attempt is
+    # a success (`FinancialsSyncResult.succeeded`). Without it a company whose
+    # statements were present and none of them recordable keeps nothing at all:
+    # the result's `detail` is logged and dropped, and `ANSWERED_RETRY_AFTER`
+    # pushes the next attempt out a year, so no later run can recover it either
+    # (docs/SOURCE_DATA_INTEGRITY.md, "Four causes, one string").
+    last_detail = models.TextField(
+        blank=True, default="", verbose_name="Detail posledného pokusu"
+    )
 
     consecutive_failures = models.PositiveIntegerField(default=0, verbose_name="Po sebe idúce chyby")
     next_retry_at = models.DateTimeField(null=True, blank=True, verbose_name="Ďalší pokus o")

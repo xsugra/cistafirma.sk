@@ -158,6 +158,13 @@ class CompanySyncStatusViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(consecutive_failures__gt=0)
         if params.get("blocked") in ("1", "true", "True"):
             qs = qs.filter(is_blocked=True)
+        if params.get("has_detail") in ("1", "true", "True"):
+            # The default ordering sorts by `-consecutive_failures`, which puts
+            # exactly the companies that *have* something to say at the bottom:
+            # a company whose statements were read and none recorded is an
+            # answered attempt, so its failure count is 0. Without this filter
+            # the field is reachable only by paging to the end.
+            qs = qs.exclude(last_detail="")
         return qs.order_by("-consecutive_failures", "-last_attempted_at")
 
     @action(detail=True, methods=["post"])

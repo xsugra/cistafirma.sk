@@ -9,6 +9,16 @@ from .services.financial_analysis import FinancialAnalysisService
 from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
 
 
+def _amount(value):
+    """A stored figure as a float, or `None` when the statement lacks it.
+
+    `float(value or 0)` is the collapse this exists to undo: it makes an absent
+    line and a zero line the same value, and a balance sheet stored without an
+    income statement is a normal row now, not a corner case.
+    """
+    return None if value is None else float(value)
+
+
 class CompanyListSerializer(serializers.ModelSerializer):
     legal_form_short = serializers.CharField(source='get_legal_form_short', read_only=True)
 
@@ -58,51 +68,67 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def get_financials(self, obj):
+        """Year rows with absent figures as `None`, never as 0.
+
+        Every field used to be `float(r.X or 0)`, which made "the statement did
+        not carry this line" and "the line reads zero" the same value. They are
+        not the same fact, and the difference is now common rather than rare: the
+        write gate stores a balance sheet on its own, so a row may legitimately
+        have `revenue` and `profit` unset. `None` is the only representation that
+        survives to the screen as `—` instead of `0 €`.
+
+        The two ratios keep their own guards -- dividing by an absent total is
+        still not a division, whatever the numerator.
+        """
         results = obj.financial_results.all().order_by('year')
         out = []
         for r in results:
-            assets_total = float(r.assets_total or 0)
-            liabilities_total = float(r.liabilities_total or 0)
-            liabilities_accruals = float(r.liabilities_accruals or 0)
-            revenue = float(r.revenue or 0)
-            added_value = float(r.added_value or 0)
+            revenue = _amount(r.revenue)
+            added_value = _amount(r.added_value)
+            assets_total = _amount(r.assets_total)
+            liabilities_total = _amount(r.liabilities_total)
+            liabilities_accruals = _amount(r.liabilities_accruals)
 
             debt_ratio = None
             if assets_total:
-                debt_ratio = round((liabilities_total + liabilities_accruals) / assets_total * 100, 2)
+                debt_ratio = round(
+                    ((liabilities_total or 0) + (liabilities_accruals or 0))
+                    / assets_total * 100,
+                    2,
+                )
 
             gross_margin = None
             if revenue:
-                gross_margin = round(added_value / revenue * 100, 2)
+                gross_margin = round((added_value or 0) / revenue * 100, 2)
 
             out.append({
                 'year': r.year,
                 'revenue': revenue,
-                'profit': float(r.profit or 0),
-                'totalRevenue': float(r.total_revenue or 0),
-                'costs': float(r.costs or 0),
-                'incomeTax': float(r.income_tax or 0),
-                'incomeTaxPaid': float(r.income_tax_paid or 0),
+                'profit': _amount(r.profit),
+                'totalRevenue': _amount(r.total_revenue),
+                'costs': _amount(r.costs),
+                'incomeTax': _amount(r.income_tax),
+                'incomeTaxPaid': _amount(r.income_tax_paid),
                 'assetsTotal': assets_total,
-                'assetsIntangible': float(r.assets_intangible or 0),
-                'assetsTangible': float(r.assets_tangible or 0),
-                'assetsFinancial': float(r.assets_financial or 0),
-                'assetsInventory': float(r.assets_inventory or 0),
-                'assetsReceivablesLong': float(r.assets_receivables_long or 0),
-                'assetsReceivablesShort': float(r.assets_receivables_short or 0),
-                'assetsFinancialAccounts': float(r.assets_financial_accounts or 0),
-                'assetsAccruals': float(r.assets_accruals or 0),
-                'equity': float(r.equity or 0),
-                'equityBasic': float(r.equity_basic or 0),
-                'equityCapitalFunds': float(r.equity_capital_funds or 0),
-                'equityProfitFunds': float(r.equity_profit_funds or 0),
-                'equityRetained': float(r.equity_retained or 0),
+                'assetsIntangible': _amount(r.assets_intangible),
+                'assetsTangible': _amount(r.assets_tangible),
+                'assetsFinancial': _amount(r.assets_financial),
+                'assetsInventory': _amount(r.assets_inventory),
+                'assetsReceivablesLong': _amount(r.assets_receivables_long),
+                'assetsReceivablesShort': _amount(r.assets_receivables_short),
+                'assetsFinancialAccounts': _amount(r.assets_financial_accounts),
+                'assetsAccruals': _amount(r.assets_accruals),
+                'equity': _amount(r.equity),
+                'equityBasic': _amount(r.equity_basic),
+                'equityCapitalFunds': _amount(r.equity_capital_funds),
+                'equityProfitFunds': _amount(r.equity_profit_funds),
+                'equityRetained': _amount(r.equity_retained),
                 'liabilitiesTotal': liabilities_total,
-                'liabilitiesReserves': float(r.liabilities_reserves or 0),
-                'liabilitiesLong': float(r.liabilities_long or 0),
-                'liabilitiesShort': float(r.liabilities_short or 0),
+                'liabilitiesReserves': _amount(r.liabilities_reserves),
+                'liabilitiesLong': _amount(r.liabilities_long),
+                'liabilitiesShort': _amount(r.liabilities_short),
                 'liabilitiesAccruals': liabilities_accruals,
-                'addedValue': float(r.added_value or 0),
+                'addedValue': added_value,
                 'debtRatio': debt_ratio,
                 'grossMargin': gross_margin,
             })

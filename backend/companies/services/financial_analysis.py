@@ -157,8 +157,24 @@ class FinancialAnalysisService:
         assets_total = _safe_float(fr.assets_total)
         equity = _safe_float(fr.equity)
         total_revenue = _safe_float(fr.total_revenue)
-        revenue = _safe_float(fr.revenue)
         added_value = _safe_float(fr.added_value)
+
+        # `_safe_float` maps an absent figure to 0.0, which is right for an
+        # arithmetic term and wrong for a *ratio*: a company whose statement
+        # carries a balance sheet and no income statement has no ROA, it does
+        # not have an ROA of zero. Such a row is now reachable -- the write gate
+        # in `ruz_financials_sync` accepts a balance sheet on its own -- so the
+        # difference between "zero" and "not filed" is the whole point.
+        #
+        # Unguarded, `0/328` becomes `roa=0.0` and `_interpret` files it as a
+        # `warning`; `debt_to_equity` becomes `0.0` and is filed as `good`, i.e.
+        # "no debt" because liabilities were never read rather than because
+        # there are none. Both are then *displayed* -- the PDF omits a `None`
+        # ratio and prints the badge beside a real one.
+        has_income = any(
+            getattr(fr, name) is not None
+            for name in ("revenue", "profit", "total_revenue", "costs")
+        )
 
         # Assets detail
         inventory = _safe_float(fr.assets_inventory)
@@ -177,17 +193,21 @@ class FinancialAnalysisService:
 
         # --- ratios ---
         ratios = RatioSet(
-            roa=_ratio(profit, assets_total),
-            roe=_ratio(profit, equity),
+            roa=_ratio(profit, assets_total) if has_income else None,
+            roe=_ratio(profit, equity) if has_income else None,
             ros=_ratio(profit, total_revenue),
             current_ratio=_simple_ratio(current_assets, liabilities_short),
             quick_ratio=_simple_ratio(receivables_short + financial_accounts, liabilities_short),
             cash_ratio=_simple_ratio(financial_accounts, liabilities_short),
-            asset_turnover=_simple_ratio(total_revenue, assets_total),
+            asset_turnover=_simple_ratio(total_revenue, assets_total) if has_income else None,
             receivables_collection=_simple_ratio(
                 receivables_short / max(total_revenue, 1) * 365, 1
             ) if total_revenue else None,
-            debt_to_equity=_simple_ratio(liabilities_total, equity),
+            # Guarded on the balance-sheet lines themselves, not on `has_income`:
+            # this one is fabricated by an absent *liability* figure.
+            debt_to_equity=_simple_ratio(liabilities_total, equity)
+            if fr.liabilities_total is not None and fr.equity is not None
+            else None,
             self_financing_ratio=_ratio(equity, assets_total),
         )
 
@@ -208,14 +228,34 @@ class FinancialAnalysisService:
         # X3 = profit (EBIT approx) / assets_total
         # X4 = equity / liabilities_total
         # X5 = total_revenue / assets_total
+        #
+        # X3 and X5 are guarded on their inputs being *measured*, because a
+        # `_safe_float` zero here is not a zero: a company that filed a balance
+        # sheet and no income statement would otherwise be scored with
+        # `x3 = x5 = 0` and labelled `Pásmo bankrotu` -- a bankruptcy verdict
+        # printed into the PDF, from a figure nobody read. The two are what the
+        # relaxed write gate stopped guaranteeing. X5 falls back to `revenue`
+        # when `total_revenue` is unset, because a P&L that resolved the
+        # operating-revenue line without the financial-revenue line is a real and
+        # common shape, and refusing there would remove scores that are sound.
+        #
+        # X1, X2 and X4 still read an absent component as 0, as they always have.
+        # That understates rather than fabricates, and tightening it belongs to
+        # whoever revisits the formula -- it is not a consequence of this gate.
         z_score = None
         z_score_label = None
-        if assets_total > 0 and liabilities_total > 0:
+        z_revenue = fr.total_revenue if fr.total_revenue is not None else fr.revenue
+        if (
+            assets_total > 0
+            and liabilities_total > 0
+            and fr.profit is not None
+            and z_revenue is not None
+        ):
             x1 = working_capital / assets_total
             x2 = equity_retained / assets_total
             x3 = profit / assets_total
             x4 = equity / liabilities_total
-            x5 = total_revenue / assets_total
+            x5 = float(z_revenue) / assets_total
 
             z_score = round(
                 0.717 * x1 + 0.847 * x2 + 3.107 * x3 + 0.420 * x4 + 0.998 * x5,

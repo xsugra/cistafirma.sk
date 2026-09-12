@@ -256,7 +256,12 @@ class LeadScoringService:
                         breakdown['revenue_trend'] = 'declining'
                         decline = ((prev_rev - latest_rev) / prev_rev) * 100
                         breakdown['details'].append(f'Revenue declining: -{decline:.1f}% YoY')
-            elif len(financials) == 1:
+            elif len(financials) == 1 and financials[0].revenue:
+                # `financials[0].revenue` and not just the row count: a company
+                # whose only readable statement is a balance sheet has a stored
+                # year and no revenue at all, and this branch used to hand it
+                # five points for "Revenue data available (single year)" -- a
+                # sentence that was simply false about it.
                 breakdown['revenue_trend'] = 'single_year'
                 points += 5
                 breakdown['details'].append('Revenue data available (single year)')
