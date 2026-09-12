@@ -26,6 +26,8 @@ const company = {
     address: {street: 'Hlavná 1', city: 'Bratislava'},
     registrationDate: '2010-01-01',
     lastUpdatedFromSource: '2026-01-01T00:00:00Z',
+    insuranceCheckedOn: '2026-01-01T00:00:00Z',
+    taxCheckedOn: '2026-01-01T00:00:00Z',
     orsr_profile: null,
     financials: [],
     analysis: null,

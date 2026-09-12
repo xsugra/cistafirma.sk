@@ -15,6 +15,8 @@ export const mockCompanyData: Company = {
     country: 'Slovenská republika',
   },
   lastUpdatedFromSource: new Date().toISOString(),
+  insuranceCheckedOn: '2026-09-10T00:00:00Z',
+  taxCheckedOn: '2026-09-12T00:00:00Z',
   debts: [
     { id: 'd1', source: 'Sociálna poisťovňa', amountEur: 1250.75, dateOfRecord: '2024-07-15' },
     { id: 'd2', source: 'Finančná správa', amountEur: 840.00, dateOfRecord: '2024-07-10' },

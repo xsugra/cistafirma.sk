@@ -1856,3 +1856,84 @@ this page's whole established discipline is the opposite: a section that cannot
 be filled says so — `SectionNotice`, every empty state, `financialsState` — and a
 rail whose entries appear and disappear per company would be the one place that
 rule was broken.
+
+## The green tick over 402 781 companies nobody had asked
+
+`CompanyDebts` renders one of two things: a list of debts, or a green tick reading
+*"Neboli nájdené žiadne aktuálne dlhy."*
+
+The list is assembled in `mapCompanyResponse` from three payload fields —
+`debt_vszp`, `debt_soc_poist`, `tax_debt` — and **a row is only built for an
+amount above zero**:
+
+```ts
+...(debtVszp > 0 ? [{ id: 'vszp', source: 'VšZP', … }] : []),
+...(debtSocPoist > 0 ? [{ id: 'sp', source: 'Sociálna poisťovňa', … }] : []),
+...(debtTax > 0 ? [{ id: 'fs', source: 'Finančná správa', … }] : []),
+```
+
+So an empty `debts` array carried two opposite meanings at once — *we asked and
+neither source reports a debt*, which is a finding, and *we have never asked*,
+which is not a finding at all. Both rendered as the same green tick.
+
+Measured 2026-09-12, over all 445 626 rows of `"Companies and SZCO"`:
+
+| | companies | share |
+|---|---|---|
+| insurance pair answered (`Dátum a čas kontroly VSZP/SP`) | 35 471 | 8,0 % of all rows |
+| tax office answered (`Dátum kontroly FS`) | 250 349 | 56,2 % of all rows |
+| **shown the tick** (no debt above zero in any of the three columns) | 411 186 | |
+| …of which **neither** source had answered | 169 556 | 41,2 % of ticks |
+| …of which **exactly one** had | 233 225 | 56,7 % of ticks |
+| …of which **both** had — the tick was earned | **8 405** | 2,0 % of ticks |
+
+**402 781 of 411 186 ticks — 98,0 % — were printed over a company with at least
+one source nobody had read.** In a risk tool that is the one direction the
+rounding must not go: a reader takes a green tick to mean *checked and clean*,
+and it overwhelmingly meant *unchecked*.
+
+The insurance column is the stricter of the two, and deliberately so:
+`update_insurance_debt` writes it only when **both** VSZP and Social insurance
+return an authoritative answer — `is_authoritative` counts "we asked and there is
+nothing" as an answer and a timeout as none — so 8,0 % is a floor on work
+completed, not an attempt count. (The two dated columns drift as the syncs run;
+these were taken within one query, and the 8,0 % figure is the one that moves
+fastest.)
+
+**The fix.** Two new fields on the company payload — `insuranceCheckedOn`
+(`last_insurance_debt`) and `taxCheckedOn` (`fs_update_date`) — and the empty
+state became three states, derived from the two dates rather than assumed:
+
+- **both present** → the tick, with the evidence: *"Overené u Sociálna poisťovňa
+  a VšZP k 10. 09. 2026 a na Finančná správa k 12. 09. 2026."* An all-clear is
+  only as good as its date.
+- **one present** → the tick is withheld; the panel names the source *nobody has
+  read* and says which half is covered.
+- **neither** → *"Dlhy tejto firmy sme ešte nekontrolovali"*, plus the sentence
+  that makes the distinction the section is about: *"To, že nič neevidujeme, tu
+  neznamená, že firma nič nedlží — znamená to, že sme sa ešte nepozreli."*
+
+`taxCheckedOn` and `vatStatus.lastCheckedAt` are the same fact under two names —
+the VAT card asks "when did we last read the tax office", this section asks "did
+we ever" — so the mapper reads `data.fs_update_date` **once** and feeds both.
+Spelling it twice is how the two would come to disagree.
+
+An empty string is not a date: the test is the same truthiness test `null` fails,
+so a bug upstream sending `''` keeps the tick unearned rather than granting it.
+
+**A regression caught on the way.** Routing the debt rows through `formatDate`
+silently changed what they render, because `formatDate` until then reformatted
+only `YYYY-MM-DD` and passed everything else through. The API sends
+`dateOfRecord` as a full timestamp (`2026-09-10T18:15:10.013490Z`), so real debt
+rows would have printed raw ISO strings — and the unit test passed anyway,
+because its fixture used the date-only form the function happened to handle. The
+live API is what caught it, not the test. `formatDate` now handles both, and
+handles them *differently* on purpose: a date-only value is a string transform
+and never goes near `Date` (`new Date('2015-01-30')` is parsed as UTC midnight,
+so it renders as the 29th for any reader west of Greenwich — a date moved by the
+viewer's timezone is a date that disagrees with the register), while a timestamp
+is a moment whose day is the reader's day and goes through the local clock.
+
+This is the same defect class as `riskScore ?? 100` and `vat_payer || false`, and
+it is the largest instance found: 98,0 % of a state whose entire purpose is
+reassurance.

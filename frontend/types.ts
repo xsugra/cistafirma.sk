@@ -33,6 +33,26 @@ export interface Company {
   registrationDate: string;
   address: Address;
   lastUpdatedFromSource: string;
+  /**
+   * Whether we have ever asked each source about this company, and when.
+   *
+   * `Debt[]` cannot answer this on its own, and the difference is the whole
+   * point. A debt row is only ever built for an amount above zero, so an empty
+   * `debts` array meant two opposite things at once: "we checked and this firm
+   * owes nothing" and "we have never checked". The section rendered both as a
+   * green tick reading *Neboli nájdené žiadne aktuálne dlhy* — measured
+   * 2026-09-12, 402 802 of the 411 186 companies that got that tick rest on at
+   * least one source nobody has read, and only 8 384 earned it by reading both.
+   * The insurance pass alone reaches 35 431 of 445 626 rows (8,0 %).
+   *
+   * `null` is "never", and it is not a date. These describe *our* coverage, not
+   * the company: an old date is a stale answer, an absent one is no answer.
+   */
+  insuranceCheckedOn: string | null;
+  /** The Finančná správa side of the same question. Same date as
+   * `vatStatus.lastCheckedAt` — one expression in the mapper fills both, so the
+   * two cannot drift apart. */
+  taxCheckedOn: string | null;
   debts: Debt[];
   vatStatus: VatStatus;
   riskScore: RiskScore;

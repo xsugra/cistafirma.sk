@@ -16,6 +16,10 @@ interface DebtsSectionProps {
  */
 export const DebtsSection: React.FC<DebtsSectionProps> = ({ company }) => (
     <div className="space-y-6">
-        <CompanyDebts debts={company.debts} />
+        <CompanyDebts
+            debts={company.debts}
+            insuranceCheckedOn={company.insuranceCheckedOn}
+            taxCheckedOn={company.taxCheckedOn}
+        />
     </div>
 );

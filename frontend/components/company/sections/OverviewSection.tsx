@@ -21,7 +21,11 @@ export const OverviewSection: React.FC<OverviewSectionProps> = ({ company }) => 
 
     return (
         <div className="space-y-6">
-            <CompanyDebts debts={company.debts} />
+            <CompanyDebts
+                debts={company.debts}
+                insuranceCheckedOn={company.insuranceCheckedOn}
+                taxCheckedOn={company.taxCheckedOn}
+            />
 
             {company.financials.length > 0 ? (
                 <FinancialIndicators data={company.financials} analysis={company.analysis?.latest} />

@@ -74,6 +74,11 @@ export const DEFAULT_COMPANY: Company = {
     registrationDate: '2010-01-01',
     address: {street: 'Hlavná 1', city: 'Bratislava', zipCode: '811 01', country: 'SK'},
     lastUpdatedFromSource: '2026-01-01T00:00:00Z',
+    // Both sources read, so this fixture's empty `debts` is a finding and not a
+    // gap. A fixture that left these null would make every unrelated test
+    // exercise the "we never looked" panel.
+    insuranceCheckedOn: '2026-01-01T00:00:00Z',
+    taxCheckedOn: '2026-01-01T00:00:00Z',
     debts: [],
     dic: '1234567890',
     vatStatus: {

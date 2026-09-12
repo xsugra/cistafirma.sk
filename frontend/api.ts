@@ -203,6 +203,13 @@ export function mapCompanyResponse(data: any): Company {
   const debtSocPoist = toAmount(data.debt_soc_poist);
   const debtTax = toAmount(data.tax_debt);
 
+  // The one expression that reads the FS check date. `vatStatus.lastCheckedAt`
+  // and `taxCheckedOn` are the same fact under two names -- the VAT block asks
+  // "when did we last read the tax office", the debts section asks "did we ever"
+  // -- and spelling `data.fs_update_date` twice is how those two would come to
+  // disagree.
+  const taxCheckedOn = data.fs_update_date ?? null;
+
   const debts = [
     ...(debtVszp > 0 ? [{ id: 'vszp', source: 'VšZP' as const, amountEur: debtVszp, dateOfRecord: data.last_insurance_debt }] : []),
     ...(debtSocPoist > 0 ? [{ id: 'sp', source: 'Sociálna poisťovňa' as const, amountEur: debtSocPoist, dateOfRecord: data.last_insurance_debt }] : []),
@@ -300,6 +307,11 @@ export function mapCompanyResponse(data: any): Company {
       country: 'Slovenská republika',
     },
     lastUpdatedFromSource: data.datum_poslednej_upravy || new Date().toISOString(),
+    // When we last read each debt source, or `null` for never. Read once here
+    // and given to both consumers rather than letting the strip and the debts
+    // section each reach for `data.fs_update_date` and drift apart.
+    insuranceCheckedOn: data.last_insurance_debt ?? null,
+    taxCheckedOn: taxCheckedOn,
     debts,
     vatStatus: {
       icDph: data.ic_dph,
@@ -317,7 +329,7 @@ export function mapCompanyResponse(data: any): Company {
       // most deregistrations carry no `Platiteľ DPH` value at all.
       deregisteredOn: data.vat_deleted_date ?? null,
       reasonForDeregistration: data.vat_deleted_reason,
-      lastCheckedAt: data.fs_update_date,
+      lastCheckedAt: taxCheckedOn,
     },
     riskScore,
     financials,
