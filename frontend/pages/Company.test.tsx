@@ -70,11 +70,10 @@ describe('Company page', () => {
             {route: '/firma/12345678/suvaha'},
         );
 
-        // The asset side of the balance sheet is being read wrongly at the
-        // source, so the section states that rather than drawing numbers that
-        // do not add up.
-        expect(await screen.findByText('Údaje sú nespoľahlivé')).toBeInTheDocument();
-        expect(screen.getByText(/nesprávne/)).toBeInTheDocument();
+        // The balance sheet reads correctly since 2026-09-12, but the section
+        // has no table yet, so it says that rather than drawing a blank panel.
+        expect(await screen.findByText('Zatiaľ nemáme')).toBeInTheDocument();
+        expect(screen.getByText(/Tabuľku súvahy/)).toBeInTheDocument();
     });
 
     it('marks a section whose source costs money as such', async () => {

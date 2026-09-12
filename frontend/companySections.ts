@@ -63,8 +63,8 @@ export const COMPANY_SECTIONS = [
         note: 'Ukazovatele a medziročné porovnanie.',
     },
     {
-        id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale', group: 'Financie', status: 'unreliable',
-        note: 'Strana aktív sa z Registra účtovných závierok načítava nesprávne — hodnoty patria iným riadkom, než pod ktorými sú uložené. Kým to nebude opravené, čísla zámerne nezobrazujeme: tabuľka, ktorá sa nedá sčítať, je horšia než žiadna.',
+        id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale', group: 'Financie', status: 'planned',
+        note: 'Strana aktív sa načítavala nesprávne — hodnoty patrili iným riadkom, než pod ktorými boli uložené. Od 12. 9. 2026 je to opravené a súvaha sa číta správne (kontrola: aktíva = vlastné imanie + záväzky + časové rozlíšenie sedí v 96 % riadkov, pred opravou v 25 %). Tabuľku súvahy ako sekciu ešte nemáme postavenú — čísla sú medzitým v Prehľade a v ukazovateľoch.',
     },
     {
         id: 'vykaz', label: 'Výkaz ziskov a strát', icon: 'fa-chart-line', group: 'Financie', status: 'partial',
