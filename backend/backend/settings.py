@@ -395,10 +395,16 @@ CELERY_BEAT_SCHEDULE = {
         'args': [500],
         'options': {'expires': 14000.0, 'queue': 'orsr'},
     },
+    # 2 000 companies every 12 h, not 500. The rotation walks the eligible
+    # population (251 598 legal persons: forms 112/121/321/721/801/205, not
+    # struck off) and 250 480 of them had no result yet, so at 500 a cycle the
+    # book would take ~250 days to be read once. This entry is only half the
+    # schedule -- the dispatcher reads `PeriodicTask` rows, not this dict, so
+    # the DB row has to carry the same args (see docs/ARCHITECTURE.md §4).
     'sync-ruz-financials-every-12-hours': {
         'task': 'registers.tasks.schedule_ruz_financials_sync',
         'schedule': 43200.0,
-        'args': [500],
+        'args': [2000],
         'options': {'expires': 43000.0, 'queue': 'financials'},
     },
     'send-pending-notifications-every-15-min': {

@@ -61,7 +61,17 @@ flowchart TD
 
 ## 4. Dátová synchronizácia
 
-Periodické úlohy sú definované v `backend/backend/settings.py` cez `CELERY_BEAT_SCHEDULE`.
+Periodické úlohy sú zapísané **dvakrát** a obe miesta musia súhlasiť:
+
+- `CELERY_BEAT_SCHEDULE` v `backend/backend/settings.py` — čitateľný zápis
+  zámeru, ale **nie to, čo naozaj beží**.
+- Tabuľka `PeriodicTask` (`django_celery_beat`) — `celery_beat` beží s
+  `--scheduler django_celery_beat.schedulers:DatabaseScheduler`, takže
+  dispatcher číta riadky z DB. Zmena dávky (`args`) v `settings.py` bez zmeny
+  riadku teda **nič neurobí** a naopak.
+
+Preklad: `sync-ruz-financials-every-12-hours` má v DB `args=[2000]` (2 000
+firiem / 12 h); rovnaké číslo je aj v `settings.py`. Obe sa menia spolu.
 
 Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 
