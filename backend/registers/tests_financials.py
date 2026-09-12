@@ -1059,7 +1059,33 @@ class RuzFinancialsSyncServiceTests(SimpleTestCase):
         self.assertEqual(self.service._extract_with_template(table, template), {})
 
 
-class CurrentAssetsTests(SimpleTestCase):
+class _BalanceTableMixin:
+    """`_assets_table` for the two classes that build a filed table by hand.
+
+    Lifted out of `CurrentAssetsTests` when the tests below needed it too: the
+    four-column shape (`gross`, `correction`, `netto`, `netto prior`) is the
+    same whichever question is being asked of it, and a second copy of it is a
+    second thing to keep in step with `_current_period_column`.
+    """
+
+    def _assets_table(self, labels, values, name="Strana aktív"):
+        """One four-column asset table: gross, correction, netto, netto prior."""
+        rows = [{"text": {"sk": label}} for label in labels]
+        data = []
+        for value in values:
+            data.extend([value, "", value, ""])
+        return (
+            {"data": data},
+            {
+                "nazov": {"sk": name},
+                "pocetDatovychStlpcov": 4,
+                "hlavicka": _assets_header(),
+                "riadky": rows,
+            },
+        )
+
+
+class CurrentAssetsTests(_BalanceTableMixin, SimpleTestCase):
     """The five lines of `Obežný majetok`, and the total the statement reports.
 
     ŠÚ SR template 699 (MF/18009/2014-74, platné od 2014-01-01) reformulated
@@ -1075,26 +1101,18 @@ class CurrentAssetsTests(SimpleTestCase):
     `financne ucty`, which šablóna 687's r.23 "Ostatné finančné účty" contains.
     That put one line's figure in another line's field, under that field's
     label: the same defect, one template further along.
+
+    The two rows 687 still left unread were closed the same way, and the third
+    attempt shows the pattern is not about 687 at all: for both rows the
+    *natural* short key names a different line somewhere else in the corpus --
+    `zasoby (` is contained in nine templates' advances on inventory, and
+    `dlhodobe pohladavky (` in templates 29 and 1141's `Ostatné dlhodobé
+    pohľadávky`. A key here is not a name; it is a claim that the phrase occurs
+    once, and the corpus is what checks it.
     """
 
     def setUp(self):
         self.service = RuzFinancialsSyncService()
-
-    def _assets_table(self, labels, values):
-        """One four-column asset table: gross, correction, netto, netto prior."""
-        rows = [{"text": {"sk": label}} for label in labels]
-        data = []
-        for value in values:
-            data.extend([value, "", value, ""])
-        return (
-            {"data": data},
-            {
-                "nazov": {"sk": "Strana aktív"},
-                "pocetDatovychStlpcov": 4,
-                "hlavicka": _assets_header(),
-                "riadky": rows,
-            },
-        )
 
     def test_the_obezny_majetok_total_is_read_and_neobezny_is_not(self):
         # `Obežný majetok` is a substring of `Neobežný majetok`, and the
@@ -1259,12 +1277,339 @@ class CurrentAssetsTests(SimpleTestCase):
         self.assertEqual(result.get("assets_financial_accounts"), Decimal("52482"))
         self.assertEqual(result.get("assets_financial_short"), Decimal("480000"))
         self.assertEqual(result.get("assets_receivables_short"), Decimal("230000"))
-        # The two rows 687 leaves unread, still unread: this fix claims the two
-        # lines whose 687 spelling names them exactly, and no more. Reading
-        # "Zásoby (…)" would need a key that also matches 699's "Poskytnuté
-        # preddavky na zásoby (314A)" -- advances, not inventory.
-        self.assertIsNone(result.get("assets_inventory"))
-        self.assertIsNone(result.get("assets_receivables_long"))
+        # The two rows 687 writes without a `súčet`, now read. Their keys carry
+        # the start of the row's account list -- see the test below for the
+        # shorter spellings that would have matched a different line.
+        self.assertEqual(result.get("assets_inventory"), Decimal("200000"))
+        self.assertEqual(result.get("assets_receivables_long"), Decimal("30000"))
+
+    def test_a_line_item_that_mentions_payables_does_not_end_the_asset_side(self):
+        # `Pohľadávky a záväzky z pevných termínových operácií (373AÚ)` is a
+        # receivable, on the asset side, that happens to name payables. The
+        # section flag used to flip on any label *containing* `zavazky`, so in
+        # templates 2, 9, 11, 522, 684 and 690 -- the ROPO / municipal and
+        # consolidated statements, which all carry this row -- every asset line
+        # below it was matched against the liabilities vocabulary and the last
+        # two were lost. One of them is the cash total.
+        table, template = self._assets_table(
+            [
+                "Pohľadávky a záväzky z pevných termínových operácií (373AÚ) - (391AÚ)",
+                "Krátkodobé pohľadávky súčet (r. 061 až 084)",
+                "Finančné účty súčet (r. 086 až 097)",
+            ],
+            ["", "8863715.58", "2439764.97"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_receivables_short"), Decimal("8863715.58"))
+        self.assertEqual(result.get("assets_financial_accounts"), Decimal("2439764.97"))
+
+    def test_a_combined_table_still_switches_at_a_liabilities_header(self):
+        # The other direction, and the reason the per-row check was anchored
+        # rather than deleted: a table named only `Súvaha` identifies no side,
+        # so the liabilities rows in it are reachable only through this switch.
+        # Every one of the 245 templates names its sides, which is why the check
+        # has never been load-bearing -- but a future combined statement is the
+        # case it exists for.
+        table, template = self._assets_table(
+            [
+                "Zásoby súčet (r. 05 až 07)",
+                "Vlastné imanie a záväzky spolu",
+                "Základné imanie súčet (r. 069 až 072)",
+            ],
+            ["100000", "", "500000"],
+            name="Súvaha",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_inventory"), Decimal("100000"))
+        self.assertEqual(result.get("equity_basic"), Decimal("500000"))
+
+    def test_an_advance_on_inventory_is_not_inventory(self):
+        # Why `zasoby (112` and not `zasoby (`: nine templates write a
+        # "Poskytnuté (prevádzkové) preddavky na zásoby (314A)" row. In 699 that
+        # is r.41, the *second* term of `Obežný majetok` -- a sibling of r.34
+        # Zásoby, not part of it. Two directions, both wrong: alone, the
+        # advance would be read as the inventory line (the first case below);
+        # beside a filed Zásoby row it would replace it whenever it is larger,
+        # because that is what `_pick_better` keeps (the second).
+        alone, template = self._assets_table(
+            ["Poskytnuté preddavky na zásoby (314A) - /391A/"],
+            ["250000"],
+        )
+
+        self.assertIsNone(
+            self.service._extract_with_template(alone, template).get("assets_inventory")
+        )
+
+        # 250 000 against a filed 100 000, deliberately inverted from anything a
+        # real filing would carry: `_pick_better` keeps the larger, so only a
+        # decoy that is larger can tell the two keys apart at all.
+        both, template = self._assets_table(
+            [
+                "Zásoby súčet (r. 35 až r. 40)",
+                "Poskytnuté preddavky na zásoby (314A) - /391A/",
+            ],
+            ["100000", "250000"],
+        )
+
+        self.assertEqual(
+            self.service._extract_with_template(both, template).get("assets_inventory"),
+            Decimal("100000"),
+        )
+
+    def test_an_asset_side_accrual_is_not_a_liability_accrual(self):
+        # The one row the section flag routes to two *different fields*, which is
+        # why this defect was not merely a missing value. In templates 2, 9, 11,
+        # 522, 684 and 690 the `Pohľadávky a záväzky z pevných termínových
+        # operácií` row flipped the flag mid-asset-table, and every row after it
+        # -- including `Časové rozlíšenie súčet`, which is the asset side's own
+        # accrual -- was then read as a liability. So the filing's asset accrual
+        # was stored under `liabilities_accruals` and `assets_accruals` was left
+        # empty: a wrong number and a missing one, from the same line.
+        table, template = self._assets_table(
+            [
+                "Pohľadávky a záväzky z pevných termínových operácií (373AÚ) - (391AÚ)",
+                "Časové rozlíšenie súčet (r. 111 až r. 113)",
+            ],
+            ["", "123456.78"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_accruals"), Decimal("123456.78"))
+        self.assertIsNone(result.get("liabilities_accruals"))
+
+    def test_a_table_named_pasiva_is_the_liabilities_side(self):
+        # Ten templates (29, 662, 663, 711, 723, 738, 941, 1121, 1141, 5181)
+        # name the table exactly `Pasíva`, and the name-side test looked for
+        # `strana pasiv` -- so it called all ten asset tables. The per-row
+        # trigger covered the mistake by accident in eight of them, on row 0;
+        # in 29 and 1141 the first row beginning with one of its markers is row
+        # 24, so everything above it was read against the asset vocabulary and
+        # `Dlhodobé záväzky súčet` -- a row the shipped rule *did* read -- was
+        # dropped.
+        #
+        # The row order below is what makes this a test rather than a
+        # restatement: the payable total comes before any row that begins with a
+        # marker, so only the table's own name can put it on the right side.
+        table, template = self._assets_table(
+            [
+                "A. Vlastné zdroje krytia majetku súčet (r. 057 + r. 062 + r. 072)",
+                "Dlhodobé záväzky súčet (r.079 až r.084)",
+                "Záväzky z nájmu (954AÚ)",
+            ],
+            ["", "418375.00", "12000"],
+            name="Pasíva",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("liabilities_long"), Decimal("418375.00"))
+
+    def test_a_sub_line_of_long_term_receivables_is_not_the_total(self):
+        # The same trap on the other row. Templates 29 and 1141 write
+        # "Ostatné dlhodobé pohľadávky (…)" as a component; their total is
+        # "Dlhodobé pohľadávky súčet (r. 031 až r. 034)". `dlhodobe pohladavky
+        # (` matches both, which is why the key carries `(311a` -- 687's
+        # account list, the only spelling of it in the corpus.
+        alone, template = self._assets_table(
+            ["Ostatné dlhodobé pohľadávky (373 AU + 375AU + 378AU + 396AU) - (391AU)"],
+            ["120000"],
+        )
+
+        self.assertIsNone(
+            self.service._extract_with_template(alone, template).get(
+                "assets_receivables_long"
+            )
+        )
+
+        both, template = self._assets_table(
+            [
+                "Dlhodobé pohľadávky súčet (r. 031 až r. 034)",
+                "Ostatné dlhodobé pohľadávky (373 AU + 375AU + 378AU + 396AU) - (391AU)",
+            ],
+            ["70000", "120000"],
+        )
+
+        self.assertEqual(
+            self.service._extract_with_template(both, template).get(
+                "assets_receivables_long"
+            ),
+            Decimal("70000"),
+        )
+
+
+class BalanceSheetGateTests(_BalanceTableMixin, SimpleTestCase):
+    """Which tables the balance-sheet block opens at all.
+
+    `is_balance_sheet` gates the whole block, so a table whose name it does not
+    recognise contributes *nothing*: not a total, not a line, not a refusal. The
+    tuple held `strana aktiv` / `strana pasiv` and two more spellings, and
+    sixteen templates name their sides `Aktíva` / `Pasíva` -- ten of them
+    letter-spaced as `A K T Í V A`, which is a typographic layout rather than a
+    different word. Measured over the corpus 2026-09-13: 32 tables, 1 048 filed
+    rows, never opened. Every insurer in the app is in that set.
+    """
+
+    def setUp(self):
+        self.service = RuzFinancialsSyncService()
+
+    def test_a_table_named_aktiva_is_opened_and_its_total_read(self):
+        # `Aktíva spolu` is the last row of the insurers' asset table, and the
+        # only row label in the whole corpus that begins with those words. The
+        # gate and the total are two separate misses on one table: opening it
+        # without the label reads the rows and still reports no assets total,
+        # which is the figure the identity control needs.
+        table, template = self._assets_table(
+            [
+                "Pohľadávky z poistenia a zaistenia",
+                "Pokladničné hodnoty a peňažné ekvivalenty",
+                "Aktíva spolu",
+            ],
+            ["1200", "3400", "4600"],
+            name="AKTÍVA",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_total"), Decimal("4600"))
+
+    def test_a_letter_spaced_side_name_is_the_same_side(self):
+        # Six templates write `P A S Í V A`. A substring test reads that as
+        # neither side; collapsing spaces on both sides reads it as the side it
+        # is. The row order below is the point of the test. `Dlhodobé záväzky
+        # súčet` sits *above* every section marker, so nothing but the table's
+        # own name can say which side it is on -- open the table and leave the
+        # side undecided and that row is looked up in the asset vocabulary,
+        # which has no key for it, and dropped. Asserting only `equity` here
+        # would not catch that: `Vlastné imanie spolu` is itself a marker and
+        # would set the flag on its own.
+        table, template = self._assets_table(
+            [
+                "Dlhodobé záväzky súčet (r.079 až r.084)",
+                "Vlastné imanie spolu",
+                "Pasíva spolu",
+            ],
+            ["418375.00", "8000", "8000"],
+            name="P A S Í V A",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("liabilities_long"), Decimal("418375.00"))
+        self.assertEqual(result.get("equity"), Decimal("8000"))
+        # And `Pasíva spolu` must *not* become the liabilities total. It is the
+        # whole pasíva side -- equity plus liabilities -- so reading it here
+        # would file the grand total as a liability and let the identity control
+        # pass by comparing a number with itself. Measured on `30807484`
+        # (Sociálna poisťovňa, šablóna 29, 2015): the row carries 1 104 603
+        # 246.61, which is 1 062 050 495.44 equity plus 42 552 751.17
+        # liabilities, not either of them.
+        self.assertIsNone(result.get("liabilities_total"))
+
+    def test_a_total_prefixed_by_its_section_letter_is_still_the_total(self):
+        # The insurance and social-insurance forms number their sides `a.` and
+        # `b.`, and both figures the identity control needs sit behind one. The
+        # letter is the form's numbering, not part of the name.
+        table, template = self._assets_table(
+            [
+                "a. Vlastné zdroje krytia majetku súčet (r. 057 + r. 062 + r. 072)",
+                "b. Cudzie zdroje súčet (r.077 + r.078 + r.085 + r.099 + r.103)",
+                "Pasíva spolu súčet (r. 056 + r. 076)",
+            ],
+            ["1062050495.44", "42552751.17", "1104603246.61"],
+            name="Pasíva",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("equity"), Decimal("1062050495.44"))
+        self.assertEqual(result.get("liabilities_total"), Decimal("42552751.17"))
+        # The arithmetic the identity control checks, from the filing itself.
+        self.assertEqual(
+            result["equity"] + result["liabilities_total"],
+            Decimal("1104603246.61"),
+        )
+
+    def test_the_whole_pasiva_side_is_not_a_liability(self):
+        # `Vlastné zdroje a cudzie zdroje spolu` names both sides at once. Every
+        # total vocabulary has to leave it alone: a figure that is already the
+        # sum of the other two cannot also be a term in that sum.
+        table, template = self._assets_table(
+            [
+                "Vlastné zdroje a cudzie zdroje spolu r.061+ r.074 + r.101",
+                "Pasíva spolu",
+            ],
+            ["5000000", "5000000"],
+            name="Strana pasív",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertIsNone(result.get("liabilities_total"))
+        self.assertIsNone(result.get("assets_total"))
+        self.assertIsNone(result.get("equity"))
+
+    def test_the_social_insurance_asset_side_is_read(self):
+        # Šablóny 29 and 1141 -- the social-insurance and health-insurance
+        # statements -- use the ordinary company vocabulary, so opening their
+        # table recovers the whole asset side rather than a total. Eight lines
+        # here, and before the gate fix every one of them was unreachable.
+        table, template = self._assets_table(
+            [
+                "Dlhodobý nehmotný majetok súčet (r.003 až r.007)",
+                "Dlhodobý hmotný majetok súčet (r.009 až r.017)",
+                "Zásoby súčet (r.027 až r. 029)",
+                "Dlhodobé pohľadávky súčet (r.031 až r.034)",
+                "Krátkodobé pohľadávky súčet (r.036 až r.044)",
+                "Majetok spolu súčet (r. 001 + r. 025)",
+            ],
+            ["500", "7000", "300", "1200", "900", "9900"],
+            name="Aktíva",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_intangible"), Decimal("500"))
+        self.assertEqual(result.get("assets_tangible"), Decimal("7000"))
+        self.assertEqual(result.get("assets_inventory"), Decimal("300"))
+        self.assertEqual(result.get("assets_receivables_long"), Decimal("1200"))
+        self.assertEqual(result.get("assets_receivables_short"), Decimal("900"))
+        self.assertEqual(result.get("assets_total"), Decimal("9900"))
+
+    def test_the_insurers_own_asset_vocabulary_stays_unread(self):
+        # The deliberate half. Eight commercial-insurance templates keep no key
+        # for `Majetkové podiely`, `Finančné nástroje v reálnej hodnote`,
+        # `Podiel zaisteného na technických rezervách` and the rest -- a
+        # different chart of accounts, and one this app has no filing-verified
+        # mapping for. They must contribute nothing rather than something
+        # plausible: a wrong number under a real label is the failure this whole
+        # file is arranged against.
+        table, template = self._assets_table(
+            [
+                "Majetkové podiely",
+                "Finančné nástroje v reálnej hodnote proti zisku a strate",
+                "Podiel zaistiteľov na technických rezervách",
+                "Hmotný hnuteľný majetok",
+                "Aktíva spolu",
+            ],
+            ["900000", "400000", "250000", "120000", "1670000"],
+            name="AKTÍVA",
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        # The total is asserted first so this cannot pass by the table never
+        # being opened -- a shut gate also reads nothing, and it would be the
+        # wrong reason to be green here.
+        self.assertEqual(result.get("assets_total"), Decimal("1670000"))
+        self.assertEqual(
+            {k: v for k, v in result.items() if k.startswith("assets_") and v is not None},
+            {"assets_total": Decimal("1670000")},
+        )
 
 
 class _CountingRuzApi(_ScriptedRuzApi):

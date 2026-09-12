@@ -2136,31 +2136,48 @@ and its asset side is 23 rows × 2 columns — current period and prior, with no
 gross/correction split, so `_data_column_shape` sees a different shape from the
 same table name.
 
-Its line names are its own, and three of them do not contain the words the
+Its line names are its own, and four of them do not contain the words the
 parser was looking for:
 
-| row | label as filed | before |
+| row | label as filed | before | now |
+|---|---|---|---|
+| r.15 | `Zásoby (112, 119, 11X, 121, …)` | unread — no `súčet` in the label | `assets_inventory` |
+| r.16 | `Dlhodobé pohľadávky (311A, 312A, …) - 391A` | unread — no `súčet` in the label | `assets_receivables_long` |
+| r.22 | `Peniaze a účty v bankách (211, 213, 21X, 221A, 22XA, +/- 261)` | unread — no key named it | `assets_financial_accounts` |
+| r.23 | `Ostatné finančné účty (251, 252, 253, 256, 257, 25X, 259, 314A)` | read into the *cash* field, by the bare-key mistake above | `assets_financial_short` |
+
+r.22 is exactly what 699 splits into r.72 `Peniaze` and r.73 `Účty v bankách`,
+so it is that statement's cash figure under one label; r.23 is its r.66.
+
+**The third instance of one pattern, and the first two that are not about 687.**
+Closing r.15 and r.16 needed the same anchoring the cash line needed, and the
+obvious keys failed for reasons that have nothing to do with this template:
+
+| the natural key | what else it matches | why that is a different line |
 |---|---|---|
-| r.15 | `Zásoby (112, 119, 11X, 121, …)` | unread — no `súčet` in the label |
-| r.16 | `Dlhodobé pohľadávky (311A, 312A, …) - 391A` | unread — no `súčet` in the label |
-| r.22 | `Peniaze a účty v bankách (211, 213, 21X, 221A, 22XA, +/- 261)` | unread — no key named it |
-| r.23 | `Ostatné finančné účty (251, 252, 253, 256, 257, 25X, 259, 314A)` | read into the *cash* field, by the bare-key mistake above |
+| `zasoby (` | `Poskytnuté (prevádzkové) preddavky na zásoby (314A)`, in nine templates | in 699 that is r.41, the *second* term of `Obežný majetok` — a sibling of r.34 Zásoby, not a part of it |
+| `dlhodobe pohladavky (` | `Ostatné dlhodobé pohľadávky (…)`, in templates 29 and 1141 | a component of their long-term receivables; their total is `Dlhodobé pohľadávky súčet (r. 031 až r. 034)` |
 
-The first two are still unread, deliberately. The last two are now read: r.22
-into `assets_financial_accounts` (it is exactly what 699 splits into r.72
-`Peniaze` and r.73 `Účty v bankách`) and r.23 into `assets_financial_short` (its
-r.66). Reading `Zásoby (…)` needs a key that does **not** also match 699's
-`Poskytnuté preddavky na zásoby (314A)` — advances, not inventory — which is why
-the obvious `zasoby (` is wrong and the row is left absent for now.
+Both keys therefore carry the start of the row's account list — `zasoby (112`
+and `dlhodobe pohladavky (311a` — and each occurs in exactly one row of the whole
+245-template corpus (measured 2026-09-13). A key in `ASSETS_LABELS` is not a
+name; it is a claim that the phrase occurs once, and the corpus is what checks
+it. The price of the longer form is that a future template listing the accounts
+differently leaves the row unread rather than reading the wrong one, which is the
+direction this file prefers throughout.
 
-**Why an unread row here does not misstate anything.** 687 reports its
-current-assets total outright at r.13 (`Obežný majetok r. 15 + r. 16 + r. 17 +
-r. 21`), and that row *is* read. `current_assets_of` prefers a reported total
-over a component sum, so the fallback never runs on a 687 filing and no ratio,
-Z-score term or sector median built from one inherits a missing component. The
-gap is confined to the balance-sheet breakdown, which lists fewer components
-than the statement carries — the honest direction, and the opposite of the 2014
-break, where the total was re-derived and so came out quietly smaller.
+**A correction to this section's first version.** It said the unread rows cost
+nothing, on the grounds that 687 reports its current-assets total outright at
+r.14 and `current_assets_of` prefers a reported total to a component sum. Both
+halves were true and the conclusion was still wrong, because a condition had
+been dropped from the middle: *when the total was filed*. 687's r.14 is
+`r. 15 + r. 16 + r. 17 + r. 21`, and r.21 is itself `r. 22 + r. 23` — so the
+fallback's five terms expand to exactly r.14's own sum. With r.15 and r.16
+unread, a 687 filing that left the total row blank reported **smaller** current
+assets than it filed, not unknown ones: `_sum_present` understates, it does not
+nullify. Same failure as the 2014 break, arrived at from the other side. It cost
+nothing in the filings sampled here, all of which filed r.14 — which is exactly
+why a sample cannot be the evidence for "this gap is harmless".
 
 **A signature made of absences is contaminated by blank cells.** The first
 attempt to size this population looked for `year >= 2014 AND assets_current IS
@@ -2176,18 +2193,420 @@ of a parser gap unless the row was there and carried a value.
 **Verified against the registry**, IČO 00176940 (`ruz_id` 13046, a bytové
 družstvo filing on 687 from 2015 on):
 
-- 2022: r.13 = 73 483 = 69 172 (r.22 `Peniaze a účty v bankách`) + 4 311 (r.17
+- 2022: r.14 = 73 483 = 69 172 (r.22 `Peniaze a účty v bankách`) + 4 311 (r.17
   `Krátkodobé pohľadávky`). Both terms zero-cost to reproduce from the API
   response, and both now stored.
-- 2016: r.13 = 267 896 against r.22 = 269 331. The statement reconciles exactly
+- 2016: r.14 = 267 896 against r.22 = 269 331. The statement reconciles exactly
   — r.17, `Krátkodobé pohľadávky`, is **−1 435** in that filing (a correction
   carried as a negative receivable) — so cash exceeds current assets and the
   filing says so. The app reads it faithfully; nothing here needs smoothing.
 
+The row number in this bullet was written as r.13 in the first version of this
+section. It is r.14: `cisloRiadku` 14, and the row's own label says
+`Obežný majetok r. 15 + r. 16 + r. 17 + r. 21`. The values were quoted from the
+API response and are unchanged; only the number naming the row was off by one.
+
 **What was repaired in the corpus.** The parser fix alone leaves already-stored
 rows on their old reading, so the population above is re-synced through
-`fetch_ruz_financials --ico-file`. The run in progress is the same 2 771-company
-list, split so that the companies already re-read once under the bare key are
-re-read again: a bare-key write is only possible where 687's r.23 carries a
-value, and among the first 43 companies processed the 687 rows all had r.23
-empty, so no stored figure had to be withdrawn.
+`fetch_ruz_financials --ico-file`. The 2 771-company list runs in two chained
+parts, so that the companies already re-read once under the bare key are re-read
+again: a bare-key write is only possible where 687's r.23 carries a value, and
+among the first 43 companies processed the 687 rows all had r.23 empty, so no
+stored figure had to be withdrawn.
+
+The first part completed 43/43 with 738 rows stored, 0 unanswered and 0 errors
+(`/tmp/backfill_pass1.log` in the backend container). The second part was then
+**stopped at 94/2 728 and restarted from the beginning**, because verifying the
+first part is what turned up the section-flag defect described below: a parser
+change made after a backfill has started leaves the rows it already wrote on the
+older reading, so the fix and the pass have to ship together. The restarted pass
+carries both fixes and is `/tmp/backfill_pass2.log`.
+
+A rate worth recording, since it is what makes "restart rather than patch later"
+the cheap option: measured across the first hundred companies of the second part,
+the pass reads **5.73 companies a minute**, so 2 728 of them is about **8.1
+hours**. The first version of this paragraph said "a few hours", extrapolated
+from a handful of timings taken at the start. The estimate was wrong in the
+direction that mattered -- it made restarting look cheaper than it is. Eight
+hours is still the right price for not carrying a known-wrong reading forward,
+but it is a night's run rather than an afternoon's, and a plan that treats it as
+an afternoon will keep choosing to patch a running pass instead.
+
+## The balance sheet the app never opened
+
+Two defects, one behind the other. The first was found by verifying the 687
+repair above; the second was found by writing a test for the first and watching
+it fail for a reason that had nothing to do with what it was testing. Both sit in
+the same forty lines of `_extract_with_template`, and both have the same
+signature: a table that filed its figures and a parser that read none of them.
+Between them they are the answer to the reported symptom -- *Súvaha: Kontrola
+súvahy / Súvahu nemožno overiť* -- for every insurer in the app.
+
+### The section flag that routed a row to the wrong field
+
+`_extract_with_template` decides, per row, which of two disjoint vocabularies to
+look the row's label up in: the asset one or the liabilities one. The table's own
+name sets the starting side, and a row *containing* one of four section markers
+(`vlastne imanie`, `vlastny kapital`, `pasiva`, `zavazky`) switched it to the
+liabilities side and never switched it back.
+
+Containment was the mistake. Measured over the tables the gate actually opens --
+the marker test sits after the gate, so only those can reach it -- the loose test
+fires in **45 tables**, and in **37** of them the row that fires it is not a
+section heading at all.
+
+**Firing is not the same as mattering, and the difference is most of the story.**
+In 31 of those 37 the table's *own name* had already put the row loop on the
+liabilities side, so the loose firing set a flag that was already set and changed
+nothing:
+
+| table name | tables | why the firing is inert |
+|---|---|---|
+| `Strana pasív` | 14 | `strana pasiv` is a `LIABILITIES_TABLE_KEYS` entry |
+| `PASÍVA` | 7 | ditto, through the bare stem |
+| `P A S Í V A` | 6 | ditto, once spaces are collapsed |
+| `Pasíva` | 3 | ditto |
+| `VLASTNÉ IMANIE A ZÁVÄZKY` | 1 | its name contains `zavazky` |
+
+Six tables change the reading, and they are all one template family and one row:
+tables named `Strana aktív` in the ROPO / municipal and consolidated statements
+(2, 9, 11, 522, 684, 690). Their asset side carries the line item
+
+> `Pohľadávky a záväzky z pevných termínových operácií (373AÚ) - (391AÚ)`
+
+a **receivable**, sitting on the **asset** side, whose name mentions payables.
+Containment read that as "the liabilities section starts here", and every asset
+row below it was then looked up in the liabilities vocabulary and dropped.
+
+**The cost was three fields, not the two first recorded, and one of them was a
+wrong value rather than a missing one.** Replaying the branch over the corpus
+with every vocabulary at its shipped value:
+
+| effect | count | what |
+|---|---|---|
+| gained | 12 | `Krátkodobé pohľadávky súčet` and `Finančné účty súčet` -- the cash total itself -- in all six |
+| moved | 6 | `Časové rozlíšenie` in all six, from `liabilities_accruals` to `assets_accruals` |
+| lost | 0 | -- |
+
+The middle row is the one that matters, and it is why an earlier reading of this
+defect in this file's working notes was wrong. That reading said *a wrong flag
+yields no field rather than a wrong one*, on the grounds that the two
+vocabularies are disjoint so a row looked up on the wrong side simply finds no
+key. That is true of both vocabularies and false of the file, because
+`Časové rozlíšenie` is the **one row routed to two different fields by this
+flag**:
+
+```python
+if "casove rozlisenie" in row_label and value is not None:
+    if in_liabilities_section:
+        extracted["liabilities_accruals"] = value
+    else:
+        extracted["assets_accruals"] = value
+```
+
+So six templates stored an **asset-side** accrual as a liability accrual, with
+`assets_accruals` left empty. One row, one flag, two errors in opposite
+directions: a number where none belongs, and a blank where a filed number
+belongs. "A missing field is not a claim" is a rule this file applies
+everywhere; the corollary it had been missing is that a *misfiled* field is a
+claim, and the one row that can move between fields is the one that makes it.
+
+The fix is to anchor the test at the start of the label, so only a row that
+begins the section switches sides.
+
+**The first version of that fix was wrong, and the way it was caught is the
+useful part.** Anchoring alone, held against the table keys as they then were,
+traded one defect for another:
+
+| | gained | moved | lost |
+|---|---|---|---|
+| anchored, against the old table keys | 12 | 6 | **2** |
+| anchored, against the shipped table keys | 12 | 6 | 0 |
+
+The two lost fields were `liabilities_long` in templates 29 and 1141 -- the
+social- and health-insurance statements. Both sat on row 22:
+
+```
+row  20  'b. cudzie zdroje sucet (r.077 + r.078 + r.085 + r.099 + r.103)'
+row  21  'rezervy (941)'
+row  22  'dlhodobe zavazky sucet (r.079 az r.084)'      <- loose=True anchored=False
+row  24  'zavazky z najmu (954au)'                      <- loose=True anchored=True
+```
+
+No row before 22 fires the test, so the loose version's only chance to set the
+flag was **row 22's own label**, which contains `zavazky`. The row was on the
+liabilities side by accident -- it tripped a test meant for section headings --
+and anchoring took the accident away along with the defect. It was caught by
+diffing the corpus reading before and after the change rather than by reading the
+code, which is the only way this class of regression is visible: nothing fails,
+nothing logs, two fields simply stop being written.
+
+The resolution is not to weaken the anchoring. It is to notice that the per-row
+test was doing work the table's own name should have been doing:
+`LIABILITIES_TABLE_KEYS` held `strana pasiv` / `liabilities` / `zavazky`, none of
+which matches a table named `Pasíva`. Sixteen templates name their pasíva side
+with the bare word -- `Pasíva` in 29, 723 and 1141, `PASÍVA` in seven more, and
+the letter-spaced `P A S Í V A` in six -- and the name-side test called every one
+of them an asset table. The row trigger covered the error up: in the ten
+plain-spelled ones the first firing row is row 0 in eight of them (`zavazky
+z obchodného styku`, `vlastné imanie z toho:`) and row 22 in 29 and 1141, which
+is why it survived unnoticed and why it cost something the moment it was touched.
+Adding the bare stem `pasiv` to those keys makes the name decide, and the
+anchoring then loses nothing.
+
+**With the name deciding, the per-row trigger is inert over the whole corpus** --
+measured, not assumed: there is no gated table whose name says assets on which
+any row still flips the side under the anchored test. So the flag can no longer
+be set by a line item's name anywhere, which is the property the fix was for. The
+trigger stays for a *combined* table -- one whose name identifies neither side --
+which this corpus does not contain but the next one might. It is worth knowing
+that `startswith` is not a test for "is a section heading": `zavazky z obchodného
+styku` is a line item and does start with `zavazky`. That imprecision is harmless
+only because the name has already decided the side by then, which is exactly the
+division of labour the change put in place.
+
+### The gate that skipped sixteen templates
+
+The test written for the fix above is what found the second defect. It built a
+table named `Pasíva` and asserted that a row on it was read as a liability. It
+failed with
+
+```
+AssertionError: None != Decimal('418375.00')
+```
+
+and the cause was not the flag. `BALANCE_SHEET_KEYS` is a tuple of table *names*,
+and `is_balance_sheet` gates the entire balance-sheet block on it:
+
+```python
+is_balance_sheet = _table_name_matches(table_name, BALANCE_SHEET_KEYS)
+...
+if not is_balance_sheet:
+    continue
+```
+
+The tuple held `suvaha`, `bilancia`, `balance sheet`, `strana aktiv`,
+`strana pasiv`, `assets`, `liabilities`, `majetok`, `zavazky`. Sixteen templates
+name their two sides `Aktíva` and `Pasíva` and nothing else, and six of those
+sixteen letter-space the words in the printable form -- `A K T Í V A`,
+`P A S Í V A` -- which contains no key in the tuple either. So the block was
+skipped before any row was looked at:
+
+| table name | templates | tables |
+|---|---|---|
+| `Aktíva` / `Pasíva` | 29, 662, 663, 711, 723, 738, 941, 1121, 1141, 5181 | 20 |
+| `A K T Í V A` / `P A S Í V A` | 541, 542, 801, 1001, 1101, 5184 | 12 |
+
+**32 tables, 1 211 rows of filed figures, never opened** -- and no table lost in
+exchange, since the tuple only grew. The list is the whole insurance sector: 29
+is the social insurer, 1141 the health insurers' statement, and 662 through 5181
+the commercial insurers. That is the reported symptom exactly. The balance-sheet
+identity control needs three figures -- `assetsTotal`, `equity`,
+`liabilitiesTotal` -- and for every insurer the app held **none** of them, so the
+control could not judge a single one. It said `Súvahu nemožno overiť`, which is
+the honest message for a statement with no numbers and the wrong message for a
+statement that filed all three.
+
+Two changes close it. `aktiva` and `pasiva` joined the tuple, and
+`_table_name_matches` collapses spaces on both sides of the comparison so that
+`A K T Í V A` matches `aktiva` -- the spaces are a typographic layout in the
+printable form, not part of the word. The helper is used for the name-side test
+as well, so the two now read a table's name the same way.
+
+**A total needs a third vocabulary, not just an open gate.** Opening the tables
+recovers their line items but not their totals: `Aktíva spolu` is the last row of
+the insurers' asset table and was in no total tuple. Measured over the 65
+templates in the corpus that carry tables -- the other 180 are narrative document
+types with no table structure at all, see below -- `aktiva spolu` is the only row
+label that begins with those words. It is now listed, and it is what closes 14 of
+the 16 newly-opened templates. The remaining two, 29 and 1141, close on
+`majetok spolu súčet (r. 001 + r. 025)`, already in the tuple.
+
+**`pasiva spolu` is its counterpart, and it belongs in neither total
+vocabulary.** It was listed here for part of a day, as the liabilities total, and
+that was wrong. It is the whole *pasíva* side -- equity included -- and two
+independent pieces of evidence settle it:
+
+- the form's own arithmetic. Templates 29 and 1141 write the row as
+  `Pasíva spolu súčet (r. 056 + r. 076)`; r. 056 is the row
+  `a. Vlastné zdroje krytia majetku súčet` and r. 076 is `b. Cudzie zdroje
+  súčet`. Equity plus liabilities is not the liabilities total.
+- a real filing. On `30807484` (Sociálna poisťovňa, šablóna 29, 2015) the row
+  carries 1 104 603 246.61, which is 1 062 050 495.44 of equity plus
+  42 552 751.17 of liabilities -- the two rows directly above it.
+
+Reading it as `liabilities_total` would have been worse than a wrong number in a
+field. The identity control builds the pasíva side as
+`equity + liabilities_total + accruals`; a value that already contains the equity
+would be counted twice, and because `equity` was absent at the time, the control
+would have compared the assets total with itself and reported the balance sheet
+as **verified**. A control that passes for that reason is worse than one that
+refuses -- the same trade this file already made for the four-column asset side.
+The key was removed the same day it was added, and a test now pins the rejection.
+
+What the sixteen templates gain, holding the column shape fixed and readable:
+
+| templates | fields gained |
+|---|---|
+| 29, 1141 | 8 asset fields (7 line items plus `assets_total`), plus `equity`, `liabilities_total`, `liabilities_long`, `liabilities_short` on the pasíva side |
+| 541, 542, 801, 1001, 1101, 5184 | `assets_total`, `equity`, `equity_basic` (twice), `equity_retained` |
+| 663, 711, 941, 1121, 5181 | `assets_total`, `equity`, `liabilities_total` |
+| 662, 738 | `assets_total`, `equity_basic` |
+| 723 | `assets_total` |
+
+Whether a given *filing* resolves a data-column shape is a separate question the
+parser already handles by refusing rather than guessing, so these are vocabulary
+gains, not a promise about every statement.
+
+**What stays unread, deliberately.** The eight commercial insurers' asset side
+keeps no key: their lines are `Majetkové podiely`, `Finančné nástroje v reálnej
+hodnote`, `Podiel zaistiteľov na technických rezervách`, `Hmotný hnuteľný
+majetok` -- a different chart of accounts, for which this app has no
+filing-verified mapping. Those tables now open and contribute their totals and
+nothing else. Inventing the vocabulary from the template alone, with no filing to
+check the mapping against, is the one direction this file never takes. Also left
+out of scope: the IFRS-ish coded templates 942 and 5182, and the tables named
+`Položky`.
+
+**Why the gate could be widened safely.** Adding a substring key to a *table
+name* tuple is a claim about table names, and it is checkable the same way a key
+in `ASSETS_LABELS` is: by asking the corpus what else it matches. `aktiva` and
+`pasiva` as table-name keys admit exactly the 20 tables above and no others, and
+nothing that previously matched stopped matching.
+
+### The identity control, and what it now verifies
+
+Opening the gate gave the sixteen templates their asset totals. A balance-sheet
+identity control needs three figures, and for the insurers two of them were still
+out of reach for reasons that had nothing to do with the gate.
+
+**A total prefixed by its section letter.** Templates 29 and 1141 number their
+sides `a.` and `b.`, and both figures the control needs sit behind one:
+`a. Vlastné zdroje krytia majetku súčet (r. 057 + r. 062 + r. 072)` is the equity
+total, `b. Cudzie zdroje súčet (r.077 + ...)` the liabilities total.
+`_is_summary_row` now drops that leading letter, in the same place and for the
+same reason it already dropped a trailing parenthetical. Measured over the corpus
+by replaying the predicate both ways with every vocabulary at its shipped value,
+dropping it changes three labels' verdicts and gains four fields -- both figures
+in both templates -- and removes none. Only that predicate strips it, so the
+line-item vocabularies cannot start matching a note row.
+
+Two of those four fields are the `a.` equity rows, and the note that first
+measured this said "exactly one label" -- true when it was written, false the
+moment `vlastne zdroje krytia majetku` was added to `EQUITY_TOTAL_LABELS`. The
+missing key had been hiding half the effect: the letter was always what stood
+between those two rows and the vocabulary, and with the vocabulary incomplete
+only the `b.` row could show it. A measurement of "what does this change" is a
+measurement *against a stated vocabulary*, and it expires when the vocabulary
+does.
+
+**An equity total under the insurers' wording.** `Vlastné zdroje krytia majetku`
+-- "own sources covering assets" -- is the equity total in the insurance and
+social-insurance statements, and it was in no equity vocabulary. It is now a key
+on `EQUITY_TOTAL_LABELS`. Measured over the corpus the phrase occurs in four
+distinct labels; the key accepts three -- the two section-lettered insurance
+totals, and `Vlastné zdroje krytia majetku spolu` in 17 and 385 -- and rejects
+the fourth, `vlastné zdroje a cudzie zdroje spolu`, which is the whole pasíva side
+again and must stay unread by every total vocabulary. That is the `pasiva spolu`
+trap in a different spelling, and it is why the key was measured before it was
+added.
+
+With both in place the control verifies the social insurer exactly, to the cent,
+in three filings under two templates:
+
+| filing | equity | liabilities | their sum | `Pasíva spolu` |
+|---|---|---|---|---|
+| 2015, šablóna 29 | 1 062 050 495.44 | 42 552 751.17 | 1 104 603 246.61 | 1 104 603 246.61 |
+| 2018, šablóna 29 | 1 109 465 273.69 | 53 559 518.68 | 1 163 024 792.37 | 1 163 024 792.37 |
+| 2024, šablóna 1141 | 1 502 341 211.70 | 124 796 544.80 | 1 627 137 756.50 | 1 627 137 756.50 |
+
+That is the reported symptom answered. Before this the app held **none** of the
+three figures for any insurer, so `Súvahu nemožno overiť` was the honest message
+for a statement that had filed all of them.
+
+**The bound, stated honestly.** Holding the vocabularies where they are, 7 of the
+16 newly-opened templates resolve all three figures: 29, 663, 711, 941, 1121,
+1141, 5181. The other nine resolve `assets_total` and -- except for 662, 723 and
+738 -- `equity`, but not `liabilities_total`: their pasíva side uses a
+liabilities-total wording outside the shipped vocabulary, and inventing a mapping
+from the template alone, with no filing to check it against, is the one direction
+this file never takes. So the gate fix makes the control *possible* for the
+insurance sector; each template's own vocabulary decides whether it is
+*reachable*, and for nine of the sixteen it is not yet.
+
+Away from the insurance sector the control was in much better shape than the
+reported symptom suggested: across the database 34 205 of 34 495 stored
+financial-result rows hold all three figures, and 4 hold none.
+
+### What no parser change can reach
+
+Two of the insurers the symptom named are beyond the parser, and it is worth
+being exact about why, because the first explanation tried was wrong.
+
+Allianz (`00151700`) and Dovera (`35942436`) return report bodies with
+`obsah = {}` -- no `tabulky` at all -- on **every** report of **every** statement,
+including the ones filed under templates that do carry tables (738, 942, 1101,
+5184). The parser pairs a report's tables with its template's rows by index, so
+with no report tables there is nothing to pair and nothing to read, whatever the
+gate and the vocabularies say.
+
+The first hypothesis was that the registry's `zdrojDat` code marked those filings
+as unstructured: Allianz's statements are `FRSR` and Dovera's `DC`, while the
+social insurer's are `CKS`. **Measured over a 24-company sample, that is false.**
+Every sampled statement carried tables -- 15 of 15 `SAM`, 6 of 6 `FRSR`, 1 of 1
+`DC` -- so the source code does not decide it. The emptiness is a property of
+those particular filings, and the reason is not determined here. What *is*
+determined is the consequence: no vocabulary or gate change recovers them.
+
+The templates they filed also include document types that have no tables **by
+design**, which is a separate and benign fact worth recording so it is not
+mistaken for a defect later. Of the corpus's 245 template headers, 180 carry no
+tables; sampled live, every one is a narrative document -- `Správa audítora`,
+`Oznámenie o dátume schválenia účtovnej závierky`, `IFRS účtovná závierka`,
+`Individuálna výročná správa`. Those are not balance sheets and reading nothing
+from them is correct. It also means the vocabulary measurements in this section
+are measurements over the **65** templates that do carry tables, which is the
+whole population they can be asked of.
+
+The product consequence is a wording one, and it is narrower than it first looks,
+because the app already names causes elsewhere. The sync layer classifies a
+company with no figures into four causes and stores the sentence durably in
+`CompanySyncStatus.last_detail` -- `no tables in the report bodies` among them,
+measured on `00179027` (7 statements) before any insurer was looked at. So the
+cause *is* recorded for a company filed the Allianz way. What is not recorded is
+the distinction at the point the reader meets it: the *Kontrola súvahy* card says
+`Súvahu nemožno overiť ... Chýba: <figure>`, which is honest about what is absent
+but cannot tell a statement whose body the registry never structured from one the
+app failed to read. Those are different facts, and only the first is nobody's
+fault.
+
+### What this cost, and what it says about the reading
+
+Both defects were present in every backfill pass this app has ever run, so the
+repair is not a parser change alone -- the affected population has to be re-read,
+and the pass that was already running had to be restarted rather than allowed to
+finish, because it carried the parser as of the first fix. That is the same rule
+already recorded above for 687, now applied twice: **a parser change made after a
+pass has started leaves the rows it already wrote on the older reading**, and
+there is no way to tell those rows apart afterwards, because the row itself is
+the only record of how it was read.
+
+The consolation is the shape of the error. Every figure the app was missing here
+was a figure the filing reported and the app never looked at -- an absence, not a
+wrong number, with the single exception of the six `Časové rozlíšenie` rows,
+which were the wrong number and were found by asking what the flag *routes*
+rather than what it matches.
+
+**The stale readings are measurable, which is what makes the restart an argument
+rather than a precaution.** Two fields show it without any template work at all.
+Across the database 24 323 rows carry `liabilities_accruals` with
+`assets_accruals` empty, against 1 709 the other way round -- an asymmetry no
+accounting fact explains, since both sides of every company template carry the
+row. Re-reading three of those filings with the shipped parser returns both
+figures on all six statements (e.g. `00332402`, 2025: `assets_accruals`
+2 533.11 alongside `liabilities_accruals` 824 513.51). The same rows also have
+`assets_current` empty, which the shipped parser reads. Those rows are simply
+older readings, and the row itself is the only record of how it was read -- so
+nothing distinguishes them afterwards, exactly as recorded above for 687. The
+asymmetry is not a defect in the current parser; it is the size of the backlog
+the restart clears.

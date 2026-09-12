@@ -83,6 +83,10 @@ class ExtractionOutcome(NamedTuple):
 
 _TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)\s*$")
 
+# The section letter a form puts in front of a heading: `a. Vlastné zdroje ...`.
+# See `_is_summary_row`, which is the only place it is stripped.
+_LEADING_SECTION_LETTER = re.compile(r"^[a-z]\.\s+")
+
 BALANCE_SHEET_KEYS = (
     "suvaha",
     "bilancia",
@@ -104,7 +108,48 @@ BALANCE_SHEET_KEYS = (
     # keys already rely on.
     "majetok",
     "zavazky",
+    # Sixteen templates name their two sides `Aktíva` / `Pasíva` and nothing
+    # else -- the social and health insurers (29, 1141 are the social-insurance
+    # statements), the commercial insurers (662, 663, 711, 723, 738, 941, 1121,
+    # 5181), and six more that letter-space the same words, `A K T Í V A` /
+    # `P A S Í V A` (541, 542, 801, 1001, 1101, 5184). The tuple above held only
+    # `strana aktiv` / `strana pasiv`, so none of those 32 tables was recognised
+    # as a balance sheet at all: the whole block below is gated on
+    # `is_balance_sheet`, so every row of both sides was skipped before any row
+    # was looked at. Measured over the corpus 2026-09-13: 32 tables, 1 211 rows
+    # of filed figures the app never opened, and no table lost in exchange --
+    # the tuple only grew. It is why an insurer's Súvaha tab
+    # showed a P&L and nothing else, and why the identity control answered
+    # "Súvahu nemožno overiť" for every insurer rather than judging one.
+    #
+    # The asset side of the eight commercial-insurance templates stays unread
+    # after this, and that is a *vocabulary* gap rather than a gate one: their
+    # lines are `Majetkové podiely`, `Finančné nástroje v reálnej hodnote`,
+    # `Pohľadávky z poistenia a zaistenia` -- a different chart of accounts, for
+    # which no key exists here. Inventing them from the template alone, without
+    # a filing to check the mapping against, is the one direction this file
+    # never takes. Recorded rather than guessed at.
+    "aktiva",
+    "pasiva",
 )
+
+
+def _table_name_matches(name: str, keys: tuple) -> bool:
+    """Whether a table's name is one of `keys`, ignoring spaces inside it.
+
+    Six templates write the side as `A K T Í V A`: the spaces are a typographic
+    layout in the printable form, not part of the word, and a plain substring
+    test reads that as neither side. Collapsing spaces on both sides costs
+    nothing -- it can only make a name that already means one of these words
+    match the word -- and it is the difference between opening those tables and
+    silently skipping them.
+    """
+    if not name:
+        return False
+    if any(key in name for key in keys):
+        return True
+    compact = name.replace(" ", "")
+    return any(key.replace(" ", "") in compact for key in keys)
 
 ASSETS_LABELS = {
     "dlhodoby nehmotny majetok sucet": "assets_intangible",
@@ -148,6 +193,28 @@ ASSETS_LABELS = {
     # whole template corpus, so neither can shadow another line.
     "peniaze a ucty v bankach": "assets_financial_accounts",
     "ostatne financne ucty": "assets_financial_short",
+    # The two 687 rows that were still unread, and why their obvious keys are
+    # the wrong ones. 687 marks neither with `súčet`/`spolu`: r.15 is
+    # "Zásoby (112, 119, 11X, 121, …)" and r.16 "Dlhodobé pohľadávky (311A,
+    # …)". The short keys that name them are not exact -- `zasoby (` is
+    # contained in the `Poskytnuté (prevádzkové) preddavky na zásoby` rows of
+    # nine templates, and `dlhodobe pohladavky (` in templates 29 and 1141's
+    # `Ostatné dlhodobé pohľadávky`, both *sub-lines* rather than the totals
+    # -- so each key below carries the start of its row's account list, which
+    # is what makes it occur in exactly one row of the whole 245-template
+    # corpus (measured 2026-09-13). The price of the longer key is that a
+    # future template listing the accounts differently leaves the row unread,
+    # which is the direction this file prefers: unread is a gap, wrong is a
+    # claim.
+    #
+    # The gap was real rather than cosmetic because both rows feed
+    # `current_assets_of`'s fallback sum. 687 reports its current-assets total
+    # as "r. 15 + r. 16 + r. 17 + r. 21", and r.21 is itself r.22 + r.23 -- so
+    # the fallback's five terms expand to exactly r.14. With two of them
+    # unread, a 687 filing that left r.14 blank would have reported *smaller*
+    # current assets than it filed, not unknown ones.
+    "zasoby (112": "assets_inventory",
+    "dlhodobe pohladavky (311a": "assets_receivables_long",
 }
 
 # `Obežný majetok` (r.33) is a *substring* of `Neobežný majetok` (r.2), so the
@@ -162,6 +229,51 @@ ASSETS_LABELS = {
 # smaller, not unknown.
 CURRENT_ASSETS_PREFIX = "obezny majetok"
 
+# Which tables carry the liabilities side, judged by the table's own name. The
+# bare stem `pasiv`, not a list of the spellings seen so far: ten templates (29,
+# 662, 663, 711, 723, 738, 941, 1121, 1141, 5181) name the table exactly
+# `Pasíva`, which `strana pasiv` does not match, so the name-side test called
+# all ten asset tables. That gap was covered up by the row trigger below
+# firing by accident -- in eight of the ten on row 0, which is why it went
+# unnoticed, and in 29 and 1141 on row 22, which is why it cost something.
+LIABILITIES_TABLE_KEYS = ("strana pasiv", "liabilities", "pasiv", "zavazky")
+
+# Where a *combined* table switches from the asset side to the liabilities side:
+# a row that *begins* the other side. For every table the app has met, the name
+# above already decides the side and this never fires usefully -- what it did
+# instead was fire harmfully. Matching `zavazky` anywhere in the label made six
+# templates (2, 9, 11, 522, 684, 690 -- the ROPO / municipal and consolidated
+# statements) switch sides in the middle of their **asset** table, at the line
+# item `Pohľadávky a záväzky z pevných termínových operácií (373AÚ)` -- a
+# receivable, on the asset side, mentioning payables in its name.
+#
+# The cost was three fields, not the two first recorded, and one of them was a
+# *wrong* value rather than a missing one. Measured over all 245 templates
+# 2026-09-13 by replaying this branch under both rules: the six lost
+# `Krátkodobé pohľadávky súčet` and `Finančné účty súčet` (the cash total
+# itself), and -- because `Časové rozlíšenie` is the one row routed to two
+# different fields *by this flag* -- their asset-side accrual was stored as
+# `liabilities_accruals`, with `assets_accruals` left empty. So the earlier
+# reading of this defect, "a wrong flag yields no field rather than a wrong
+# one", held for the two disjoint vocabularies and missed the one row that is
+# not in either of them.
+#
+# Anchoring keeps the mechanism for a combined table this app has not met yet
+# and removes every effect it has had.
+#
+# Measured against the corpus by replaying the branch both ways, all vocabularies
+# at their shipped values: anchoring gains 12 fields, moves 6 (the six
+# `Časové rozlíšenie` rows, the wrong-value case above) and -- once
+# `LIABILITIES_TABLE_KEYS` below carries `pasiv` -- loses nothing. Held against
+# the tuple it was first written for, it did lose two: `Dlhodobé záväzky súčet`
+# in 29 and 1141 sat on row 22, where the loose test fired *on the row itself*
+# and so put it on the liabilities side by accident -- `dlhodobe zavazky sucet`
+# contains `zavazky`. Anchoring removed the accident and the row went with it.
+# That is what the table keys are for: a table named `Pasíva` is the liabilities
+# side because its own name says so, not because a line item's name tripped a
+# test meant for section headings.
+LIABILITIES_SECTION_MARKERS = ("vlastne imanie", "vlastny kapital", "pasiva", "zavazky")
+
 # The three totals, as prefixes for `_is_summary_row`, which anchors at the
 # start of the label and then accepts an empty remainder or `r.` / `sucet` /
 # `spolu`. "Majetok celkom" and "Záväzky celkom" therefore need their own entry:
@@ -169,7 +281,24 @@ CURRENT_ASSETS_PREFIX = "obezny majetok"
 # the form this app uses everywhere else (`frontend/utils/pdfExport.ts`,
 # `components/company/LiabilitiesPieChart.tsx`) -- which is why
 # `LIABILITIES_TOTAL_LABELS` has always listed it.
-ASSETS_TOTAL_LABELS = ("majetok spolu", "aktiva celkom", "spolu majetok", "majetok celkom")
+#
+# `aktiva spolu` is the fourth spelling and the one that closes those sixteen
+# templates: it is the last row of their `Aktíva` table, and measured over the
+# corpus it is the only row label that begins with those words -- 16 templates
+# carry it and none of them could read an assets total before.
+#
+# `pasiva spolu` is its counterpart on the other side, and it is deliberately in
+# *neither* total vocabulary. It is not the liabilities total: it is the whole
+# pasíva side, equity included. Measured on `30807484` (Sociálna poisťovňa,
+# šablóna 29, 2015) the row carries 1 104 603 246.61, which is 1 062 050 495.44
+# of equity plus 42 552 751.17 of liabilities. Reading it as `liabilities_total`
+# was tried and withdrawn: the app's identity control builds the pasíva side as
+# `equity + liabilities_total + accruals`, so a value that already contains the
+# equity would be counted twice -- and because `equity` was absent at the time,
+# the control would have compared the assets total with itself and reported the
+# balance sheet as verified. A control that passes for that reason is worse than
+# one that refuses.
+ASSETS_TOTAL_LABELS = ("majetok spolu", "aktiva celkom", "spolu majetok", "majetok celkom", "aktiva spolu")
 
 LIABILITIES_LABELS = {
     "zakladne imanie sucet": "equity_basic",
@@ -191,7 +320,18 @@ LIABILITIES_LABELS = {
 # Bare prefixes, not the full labels: `_is_summary_row` already accepts the
 # `sucet` and `spolu` remainders, so "vlastne imanie" covers "Vlastné imanie",
 # "Vlastné imanie súčet" and "Vlastné imanie spolu" at once.
-EQUITY_TOTAL_LABELS = ("vlastne imanie", "vlastny kapital")
+#
+# `vlastne zdroje krytia majetku` is the same figure under the insurance and
+# social-insurance wording -- "own sources covering assets". It is the equity
+# total, and it is what the identity control was missing for the social insurer:
+# measured on `30807484` (Sociálna poisťovňa, šablóna 29, 2015) the row reads
+# 1 062 050 495.44 and `b. Cudzie zdroje` reads 42 552 751.17, summing exactly to
+# the 1 104 603 246.61 on `Pasíva spolu`. Measured over the corpus the phrase
+# occurs in four distinct labels. The key accepts three of them -- the two
+# insurance equity totals and `Vlastné zdroje krytia majetku spolu` in 17 and 385
+# -- and rejects the fourth, `vlastne zdroje a cudzie zdroje spolu`, which is the
+# whole pasíva side and must stay unread by every total vocabulary.
+EQUITY_TOTAL_LABELS = ("vlastne imanie", "vlastny kapital", "vlastne zdroje krytia majetku")
 LIABILITIES_TOTAL_LABELS = ("zavazky", "cudzie zdroje", "zavazky celkom")
 
 # Which fields make a statement worth a row: the five headline aggregates.
@@ -711,20 +851,24 @@ class RuzFinancialsSyncService:
         table_name = self._normalize_text(
             self._table_name(template_table) or self._table_name(table)
         )
-        is_balance_sheet = any(k in table_name for k in BALANCE_SHEET_KEYS) if table_name else False
+        is_balance_sheet = _table_name_matches(table_name, BALANCE_SHEET_KEYS)
 
         # `in_liabilities_section` starts the row loop on the right side. The
-        # per-row check further down corrects it, but only once it has seen a
-        # row containing `zavazky` -- so a `Záväzky` table whose first row is
-        # `Rezervy súčet` would read that row as an asset. The blast radius is
-        # bounded (`ASSETS_LABELS` and `LIABILITIES_LABELS` are disjoint, so a
-        # wrong flag yields no field rather than a wrong one), but the flag
-        # should still be right.
-        is_liabilities_table = (
-            any(k in table_name for k in ("strana pasiv", "liabilities", "zavazky"))
-            if table_name
-            else False
-        )
+        # table's own name decides it (see `LIABILITIES_TABLE_KEYS`), and for all
+        # 245 templates that is now enough -- every table is named for the side
+        # it carries. The per-row check further down exists only for a
+        # *combined* table, one whose name identifies neither side, and it is
+        # anchored so that a line item whose name merely mentions the other side
+        # cannot switch it (see `LIABILITIES_SECTION_MARKERS`).
+        #
+        # The flag's blast radius is bounded in the two disjoint vocabularies --
+        # a wrong flag yields no field rather than a wrong one -- but not
+        # entirely: `Časové rozlíšenie` is routed to `assets_accruals` or
+        # `liabilities_accruals` *by this flag*, so a wrong flag there is a wrong
+        # value. That is the one row the six ROPO/municipal templates had
+        # misfiled, and it is why the name-side test above had to be complete
+        # rather than merely adequate-by-accident.
+        is_liabilities_table = _table_name_matches(table_name, LIABILITIES_TABLE_KEYS)
 
         in_liabilities_section = is_liabilities_table
 
@@ -809,7 +953,7 @@ class RuzFinancialsSyncService:
             if not is_balance_sheet:
                 continue
 
-            if any(k in row_label for k in ("vlastne imanie", "vlastny kapital", "pasiva", "zavazky")):
+            if row_label.startswith(LIABILITIES_SECTION_MARKERS):
                 in_liabilities_section = True
 
             if self._is_summary_row(row_label, ASSETS_TOTAL_LABELS):
@@ -868,11 +1012,27 @@ class RuzFinancialsSyncService:
         values sitting in the table -- measured on `00681393` and `00699349`
         2026-09-12, after the table names themselves were already recognised.
 
-        Only this predicate strips it. The `ASSETS_LABELS` / `LIABILITIES_LABELS`
-        lookups below still match against the full label, so a note row cannot
-        start producing a line item.
+        A *leading* section letter is dropped for the same reason and in the same
+        place. The insurance statements number their sides `a.` and `b.`, and
+        both of the figures the balance-sheet identity needs sit behind one:
+        `a. Vlastné zdroje krytia majetku súčet (r. 057 + r. 062 + r. 072)` is
+        the equity total and `b. Cudzie zdroje súčet (r.077 + ...)` is the
+        liabilities total, in templates 29 and 1141. Measured over the corpus by
+        replaying the predicate both ways, all vocabularies at their shipped
+        values: dropping it changes three labels' verdicts and gains four fields
+        -- both figures in both templates -- and removes none. (An earlier note
+        in this docstring said "exactly one label", which was true when it was
+        measured and stopped being true when
+        `vlastne zdroje krytia majetku` joined `EQUITY_TOTAL_LABELS` and made the
+        two `a.` rows readable as well. The letter was always what stood between
+        them and the vocabulary; the missing key hid that.) The letter is the
+        form's own numbering, not part of the name.
+
+        Only this predicate strips either. The `ASSETS_LABELS` /
+        `LIABILITIES_LABELS` lookups below still match against the full label, so
+        a note row cannot start producing a line item.
         """
-        label = _TRAILING_PARENTHETICAL.sub("", label).strip()
+        label = _LEADING_SECTION_LETTER.sub("", _TRAILING_PARENTHETICAL.sub("", label).strip())
         for prefix in prefixes:
             if not label.startswith(prefix):
                 continue
