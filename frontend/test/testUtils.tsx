@@ -2,7 +2,7 @@ import {render} from '@testing-library/react';
 import type {ReactElement} from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {ThemeProvider} from '../context/ThemeContext';
-import type {Company, User} from '../types';
+import type {Company, Financials, User} from '../types';
 
 export const DEFAULT_USER: User = {
     id: 'u-test',
@@ -18,6 +18,50 @@ export const DEFAULT_USER: User = {
 };
 
 export const makeUser = (overrides: Partial<User> = {}): User => ({...DEFAULT_USER, ...overrides});
+
+/**
+ * One statement row that filed nothing, for the cases that name what they need.
+ *
+ * Every line is `null` rather than 0 on purpose -- that is the distinction the
+ * statement sections are built around, and a fixture that defaulted to zero
+ * would let a test pass while the screen showed a figure the filing never had.
+ */
+export const DEFAULT_FINANCIALS: Financials = {
+    year: 2023,
+    revenue: null,
+    profit: null,
+    totalRevenue: null,
+    costs: null,
+    addedValue: null,
+    incomeTax: null,
+    incomeTaxPaid: null,
+    assetsTotal: null,
+    assetsIntangible: null,
+    assetsTangible: null,
+    assetsFinancial: null,
+    assetsInventory: null,
+    assetsReceivablesLong: null,
+    assetsReceivablesShort: null,
+    assetsFinancialAccounts: null,
+    assetsAccruals: null,
+    equity: null,
+    equityBasic: null,
+    equityCapitalFunds: null,
+    equityProfitFunds: null,
+    equityRetained: null,
+    liabilitiesTotal: null,
+    liabilitiesReserves: null,
+    liabilitiesLong: null,
+    liabilitiesShort: null,
+    liabilitiesAccruals: null,
+    debtRatio: null,
+    grossMargin: null,
+};
+
+export const makeFinancials = (overrides: Partial<Financials> = {}): Financials => ({
+    ...DEFAULT_FINANCIALS,
+    ...overrides,
+});
 
 /** A company with nothing filed anywhere, for the cases that name what they need. */
 export const DEFAULT_COMPANY: Company = {

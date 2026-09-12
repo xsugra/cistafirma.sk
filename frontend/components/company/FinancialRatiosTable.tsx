@@ -177,7 +177,14 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                                     {section.rows.map((row) => {
                                         const ratios = analysis.ratios as unknown as Record<string, number | null>;
                                         const value = ratios[row.key];
-                                        const interp = analysis.interpretation[row.key] || 'bad';
+                                        // A row with no figure gets no verdict. The
+                                        // backend answers `bad` for a value the
+                                        // statement never carried, which put a red
+                                        // "Riziková" badge beside a dash -- a claim
+                                        // about the company rather than the filing.
+                                        const interp = value == null
+                                            ? null
+                                            : (analysis.interpretation[row.key] || 'bad');
                                         const prevVal = getPrevValue(row.key);
 
                                         return (
@@ -201,11 +208,15 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                                                     )}
                                                 </td>
                                                 <td className="px-4 py-2.5 text-right">
-                                                    <span
-                                                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${INTERPRETATION_COLORS[interp]}`}
-                                                    >
-                                                        {INTERPRETATION_LABELS[interp]}
-                                                    </span>
+                                                    {interp ? (
+                                                        <span
+                                                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${INTERPRETATION_COLORS[interp]}`}
+                                                        >
+                                                            {INTERPRETATION_LABELS[interp]}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-gray-400 dark:text-gray-500">—</span>
+                                                    )}
                                                 </td>
                                             </tr>
                                         );

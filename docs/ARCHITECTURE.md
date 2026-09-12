@@ -81,7 +81,15 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 | `orsr` | 4 h | ORSR sync pre chýbajúce profily |
 | `financials` | 12 h | RUZ finančné výsledky per-company |
 | `insurance` | 12 h | Kontrola dlhov v poisťovniach (VŠZP, Soc. poisťovňa) |
-| `celery` (default) | 24 h | Aktualizácia FS dát, orchestračné a ad-hoc úlohy |
+| `celery` (default) | 24 h | Aktualizácia FS dát, sektorové mediány, orchestračné a ad-hoc úlohy |
+
+> `compute-sector-benchmarks-daily` prepočítava mediány (`SectorBenchmark`),
+> proti ktorým sa na stránke firmy porovnávajú jej vlastné ukazovatele. Úloha
+> mala v docstringu „beží raz denne cez Celery Beat" odjakživa, ale **žiadny
+> záznam v `CELERY_BEAT_SCHEDULE` ani riadok v `PeriodicTask` neexistoval** —
+> tabuľka bola prázdna a benchmark sa nezobrazoval nikde (ani v PDF). Zapisuje
+> výhradne riadky `SectorBenchmark` (`update_or_create`, jeden na NACE sekciu),
+> číta len našu databázu a na registre nerobí žiadny request.
 
 > `insurance` je **kapacitne viazaná, nie intervalom viazaná**: interval určuje
 > len to, ktoré firmy sú *due* (`last_insurance_debt` staršie ako 12 h alebo

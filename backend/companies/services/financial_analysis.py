@@ -69,10 +69,46 @@ THRESHOLDS: dict[str, tuple[float | None, float | None, float | None, float | No
 
 
 def _safe_float(value: Decimal | float | None) -> float:
-    """Convert Decimal/float/None to float, returning 0.0 for None."""
+    """Convert Decimal/float/None to float, returning 0.0 for None.
+
+    Read `_amount` below before using this on a figure that becomes a ratio.
+    Collapsing absence into zero is right where the value is only ever summed
+    and compared, and wrong where it is divided by something: a line the filing
+    never carried then enters a sector median as a measured zero, which is how
+    the median gross margin of a whole NACE section came out as 0.0 %.
+    """
     if value is None:
         return 0.0
     return float(value)
+
+
+def _amount(value: Decimal | float | None) -> float | None:
+    """A stored figure as a float, or `None` when the statement lacked it."""
+    return None if value is None else float(value)
+
+
+def _sum_present(*values: float | None) -> float | None:
+    """The sum of the lines actually filed, or `None` if none of them was.
+
+    A sum of present lines is a measurement; a sum with an absent line counted
+    as zero is a guess wearing the same clothes.
+    """
+    present = [v for v in values if v is not None]
+    return sum(present) if present else None
+
+
+def _ratio_present(a: float | None, b: float | None) -> float | None:
+    """`a / b` as a percentage, or `None` if either side was not filed."""
+    if a is None or b is None:
+        return None
+    return _ratio(a, b)
+
+
+def _simple_ratio_present(a: float | None, b: float | None) -> float | None:
+    """`a / b` as a multiple, or `None` if either side was not filed."""
+    if a is None or b is None:
+        return None
+    return _simple_ratio(a, b)
 
 
 def _ratio(a: float, b: float) -> float | None:
@@ -159,6 +195,11 @@ class FinancialAnalysisService:
         total_revenue = _safe_float(fr.total_revenue)
         added_value = _safe_float(fr.added_value)
 
+        # The same two totals, keeping "not filed" distinct -- the zero-based
+        # `assets_total`/`equity` above are what the Z-score arithmetic takes.
+        assets_filed = _amount(fr.assets_total)
+        equity_filed = _amount(fr.equity)
+
         # `_safe_float` maps an absent figure to 0.0, which is right for an
         # arithmetic term and wrong for a *ratio*: a company whose statement
         # carries a balance sheet and no income statement has no ROA, it does
@@ -176,39 +217,58 @@ class FinancialAnalysisService:
             for name in ("revenue", "profit", "total_revenue", "costs")
         )
 
-        # Assets detail
-        inventory = _safe_float(fr.assets_inventory)
-        receivables_short = _safe_float(fr.assets_receivables_short)
-        receivables_long = _safe_float(fr.assets_receivables_long)
-        financial_accounts = _safe_float(fr.assets_financial_accounts)
+        # Assets detail. None-preserving, because each of these becomes a
+        # liquidity ratio below: `_safe_float` would turn an unfiled line into
+        # a filed zero, and a company whose statement never carried a financial
+        # account was being shown a cash ratio of 0.0 % -- filed as `bad`, i.e.
+        # "no cash", which is a claim about the company and not about the filing.
+        inventory = _amount(fr.assets_inventory)
+        receivables_short = _amount(fr.assets_receivables_short)
+        receivables_long = _amount(fr.assets_receivables_long)
+        financial_accounts = _amount(fr.assets_financial_accounts)
 
-        # Liabilities detail
+        # Liabilities detail. `liabilities_total` stays zero-based: it is a term
+        # in the Altman arithmetic (`liabilities_total > 0`, `equity /
+        # liabilities_total`), not an input to a ratio of its own --
+        # `debt_to_equity` is guarded on the raw fields instead.
         liabilities_total = _safe_float(fr.liabilities_total)
-        liabilities_short = _safe_float(fr.liabilities_short)
+        liabilities_short = _amount(fr.liabilities_short)
         equity_retained = _safe_float(fr.equity_retained)
 
         # --- compute current assets and working capital ---
-        current_assets = inventory + receivables_short + receivables_long + financial_accounts
-        working_capital = current_assets - liabilities_short
+        # A partial sum is the reading the filing supports, and it is the same
+        # sum the sector medians take (`benchmarking._compute_section_metrics`),
+        # so the figure in the benchmark row and the median beside it are built
+        # the same way. Only "the filing carried none of the four lines" is
+        # unknown, and that is what `_sum_present` answers with None.
+        current_assets = _sum_present(
+            inventory, receivables_short, receivables_long, financial_accounts
+        )
+        # X1 of the Z-score still reads an absent component as 0, as it always
+        # has (see the note above the formula); that understates rather than
+        # fabricates, and it is deliberately not the ratio-set rule.
+        working_capital = (current_assets or 0.0) - (liabilities_short or 0.0)
 
         # --- ratios ---
         ratios = RatioSet(
             roa=_ratio(profit, assets_total) if has_income else None,
             roe=_ratio(profit, equity) if has_income else None,
             ros=_ratio(profit, total_revenue),
-            current_ratio=_simple_ratio(current_assets, liabilities_short),
-            quick_ratio=_simple_ratio(receivables_short + financial_accounts, liabilities_short),
-            cash_ratio=_simple_ratio(financial_accounts, liabilities_short),
+            current_ratio=_simple_ratio_present(current_assets, liabilities_short),
+            quick_ratio=_simple_ratio_present(
+                _sum_present(receivables_short, financial_accounts), liabilities_short
+            ),
+            cash_ratio=_simple_ratio_present(financial_accounts, liabilities_short),
             asset_turnover=_simple_ratio(total_revenue, assets_total) if has_income else None,
             receivables_collection=_simple_ratio(
                 receivables_short / max(total_revenue, 1) * 365, 1
-            ) if total_revenue else None,
+            ) if total_revenue and receivables_short is not None else None,
             # Guarded on the balance-sheet lines themselves, not on `has_income`:
             # this one is fabricated by an absent *liability* figure.
             debt_to_equity=_simple_ratio(liabilities_total, equity)
             if fr.liabilities_total is not None and fr.equity is not None
             else None,
-            self_financing_ratio=_ratio(equity, assets_total),
+            self_financing_ratio=_ratio_present(equity_filed, assets_filed),
         )
 
         # --- interpretation ---

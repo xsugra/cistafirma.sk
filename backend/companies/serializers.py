@@ -6,18 +6,13 @@ from rest_framework import serializers
 from core.constants import PERSON_SKIP_PREFIXES
 from registers.models import CompanySyncStatus
 from .models import Company, Watchlist, SectorBenchmark, SearchHistory
-from .services.financial_analysis import FinancialAnalysisService
+from .services.financial_analysis import (
+    FinancialAnalysisService,
+    _amount,
+    _ratio_present,
+    _sum_present,
+)
 from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
-
-
-def _amount(value):
-    """A stored figure as a float, or `None` when the statement lacks it.
-
-    `float(value or 0)` is the collapse this exists to undo: it makes an absent
-    line and a zero line the same value, and a balance sheet stored without an
-    income statement is a normal row now, not a corner case.
-    """
-    return None if value is None else float(value)
 
 
 #: The closed vocabulary `financialsState` answers with -- a token, not a
@@ -122,8 +117,12 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         have `revenue` and `profit` unset. `None` is the only representation that
         survives to the screen as `—` instead of `0 €`.
 
-        The two ratios keep their own guards -- dividing by an absent total is
-        still not a division, whatever the numerator.
+        The two ratios are computed by the same expressions the sector medians
+        are computed by (`companies/services/benchmarking.py`), on purpose: the
+        benchmark prints them side by side, and a comparison between two
+        different formulas is not a comparison. That means an absent input
+        yields no ratio here too -- a company that filed a balance sheet with no
+        liabilities line has an unknown debt ratio, not a debt-free one.
         """
         results = obj.financial_results.all().order_by('year')
         out = []
@@ -134,17 +133,10 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             liabilities_total = _amount(r.liabilities_total)
             liabilities_accruals = _amount(r.liabilities_accruals)
 
-            debt_ratio = None
-            if assets_total:
-                debt_ratio = round(
-                    ((liabilities_total or 0) + (liabilities_accruals or 0))
-                    / assets_total * 100,
-                    2,
-                )
-
-            gross_margin = None
-            if revenue:
-                gross_margin = round((added_value or 0) / revenue * 100, 2)
+            debt_ratio = _ratio_present(
+                _sum_present(liabilities_total, liabilities_accruals), assets_total
+            )
+            gross_margin = _ratio_present(added_value, revenue)
 
             out.append({
                 'year': r.year,

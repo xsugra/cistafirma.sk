@@ -19,7 +19,12 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from ..models import Company, SectorBenchmark
-from .financial_analysis import FinancialAnalysisService
+from .financial_analysis import (
+    FinancialAnalysisService,
+    _amount,
+    _ratio_present,
+    _sum_present,
+)
 from .nace import get_nace_info
 
 logger = logging.getLogger(__name__)
@@ -302,13 +307,27 @@ def generate_company_report(company: Company) -> bytes:
                     'company_count': bm.company_count,
                 }
                 company_ratios = analysis['latest']['ratios']
+                # The row is labelled with a percentage and the sector side is
+                # a percentage, so the company side has to be one too. It used
+                # to be `debt_to_equity` -- a multiple, printed with a '%' sign
+                # beside a percentage median, which flattered almost every
+                # company. The filed debt ratio for the analysed year is the
+                # figure the sector median is a median *of*.
+                latest_fr = financial_results[-1]
+                filed_debt_ratio = _ratio_present(
+                    _sum_present(
+                        _amount(latest_fr.liabilities_total),
+                        _amount(latest_fr.liabilities_accruals),
+                    ),
+                    _amount(latest_fr.assets_total),
+                )
                 bench_metrics = [
-                    ('ROA', company_ratios.get('roa'), float(bm.median_roa) if bm.median_roa else None, '%'),
-                    ('ROE', company_ratios.get('roe'), float(bm.median_roe) if bm.median_roe else None, '%'),
-                    ('ROS', company_ratios.get('ros'), float(bm.median_ros) if bm.median_ros else None, '%'),
-                    ('Zadĺženosť', company_ratios.get('debt_to_equity'), float(bm.median_debt_ratio) if bm.median_debt_ratio else None, '%'),
-                    ('L3 Likvidita', company_ratios.get('current_ratio'), float(bm.median_current_ratio) if bm.median_current_ratio else None, '×'),
-                    ('Samofinancovanie', company_ratios.get('self_financing_ratio'), float(bm.median_self_financing_ratio) if bm.median_self_financing_ratio else None, '%'),
+                    ('ROA', company_ratios.get('roa'), _amount(bm.median_roa), '%'),
+                    ('ROE', company_ratios.get('roe'), _amount(bm.median_roe), '%'),
+                    ('ROS', company_ratios.get('ros'), _amount(bm.median_ros), '%'),
+                    ('Zadĺženosť', filed_debt_ratio, _amount(bm.median_debt_ratio), '%'),
+                    ('L3 Likvidita', company_ratios.get('current_ratio'), _amount(bm.median_current_ratio), '×'),
+                    ('Samofinancovanie', company_ratios.get('self_financing_ratio'), _amount(bm.median_self_financing_ratio), '%'),
                 ]
                 for label, cv, sv, unit in bench_metrics:
                     benchmark_rows.append({

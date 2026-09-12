@@ -16,7 +16,12 @@ from typing import Any
 from django.db.models import QuerySet
 
 from ..models import Company, CompanyFinancialResult, SectorBenchmark
-from .financial_analysis import FinancialAnalysisService, _safe_float, _ratio, _simple_ratio
+from .financial_analysis import (
+    FinancialAnalysisService,
+    _amount,
+    _ratio_present,
+    _sum_present,
+)
 from .nace import get_nace_section
 
 logger = logging.getLogger(__name__)
@@ -151,23 +156,27 @@ def _compute_section_metrics(fr_list: list[CompanyFinancialResult], section: str
     ratios_self = []
 
     for fr in fr_list:
-        # Raw values
-        profit = _safe_float(fr.profit)
-        assets_total = _safe_float(fr.assets_total)
-        equity = _safe_float(fr.equity)
-        total_revenue = _safe_float(fr.total_revenue)
-        revenue = _safe_float(fr.revenue)
-        added_value = _safe_float(fr.added_value)
-        liabilities_total = _safe_float(fr.liabilities_total)
-        liabilities_short = _safe_float(fr.liabilities_short)
-        liabilities_accruals = _safe_float(fr.liabilities_accruals)
+        # Raw values. Every one of these becomes a ratio below, so an absent
+        # line has to stay absent rather than arrive as 0.0 -- `_safe_float`
+        # is deliberately not used here (see its docstring).
+        profit = _amount(fr.profit)
+        assets_total = _amount(fr.assets_total)
+        equity = _amount(fr.equity)
+        total_revenue = _amount(fr.total_revenue)
+        revenue = _amount(fr.revenue)
+        added_value = _amount(fr.added_value)
+        liabilities_total = _amount(fr.liabilities_total)
+        liabilities_short = _amount(fr.liabilities_short)
+        liabilities_accruals = _amount(fr.liabilities_accruals)
 
-        # Current assets
-        current_assets = (
-            _safe_float(fr.assets_inventory)
-            + _safe_float(fr.assets_receivables_short)
-            + _safe_float(fr.assets_receivables_long)
-            + _safe_float(fr.assets_financial_accounts)
+        # Current assets. A partial sum is still the best reading the filing
+        # supports, and it is the same sum the per-company ratio set takes --
+        # so the median and the figure it is compared against agree.
+        current_assets = _sum_present(
+            _amount(fr.assets_inventory),
+            _amount(fr.assets_receivables_short),
+            _amount(fr.assets_receivables_long),
+            _amount(fr.assets_financial_accounts),
         )
 
         if revenue:
@@ -179,14 +188,17 @@ def _compute_section_metrics(fr_list: list[CompanyFinancialResult], section: str
         if equity:
             equities.append(equity)
 
-        # Ratios
-        roa = _ratio(profit, assets_total)
-        roe = _ratio(profit, equity)
-        ros = _ratio(profit, total_revenue)
-        debt_ratio = _ratio(liabilities_total + liabilities_accruals, assets_total)
-        gross_margin = _ratio(added_value, max(revenue, 1))
-        current_ratio = _simple_ratio(current_assets, liabilities_short)
-        self_financing = _ratio(equity, assets_total)
+        # Ratios. `_ratio_present` answers "not filed" with None, so the row
+        # leaves the median instead of voting for zero.
+        roa = _ratio_present(profit, assets_total)
+        roe = _ratio_present(profit, equity)
+        ros = _ratio_present(profit, total_revenue)
+        debt_ratio = _ratio_present(
+            _sum_present(liabilities_total, liabilities_accruals), assets_total
+        )
+        gross_margin = _ratio_present(added_value, revenue)
+        current_ratio = _ratio_present(current_assets, liabilities_short)
+        self_financing = _ratio_present(equity, assets_total)
 
         if roa is not None:
             ratios_roa.append(roa)

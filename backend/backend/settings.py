@@ -407,6 +407,18 @@ CELERY_BEAT_SCHEDULE = {
         'args': [2000],
         'options': {'expires': 43000.0, 'queue': 'financials'},
     },
+    # Recomputes the sector medians the benchmark table compares a company
+    # against. It was written to run daily -- its own docstring says so -- but
+    # no entry here and no `PeriodicTask` row ever existed, so
+    # `SectorBenchmark` was empty and the benchmark block rendered nowhere: not
+    # on the company page, not in the PDF export. Writes only `SectorBenchmark`
+    # rows (one per NACE section, `update_or_create`), reads only our own
+    # database, and issues no request to any register.
+    'compute-sector-benchmarks-daily': {
+        'task': 'registers.tasks.compute_sector_benchmarks',
+        'schedule': 86400.0,
+        'options': {'expires': 85000.0, 'queue': 'celery'},
+    },
     'send-pending-notifications-every-15-min': {
         'task': 'notifications.tasks.send_pending_notifications',
         'schedule': 900.0,

@@ -1,41 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {screen} from '@testing-library/react';
 import {ProfitLossSection} from './ProfitLossSection';
-import {makeCompany, renderWithProviders} from '../../../test/testUtils';
-import type {Financials} from '../../../types';
-
-const filed = (overrides: Partial<Financials>): Financials => ({
-    year: 2023,
-    revenue: null,
-    profit: null,
-    totalRevenue: null,
-    costs: null,
-    addedValue: null,
-    incomeTax: null,
-    incomeTaxPaid: null,
-    assetsTotal: null,
-    assetsIntangible: null,
-    assetsTangible: null,
-    assetsFinancial: null,
-    assetsInventory: null,
-    assetsReceivablesLong: null,
-    assetsReceivablesShort: null,
-    assetsFinancialAccounts: null,
-    assetsAccruals: null,
-    equity: null,
-    equityBasic: null,
-    equityCapitalFunds: null,
-    equityProfitFunds: null,
-    equityRetained: null,
-    liabilitiesTotal: null,
-    liabilitiesReserves: null,
-    liabilitiesLong: null,
-    liabilitiesShort: null,
-    liabilitiesAccruals: null,
-    debtRatio: null,
-    grossMargin: null,
-    ...overrides,
-});
+import {makeCompany, makeFinancials as filed, renderWithProviders} from '../../../test/testUtils';
 
 describe('ProfitLossSection', () => {
     it('computes the year-over-year change only where both years filed the line', () => {

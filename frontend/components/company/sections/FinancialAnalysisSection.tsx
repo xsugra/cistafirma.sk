@@ -37,13 +37,21 @@ export const FinancialAnalysisSection: React.FC<FinancialAnalysisSectionProps> =
 
     const history = analysis.history || [];
     const prevAnalysis = history.length > 1 ? history[history.length - 2] : undefined;
+    // The benchmark compares against the year the analysis describes, not
+    // against the newest statement we happen to hold: the ratios and the
+    // figures beside them have to come from the same filing.
+    const analysedYear = company.financials.find((f) => f.year === analysis.latest.year) ?? null;
 
     return (
         <div className="space-y-6">
             <FinancialRatiosTable analysis={analysis.latest} prevAnalysis={prevAnalysis} />
 
             {company.benchmark && (
-                <BenchmarkComparison benchmark={company.benchmark} analysis={analysis.latest} />
+                <BenchmarkComparison
+                    benchmark={company.benchmark}
+                    analysis={analysis.latest}
+                    financials={analysedYear}
+                />
             )}
 
             {/* Year-over-year comparison */}
