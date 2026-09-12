@@ -5,6 +5,7 @@ import { Data } from './pages/Data';
 import { CompaniesBuilderPage } from './pages/CompaniesBuilderPage';
 import { Users } from './pages/Users';
 import { SyncJobs } from './pages/SyncJobs';
+import { SyncStatus } from './pages/SyncStatus';
 import { ScheduledTasks } from './pages/ScheduledTasks';
 import { AuditLog } from './pages/AuditLog';
 import { System } from './pages/System';
@@ -25,6 +26,7 @@ export function AdminApp({ onExit, userName }: Props) {
       case 'companies': return <CompaniesBuilderPage />;
       case 'users': return <Users />;
       case 'sync-jobs': return <SyncJobs />;
+      case 'sync-status': return <SyncStatus />;
       case 'scheduled-tasks': return <ScheduledTasks />;
       case 'audit-log': return <AuditLog />;
       case 'system': return <System />;

@@ -236,6 +236,8 @@ export interface CompanySyncStatus {
   last_succeeded_at: string | null;
   last_error: string | null;
   last_error_type: string | null;
+  /** What the last attempt had to say about itself, on a successful one too. */
+  last_detail: string | null;
   consecutive_failures: number;
   next_retry_at: string | null;
   is_blocked: boolean;

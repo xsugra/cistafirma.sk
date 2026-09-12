@@ -2,6 +2,7 @@
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from adminapi.permissions import IsAdminStaff, IsSuperUser
@@ -144,10 +145,23 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(SyncJobSerializer(new_job).data, status=status.HTTP_201_CREATED)
 
 
+class _SyncStatusPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+
 class CompanySyncStatusViewSet(viewsets.ReadOnlyModelViewSet):
+    # One row per company per source, so this table is as large as the book is:
+    # 111 071 rows when the admin screen was finally wired up, split across
+    # `vszp` and `social` (54 007 each), `orsr` and `financials`. Unpaginated,
+    # the endpoint answered with all of them at once -- a response the browser
+    # cannot render and, at `-consecutive_failures`, one whose first page was
+    # 49 430 rate-limited insurance rows with the interesting ones at the end.
     queryset = CompanySyncStatus.objects.all().select_related("company")
     serializer_class = CompanySyncStatusSerializer
     permission_classes = [IsAdminStaff]
+    pagination_class = _SyncStatusPagination
 
     def get_queryset(self):
         qs = super().get_queryset()
