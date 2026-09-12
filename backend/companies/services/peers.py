@@ -1,10 +1,11 @@
 """Companies that sit next to a given one.
 
-Four company-page sections ask the same question with a different boundary --
+Five company-page sections ask the same question with a different boundary --
 "who else is in this region", "who else is in this industry", "who is largest",
-"who is most like this firm". They share one query shape here rather than four
-views each spelling out its own ordering, because the interesting part is not
-the filter but the *population*: what a reader is being shown the top of.
+"who is most like this firm", "who else is this size". They share one query shape
+here rather than five views each spelling out its own ordering, because the
+interesting part is not the filter but the *population*: what a reader is being
+shown the top of.
 
 That population is the honest difficulty. Only companies with a filed RUZ
 statement have any revenue at all -- under two thousand of 445 000 in the local
@@ -49,11 +50,17 @@ import logging
 import math
 from decimal import Decimal
 
-from django.db.models import FloatField, QuerySet, Subquery
+from django.db.models import FloatField, Q, QuerySet, Subquery
 from django.db.models.functions import Abs, Cast, Ln
 
 from ..models import Company, CompanyFinancialResult
 from .nace import _extract_division, get_nace_division_name
+from .velkost import (
+    SIZE_UNKNOWN,
+    is_known_size_code,
+    normalise_size_code,
+    size_band_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +78,15 @@ SCOPE_KRAJ = 'kraj'
 SCOPE_ODVETVIE = 'odvetvie'
 SCOPE_TRZBY = 'trzby'
 SCOPE_PODOBNE = 'podobne'
+SCOPE_ZAMESTNANCI = 'zamestnanci'
 
-PEER_SCOPES = (SCOPE_PODOBNE, SCOPE_KRAJ, SCOPE_ODVETVIE, SCOPE_TRZBY)
+PEER_SCOPES = (
+    SCOPE_PODOBNE,
+    SCOPE_KRAJ,
+    SCOPE_ODVETVIE,
+    SCOPE_TRZBY,
+    SCOPE_ZAMESTNANCI,
+)
 
 #: NUTS 3 code -> Slovak region name. Not in the RUZ payload: the register
 #: sends `kraj: "1"` and the model stores the derived `SK010`-style code, so
@@ -172,20 +186,30 @@ def _active() -> QuerySet[Company]:
     return Company.objects.filter(datum_zrusenia__isnull=True)
 
 
-def _empty(scope: str, reason: str) -> dict:
+def _empty(scope: str, reason: str, in_scope: int = 0, subject=None) -> dict:
     """The payload for a scope the subject cannot be ranked in.
 
     Same key set as a filled payload, so the frontend has one shape to read and
     cannot mistake a missing key for a missing value.
+
+    `in_scope` and `subject` are overridable because "cannot be ranked" is not
+    always "there is nothing to say". `zamestnanci` cannot rank a company whose
+    size the register does not record, but the number of *other* companies in
+    that same position is the whole explanation of why -- and it is a count from
+    the same table, so it is read rather than written down here.
+
+    `total_ranked` stays 0 in every case: this is the branch for a ranking that
+    does not exist, and a caller that sees a non-zero `total_ranked` beside an
+    empty `results` would have to guess which of the two to believe.
     """
     return {
         'scope': scope,
-        'subject': None,
+        'subject': subject,
         'subject_label': None,
         'reason': reason,
         'ranked_by': 'revenue',
         'total_ranked': 0,
-        'total_in_scope': 0,
+        'total_in_scope': in_scope,
         'results': [],
     }
 
@@ -209,6 +233,73 @@ def _payload(scope, subject, subject_label, ranked, in_scope, ranked_by='revenue
     }
 
 
+def _by_size_band(scope: str, company: Company, active: QuerySet[Company]) -> dict:
+    """The companies in the subject's own employee-size band, largest first.
+
+    The band is the register's own code (`Company.velkost_organizacie`, ŠÚ SR
+    číselník 0073) and the label comes from `services/velkost.py` -- the code is
+    never rendered on its own, and the band edges are uneven (`05` spans five
+    employee counts, `11` spans twenty-five), so a bare code would be read as a
+    step.
+
+    **A company the register gives no band is not ranked, and this is the point
+    of the scope.** `00` means "nezistený" -- the register stating that it does
+    not know -- and it is the *modal* value, 205 840 of 325 337 active companies
+    (63,3 %) measured 2026-09-12, with a further 400 rows holding nothing at all.
+    Ranking those 206 240 together would be the absent-versus-zero mistake this
+    project keeps finding: "Firmy podľa zamestnancov: nezistený" over a list of
+    ten firms would read as a band called *unknown*, and the reader would take
+    the list for a category rather than for the absence of one.
+
+    So the scope refuses, and says how ordinary the refusal is by returning the
+    count of companies in the same position as `total_in_scope`. That number is
+    the sentence -- it turns "we have nothing for your firm" into "the register
+    does not record a size for your firm, which is true of 206 240 others".
+    """
+    code = normalise_size_code(company.velkost_organizacie)
+
+    if code is not None and code != SIZE_UNKNOWN and not is_known_size_code(code):
+        # Not `00`, and not a band the číselník defines either. Nothing in the
+        # live table looks like this today (every observed value is `00`-`38`,
+        # plus 400 empty rows), so it means the register has added a band and
+        # `services/velkost.py` has not caught up. Logged rather than swallowed:
+        # the reader still gets the honest "no band" answer below, but this line
+        # is the only sign that the codebook needs re-reading.
+        logger.warning(
+            'Unknown size code %r on company %s -- services/velkost.py may be '
+            'out of date with the register', code, company.ico,
+        )
+
+    label = size_band_label(code)
+    if label is None:
+        unknown = active.filter(
+            Q(velkost_organizacie__isnull=True) | Q(velkost_organizacie='')
+            | Q(velkost_organizacie=SIZE_UNKNOWN)
+        )
+        return _empty(scope, 'no_size', in_scope=unknown.count(), subject=code)
+
+    # Exact, not `iexact`, for the reason `kraj` above is exact -- the value
+    # comes from the same column as the rows being matched, so it matches itself
+    # whatever the register stored. Here there is a second reason: the table has
+    # a composite index on `(velkost_organizacie, datum_zrusenia)`
+    # (`company_size_active_idx`, migration 0010), which an `UPPER()` comparison
+    # cannot use. Measured on the live table, exact match plans as an index-only
+    # scan at 51 ms.
+    in_band = _ranked_queryset().filter(
+        company__velkost_organizacie=code
+    ).exclude(company_id=company.pk)
+
+    return _payload(
+        scope,
+        subject=code,
+        # The code *and* its text: the heading needs both, and joining them here
+        # is what stops a section from printing "04" and calling it a size.
+        subject_label=f'{code} — {label}',
+        ranked=in_band.order_by('-revenue', 'company__nazov_UJ'),
+        in_scope=active.filter(velkost_organizacie=code),
+    )
+
+
 def peers_for(company: Company, scope: str) -> dict:
     """The ranked neighbours of `company` in one `scope`.
 
@@ -216,6 +307,11 @@ def peers_for(company: Company, scope: str) -> dict:
     degrades rather than fails: with no revenue of its own there is no size to
     be similar to, so it shows the same industry ordered by size and says so
     through `ranked_by`.
+
+    `zamestnanci` refuses rather than degrading, and that asymmetry is
+    deliberate -- see `_by_size_band`. There is no neighbouring order that means
+    "the same size", so a fallback could only be a different question under this
+    heading.
     """
     if scope not in PEER_SCOPES:
         raise ValueError(f'unknown scope: {scope!r}')
@@ -256,6 +352,9 @@ def peers_for(company: Company, scope: str) -> dict:
             ).order_by('-revenue', 'company__nazov_UJ'),
             in_scope=active.filter(kraj=company.kraj),
         )
+
+    if scope == SCOPE_ZAMESTNANCI:
+        return _by_size_band(scope, company, active)
 
     prefix = _division_prefix(company.sk_NACE)
     if not prefix:

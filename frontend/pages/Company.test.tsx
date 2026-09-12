@@ -3,6 +3,7 @@ import {screen} from '@testing-library/react';
 import {Route, Routes, useParams} from 'react-router-dom';
 import {Company} from './Company';
 import {Monitoring} from './Monitoring';
+import {COMPANY_SECTIONS} from '../companySections';
 import {renderWithProviders} from '../test/testUtils';
 import type {Company as CompanyType} from '../types';
 
@@ -73,19 +74,33 @@ describe('Company page', () => {
         expect(await screen.findByTestId('probe')).toHaveTextContent('12345678/prehlad');
     });
 
-    it('says why a section we cannot fill is empty instead of showing a blank panel', async () => {
-        // The example moved from `zaverky` to `databaza-zamestnanci` when the
-        // former got a body: the claim under test is about a section that has
-        // none, so the fixture has to be one that still does not.
-        renderWithProviders(
-            <Routes>
-                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
-            </Routes>,
-            {route: '/firma/12345678/databaza-zamestnanci'},
-        );
+    it('says why every section we cannot fill is empty, not just the one we picked', async () => {
+        // A loop over the registry rather than one hard-coded id. This test used
+        // to name a single unfilled section and had to be re-pointed each time
+        // one of them got a body -- `zaverky` first, then
+        // `databaza-zamestnanci`. The claim was never about one section: an
+        // empty panel leaves the reader guessing whether the firm has no data or
+        // we have no feature, and *every* section without a body has to say
+        // which. Naming one of them tested the example, not the rule.
+        const unfilled = COMPANY_SECTIONS.filter((section) => section.status !== 'ready');
+        // If this ever hits zero the loop below proves nothing, and the honest
+        // thing is to delete this test rather than let it pass vacuously.
+        expect(unfilled.length).toBeGreaterThan(0);
 
-        expect(await screen.findByText('Zatiaľ nemáme')).toBeInTheDocument();
-        expect(screen.getByText(/Číselný počet zamestnancov nemáme/)).toBeInTheDocument();
+        for (const section of unfilled) {
+            const {unmount} = renderWithProviders(
+                <Routes>
+                    <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+                </Routes>,
+                {route: `/firma/12345678/${section.id}`},
+            );
+
+            // The note verbatim, because that sentence is the whole mechanism:
+            // the status chip says *that* we cannot fill it, the note says why.
+            expect(await screen.findByText(section.note)).toBeInTheDocument();
+
+            unmount();
+        }
     });
 
     it('renders the body of a section that has one', async () => {

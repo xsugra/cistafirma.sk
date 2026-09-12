@@ -434,6 +434,16 @@ export const api = {
    */
   getPeers: async (ico: string, scope: PeerScope): Promise<PeerList> => {
     if (ENABLE_MOCK_DATA) {
+      // One entry per scope rather than a chain of ternaries: the two halves
+      // have to come from the *same* scope, and a fallthrough would label a
+      // size band with a NACE code, which reads as a band called "62".
+      const mockSubject: Record<PeerScope, [string | null, string | null]> = {
+        podobne: ['62', '62 — Počítačové programovanie'],
+        kraj: ['SK010', 'Bratislavský kraj'],
+        odvetvie: ['62', '62 — Počítačové programovanie'],
+        trzby: [null, null],
+        zamestnanci: ['04', '04 — 3-4 zamestnanci'],
+      };
       return new Promise((resolve) =>
         setTimeout(
           () =>
@@ -442,11 +452,8 @@ export const api = {
               // Both halves of the pair move together: a label with no subject
               // would be a narrowing that names nothing, which is the one
               // combination the real backend never sends.
-              subject: scope === 'trzby' ? null : scope === 'kraj' ? 'SK010' : '62',
-              subject_label:
-                scope === 'trzby' ? null
-                  : scope === 'kraj' ? 'Bratislavský kraj'
-                    : '62 — Počítačové programovanie',
+              subject: mockSubject[scope][0],
+              subject_label: mockSubject[scope][1],
               reason: null,
               ranked_by: scope === 'podobne' ? 'similarity' : 'revenue',
               total_ranked: 3,

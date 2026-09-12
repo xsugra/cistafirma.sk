@@ -46,6 +46,14 @@ const SCOPE_COPY: Record<PeerScope, ScopeCopy> = {
         icon: 'fa-coins',
         intro: 'Najväčšie firmy v celom registri podľa poslednej zverejnenej závierky.',
     },
+    zamestnanci: {
+        title: 'Firmy podľa zamestnancov',
+        icon: 'fa-user-friends',
+        intro:
+            'Firmy v tej istej veľkostnej kategórii, akú tejto firme priradil register. ' +
+            'Kategória je kód z číselníka ŠÚ SR (0073) a jeho pásma nie sú rovnako široké — ' +
+            '„5-9 zamestnancov" je rozpätie piatich hodnôt, „25-49 zamestnancov" dvadsiatich piatich.',
+    },
 };
 
 /**
@@ -151,7 +159,7 @@ interface PeerListSectionProps {
 }
 
 /**
- * One of the four "who else is here" lists on a company page.
+ * One of the five "who else is here" lists on a company page.
  *
  * The service behind this answers with two counts and a code for why it could
  * not answer at all, and all three are rendered rather than smoothed over: a
@@ -228,6 +236,36 @@ export const PeerListSection: React.FC<PeerListSectionProps> = ({ico, scope}) =>
                 <p className="text-gray-700 dark:text-gray-300 leading-relaxed">
                     V registri nemáme pre túto firmu čitateľný kód SK NACE, takže ju nevieme
                     zaradiť do odvetvia. Doplní sa pri najbližšom načítaní firmy z registra.
+                </p>
+            </InfoCard>
+        );
+    }
+
+    if (payload.reason === 'no_size') {
+        // Not a missing field on our side, which is why this reads differently
+        // from the two panels above. The register *has* a value here and the
+        // value says it does not know the size (`00`, "nezistený") -- and that
+        // is the modal answer in the whole table, 63,3 % of active companies.
+        // So the panel leads with how ordinary it is: for almost two thirds of
+        // Slovak companies there is no size band, and this section cannot exist
+        // for any of them. `payload.total_in_scope` is that count, read from the
+        // table rather than written down here.
+        return (
+            <InfoCard title={copy.title} icon={copy.icon}>
+                <p className="text-gray-700 dark:text-gray-300 leading-relaxed">{copy.intro}</p>
+
+                <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                    <i className="fas fa-circle-info mr-2"/>
+                    Register pri tejto firme <strong>neuvádza veľkosť</strong>, takže ju nemáme
+                    s čím porovnať a do žiadnej kategórie ju zaradiť nevieme. Nie je to chyba
+                    tejto firmy ani nášho zápisu — veľkosť neuvádza ani pri{' '}
+                    {formatNumber(payload.total_in_scope)} ďalších aktívnych firmách.
+                </p>
+
+                <p className="mt-3 text-sm leading-relaxed text-gray-600 dark:text-gray-400">
+                    Kód, ktorý register pre takéto firmy používa, znamená doslova „nezistený".
+                    Preto tu neuvidíte zoznam: firmy s nezistenou veľkosťou nie sú kategória,
+                    bola by to skupina definovaná tým, čo o nej nevieme.
                 </p>
             </InfoCard>
         );

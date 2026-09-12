@@ -26,7 +26,7 @@ import { UdalostiSection } from '../components/company/sections/UdalostiSection'
 import type { PeerScope } from '../types';
 
 /**
- * The four Databáza sections are one component asked four different questions,
+ * The five Databáza sections are one component asked five different questions,
  * so the section id and the scope it names are built together rather than
  * written twice and left to agree by hand.
  */
@@ -57,6 +57,7 @@ const BODIES: Record<ReadySectionId, React.FC<{ company: CompanyType }>> = {
     'databaza-kraj': peer('kraj'),
     'databaza-odvetvie': peer('odvetvie'),
     'databaza-trzby': peer('trzby'),
+    'databaza-zamestnanci': peer('zamestnanci'),
 };
 
 /**

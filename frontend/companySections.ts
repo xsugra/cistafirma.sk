@@ -118,8 +118,8 @@ export const COMPANY_SECTIONS = [
         note: 'Najväčšie firmy v tej istej divízii SK NACE, teda podľa prvého dvojčíslia kódu. Aj tu sekcia vypíše, koľko firiem v divízii máme a koľko z nich má zverejnenú závierku s tržbami — v divízii 46 je to 48 z 20 488, takže rebríček „najväčšie v odvetví" je rebríčkom zlomku odvetvia a bez toho druhého čísla by to tak nevyzeralo.',
     },
     {
-        id: 'databaza-zamestnanci', label: 'Firmy podľa zamestnancov', icon: 'fa-user-friends', group: 'Databáza', status: 'planned',
-        note: 'Číselný počet zamestnancov nemáme. V registri je len kód pásma, a to „00" má vyše 70 % firiem, takže ide o nevyplnené pole a nie o kategóriu. Nikde v projekte neexistuje mapovanie kódu na pásmo — admin filter ponúka „mikro/small/medium/large", čo nezodpovedá žiadnej hodnote v dátach — takže nemáme ani ako zistiť, čo tie kódy znamenajú. Najprv musí existovať to mapovanie.',
+        id: 'databaza-zamestnanci', label: 'Firmy podľa zamestnancov', icon: 'fa-user-friends', group: 'Databáza', status: 'ready',
+        note: 'Najväčšie firmy v tej istej veľkostnej kategórii, akú firme priradil register. Kategória je dvojčíslie z číselníka ŠÚ SR 0073/KATP97 a jeho pásma nie sú rovnako široké — „5-9 zamestnancov" pokrýva päť hodnôt, „25-49 zamestnancov" dvadsaťpäť — takže kód sa nikde nezobrazuje sám, vždy s textom pásma. Odpovedať sa nedá firme, ktorej register veľkosť neuvádza: kód „00" znamená doslova „nezistený" a k 12. 9. 2026 ho má 205 840 z 325 337 aktívnych firiem (63,3 %), takže je to najčastejší stav, nie výnimka. Sekcia preto namiesto zoznamu vypíše, pri koľkých ďalších firmách register veľkosť neuvádza — zoskupiť 206 240 firiem pod hlavičku „nezistený" by vyzeralo ako kategória a čítať sa ako odpoveď.',
     },
     {
         id: 'databaza-trzby', label: 'Firmy podľa tržieb', icon: 'fa-coins', group: 'Databáza', status: 'ready',

@@ -309,13 +309,13 @@ export interface CompanyBenchmark {
 // --- PEERS ---
 
 /**
- * The four questions a company page can ask about its neighbours.
+ * The five questions a company page can ask about its neighbours.
  *
  * Closed on purpose: the backend rejects anything else with a 400 rather than
  * falling back to a default, because each value answers a different question
  * and a silent default would put one ranking under another one's heading.
  */
-export type PeerScope = 'podobne' | 'kraj' | 'odvetvie' | 'trzby';
+export type PeerScope = 'podobne' | 'kraj' | 'odvetvie' | 'trzby' | 'zamestnanci';
 
 /** How a scope ordered its rows. `similarity` means closeness in *ratio*. */
 export type PeerRanking = 'revenue' | 'similarity';
@@ -326,8 +326,14 @@ export type PeerRanking = 'revenue' | 'similarity';
  * `no_region` and `no_nace` are the two the register can produce: a company
  * with no region, or no readable NACE code, has no boundary to be ranked
  * inside. A code and not a sentence -- the Slovak text is built here.
+ *
+ * `no_size` is the third, and it is different in kind: the register *does* have
+ * a value for this company, and the value says it does not know the size
+ * (`00` — "nezistený"). It is the common case rather than an edge one, 63,3 %
+ * of active companies, so its panel reports how many others are in the same
+ * position instead of treating the firm as an anomaly.
  */
-export type PeerReason = 'no_region' | 'no_nace' | null;
+export type PeerReason = 'no_region' | 'no_nace' | 'no_size' | null;
 
 export interface PeerRow {
     ico: string;

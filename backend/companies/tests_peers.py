@@ -1,4 +1,4 @@
-"""The four peer rankings, and the population each of them admits to.
+"""The five peer rankings, and the population each of them admits to.
 
 Two properties matter more than the ordering itself.
 
@@ -29,6 +29,7 @@ from companies.services.peers import (
     SCOPE_ODVETVIE,
     SCOPE_PODOBNE,
     SCOPE_TRZBY,
+    SCOPE_ZAMESTNANCI,
     peers_for,
 )
 from companies.throttles import PeersThrottle, ReportThrottle
@@ -58,7 +59,8 @@ def filed(company, year, revenue, profit=None):
 class PeersServiceTests(TestCase):
     def test_the_scope_vocabulary_is_closed(self):
         self.assertEqual(
-            sorted(PEER_SCOPES), ['kraj', 'odvetvie', 'podobne', 'trzby']
+            sorted(PEER_SCOPES),
+            ['kraj', 'odvetvie', 'podobne', 'trzby', 'zamestnanci'],
         )
         with self.assertRaises(ValueError):
             peers_for(make_company('10000001', 'X'), 'nonsense')
@@ -261,18 +263,126 @@ class PeersServiceTests(TestCase):
         # Its own largest filer by a mile, so in the whole-register scope it
         # would come first if it were not excluded -- an assertion that would
         # pass by accident if it were merely ranked low.
-        company = make_company('10000150', 'Sama sebe', kraj='SK010', nace='62010')
+        company = make_company('10000150', 'Sama sebe', kraj='SK010', nace='62010',
+                               velkost_organizacie='11')
         filed(company, 2024, 900_000_000)
 
-        for scope in (SCOPE_TRZBY, SCOPE_KRAJ, SCOPE_ODVETVIE, SCOPE_PODOBNE):
+        for scope in (SCOPE_TRZBY, SCOPE_KRAJ, SCOPE_ODVETVIE, SCOPE_PODOBNE,
+                      SCOPE_ZAMESTNANCI):
             with self.subTest(scope=scope):
                 icos = [r['ico'] for r in peers_for(company, scope)['results']]
                 self.assertNotIn('10000150', icos)
 
 
+class SizeBandScopeTests(TestCase):
+    """`zamestnanci`: the neighbours that share the register's size code.
+
+    The code is ŠÚ SR číselník 0073 and its band edges are uneven, so the
+    assertions below are on the *code* being matched exactly and on its text
+    coming from `services/velkost.py` rather than being reconstructed here.
+    """
+
+    def test_the_band_narrows_to_the_code_and_carries_its_text(self):
+        subject = make_company('40000001', 'Subjekt', velkost_organizacie='04')
+        same = make_company('40000002', 'Rovnaká kategória', velkost_organizacie='04')
+        # Adjacent bands, and the one above it is far larger -- so a scope that
+        # matched on anything but the exact code would be visibly wrong here.
+        bigger = make_company('40000003', 'Väčšia', velkost_organizacie='05')
+        filed(subject, 2024, 5_000)
+        filed(same, 2024, 40_000)
+        filed(bigger, 2024, 9_000_000)
+
+        payload = peers_for(subject, SCOPE_ZAMESTNANCI)
+
+        self.assertEqual([r['ico'] for r in payload['results']], ['40000002'])
+        self.assertEqual(payload['subject'], '04')
+        # The code and its číselník text together: the heading renders this
+        # verbatim, so a band called by its number alone is not possible.
+        self.assertEqual(payload['subject_label'], '04 — 3-4 zamestnanci')
+        self.assertEqual(payload['reason'], None)
+
+    def test_the_band_counts_firms_that_never_filed_inside_the_scope(self):
+        subject = make_company('40000010', 'Subjekt', velkost_organizacie='04')
+        filed(subject, 2024, 5_000)
+        filed(make_company('40000011', 'Filer', velkost_organizacie='04'), 2024, 4_000)
+        make_company('40000012', 'Nefilujúca', velkost_organizacie='04')
+        make_company('40000013', 'Iná kategória', velkost_organizacie='05')
+
+        payload = peers_for(subject, SCOPE_ZAMESTNANCI)
+
+        self.assertEqual(payload['total_ranked'], 1)
+        # Three, not four: the subject is in its own band's population, which is
+        # the point -- the band is 3 231 firms and the subject is one of them.
+        self.assertEqual(payload['total_in_scope'], 3)
+
+    def test_a_company_the_register_gives_no_size_is_not_put_in_a_band(self):
+        # `00` is "nezistený" -- the register stating that it does not know --
+        # and it is the modal value in the table, not an edge case. Ten firms
+        # would render as a band called "unknown" and read as a category.
+        subject = make_company('40000020', 'Neznáma veľkosť', velkost_organizacie='00')
+        filed(subject, 2024, 5_000)
+        filed(make_company('40000021', 'Tiež neznáma', velkost_organizacie='00'), 2024, 1)
+
+        payload = peers_for(subject, SCOPE_ZAMESTNANCI)
+
+        self.assertEqual(payload['reason'], 'no_size')
+        self.assertEqual(payload['results'], [])
+        self.assertEqual(payload['total_ranked'], 0)
+        self.assertIsNone(payload['subject_label'])
+        # The code is still reported, so the section can say *which* value it
+        # was that the register could not turn into a size.
+        self.assertEqual(payload['subject'], '00')
+
+    def test_the_refusal_counts_the_others_the_register_cannot_size(self):
+        # The count is the explanation: it is what turns "we have nothing for
+        # your firm" into "the register records no size for your firm, as for
+        # these others". Read from the table, never written down as a constant.
+        subject = make_company('40000030', 'Bez veľkosti', velkost_organizacie='00')
+        make_company('40000031', 'Bez kódu')                      # NULL
+        make_company('40000032', 'Prázdny kód', velkost_organizacie='')
+        make_company('40000033', 'Tiež 00', velkost_organizacie='00')
+        make_company('40000034', 'Má kategóriu', velkost_organizacie='12')
+        make_company('40000035', 'Zrušená, bez kódu', dissolved=True)
+
+        payload = peers_for(subject, SCOPE_ZAMESTNANCI)
+
+        self.assertEqual(payload['reason'], 'no_size')
+        # Three: the subject, the null, the empty string and the other `00` --
+        # but not the firm with a band, and not the struck-off one, which no
+        # other scope counts either.
+        self.assertEqual(payload['total_in_scope'], 4)
+
+    def test_a_size_code_the_codebook_does_not_define_is_refused_not_guessed(self):
+        # Nothing in the live table looks like this (every value is `00`-`38` or
+        # null, measured 2026-09-12), so it would mean the register has added a
+        # band. The answer is still "no band" rather than a guess -- but the
+        # service logs it, which is the only signal that the codebook is stale.
+        subject = make_company('40000040', 'Nový kód', velkost_organizacie='99')
+
+        with self.assertLogs('companies.services.peers', level='WARNING') as logs:
+            payload = peers_for(subject, SCOPE_ZAMESTNANCI)
+
+        self.assertEqual(payload['reason'], 'no_size')
+        self.assertIn('99', ''.join(logs.output))
+
+    def test_a_zero_revenue_company_in_the_band_does_not_take_the_section_down(self):
+        # Same guard as `podobne`, reached a different way: the band is matched
+        # on a code, and revenue is only the ordering, so a zero-revenue member
+        # is ranked last rather than crashing the logarithm.
+        subject = make_company('40000050', 'Subjekt', velkost_organizacie='06')
+        filed(subject, 2024, 5_000)
+        filed(make_company('40000051', 'Nulová', velkost_organizacie='06'), 2024, 0)
+        filed(make_company('40000052', 'Kladná', velkost_organizacie='06'), 2024, 700)
+
+        rows = peers_for(subject, SCOPE_ZAMESTNANCI)['results']
+
+        self.assertEqual([r['ico'] for r in rows], ['40000052', '40000051'])
+
+
 class PeersEndpointTests(TestCase):
     def setUp(self):
-        self.subject = make_company('30000001', 'Subjekt', kraj='SK010', nace='62010')
+        self.subject = make_company('30000001', 'Subjekt', kraj='SK010', nace='62010',
+                                    velkost_organizacie='11')
         self.peer = make_company('30000002', 'Kolega', kraj='SK010', nace='62010')
         filed(self.subject, 2024, 1_000_000)
         filed(self.peer, 2024, 900_000)
@@ -289,6 +399,46 @@ class PeersEndpointTests(TestCase):
         self.assertEqual(body['scope'], 'kraj')
         self.assertEqual(body['subject'], 'SK010')
         self.assertEqual([r['ico'] for r in body['results']], ['30000002'])
+
+    def test_the_size_scope_answers_with_the_band_even_when_nobody_in_it_filed(self):
+        # The subject carries band `11`; the peer carries none. So the question
+        # has an answer -- here is your band, here is how many firms are in it --
+        # and the answer happens to contain no ranked rows. That is *not* the
+        # `no_size` refusal: `reason` stays null, and `total_in_scope` is 1,
+        # which is the pair of facts the section renders.
+        response = self.client.get(self.url(scope='zamestnanci'))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['scope'], 'zamestnanci')
+        self.assertIsNone(body['reason'])
+        self.assertEqual(body['subject'], '11')
+        self.assertEqual(body['subject_label'], '11 — 25-49 zamestnancov')
+        self.assertEqual(body['results'], [])
+        self.assertEqual(body['total_ranked'], 0)
+        self.assertEqual(body['total_in_scope'], 1)
+
+    def test_the_size_scope_reports_the_refusal_over_the_wire(self):
+        # The other branch, and the one 63,3 % of the register lands in: the
+        # register records no size, so there is no band to rank within. It
+        # travels as a reason code -- not a 404, and not an empty list with no
+        # explanation -- with the count of firms in the same position, because
+        # the frontend owns the sentence and needs the number for it.
+        make_company('30000003', 'Bez veľkosti', velkost_organizacie='00')
+
+        response = self.client.get(self.url(ico='30000003', scope='zamestnanci'))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['reason'], 'no_size')
+        self.assertEqual(body['subject'], '00')
+        self.assertIsNone(body['subject_label'])
+        self.assertEqual(body['results'], [])
+        self.assertEqual(body['total_ranked'], 0)
+        # Two: this company, and `setUp`'s peer, which carries no code at all.
+        # Both are "the register cannot size this firm", which is the point of
+        # counting them together rather than only the `00`s.
+        self.assertEqual(body['total_in_scope'], 2)
 
     def test_the_endpoint_refuses_an_unknown_scope_rather_than_guessing_one(self):
         # Every scope answers a different question, so a default would put one

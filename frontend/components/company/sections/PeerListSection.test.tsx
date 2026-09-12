@@ -170,6 +170,68 @@ describe('PeerListSection', () => {
         await screen.findByText(/V rozsahu celý register/);
     });
 
+    it('names a size the register does not record instead of ranking nothing', async () => {
+        // The modal case, not the edge case: 205 840 of 325 337 active companies
+        // (63,3 %) carry the register's `00` -- "nezistený". The panel has to
+        // read as *the register does not record this*, not as *we have no data*,
+        // so it leads with how many other firms are in the same position.
+        render('zamestnanci', payload({
+            scope: 'zamestnanci',
+            subject: '00',
+            subject_label: null,
+            reason: 'no_size',
+            results: [],
+            total_ranked: 0,
+            total_in_scope: 206_240,
+        }));
+
+        expect(await screen.findByText(/neuvádza veľkosť/)).toBeInTheDocument();
+        expect(bodyText()).toContain('206 240');
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    });
+
+    it('does not turn an unknown size into a band called "unknown"', async () => {
+        // The mistake this scope exists to avoid. `nezistený` is a real codebook
+        // value, so a section that ranked these firms together would look
+        // correct -- it would draw a table under a plausible heading -- and would
+        // be presenting the absence of a category as one. Asserted on the table
+        // rather than on the word: the panel quotes "nezistený" on purpose, to
+        // name the code it is refusing to treat as a size.
+        render('zamestnanci', payload({
+            scope: 'zamestnanci',
+            subject: '00',
+            subject_label: null,
+            reason: 'no_size',
+            results: [row()],
+            total_ranked: 0,
+            total_in_scope: 206_240,
+        }));
+
+        await screen.findByText(/neuvádza veľkosť/);
+        expect(screen.queryByRole('table')).not.toBeInTheDocument();
+        expect(screen.queryByText('ESET, spol. s r.o.')).not.toBeInTheDocument();
+        // And no promise of rows, for the same reason the `podobne` fallback
+        // makes none: the sentence's tail would describe a table that is absent.
+        expect(screen.queryByText(/Zobrazujeme/)).not.toBeInTheDocument();
+    });
+
+    it('heads the band with its code and the codebook text, never the code alone', async () => {
+        // The band edges are uneven -- `05` spans five employee counts, `11`
+        // spans twenty-five -- so a heading of "04" is not a shorter way of
+        // saying "3-4 zamestnanci", it is a number the reader has to decode.
+        render('zamestnanci', payload({
+            scope: 'zamestnanci',
+            subject: '04',
+            subject_label: '04 — 3-4 zamestnanci',
+            total_ranked: 1,
+            total_in_scope: 16_342,
+        }));
+
+        await screen.findByText(/V rozsahu 04 — 3-4 zamestnanci/);
+        expect(bodyText()).toContain('16 342 firiem');
+        expect(screen.getByRole('table')).toBeInTheDocument();
+    });
+
     it('gives every scope its own heading', async () => {
         // `SCOPE_COPY` is a `Record`, so this cannot fail for a missing key --
         // it fails if two scopes are given the same copy, which the type system
@@ -179,6 +241,7 @@ describe('PeerListSection', () => {
             kraj: 'Firmy v kraji',
             odvetvie: 'Firmy v odvetví',
             trzby: 'Firmy podľa tržieb',
+            zamestnanci: 'Firmy podľa zamestnancov',
         };
 
         for (const [scope, title] of Object.entries(titles) as [PeerScope, string][]) {
