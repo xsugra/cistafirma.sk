@@ -115,7 +115,17 @@ class AdminCompanyListSerializer(serializers.ModelSerializer):
 class _CompanyFinancialMiniSerializer(serializers.ModelSerializer):
     class Meta:
         model = CompanyFinancialResult
-        fields = ["year", "revenue", "profit", "source", "updated_at"]
+        # Both P&L result rows, for the same reason the public serializer carries
+        # both: `profit` is the operating result, and a surface that shows it
+        # without `profit_after_tax` shows half of what the statement said.
+        fields = [
+            "year",
+            "revenue",
+            "profit",
+            "profit_after_tax",
+            "source",
+            "updated_at",
+        ]
 
 
 class _SyncStatusMiniSerializer(serializers.ModelSerializer):

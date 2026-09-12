@@ -199,6 +199,7 @@ Detail firmy podľa IČO. Obsahuje finančné dáta, exekutívu, ORSR profil, dl
 | `year` | number |
 | `revenue` | number |
 | `profit` | number |
+| `profitAfterTax` | number\|null |
 | `totalRevenue` | number |
 | `costs` | number |
 | `incomeTax` | number |
@@ -222,6 +223,13 @@ Detail firmy podľa IČO. Obsahuje finančné dáta, exekutívu, ORSR profil, dl
 | `liabilitiesAccruals` | number |
 | `debtRatio` | number\|null |
 | `grossMargin` | number\|null |
+
+`profit` je **výsledok hospodárenia z hospodárskej činnosti** (pred zdanením);
+`profitAfterTax` je výsledok za účtovné obdobie po zdanení. Bývalý jediný riadok
+`profit` niesol podľa okolností jeden alebo druhý, preto sa obe veličiny už
+nespájajú. `profitAfterTax` je `null` pre každý záznam, ktorý nebol znovu
+načítaný od rozdelenia (2026-09-12) — `null` tu znamená „riadok nebol prečítaný“,
+nie nulu.
 
 **`orsr_profile.structured` objekt:**
 

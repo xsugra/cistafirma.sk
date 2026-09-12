@@ -188,7 +188,10 @@ class OrsrCompanyProfileInline(admin.StackedInline):
 class CompanyFinancialResultInline(admin.TabularInline):
     model = CompanyFinancialResult
     extra = 0
-    fields = ('year', 'revenue', 'profit', 'source', 'updated_at')
+    # Both P&L result rows: `profit` is the operating result and
+    # `profit_after_tax` is the bottom line, and an inline that shows one of
+    # them invites the reader to take it for the other.
+    fields = ('year', 'revenue', 'profit', 'profit_after_tax', 'source', 'updated_at')
     readonly_fields = ('updated_at',)
     ordering = ('-year',)
 

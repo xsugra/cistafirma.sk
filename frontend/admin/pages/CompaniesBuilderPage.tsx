@@ -25,7 +25,12 @@ const FIELD_DEFS = [
   { value: 'has_orsr', label: 'ORSR profil', kind: 'select', options: ['1', '0'], operators: ['equals'] as const },
   { value: 'has_financials', label: 'Financie', kind: 'select', options: ['1', '0'], operators: ['equals'] as const },
   { value: 'debt_state', label: 'Dlhy', kind: 'select', options: ['no_debt', 'has_debt'], operators: ['equals'] as const },
-  { value: 'profit_state', label: 'Zisk / strata', kind: 'select', options: ['profit', 'loss', 'break_even', 'unknown'], operators: ['equals'] as const },
+  // The facet reads `profit`, which is the operating result -- a bare "Zisk"
+  // over it named a figure the filter does not read (the same mislabelling the
+  // column header and the company page carried). There is no after-tax facet
+  // because `profit_after_tax` is only populated for rows re-read since the two
+  // were split, so it would answer "Bez údajov" for almost every company.
+  { value: 'profit_state', label: 'VH z hosp. činnosti', kind: 'select', options: ['profit', 'loss', 'break_even', 'unknown'], operators: ['equals'] as const },
   { value: 'revenue_state', label: 'Tržby', kind: 'select', options: ['revenue', 'no_revenue'], operators: ['equals'] as const },
   { value: 'vat_payer', label: 'Platiteľ DPH', kind: 'select', options: ['1', '0'], operators: ['equals'] as const },
   { value: 'tax_reliability', label: 'Daňová spoľahlivosť', kind: 'select', options: ['vysoko spoľahlivý', 'spoľahlivý', 'nespoľahlivý'], operators: ['equals'] as const },
