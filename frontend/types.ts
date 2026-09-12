@@ -392,9 +392,22 @@ export interface User {
     username: string;
     firstName: string;
     lastName: string;
+    /**
+     * The plan, as its slug. The API publishes the plan as a nested object
+     * (`subscription_plan`), so this is `subscription_plan.slug` -- reading that
+     * object as if it were already a string is how the profile page came to
+     * render an object where a plan name belongs.
+     */
     plan: 'free' | 'plus' | 'pro' | 'business';
-    apiCallsUsed: number;
-    apiCallsLimit: number;
+    /**
+     * How much of a monthly API quota this account has used, and what the quota
+     * is. `null` means the response did not say -- and it never has: the profile
+     * endpoint publishes neither field. They are nullable so that the page can
+     * tell "no quota reported" from "a quota of zero", which is the same
+     * distinction the risk score and the RUZ statement counts are built on.
+     */
+    apiCallsUsed: number | null;
+    apiCallsLimit: number | null;
     isStaff: boolean;
     isSuperuser: boolean;
 }

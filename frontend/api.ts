@@ -13,13 +13,28 @@ import type {
   WatchlistEntry,
 } from './types';
 
+/**
+ * The plan as the profile endpoint actually publishes it: a nested object, not
+ * a slug. `UserDetailSerializer` nests `SubscriptionPlanSerializer`, so
+ * `subscription_plan` arrives as `{id, name, slug, max_watched_companies,
+ * price_eur}` or as null for an account with no plan.
+ */
+interface RawSubscriptionPlan {
+  id: string;
+  name: string;
+  slug: User['plan'];
+  max_watched_companies: number;
+  price_eur: string;
+}
+
 interface RawUser {
   id: string;
   email: string;
   username: string;
   first_name?: string;
   last_name?: string;
-  subscription_plan?: string;
+  subscription_plan?: RawSubscriptionPlan | null;
+  /** Declared because the API might send them; it does not, today. See `mapUserResponse`. */
   api_calls_used?: number;
   api_calls_limit?: number;
   is_staff?: boolean;
@@ -54,16 +69,32 @@ interface LoginResult {
   user: User;
 }
 
-function mapUserResponse(data: RawUser): User {
+/**
+ * Exported for its own spec, and for the same reason the function is worth
+ * testing at all: it is the boundary where the API's shape and this app's types
+ * meet, and the one place where a wrong reading of that shape is invisible to
+ * the compiler.
+ */
+export function mapUserResponse(data: RawUser): User {
   return {
     id: data.id,
     email: data.email,
     username: data.username,
     firstName: data.first_name || '',
     lastName: data.last_name || '',
-    plan: (data.subscription_plan as User['plan']) || 'free',
-    apiCallsUsed: data.api_calls_used || 0,
-    apiCallsLimit: data.api_calls_limit || 10,
+    // `.slug`, because `subscription_plan` is an object. This line used to read
+    // `(data.subscription_plan as User['plan'])`, and the cast is what let it
+    // compile: at runtime the field held the whole plan, so `plan` was an object
+    // and the profile page rendered it as a React child. It survived only
+    // because the one account in the database has no plan, and null falls
+    // through to 'free'.
+    plan: data.subscription_plan?.slug ?? 'free',
+    // No invented fallback. The profile endpoint publishes neither field, so
+    // `|| 0` and `|| 10` printed "0 / 10" under a heading that claims to measure
+    // a quota -- a number and a progress bar for something nothing counts.
+    // Absent is mapped as absent and the page decides what to say about it.
+    apiCallsUsed: data.api_calls_used ?? null,
+    apiCallsLimit: data.api_calls_limit ?? null,
     isStaff: Boolean(data.is_staff),
     isSuperuser: Boolean(data.is_superuser),
   };

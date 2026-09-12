@@ -170,7 +170,13 @@ export const Profile: React.FC = () => {
     };
 
     const renderDashboard = () => {
-        const percentUsed = user ? (user.apiCallsUsed / user.apiCallsLimit) * 100 : 0;
+        // The API publishes no search counter, so both of these are null for a
+        // real account. A bar drawn from an invented "0 / 10" is a measurement
+        // of nothing, and the page says so instead of drawing it.
+        const used = user?.apiCallsUsed ?? null;
+        const limit = user?.apiCallsLimit ?? null;
+        const measured = used !== null && limit !== null && limit > 0;
+        const percentUsed = measured ? (used / limit) * 100 : 0;
         return (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in">
                 <div className="app-card p-6">
@@ -201,22 +207,30 @@ export const Profile: React.FC = () => {
                     <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                         <i className="fas fa-chart-pie text-blue-600"></i> Využitie API Limitov
                     </h3>
-                    <div className="mb-2 flex justify-between text-sm">
-                        <span className="text-gray-600 dark:text-gray-400">Mesačné vyhľadávania</span>
-                        <span
-                            className="font-bold text-gray-900 dark:text-white">{user?.apiCallsUsed} / {user?.apiCallsLimit}</span>
-                    </div>
-                    <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-4 mb-4 overflow-hidden">
-                        <div
-                            className={`h-4 rounded-full transition-all duration-500 ${percentUsed > 90 ? 'bg-red-500' : 'bg-blue-600'}`}
-                            style={{width: `${percentUsed}%`}}
-                        ></div>
-                    </div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                        Limit sa obnoví 1. dňa nasledujúceho mesiaca.
-                        {percentUsed > 80 &&
-                            <span className="text-red-500 ml-1 block mt-1">Blížite sa k vyčerpaniu limitu!</span>}
-                    </p>
+                    {measured ? (
+                        <>
+                            <div className="mb-2 flex justify-between text-sm">
+                                <span className="text-gray-600 dark:text-gray-400">Mesačné vyhľadávania</span>
+                                <span
+                                    className="font-bold text-gray-900 dark:text-white">{used} / {limit}</span>
+                            </div>
+                            <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-4 mb-4 overflow-hidden">
+                                <div
+                                    className={`h-4 rounded-full transition-all duration-500 ${percentUsed > 90 ? 'bg-red-500' : 'bg-blue-600'}`}
+                                    style={{width: `${percentUsed}%`}}
+                                ></div>
+                            </div>
+                            {percentUsed > 80 &&
+                                <p className="text-sm text-red-500">
+                                    Blížite sa k vyčerpaniu limitu!
+                                </p>}
+                        </>
+                    ) : (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                            Počet vyhľadávaní pre tento účet nesledujeme, takže tu nie je čo
+                            vykresliť. Vyhľadávanie je zatiaľ bez kvóty.
+                        </p>
+                    )}
                 </div>
             </div>
         );

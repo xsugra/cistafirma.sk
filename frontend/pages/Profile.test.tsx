@@ -64,4 +64,24 @@ describe('Profile (pricing-removal regression)', () => {
         expect(mocks.api.getWatchlist).toHaveBeenCalledTimes(1);
         expect(mocks.api.getHistory).toHaveBeenCalledTimes(1);
     });
+
+    it('draws no quota when the API reported none', async () => {
+        // The real account state: the profile endpoint publishes no search
+        // counter, so the mapper maps both fields as null. The page used to
+        // print an invented "0 / 10" with a progress bar behind it.
+        mocks.auth.useAuth.mockReturnValue({
+            user: makeUser({plan: 'free', apiCallsUsed: null, apiCallsLimit: null}),
+            isAuthenticated: true,
+            login: vi.fn(),
+            logout: vi.fn(),
+            isLoading: false,
+        });
+
+        renderWithProviders(<Profile/>, {route: '/profile'});
+
+        expect(await screen.findByText('Využitie API Limitov')).toBeInTheDocument();
+        expect(screen.getByText(/Počet vyhľadávaní pre tento účet nesledujeme/)).toBeInTheDocument();
+        expect(screen.queryByText('0 / 10')).not.toBeInTheDocument();
+        expect(screen.queryByText(/0 \/ null|null \/ null/)).not.toBeInTheDocument();
+    });
 });

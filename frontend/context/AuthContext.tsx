@@ -48,7 +48,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     // This will now use the centralized 'request' in api.js.
                     // If it fails with 401, the event listener above will handle it.
                     const userData = await api.getProfile();
-                    // @ts-ignore
                     setUser(userData);
                 } catch (error) {
                     console.error("Auth initialization failed", error);
