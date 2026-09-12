@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from companies.models import Company, Watchlist
 
@@ -414,3 +415,78 @@ class DetectStatusChangeTests(TestCase):
             len(event.company_name),
             NotificationEvent._meta.get_field('company_name').max_length,
         )
+
+
+class CompanyScopedEventListTests(TestCase):
+    """`GET /api/notifications/events/?ico=` -- what a company page reads.
+
+    The section on the company page is the reason the filter exists, and the two
+    properties that keep it honest are here: it returns the *caller's* events
+    and nobody else's, and a malformed filter is refused rather than ignored.
+    Ignoring it would answer with the whole mailbox under a heading that says
+    "for this company".
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(email='me@example.com', password='testpass123')
+        self.other = User.objects.create_user(email='them@example.com', password='testpass123')
+
+        # `APIClient.force_authenticate` and not `force_login`: the project
+        # authenticates with JWTs only (`DEFAULT_AUTHENTICATION_CLASSES`), so a
+        # session cookie authenticates nothing here and every request below
+        # would answer 401 whatever the filter did.
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+        self.mine = make_event(self.user, company_ico='12345678')
+        self.same_company_other_user = make_event(
+            self.other, company_ico='12345678', title='Cudzia udalosť'
+        )
+        self.other_company = make_event(self.user, company_ico='87654321')
+
+    def test_the_filter_narrows_to_the_company(self):
+        response = self.client.get('/api/notifications/events/?ico=12345678')
+
+        self.assertEqual(response.status_code, 200)
+        ids = [row['id'] for row in response.json()]
+        self.assertEqual(ids, [self.mine.id])
+
+    def test_another_users_events_for_the_same_company_are_not_returned(self):
+        # The whole reason this is `?ico=` on a user-scoped resource rather than
+        # an endpoint under `/api/companies/<ico>/`: an IČO is public data, and
+        # filtering only by it would publish every user's notification history.
+        response = self.client.get('/api/notifications/events/?ico=12345678')
+
+        self.assertNotIn(
+            self.same_company_other_user.id, [row['id'] for row in response.json()]
+        )
+
+    def test_no_filter_is_still_the_whole_mailbox(self):
+        response = self.client.get('/api/notifications/events/')
+
+        self.assertEqual(
+            sorted(row['id'] for row in response.json()),
+            sorted([self.mine.id, self.other_company.id]),
+        )
+
+    def test_a_malformed_ico_is_refused_rather_than_ignored(self):
+        for bad in ('abc', '123', '../../../etc/passwd', '1234567890123456789012'):
+            with self.subTest(ico=bad):
+                response = self.client.get(f'/api/notifications/events/?ico={bad}')
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('ico', response.json()['detail'])
+
+    def test_an_unknown_company_is_an_empty_list_and_not_a_404(self):
+        # The company page renders this section for a company that may have no
+        # events at all; "none yet" is an answer, not an error.
+        response = self.client.get('/api/notifications/events/?ico=99999999')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_the_filter_needs_an_account(self):
+        anonymous = APIClient()
+
+        response = anonymous.get('/api/notifications/events/?ico=12345678')
+
+        self.assertIn(response.status_code, (401, 403))

@@ -63,6 +63,23 @@ describe('Company page', () => {
     });
 
     it('says why a section we cannot fill is empty instead of showing a blank panel', async () => {
+        // The example moved from `zaverky` to `databaza-zamestnanci` when the
+        // former got a body: the claim under test is about a section that has
+        // none, so the fixture has to be one that still does not.
+        renderWithProviders(
+            <Routes>
+                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+            </Routes>,
+            {route: '/firma/12345678/databaza-zamestnanci'},
+        );
+
+        expect(await screen.findByText('Zatiaľ nemáme')).toBeInTheDocument();
+        expect(screen.getByText(/Číselný počet zamestnancov nemáme/)).toBeInTheDocument();
+    });
+
+    it('renders the body of a section that has one', async () => {
+        // The other half of the pair above: `ready` in the registry must mean a
+        // body is drawn, not that the notice is drawn in a different colour.
         renderWithProviders(
             <Routes>
                 <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
@@ -70,8 +87,10 @@ describe('Company page', () => {
             {route: '/firma/12345678/zaverky'},
         );
 
-        expect(await screen.findByText('Zatiaľ nemáme')).toBeInTheDocument();
-        expect(screen.getByText(/správu audítora/)).toBeInTheDocument();
+        // A sentence only the body has: the section's own label is also in the
+        // rail, so matching the title would pass on the navigation alone.
+        expect(await screen.findByText(/sa do tejto databázy nesťahujú/)).toBeInTheDocument();
+        expect(screen.queryByText('Zatiaľ nemáme')).not.toBeInTheDocument();
     });
 
     it('names which of the four reasons left the balance sheet empty', async () => {

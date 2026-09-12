@@ -47,6 +47,12 @@ export const mockCompanyData: Company = {
   // This fixture files three complete years, so the sections have something to
   // draw. `ready` is the state the backend reports for a company with rows.
   financialsState: 'ready',
+  // One more than we read, which is the ordinary case in the live register and
+  // exercises the notice that says so. The counts are RUZ's, the years above are
+  // ours, and nothing joins the two lists -- which is the whole point of the
+  // Účtovné závierky section.
+  ruzStatements: 4,
+  ruzAnnualReports: 1,
    executives: [
        { name: 'Ing. Ján Vážny', role: 'Konateľ' },
        { name: 'Mgr. Eva Múdra', role: 'Konateľ' },

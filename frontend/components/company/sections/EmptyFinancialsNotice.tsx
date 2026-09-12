@@ -32,6 +32,19 @@ const STATE_NOTE: Record<FinancialsState, string> = {
 const IFRS_NOTE =
     'Táto spoločnosť účtuje podľa medzinárodných štandardov (IFRS). RUZ vydáva jej výkazy len ako PDF, takže ich nevieme načítať po riadkoch.';
 
+/**
+ * The same sentence, for a section that draws its own card.
+ *
+ * Exported because `ZaverkySection` needs the words *and* a card of its own --
+ * it has the RUZ counts to show beside them. Nesting `EmptyFinancialsNotice`
+ * inside it would put one card inside another, so the vocabulary lives here and
+ * each section owns its surface.
+ */
+export const financialsStateNote = (company: Company): string =>
+    company.usesIfrs
+        ? IFRS_NOTE
+        : STATE_NOTE[company.financialsState] ?? STATE_NOTE.not_fetched;
+
 interface EmptyFinancialsNoticeProps {
     company: Company;
     title: string;
@@ -44,9 +57,7 @@ export const EmptyFinancialsNotice: React.FC<EmptyFinancialsNoticeProps> = ({
     icon,
 }) => {
     const ifrs = company.usesIfrs;
-    const note = ifrs
-        ? IFRS_NOTE
-        : STATE_NOTE[company.financialsState] ?? STATE_NOTE.not_fetched;
+    const note = financialsStateNote(company);
 
     return (
         <InfoCard title={title} icon={icon}>

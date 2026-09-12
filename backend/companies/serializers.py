@@ -76,10 +76,18 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     connections = serializers.SerializerMethodField()
     orsr_profile = serializers.SerializerMethodField()
     ruz_portal_url = serializers.SerializerMethodField()
+    ruz_statements = serializers.SerializerMethodField()
+    ruz_annual_reports = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
-        fields = '__all__'
+        # Everything except the two raw ID lists, which are counts to every
+        # consumer this project has and arrays of up to 372 integers on the
+        # wire (measured: Tatra Asset Management holds 372 statement IDs, and
+        # the detail response is already 42 kB). `fields = '__all__'` published
+        # them because they are fields on the model, not because anything read
+        # them -- the two counts below are what a section can actually use.
+        exclude = ['id_uctovnych_zavierok', 'id_vyrocnych_sprav']
 
     def get_financialsState(self, obj):
         """Why the financial sections are empty, when they are.
@@ -258,6 +266,34 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         if obj.ruz_id:
             return f"https://www.registeruz.sk/cruz-public/home/uctovna-jednotka?id={obj.ruz_id}"
         return None
+
+    def get_ruz_statements(self, obj):
+        """How many účtovné závierky RUZ itself lists for this company.
+
+        This is the denominator the "Účtovné závierky" section needs and the one
+        number a reader cannot get from anywhere else on the page. The page
+        shows the years *we* read; without this, a company whose statements RUZ
+        holds and which the financials sync has not reached yet looks identical
+        to a company that files nothing at all. Volkswagen Slovakia is exactly
+        that case today: 37 statement IDs in RUZ, zero rows read here.
+
+        The list is already loaded with the row -- `exclude` above keeps it off
+        the *wire*, not out of memory -- so this is a `len` on it rather than a
+        second query. Every one of the 445 626 rows holds a list (measured
+        2026-09-12: 0 nulls, 0 non-arrays), so there is no other shape to
+        handle.
+        """
+        return len(obj.id_uctovnych_zavierok or [])
+
+    def get_ruz_annual_reports(self, obj):
+        """The same count for výročné správy, which we do not read at all.
+
+        Only 4 % of rows carry one and there is no endpoint here that fetches a
+        report's body, so this is published as a count for one reason: so the
+        section can say what exists and is not in this database, rather than
+        leaving a reader to conclude it does not exist.
+        """
+        return len(obj.id_vyrocnych_sprav or [])
 
     def _get_orsr_profile(self, obj):
         try:

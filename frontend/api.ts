@@ -115,6 +115,11 @@ function mapOrsrProfileResponse(profile: any): OrsrProfile | undefined {
 // owes nothing -- and wrong for a filed statement, where a missing line means
 // the statement did not carry it. The backend sends `null` for those, and it
 // has to survive to the render, or an unread revenue shows as "0 €".
+//
+// It carries the RUZ statement counts too, for the same reason in a different
+// place: a count is either something the response told us or something it did
+// not, and a missing count that becomes 0 reads as "this company files
+// nothing".
 const toFiledAmount = (value: any): number | null => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -275,6 +280,12 @@ function mapCompanyResponse(data: any): Company {
     benchmark: data.benchmark || undefined,
     usesIfrs: data.uses_ifrs || false,
     ruzPortalUrl: data.ruz_portal_url || null,
+    // Kept absent when absent, like every other figure here. `Number(x) || 0`
+    // would turn a response that did not carry the field into a positive claim
+    // that RUZ holds no statements for this company -- the same mistake the
+    // risk score made when it defaulted to 100.
+    ruzStatements: toFiledAmount(data.ruz_statements),
+    ruzAnnualReports: toFiledAmount(data.ruz_annual_reports),
   };
 }
 
@@ -550,6 +561,20 @@ export const api = {
 
   getNotifications: async (): Promise<NotificationEvent[]> => {
     return apiRequest<NotificationEvent[]>('/notifications/events/');
+  },
+
+  /**
+   * The notifications *this account* was sent about one company.
+   *
+   * The company is a filter on the signed-in user's own mailbox, not a
+   * property of the company: the same URL answers differently for two people,
+   * and read without an account it is a 401 rather than an empty list. The
+   * section that calls this is behind `useAuth` for exactly that reason.
+   */
+  getCompanyEvents: async (ico: string): Promise<NotificationEvent[]> => {
+    return apiRequest<NotificationEvent[]>(
+      `/notifications/events/?ico=${encodeURIComponent(ico)}`
+    );
   },
 
   getNotificationPreferences: async (): Promise<NotificationPreferences> => {

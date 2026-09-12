@@ -103,6 +103,12 @@ export const DEFAULT_COMPANY: Company = {
     // not also claim to be `ready`, or a section test could pass by rendering a
     // sentence about figures it never had.
     financialsState: 'not_fetched',
+    // Zero and not null: this fixture is a company that files nothing anywhere
+    // (`debts: []`, `financials: []`), so RUZ listing nothing for it is a fact
+    // rather than a missing answer. The two mean different things and the
+    // Účtovné závierky section says which one it has.
+    ruzStatements: 0,
+    ruzAnnualReports: 0,
     executives: [],
     connections: [],
     usesIfrs: false,

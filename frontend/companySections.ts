@@ -71,8 +71,8 @@ export const COMPANY_SECTIONS = [
         note: 'Tržby, náklady, pridaná hodnota, dane a výsledok hospodárenia po rokoch, s medziročnou zmenou.',
     },
     {
-        id: 'zaverky', label: 'Účtovné závierky', icon: 'fa-file-invoice', group: 'Financie', status: 'planned',
-        note: 'RUZ vydáva aj prílohy — správu audítora a výročnú správu. Integrácia zatiaľ nie je hotová.',
+        id: 'zaverky', label: 'Účtovné závierky', icon: 'fa-file-invoice', group: 'Financie', status: 'ready',
+        note: 'Koľko závierok pre firmu eviduje RUZ a koľko z nich sme prečítali, s odkazom na portál RUZ. Prílohy — správa audítora, výročná správa, PDF — sa do databázy nesťahujú; na ne je odkaz, nie sťahovanie.',
     },
 
     {
@@ -80,8 +80,8 @@ export const COMPANY_SECTIONS = [
         note: 'Zoznamy dlžníkov Finančnej správy, VšZP a Sociálnej poisťovne.',
     },
     {
-        id: 'udalosti', label: 'Udalosti vo firme', icon: 'fa-bell', group: 'Riziká a súdy', status: 'partial',
-        note: 'Dnes vieme tri typy udalostí — zmenu dlhu, zmenu statusu a zmenu štatutára. Plná verzia je agregácia cez šesť zdrojov a je to najťažšia položka zoznamu.',
+        id: 'udalosti', label: 'Udalosti vo firme', icon: 'fa-bell', group: 'Riziká a súdy', status: 'ready',
+        note: 'Zatiaľ tri typy udalostí — zmena dlhu, zmena statusu a zmena štatutára — a len pre prihláseného: sú to notifikácie, ktoré sme poslali tebe o tejto firme, nie história firmy. Môžu existovať len pre firmy v tvojich sledovaných a vznikajú až od chvíle, keď si firmu pridal. Plná verzia by bola agregácia cez šesť zdrojov a je to najťažšia položka zoznamu.',
     },
     {
         id: 'platobne-rozkazy', label: 'Platobné rozkazy', icon: 'fa-file-signature', group: 'Riziká a súdy', status: 'planned',

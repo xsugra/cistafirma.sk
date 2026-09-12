@@ -37,6 +37,20 @@ export interface Company {
   benchmark?: CompanyBenchmark;
     usesIfrs: boolean;
     ruzPortalUrl: string | null;
+    /**
+     * How many účtovné závierky RUZ itself lists for this company.
+     *
+     * The denominator for `financials`. The page shows the years *we* read;
+     * this says how many there are to read, which is the only way to tell a
+     * company that files nothing from one the sync has not reached yet.
+     *
+     * `null` when the response did not carry it -- which is not the same fact
+     * as a company RUZ holds nothing for, and the section renders the two
+     * differently.
+     */
+    ruzStatements: number | null;
+    /** The same count for výročné správy, which we do not read at all. */
+    ruzAnnualReports: number | null;
 }
 
 export interface Address {

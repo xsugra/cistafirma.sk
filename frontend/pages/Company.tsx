@@ -21,6 +21,8 @@ import { ConnectionsSection } from '../components/company/sections/ConnectionsSe
 import { ReportSection } from '../components/company/sections/ReportSection';
 import { DebtsSection } from '../components/company/sections/DebtsSection';
 import { PeerListSection } from '../components/company/sections/PeerListSection';
+import { ZaverkySection } from '../components/company/sections/ZaverkySection';
+import { UdalostiSection } from '../components/company/sections/UdalostiSection';
 import type { PeerScope } from '../types';
 
 /**
@@ -49,6 +51,8 @@ const BODIES: Record<ReadySectionId, React.FC<{ company: CompanyType }>> = {
     dlhy: DebtsSection,
     osoby: PeopleOrgansSection,
     prepojenia: ({ company }) => <ConnectionsSection ico={company.ico} />,
+    zaverky: ZaverkySection,
+    udalosti: ({ company }) => <UdalostiSection ico={company.ico} />,
     podobne: peer('podobne'),
     'databaza-kraj': peer('kraj'),
     'databaza-odvetvie': peer('odvetvie'),
