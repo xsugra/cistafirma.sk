@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {screen} from '@testing-library/react';
 import {RiskScoreSection} from './RiskScoreSection';
 import {renderWithProviders} from '../../../test/testUtils';
-import type {Company, RiskScore, RiskScoreBreakdown} from '../../../types';
+import type {Company, RiskScore, RiskScoreBreakdown, RiskScorePart} from '../../../types';
 
 /** Minimal company carrying only what this section reads. */
 const makeCompany = (riskScore: RiskScore): Company =>
@@ -58,6 +58,41 @@ describe('RiskScoreSection', () => {
 
         expect(screen.getAllByText('bez vplyvu')).toHaveLength(2);
         expect(screen.getByText('nevyhodnotené')).toBeInTheDocument();
+    });
+
+    it('reads the negative zero the API sends as a factor that cost nothing', () => {
+        // Not a hypothetical shape. `/api/companies/00685399/` returns
+        // `"delta": -0.0` for all three factors of a company with no debts, a
+        // safe Altman zone and a ROA of 15,2 % -- the zero arrives negatively
+        // signed because the backend negates the points it charges.
+        //
+        // `-0 === 0` is true, so the "cost nothing" branch catches it; the
+        // printing path is one `!==` away, and `String(-0)` is "0", which would
+        // put a factor in the deduction column that deducted nothing.
+        const parts: RiskScorePart[] = [
+            {key: 'debt', label: 'Evidované nedoplatky', delta: -0, detail: 'žiadne'},
+            {key: 'zone', label: 'Altman Z-score', delta: -0, detail: 'bezpečná zóna'},
+            {key: 'roa', label: 'Rentabilita aktív', delta: -0, detail: '15,2 %'},
+        ];
+        // Asserted so this cannot quietly become a copy of the `delta: 0` case
+        // above: a formatter that rewrites `-0` to `0` would leave a test that
+        // still passes while no longer testing anything.
+        expect(Object.is(parts[0].delta, -0)).toBe(true);
+
+        renderWithProviders(
+            <RiskScoreSection
+                company={makeCompany({
+                    score: 100,
+                    summary: 'Bez rizika',
+                    breakdown: breakdown({parts}),
+                })}
+            />
+        );
+
+        expect(screen.getAllByText('bez vplyvu')).toHaveLength(3);
+        expect(
+            screen.getByText(/Nebol zistený žiadny faktor, ktorý by skóre znížil/)
+        ).toBeInTheDocument();
     });
 
     it('explains a floor that the deductions do not reach', () => {
