@@ -4,6 +4,7 @@ import { CompanyHeader } from './company/CompanyHeader';
 import { CompanySummaryStrip } from './company/CompanySummaryStrip';
 import { useCompanyProfile } from './company/useCompanyProfile';
 import { OverviewSection } from './company/sections/OverviewSection';
+import { RiskScoreSection } from './company/sections/RiskScoreSection';
 import { FinancialAnalysisSection } from './company/sections/FinancialAnalysisSection';
 import { BalanceSheetSection } from './company/sections/BalanceSheetSection';
 import { ProfitLossSection } from './company/sections/ProfitLossSection';
@@ -22,6 +23,7 @@ import { ConnectionsSection } from './company/sections/ConnectionsSection';
  */
 const TABS = [
     { id: 'overview', label: 'Prehľad', icon: 'fa-chart-pie' },
+    { id: 'skore', label: 'Rizikové skóre', icon: 'fa-tachometer-alt' },
     { id: 'financials', label: 'Finančná analýza', icon: 'fa-calculator' },
     { id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale' },
     { id: 'vykaz', label: 'Zisk a strata', icon: 'fa-chart-line' },
@@ -62,6 +64,7 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
 
             {/* Tab Content */}
             {activeTab === 'overview' && <OverviewSection company={company} />}
+            {activeTab === 'skore' && <RiskScoreSection company={company} />}
             {activeTab === 'financials' && <FinancialAnalysisSection company={company} />}
             {activeTab === 'suvaha' && <BalanceSheetSection company={company} />}
             {activeTab === 'vykaz' && <ProfitLossSection company={company} />}

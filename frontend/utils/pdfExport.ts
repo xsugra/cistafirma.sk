@@ -409,12 +409,16 @@ function buildHeader(c: Company): string {
 
 function buildSummary(c: Company): string {
   const totalDebt = c.debts.reduce((s, d) => s + d.amountEur, 0);
+  // An absent score prints a dash, not `null` and not a green 100. The report
+  // is the artefact that gets forwarded, so a figure invented here would
+  // outlive the screen it came from.
+  const score = c.riskScore.score;
   return `
 <div class="cols-3">
   <div class="box">
     <div class="box-label">Rizikové skóre</div>
-    <div class="box-value">${c.riskScore.score} / 100</div>
-    <div class="box-sub">${esc(c.riskScore.summary)}</div>
+    <div class="box-value">${score === null ? '—' : `${score} / 100`}</div>
+    <div class="box-sub">${esc(c.riskScore.summary || (score === null ? 'Skóre sa nepodarilo načítať.' : ''))}</div>
   </div>
   <div class="box">
     <div class="box-label">Celkové dlhy</div>

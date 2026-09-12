@@ -11,6 +11,7 @@ import { CompanyNav } from '../components/company/CompanyNav';
 import { SectionNotice } from '../components/company/SectionNotice';
 import { useCompanyProfile } from '../components/company/useCompanyProfile';
 import { OverviewSection } from '../components/company/sections/OverviewSection';
+import { RiskScoreSection } from '../components/company/sections/RiskScoreSection';
 import { FinancialAnalysisSection } from '../components/company/sections/FinancialAnalysisSection';
 import { BalanceSheetSection } from '../components/company/sections/BalanceSheetSection';
 import { ProfitLossSection } from '../components/company/sections/ProfitLossSection';
@@ -29,6 +30,7 @@ import { DebtsSection } from '../components/company/sections/DebtsSection';
  */
 const BODIES: Record<ReadySectionId, React.FC<{ company: CompanyType }>> = {
     prehlad: OverviewSection,
+    skore: RiskScoreSection,
     register: RegisterSection,
     report: ReportSection,
     ukazovatele: FinancialAnalysisSection,

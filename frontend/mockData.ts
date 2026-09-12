@@ -28,7 +28,16 @@ export const mockCompanyData: Company = {
   riskScore: {
     score: 68,
     summary: 'Spoločnosť vykazuje mierne riziko z dôvodu existujúcich nedoplatkov. Finančné výsledky sú stabilné.',
-    calculationDate: new Date().toISOString(),
+    breakdown: {
+      start: 100,
+      floor: 5,
+      clamped: false,
+      parts: [
+        { key: 'debt', label: 'Evidované nedoplatky', delta: -32, detail: '10 000 €' },
+        { key: 'zone', label: 'Altman Z-score', delta: 0, detail: 'bezpečná zóna' },
+        { key: 'roa', label: 'Rentabilita aktív', delta: 0, detail: '5,2 %' },
+      ],
+    },
   },
   financials: [
     { year: 2021, revenue: 1250000, profit: 85000, profitAfterTax: 67000, totalRevenue: 1300000, costs: 1165000, incomeTax: 18000, incomeTaxPaid: 18000, assetsTotal: 2100000, assetsIntangible: 50000, assetsTangible: 800000, assetsFinancial: 100000, assetsInventory: 200000, assetsReceivablesLong: 50000, assetsReceivablesShort: 600000, assetsFinancialAccounts: 250000, assetsAccruals: 50000, equity: 900000, equityBasic: 200000, equityCapitalFunds: 0, equityProfitFunds: 100000, equityRetained: 515000, liabilitiesTotal: 1150000, liabilitiesReserves: 50000, liabilitiesLong: 400000, liabilitiesShort: 700000, liabilitiesAccruals: 50000, debtRatio: 57.14, grossMargin: 10.8 },

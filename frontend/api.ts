@@ -198,10 +198,16 @@ function mapCompanyResponse(data: any): Company {
   // three debts and nothing else, so a company in the Altman bankruptcy zone
   // with no debt was 100/100 in the list and 80/100 on its own page. One
   // ladder, on the server, published by `CompanyDetailSerializer`.
+  //
+  // `score` stays `null` when the API did not send one. The `?? 100` that was
+  // here meant a response missing the field rendered as a perfect 100/100 on
+  // every company -- "nothing here to look at" -- with nothing logged.
+  // `calculationDate` went with it: it was `new Date()`, a timestamp of when
+  // the browser mapped the response, and no screen ever read it.
   const riskScore = {
-    score: data.riskScore?.score ?? 100,
+    score: typeof data.riskScore?.score === 'number' ? data.riskScore.score : null,
     summary: data.riskScore?.summary ?? '',
-    calculationDate: new Date().toISOString(),
+    breakdown: data.riskScore?.breakdown ?? null,
   };
 
   return {
@@ -274,7 +280,20 @@ export const api = {
               ico: '12345678',
               name: 'Stará Firma, a.s.',
               status: 'V likvidácii',
-              riskScore: { score: 90, summary: 'Vysoké riziko.', calculationDate: new Date().toISOString() },
+              riskScore: {
+                score: 90,
+                summary: 'Vysoké riziko.',
+                breakdown: {
+                  start: 100,
+                  floor: 5,
+                  clamped: false,
+                  parts: [
+                    { key: 'debt', label: 'Evidované nedoplatky', delta: -10, detail: 'žiadne' },
+                    { key: 'zone', label: 'Altman Z-score', delta: 0, detail: 'bezpečná zóna' },
+                    { key: 'roa', label: 'Rentabilita aktív', delta: 0, detail: '2,0 %' },
+                  ],
+                },
+              },
             });
           } else if (ico.length !== 8) {
             reject(new Error('IČO musí mať 8 číslic.'));
@@ -287,7 +306,10 @@ export const api = {
               riskScore: {
                 score: Math.floor(Math.random() * 100),
                 summary: 'Automaticky generovaný mock.',
-                calculationDate: new Date().toISOString(),
+                // A generated mock has no factors behind it, so it carries no
+                // breakdown rather than an invented one -- the section then
+                // shows its "could not load" notice, which is what this data is.
+                breakdown: null,
               },
             });
           }

@@ -33,7 +33,7 @@ const company = {
     rozPortalUrl: null,
     debts: [],
     vatStatus: {isVatPayer: true, icDph: 'SK1234567890', taxReliabilityIndex: 'Spoľahlivý', lastCheckedAt: null},
-    riskScore: {score: 70, summary: 'Nízke riziko'},
+    riskScore: {score: 70, summary: 'Nízke riziko', breakdown: null},
 } as unknown as CompanyType;
 
 const SectionProbe: React.FC = () => {

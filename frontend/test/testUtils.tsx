@@ -82,7 +82,22 @@ export const DEFAULT_COMPANY: Company = {
         reasonForDeregistration: null,
         lastCheckedAt: '2026-01-01T00:00:00Z',
     },
-    riskScore: {score: 70, summary: 'Nízke riziko', calculationDate: '2026-01-01T00:00:00Z'},
+    riskScore: {
+        score: 70,
+        summary: 'Nízke riziko',
+        // The strip and the section both read this; a fixture without it would
+        // exercise the "could not load" branch in every unrelated test.
+        breakdown: {
+            start: 100,
+            floor: 5,
+            clamped: false,
+            parts: [
+                {key: 'debt', label: 'Evidované nedoplatky', delta: -30, detail: 'žiadne'},
+                {key: 'zone', label: 'Altman Z-score', delta: 0, detail: 'bezpečná zóna'},
+                {key: 'roa', label: 'Rentabilita aktív', delta: 0, detail: '4,0 %'},
+            ],
+        },
+    },
     financials: [],
     // Paired with the empty `financials` above: a fixture that has no rows must
     // not also claim to be `ready`, or a section test could pass by rendering a

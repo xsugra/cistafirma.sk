@@ -61,10 +61,40 @@ export interface VatStatus {
   lastCheckedAt: string;
 }
 
+/** One factor the risk score looked at, and what it cost. */
+export interface RiskScorePart {
+  key: string;
+  label: string;
+  /** Points taken off the score, or `null` when the factor was not assessed.
+   *  A factor at 0 and a factor we could not read are different facts. */
+  delta: number | null;
+  /** What was read, in words: the debt amount, the zone, the ROA. */
+  detail: string;
+}
+
+export interface RiskScoreBreakdown {
+  /** What the score starts from before any deduction — 100. */
+  start: number;
+  /** The score never falls below this. */
+  floor: number;
+  /** True when the floor is what set the number, so the parts deliberately do
+   *  not add up to it — the section says so rather than leaving the reader to
+   *  find an inconsistency. */
+  clamped: boolean;
+  parts: RiskScorePart[];
+}
+
 export interface RiskScore {
-  score: number; // 0-100
+  /** 0-100, or `null` when the API sent no score.
+   *
+   * This used to be `data.riskScore?.score ?? 100`, so a response that did not
+   * carry the field — a rename on the server, a shape change — read as a
+   * perfect 100/100 "nothing here to look at" on every company in the
+   * registry, silently. Absent is not the same as safest. */
+  score: number | null;
   summary: string;
-  calculationDate: string;
+  /** The reasons behind the number. `null` when the API sent none. */
+  breakdown: RiskScoreBreakdown | null;
 }
 
 /**

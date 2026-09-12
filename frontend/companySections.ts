@@ -46,8 +46,8 @@ export const COMPANY_SECTIONS = [
         note: 'Základné údaje, hospodárske výsledky a kapitál spoločnosti.',
     },
     {
-        id: 'skore', label: 'Rizikové skóre', icon: 'fa-tachometer-alt', group: 'Firma', status: 'partial',
-        note: 'Skóre je dnes jedno číslo a slovný súhrn. Rozpad na zložky, z ktorých vzniká, je nová práca — a je to naše vlastné skóre z verejných dát, nie cudzí model.',
+        id: 'skore', label: 'Rizikové skóre', icon: 'fa-tachometer-alt', group: 'Firma', status: 'ready',
+        note: 'Skóre a rozpad na faktory, z ktorých vzniká — nedoplatky, Altmanova zóna a rentabilita aktív. Je to naše vlastné skóre z verejných dát, nie cudzí model.',
     },
     {
         id: 'register', label: 'Obchodný register', icon: 'fa-landmark', group: 'Firma', status: 'ready',
@@ -64,7 +64,7 @@ export const COMPANY_SECTIONS = [
     },
     {
         id: 'suvaha', label: 'Súvaha', icon: 'fa-balance-scale', group: 'Financie', status: 'ready',
-        note: 'Aktíva a pasíva po rokoch, s kontrolou, že aktíva = vlastné imanie + záväzky + časové rozlíšenie. Kontrola sedí v 93,5 % riadkov, ktoré majú všetky štyri čísla (pred opravou čítania aktív v 25 %).',
+        note: 'Aktíva a pasíva po rokoch, s kontrolou, že aktíva = vlastné imanie + záväzky + časové rozlíšenie. Chýbajúce časové rozlíšenie čítame ako nulu — v 2 326 z 2 336 takých riadkov to tak naozaj je. Kontrola sedí presne v 13 816 zo 14 652 riadkov (94,3 %); keď závierke chýba iné číslo, kontrola to pomenuje a rovnicu neposudzuje.',
     },
     {
         id: 'vykaz', label: 'Výkaz ziskov a strát', icon: 'fa-chart-line', group: 'Financie', status: 'ready',

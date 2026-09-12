@@ -7,6 +7,7 @@ interface CompanySummaryStripProps {
 }
 
 export const CompanySummaryStrip: React.FC<CompanySummaryStripProps> = ({ company }) => {
+    const score = company.riskScore.score;
     const totalDebt = company.debts.reduce((sum, d) => sum + d.amountEur, 0);
     const hasDebt = totalDebt > 0;
     const reliabilityIndex = company.vatStatus.taxReliabilityIndex;
@@ -17,12 +18,23 @@ export const CompanySummaryStrip: React.FC<CompanySummaryStripProps> = ({ compan
             {/* Risk Score */}
             <div className="app-card p-5 flex items-center gap-5">
                 <div className="w-20 h-20 flex-shrink-0">
-                    <RiskDonut score={company.riskScore.score} size="sm" />
+                    {/* A donut needs a number to draw an arc for. An absent score
+                        gets an empty ring rather than a full green one, which is
+                        what a donut at 100 would have drawn. */}
+                    {score === null
+                        ? <div className="w-full h-full rounded-full border-8 border-gray-200 dark:border-slate-700" />
+                        : <RiskDonut score={score} size="sm" />}
                 </div>
                 <div className="min-w-0">
                     <p className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">Rizikové skóre</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{company.riskScore.score}<span className="text-sm font-normal text-gray-400"> / 100</span></p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{company.riskScore.summary}</p>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {score === null
+                            ? <span className="text-gray-400 dark:text-gray-500">—</span>
+                            : <>{score}<span className="text-sm font-normal text-gray-400"> / 100</span></>}
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {company.riskScore.summary || (score === null ? 'Skóre sa nepodarilo načítať.' : '')}
+                    </p>
                 </div>
             </div>
 

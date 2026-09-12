@@ -195,5 +195,103 @@ class OneScoreTests(TestCase):
         from companies.serializers import CompanyDetailSerializer
 
         payload = CompanyDetailSerializer(self.company).data['riskScore']
-        self.assertEqual(sorted(payload), ['score', 'summary'])
+        # `breakdown` joined the two when the score got a section of its own.
+        # The list is spelled out rather than asserted non-empty so that a
+        # fourth key has to be a deliberate edit here, which is the property
+        # that keeps the published contract from growing by accident.
+        self.assertEqual(sorted(payload), ['breakdown', 'score', 'summary'])
         self.assertTrue(payload['summary'])
+
+
+class BreakdownTests(SimpleTestCase):
+    """The parts have to add up to the number, or the section is a lie.
+
+    The score is published as one integer and the breakdown as a list of
+    deductions, so the two can disagree in a way nothing would log: the page
+    would print a table of reasons beside a total they do not produce. These
+    tests recompute the score from the parts and compare.
+    """
+
+    @staticmethod
+    def _total(result) -> float:
+        """100 minus the parts, floored -- the score's own ladder."""
+        parts = result['breakdown']['parts']
+        raw = result['breakdown']['start'] + sum(p['delta'] for p in parts if p['delta'] is not None)
+        return max(float(result['breakdown']['floor']), raw)
+
+    def test_the_parts_produce_the_published_score(self):
+        cases = [
+            (_Company(), None),
+            (_Company(vszp=5000), None),
+            (_Company(tax=10_000_000), None),
+            (_Company(), analysis(zone='distress')),
+            (_Company(), analysis(zone='grey', roa=-3.2)),
+            (_Company(vszp=25_000), analysis(zone='distress', roa=-1.0)),
+            (_Company(tax=7500), analysis(zone='safe', roa=4.0)),
+        ]
+        for company, payload in cases:
+            with self.subTest(company=vars(company), analysis=payload):
+                result = compute_risk_score(company, payload)
+                self.assertEqual(_round_half_up(self._total(result)), result['score'])
+
+    def test_every_factor_is_listed_even_when_it_cost_nothing(self):
+        # A factor at 0 and a factor we could not read are different facts.
+        # Dropping the zero rows would make "considered and fine" look the
+        # same as "never looked at".
+        keys = [p['key'] for p in compute_risk_score(_Company(), None)['breakdown']['parts']]
+        self.assertEqual(keys, ['debt', 'zone', 'roa'])
+
+    def test_an_unread_factor_is_null_and_not_zero(self):
+        result = compute_risk_score(_Company(), None)
+        by_key = {p['key']: p for p in result['breakdown']['parts']}
+
+        # No analysis payload at all: neither model saw this company.
+        self.assertIsNone(by_key['zone']['delta'])
+        self.assertIsNone(by_key['roa']['delta'])
+        # Debt is different on purpose -- an unfetched debt is not a debt.
+        self.assertEqual(by_key['debt']['delta'], 0)
+
+    def test_a_read_factor_that_cost_nothing_is_zero_not_null(self):
+        by_key = {
+            p['key']: p
+            for p in compute_risk_score(_Company(), analysis(zone='safe', roa=4.0))['breakdown']['parts']
+        }
+        self.assertEqual(by_key['zone']['delta'], 0)
+        self.assertEqual(by_key['roa']['delta'], 0)
+
+    def test_the_floor_is_announced_rather_than_silently_applied(self):
+        # 10 M of debt, a bankruptcy zone and a loss: 100 - 80 - 20 - 10 is
+        # -10, and the published number is the floor. A reader adding the
+        # parts up gets -10, so the payload has to say why.
+        result = compute_risk_score(
+            _Company(tax=10_000_000), analysis(zone='distress', roa=-2.0)
+        )
+        self.assertEqual(result['score'], RISK_SCORE_FLOOR)
+        self.assertTrue(result['breakdown']['clamped'])
+
+    def test_a_score_above_the_floor_is_not_announced_as_clamped(self):
+        result = compute_risk_score(_Company(tax=10_000_000), None)
+        self.assertEqual(result['score'], 20)
+        self.assertFalse(result['breakdown']['clamped'])
+
+    def test_the_debt_row_names_the_amount_it_read(self):
+        result = compute_risk_score(_Company(vszp=200_000, soc=1_400), None)
+        detail = result['breakdown']['parts'][0]['detail']
+        # Slovak grouping: a space between thousands, a comma before the cents.
+        self.assertEqual(detail, '201 400 €')
+
+    def test_the_debt_row_says_none_rather_than_printing_a_zero(self):
+        self.assertEqual(
+            compute_risk_score(_Company(), None)['breakdown']['parts'][0]['detail'],
+            'žiadne',
+        )
+
+    def test_the_zone_row_names_the_zone_in_the_summarys_words(self):
+        detail = compute_risk_score(_Company(), analysis(zone='distress'))['breakdown']['parts'][1]
+        self.assertEqual(detail['detail'], 'pásmo bankrotu')
+        self.assertEqual(detail['delta'], -20)
+
+    def test_the_roa_row_carries_the_percentage_it_read(self):
+        detail = compute_risk_score(_Company(), analysis(roa=-3.2))['breakdown']['parts'][2]
+        self.assertEqual(detail['detail'], '-3,2 %')
+        self.assertEqual(detail['delta'], -10)

@@ -252,6 +252,38 @@ nie nulu.
 
 ---
 
+### `GET /api/companies/<ico>/report/`
+
+Celý firemný report ako PDF (`application/pdf`), vykreslený na serveri cez
+WeasyPrint zo šablóny `backend/companies/templates/company_report.html`.
+Nevyžaduje JWT.
+
+**Response `200`:** binárne PDF, `Content-Disposition: attachment;
+filename="<ico>_<názov>.pdf"`.
+
+**Response `404`:** `{"detail": "Firma s týmto IČO nebola nájdená."}`
+
+**Response `500`:** `{"detail": "Report sa nepodarilo vygenerovať. Skúste to
+prosím znova."}` — obstarané tak, aby odpoveď pre anonymného volajúceho
+neobsahovala text podkladovej výnimky (cesta k modulu, stopa WeasyPrintu).
+
+Report obsahuje to, čo klientský export v prehliadači nemá: rizikové skóre,
+evidované nedoplatky, tabuľku ukazovateľov s uvedeným základom rentability,
+Altmanov a Tafflerov model, prehľad hospodárskych výsledkov, štatutárov a
+sektorové porovnanie. Naopak **neobsahuje graf prepojení** — ten kreslí
+`frontend/utils/pdfExport.ts`, ktorý si prehliadač skladá sám a používa ho
+tlačidlo „Stiahnuť PDF“ na stránke firmy. Dve cesty k reportu sa teda
+neprekrývajú v obsahu, ale ani jedna nie je nadmnožinou tej druhej; zlúčenie
+je otvorené rozhodnutie, nie hotová vec.
+
+**Frontend volajúci:** žiadny. Endpoint je dnes verejné API pre tretie strany,
+nie to, čo obsluhuje tlačidlo v aplikácii — pozri `docs/SOURCE_DATA_INTEGRITY.md`.
+
+**Spotreba:** vykreslenie je CPU-náročné a endpoint je `AllowAny`, preto je
+naň nasadený throttle (pozri `REPORT_THROTTLE_RATE` v `companies/views.py`).
+
+---
+
 ## 3. Graf prepojení (`/api/companies/<ico>/graph/`)
 
 ### `GET /api/companies/<ico>/graph/`

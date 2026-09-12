@@ -92,30 +92,77 @@ def _round_half_up(value: float) -> int:
     return int(value + 0.5)
 
 
+def _describe_debt(debt: Decimal) -> str:
+    """The debt total as the sentence a reader would say it in.
+
+    Slovak groups thousands with a space and uses a comma for the decimal
+    mark, and this string is rendered as-is rather than reformatted by the
+    frontend -- the same figure must not read two ways on one screen.
+    """
+    whole = int(debt)
+    text = f'{whole:,}'.replace(',', ' ')
+    cents = debt - whole
+    if cents:
+        text += f',{int(cents * 100):02d}'
+    return f'{text} €'
+
+
+def _describe_zone(zone: str) -> str:
+    """The zone in the words the summary already uses for it."""
+    return {
+        'distress': 'pásmo bankrotu',
+        'grey': 'šedá zóna',
+        'safe': 'bezpečná zóna',
+    }.get(zone, zone)
+
+
 def compute_risk_score(company, analysis: dict | None = None) -> dict:
-    """The risk score and its one-sentence summary.
+    """The risk score, its one-sentence summary, and what moved it.
 
     `analysis` is the `FinancialAnalysisService.to_dict` payload -- the same
     dict the API publishes and the PDF is rendered from, so all three read one
     computation rather than three.
+
+    The `score` and `summary` are unchanged by `parts` being here: the
+    additions below are the same ladder read out loud. They are computed as
+    deductions off a clean 100 rather than the original step-by-step `max`,
+    which is the same number -- every step only ever subtracts, so clamping
+    once at the end is equivalent to clamping at each one -- but it can be
+    *shown*, and a reader asking "why 35?" deserves an answer.
+
+    `parts` carries every factor that was considered, not only the ones that
+    cost something, because a factor at 0 and a factor we could not read are
+    different facts and the difference matters to whoever is deciding whether
+    to trust the number. `delta` is `None` for "not assessed", and a number
+    (possibly 0) for "assessed, and this is what it cost".
     """
     debt = total_debt(company)
     has_debt = debt > 0
 
     if has_debt:
         penalty = min(float(debt) / DEBT_PER_POINT, DEBT_MAX_PENALTY)
-        score = max(RISK_SCORE_FLOOR, DEBT_BASE_SCORE - penalty)
+        # `DEBT_BASE_SCORE` is 70 against a clean 100, so being in debt costs
+        # 30 points before the slope even starts.
+        debt_deduction = (100 - DEBT_BASE_SCORE) + penalty
         summary = SUMMARY_DEBT
     else:
-        score = 100.0
+        debt_deduction = 0.0
         summary = SUMMARY_CLEAN
+
+    parts: list[dict] = [{
+        'key': 'debt',
+        'label': 'Evidované nedoplatky',
+        'delta': -debt_deduction,
+        'detail': _describe_debt(debt) if has_debt else 'žiadne',
+    }]
 
     latest = (analysis or {}).get('latest') or {}
     zone = latest.get('zScoreZone')
     roa = (latest.get('ratios') or {}).get('roa')
 
+    zone_deduction = 0.0
     if zone in ZONE_PENALTY:
-        score = max(RISK_SCORE_FLOOR, score - ZONE_PENALTY[zone])
+        zone_deduction = float(ZONE_PENALTY[zone])
         if zone == 'distress':
             summary = SUMMARY_DISTRESS
         elif zone == 'grey' and not has_debt:
@@ -123,15 +170,49 @@ def compute_risk_score(company, analysis: dict | None = None) -> dict:
         elif zone == 'safe' and not has_debt:
             summary = SUMMARY_SAFE
 
+    parts.append({
+        'key': 'zone',
+        'label': 'Altman Z-score',
+        # `None`, not 0, when the zone is absent: an unread zone is not a
+        # neutral one, and showing it as "no effect" would claim the model
+        # looked at a company it never saw.
+        'delta': -zone_deduction if zone in ZONE_PENALTY else None,
+        'detail': _describe_zone(zone) if zone in ZONE_PENALTY else 'nemáme závierku',
+    })
+
+    roa_deduction = 0.0
     if roa is not None and roa < 0:
-        score = max(RISK_SCORE_FLOOR, score - NEGATIVE_ROA_PENALTY)
+        roa_deduction = float(NEGATIVE_ROA_PENALTY)
         # The clause is appended to the sentence rather than made a sentence
         # of its own, so the summary stays one line in the tile it renders in.
         # `rstrip('.')` and not `replace('.', '')`, which the frontend did --
         # that would also eat a decimal point inside a summary that had one.
         summary = f'{summary.rstrip(".")} + {SUMMARY_NEGATIVE_ROA}.'
 
-    return {'score': _round_half_up(score), 'summary': summary}
+    parts.append({
+        'key': 'roa',
+        'label': 'Rentabilita aktív',
+        'delta': -roa_deduction if roa is not None else None,
+        'detail': f'{roa:.1f} %'.replace('.', ',') if roa is not None else 'nemáme závierku',
+    })
+
+    raw = 100.0 - debt_deduction - zone_deduction - roa_deduction
+    clamped = raw < RISK_SCORE_FLOOR
+    score = max(float(RISK_SCORE_FLOOR), raw)
+
+    return {
+        'score': _round_half_up(score),
+        'summary': summary,
+        'breakdown': {
+            'start': 100,
+            'floor': RISK_SCORE_FLOOR,
+            # True when the floor is what set the number, so a reader adding
+            # the parts up is told why they do not reach the score instead of
+            # finding an inconsistency we left in.
+            'clamped': clamped,
+            'parts': parts,
+        },
+    }
 
 
 def risk_score_for_company(company) -> dict:
