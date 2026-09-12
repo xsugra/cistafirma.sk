@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from companies.models import Company, CompanyFinancialResult
 from registers.integrations.ruz_api import RuzApi, RuzUnreachable
@@ -59,6 +59,26 @@ class FinancialsSyncResult:
         something different from "never checked".
         """
         return self.outcome.answered
+
+
+class ExtractionOutcome(NamedTuple):
+    """What reading one statement's reports produced, and what it had to work with.
+
+    `financials` alone cannot say whether an empty result means the registry
+    filed nothing or this code could not map what was filed. Measured 2026-09-12
+    over the 79 companies the rotation answered with nothing: four different
+    facts arrived as one sentence, and the sentence named the wrong one. Holding
+    the two counts next to the fields is what lets the caller say which.
+
+    `filled_cells` counts cells holding a number this reader could have used
+    (`_to_decimal`), not merely non-blank text -- a cell of prose is not a figure
+    the parser lost.
+    """
+
+    financials: Dict[str, Optional[Decimal]]
+    is_ifrs: bool
+    tables_seen: int
+    filled_cells: int
 
 
 BALANCE_SHEET_KEYS = ("suvaha", "bilancia", "balance sheet", "strana aktiv", "strana pasiv", "assets", "liabilities")
@@ -190,29 +210,44 @@ class RuzFinancialsSyncService:
             )
 
         upserts = 0
-        skipped = 0
+        # Why a statement contributed nothing, counted rather than summed: the
+        # four reasons below mean different things and used to arrive as one
+        # sentence, which then named the wrong one.
+        unreadable = 0     # the statement itself could not be used
+        no_tables = 0      # the report bodies carry no tables
+        empty_tables = 0   # tables exist and hold no number
+        unmapped = 0       # tables hold numbers, and no key or column rule reads them
+        gated = 0          # read fine, discarded for carrying neither revenue nor profit
         found_ifrs = False
         for statement_id in statement_ids[:max_statements]:
             statement = self.api.get_financial_statement_details(statement_id)
             if not statement:
-                skipped += 1
+                unreadable += 1
                 continue
 
             year = self._extract_year(statement)
             if not year:
-                skipped += 1
+                unreadable += 1
                 continue
 
             report_ids = statement.get("idUctovnychVykazov", []) or []
             if not report_ids:
-                skipped += 1
+                unreadable += 1
                 continue
 
-            financials, is_ifrs = self._extract_financials_from_reports(report_ids)
-            if is_ifrs:
+            extraction = self._extract_financials_from_reports(report_ids)
+            if extraction.is_ifrs:
                 found_ifrs = True
+            financials = extraction.financials
             if financials.get("revenue") is None and financials.get("profit") is None:
-                skipped += 1
+                if extraction.tables_seen == 0:
+                    no_tables += 1
+                elif extraction.filled_cells == 0:
+                    empty_tables += 1
+                elif not financials:
+                    unmapped += 1
+                else:
+                    gated += 1
                 continue
 
             CompanyFinancialResult.objects.update_or_create(
@@ -229,13 +264,31 @@ class RuzFinancialsSyncService:
             company.uses_ifrs = found_ifrs
             company.save(update_fields=["uses_ifrs"])
 
+        reasons = self._reason_clauses(
+            unreadable=unreadable,
+            no_tables=no_tables,
+            empty_tables=empty_tables,
+            unmapped=unmapped,
+            gated=gated,
+        )
+
         if upserts == 0:
-            # Statements exist but none yielded a revenue or a profit we could
-            # read. Still an answer -- and worth being able to count, because a
-            # population that is all this and no `RECORDED` is a parser signal.
+            # Statements exist and none was recorded. Still an answer -- and
+            # worth being able to count, because a population that is all this
+            # and no `RECORDED` is a signal. Which signal, though, depends on
+            # why: `gated` is a decision this code makes, `unmapped` is a gap in
+            # it, and the other three are the registry having nothing to give.
+            # The single sentence that used to stand here said "none readable"
+            # about all of them, and for a company the gate had discarded it was
+            # false -- measured 2026-09-12 on the 79 companies the rotation
+            # answered with nothing. A reader told the wrong reason looks in the
+            # wrong place, which is how that investigation took two wrong turns.
             return FinancialsSyncResult(
                 FinancialsOutcome.NO_STATEMENTS,
-                detail=f"{len(statement_ids)} statement(s) present, none readable",
+                detail=(
+                    f"{len(statement_ids)} statement(s) present, none recorded "
+                    f"({', '.join(reasons) if reasons else 'none readable'})"
+                ),
             )
 
         # A statement we could not read is worth naming even when others were
@@ -244,13 +297,43 @@ class RuzFinancialsSyncService:
         # and the second is the early warning that the first is about to stop
         # being true. The count is the signal; the trend across runs is the
         # alarm. Measured 2026-09-11 on the pilot: 12-13 statements per company,
-        # all read.
+        # all read. The reasons ride along for the same purpose: a run that
+        # starts discarding statements says so before the count moves.
         readable = f"{upserts} of {len(statement_ids)} statement(s) readable"
         return FinancialsSyncResult(
             FinancialsOutcome.RECORDED,
             rows=upserts,
-            detail=readable if skipped else "",
+            detail=f"{readable} ({', '.join(reasons)})" if reasons else "",
         )
+
+    @staticmethod
+    def _reason_clauses(
+        *,
+        unreadable: int,
+        no_tables: int,
+        empty_tables: int,
+        unmapped: int,
+        gated: int,
+    ) -> List[str]:
+        """Why statements contributed nothing, ordered by what a reader should check first.
+
+        `gated` and `unmapped` lead because both are this code's doing -- one a
+        decision, one a gap -- and a reader who meets them first looks here. The
+        rest are facts about the registry: an empty template and a body without
+        tables are the company having nothing to file, not something to repair.
+        """
+        clauses = []
+        if gated:
+            clauses.append(f"{gated} readable but carrying neither a revenue nor a profit")
+        if unmapped:
+            clauses.append(f"{unmapped} carrying values that yielded no field")
+        if empty_tables:
+            clauses.append(f"{empty_tables} with tables but no filled cell")
+        if no_tables:
+            clauses.append(f"{no_tables} with no tables in the report bodies")
+        if unreadable:
+            clauses.append(f"{unreadable} unusable")
+        return clauses
 
     def _extract_year(self, statement: Dict) -> Optional[int]:
         for key in ("obdobieDo", "obdobieOd"):
@@ -262,10 +345,17 @@ class RuzFinancialsSyncService:
                 return int(match.group(1))
         return None
 
-    def _extract_financials_from_reports(self, report_ids: List[int]) -> tuple:
-        """Returns (financials_dict, is_ifrs)."""
+    def _extract_financials_from_reports(self, report_ids: List[int]) -> ExtractionOutcome:
+        """Read a statement's reports, and report what there was to read.
+
+        The counts are gathered here rather than by the caller because the
+        reports are already fetched here: walking them a second time would mean
+        a second round of requests to a registry that times out.
+        """
         result: Dict[str, Optional[Decimal]] = {}
         is_ifrs = False
+        tables_seen = 0
+        filled_cells = 0
 
         for report_id in report_ids:
             report = self.api.get_financial_report_details(report_id)
@@ -277,6 +367,14 @@ class RuzFinancialsSyncService:
 
             tables = ((report.get("obsah") or {}).get("tabulky") or [])
             template_tables = self._get_template_tables(report.get("idSablony"))
+
+            tables_seen += len(tables)
+            for table in tables:
+                filled_cells += sum(
+                    1
+                    for value in (table.get("data") or [])
+                    if self._to_decimal(value) is not None
+                )
 
             for idx, table in enumerate(tables):
                 template_table = template_tables[idx] if idx < len(template_tables) else None
@@ -322,7 +420,7 @@ class RuzFinancialsSyncService:
         if result.get("profit") is None and result.get("revenue") is not None and result.get("costs") is not None:
             result["profit"] = result["revenue"] - result["costs"]
 
-        return result, is_ifrs
+        return ExtractionOutcome(result, is_ifrs, tables_seen, filled_cells)
 
     def _data_column_shape(
         self, template_table: Dict, rows: List[Dict], data: List

@@ -715,13 +715,21 @@ def schedule_missing_orsr_sync(limit: int = 200):
 def sync_company_financials_from_ruz(company_id: int):
     company = Company.objects.get(id=company_id)
     result = sync_company_and_record(company)
+    # `detail` is logged because the scheduled path is where it would otherwise
+    # be lost: `sync_company_and_record` keeps it only for failures, so a run
+    # that reached the registry, found statements and recorded none of them
+    # leaves `CompanySyncStatus.last_error` empty. That is the shape of the
+    # question this log line answers -- "why did 79 companies store nothing?"
+    # -- and the service now answers it in words. Logged here rather than in
+    # the service so the manual CLI and the admin do not print it twice.
     logger.info(
-        "RUZ financial sync company_id=%s ico=%s outcome=%s rows=%s",
-        company_id, company.ico, result.outcome.value, result.rows,
+        "RUZ financial sync company_id=%s ico=%s outcome=%s rows=%s detail=%s",
+        company_id, company.ico, result.outcome.value, result.rows, result.detail,
     )
     return (
         f"RUZ financial sync for {company.ico}: "
         f"{result.outcome.value}, rows={result.rows}"
+        + (f" ({result.detail})" if result.detail else "")
     )
 
 

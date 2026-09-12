@@ -219,6 +219,112 @@ class FinancialsOutcomeTests(TestCase):
         self.assertEqual(result.detail, "")
 
 
+class NoStatementsReasonTests(TestCase):
+    """One sentence covered four different facts, and named the wrong one.
+
+    Measured 2026-09-12 over the 79 companies the rotation answered with nothing:
+    `NO_STATEMENTS` with "N statement(s) present, none readable" stood for an
+    empty registry, an empty template, a gap in the parser, and a statement the
+    write gate discarded -- and for the last one the sentence was simply false,
+    which sent that investigation down two wrong paths. Each cause now says
+    which it is, because the reader cannot tell them apart from outside.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=4713, ico="47130000", nazov_UJ="Dovod s.r.o."
+        )
+
+    def _service(self, **kwargs):
+        return RuzFinancialsSyncService(api=_ScriptedRuzApi(**kwargs))
+
+    def _one_statement(self, report):
+        return dict(
+            detail={"idUctovnychZavierok": [77]},
+            statements={
+                77: {"obdobieDo": "2023-12-31", "idUctovnychVykazov": [88], "idSablony": 1}
+            },
+            reports={88: report},
+        )
+
+    def test_a_body_without_tables_says_so(self):
+        result = self._service(
+            **self._one_statement({"idSablony": 1, "obsah": {"tabulky": []}}),
+            templates={1: {"tabulky": []}},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.NO_STATEMENTS)
+        self.assertIn("1 statement(s) present, none recorded", result.detail)
+        self.assertIn("1 with no tables in the report bodies", result.detail)
+
+    def test_a_template_with_every_cell_empty_says_so(self):
+        result = self._service(
+            **self._one_statement(
+                {"idSablony": 1, "obsah": {"tabulky": [{"nazov": "Vynosy", "data": ["", ""]}]}}
+            ),
+            templates={1: {"tabulky": []}},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.NO_STATEMENTS)
+        self.assertIn("1 with tables but no filled cell", result.detail)
+
+    def test_tables_carrying_values_that_yield_no_field_say_so(self):
+        """The gap that is this code's doing, as opposed to the registry's.
+
+        `Majetok` is the measured shape: the table holds a figure, resolves its
+        column shape, and no key names the row -- so the parser loses a number
+        that was there. Only `filled_cells > 0` with an empty result separates
+        this from the two cases above.
+        """
+        result = self._service(
+            **self._one_statement(
+                {"idSablony": 1, "obsah": {"tabulky": [{"nazov": "Majetok", "data": ["16.23"]}]}}
+            ),
+            templates={1: {"tabulky": []}},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.NO_STATEMENTS)
+        self.assertIn("1 carrying values that yielded no field", result.detail)
+
+    def test_a_readable_statement_the_gate_discarded_is_not_called_unreadable(self):
+        """The measured falsehood: `00591653` filed four balance sheets.
+
+        The parser read assets and equity out of each of them and the write gate
+        dropped all four for carrying neither a revenue nor a profit. The old
+        sentence called those "none readable" -- untrue about the statements and
+        misleading about where to look, since the reason was this code's own
+        decision, not the registry's filing.
+        """
+        template = {
+            "tabulky": [
+                {
+                    "nazov": "Strana aktív",
+                    "pocetDatovychStlpcov": 1,
+                    "hlavicka": [],
+                    "riadky": [
+                        {"text": {"sk": "Majetok spolu"}},
+                        {"text": {"sk": "Vlastné imanie"}},
+                    ],
+                }
+            ]
+        }
+        result = self._service(
+            **self._one_statement(
+                {"idSablony": 555, "obsah": {"tabulky": [{"nazov": "Strana aktív", "data": ["328", "328"]}]}}
+            ),
+            templates={555: template},
+        ).sync_company_detailed(self.company)
+
+        self.assertEqual(result.outcome, FinancialsOutcome.NO_STATEMENTS)
+        self.assertIn("1 readable but carrying neither a revenue nor a profit", result.detail)
+        self.assertNotIn(
+            "none readable",
+            result.detail,
+            "the statement was read; the gate is what discarded it",
+        )
+        self.assertFalse(CompanyFinancialResult.objects.exists())
+
+
 class SyncCompanyAndRecordTests(TestCase):
     """The single outcome -> CompanySyncStatus rule."""
 
