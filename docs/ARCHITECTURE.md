@@ -160,6 +160,14 @@ sequenceDiagram
 - **Async pipeline** – heavy I/O synchronizácie mimo request-response cesty.
 - **K8s migrate-first deploy** – schéma migrácie pred rolloutom app deploymentov.
 - **API-first backend** – frontend závislý na stabilných DRF endpointoch.
+- **Plánové limity sa nevynucujú** – `SubscriptionPlan.max_watched_companies`
+  a `pdf_reports_per_month` číta len admin a profil, nikde neblokujú operáciu;
+  jediné limity, ktoré projekt naozaj uplatňuje, sú DRF throttles v
+  `companies/throttles.py`. Je to rozhodnutie, nie nedokončená práca: nemáme
+  počítadlo stiahnutí, serverový report endpoint nemá ani volajúceho (PDF sa
+  skladá v prehliadači) a žiadny plán sa nepredáva. Vynútiť kvótu na endpoint,
+  ktorý nikto nevolá, by vytvorilo kontrolu, ktorá sa tvári zdravo a nerobí nič.
+  Dôvod je rozpísaný v docstringu modelu.
 
 ## 8. Rizikové miesta
 
