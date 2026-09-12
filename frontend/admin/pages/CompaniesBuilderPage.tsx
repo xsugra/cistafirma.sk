@@ -34,7 +34,20 @@ const FIELD_DEFS = [
   { value: 'revenue_state', label: 'Tržby', kind: 'select', options: ['revenue', 'no_revenue'], operators: ['equals'] as const },
   { value: 'vat_payer', label: 'Platiteľ DPH', kind: 'select', options: ['1', '0'], operators: ['equals'] as const },
   { value: 'tax_reliability', label: 'Daňová spoľahlivosť', kind: 'select', options: ['vysoko spoľahlivý', 'spoľahlivý', 'nespoľahlivý'], operators: ['equals'] as const },
-  { value: 'velkost_organizacie', label: 'Veľkosť firmy', kind: 'select', options: ['mikro', 'small', 'medium', 'large'], operators: ['equals'] as const },
+  // The 23 codes of ŠÚ SR číselník 0073/KATP97, which is what the column
+  // actually holds (`00`-`38`). The options used to read
+  // `['mikro','small','medium','large']` -- words that appear in no row of the
+  // table, so the filter could only ever return nothing while looking like it
+  // had worked. `00` is in the list on purpose: the company page refuses to
+  // *rank* the 206 240 firms whose size the register does not record, because a
+  // ranking would present "unknown" as a category, but an operator asking for
+  // exactly those firms is asking a question worth answering.
+  {
+    value: 'velkost_organizacie', label: 'Veľkosť firmy', kind: 'select',
+    options: ['00', '01', '02', '03', '04', '05', '06', '07', '11', '12',
+      '21', '22', '23', '24', '25', '31', '32', '33', '34', '35', '36', '37', '38'],
+    operators: ['equals'] as const,
+  },
   { value: 'sync_state', label: 'Sync stav', kind: 'select', options: ['healthy', 'failing', 'blocked'], operators: ['equals'] as const },
   { value: 'lead_score', label: 'Lead score', kind: 'number', operators: ['gte', 'lte', 'gt', 'lt'] as const },
   { value: 'confidence_min', label: 'Confidence min', kind: 'number', operators: ['gte', 'lte', 'gt', 'lt'] as const },
@@ -657,7 +670,36 @@ function selectLabel(field: string, value: string) {
     vat_payer: { '1': 'Áno', '0': 'Nie' },
     sync_state: { healthy: 'Zdravý', failing: 'Chybný', blocked: 'Blokovaný' },
     pravna_forma: { '112': 's. r. o.', '121': 'a. s.', '101': 'FO-podnikateľ', '111': 'v. o. s.', '205': 'družstvo' },
-    velkost_organizacie: { mikro: 'Mikro', small: 'Malá', medium: 'Stredná', large: 'Veľká' },
+    // The register's own band wording, with the code in front of it. The code
+    // is what the filter writes, and the číselník's edges are uneven -- `07` is
+    // 20-24 employees and `11` is 25-49 -- so a bare code is not decodable from
+    // the sequence. The authority for these strings is
+    // `backend/companies/services/velkost.py`; this is the admin panel's copy.
+    velkost_organizacie: {
+      '00': '00 — nezistený',
+      '01': '01 — 0 zamestnancov',
+      '02': '02 — 1 zamestnanec',
+      '03': '03 — 2 zamestnanci',
+      '04': '04 — 3-4 zamestnanci',
+      '05': '05 — 5-9 zamestnancov',
+      '06': '06 — 10-19 zamestnancov',
+      '07': '07 — 20-24 zamestnancov',
+      '11': '11 — 25-49 zamestnancov',
+      '12': '12 — 50-99 zamestnancov',
+      '21': '21 — 100-149 zamestnancov',
+      '22': '22 — 150-199 zamestnancov',
+      '23': '23 — 200-249 zamestnancov',
+      '24': '24 — 250-499 zamestnancov',
+      '25': '25 — 500-999 zamestnancov',
+      '31': '31 — 1000-1999 zamestnancov',
+      '32': '32 — 2000-2999 zamestnancov',
+      '33': '33 — 3000-3999 zamestnancov',
+      '34': '34 — 4000-4999 zamestnancov',
+      '35': '35 — 5000-9999 zamestnancov',
+      '36': '36 — 10000-19999 zamestnancov',
+      '37': '37 — 20000-29999 zamestnancov',
+      '38': '38 — 30000+ zamestnancov',
+    },
   };
   return map[field]?.[value] || value;
 }

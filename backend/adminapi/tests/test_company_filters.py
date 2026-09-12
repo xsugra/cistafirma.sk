@@ -74,6 +74,56 @@ class CompanyFilterServicePerformanceTests(TestCase):
         self.assertNotIn('JOIN "Company Financial Results"', sql)
         self.assertNotIn('JOIN "registers_companysyncstatus"', sql)
 
+    def test_the_size_filter_matches_the_code_without_folding_its_case(self):
+        """The column holds a two-digit code, so `iexact` buys nothing and costs the index.
+
+        `velkost_organizacie` carries ŠÚ SR číselník 0073 -- `00` to `38`. There
+        is no case in it to fold, and `iexact` compiles to
+        `UPPER("Veľkosť") = UPPER(%s)`, which cannot use the composite
+        `(velkost_organizacie, datum_zrusenia)` index the model declares and
+        falls back to scanning the table. Both routes to this filter are checked
+        because they are separate code paths -- the builder's `filter_builder`
+        JSON and a flat `?velkost_organizacie=` query parameter -- and the admin
+        UI only ever takes the first, so a fix applied to one of them would look
+        like it had worked.
+        """
+        self.matching.velkost_organizacie = "04"
+        self.matching.save(update_fields=["velkost_organizacie"])
+
+        # The builder route, isolated so this asserts about the lookup alone
+        # rather than about every `UPPER` anywhere in the listing queryset.
+        condition = {"field": "velkost_organizacie", "operator": "equals", "value": "04"}
+        sql = str(Company.objects.filter(self.service._condition_to_q(condition)).query)
+        self.assertNotIn("UPPER(", sql)
+
+        built = self.service.apply(
+            self.view._listing_queryset(),
+            {
+                "filter_builder": json.dumps(
+                    {
+                        "id": "root",
+                        "type": "group",
+                        "logic": "and",
+                        "children": [
+                            {"type": "condition", "field": "velkost_organizacie", "operator": "equals", "value": "04"},
+                        ],
+                    }
+                )
+            },
+        )
+        self.assertEqual(list(built.values_list("id", flat=True)), [self.matching.id])
+
+        # And the flat query parameter, which is a different branch of `apply`.
+        flat = self.service.apply(self.view._listing_queryset(), {"velkost_organizacie": "04"})
+        self.assertEqual(list(flat.values_list("id", flat=True)), [self.matching.id])
+        self.assertNotIn("UPPER(", str(flat.query))
+
+        # The code is a code, so a value one digit away is a different band and
+        # must not match -- the reason an exact lookup is right here, rather than
+        # a widening one that would answer a question nobody asked.
+        other = self.service.apply(self.view._listing_queryset(), {"velkost_organizacie": "05"})
+        self.assertEqual(list(other.values_list("id", flat=True)), [])
+
 
 class CompanyPresetTests(TestCase):
     """Presets are a promise about the data, and until now nothing checked them.

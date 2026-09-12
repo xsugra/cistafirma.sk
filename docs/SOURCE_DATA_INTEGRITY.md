@@ -1937,3 +1937,96 @@ is a moment whose day is the reader's day and goes through the local clock.
 This is the same defect class as `riskScore ?? 100` and `vat_payer || false`, and
 it is the largest instance found: 98,0 % of a state whose entire purpose is
 reassurance.
+
+## The size band, and the four words that matched no row
+
+`Company.velkost_organizacie` fed one `planned` section and one admin filter.
+Building the section turned up a bug in the filter, and the two share a cause:
+nobody had read the column's vocabulary.
+
+**The codebook was one HTTP call away.** The `planned` note for
+`Firmy podľa zamestnancov` said the mapping from code to band was nowhere in the
+project, which was true, and then inferred that `00` is "an unfilled field",
+which was a guess. The register publishes the codebook itself at
+`https://www.registeruz.sk/cruz-public/api/velkosti-organizacie` — ŠÚ SR číselník
+0073/KATP97, 23 entries, `00`-`38`. `00` is not unfilled: it is a value with a
+name, `nezistený`, and it is the modal one.
+
+Read 12. 9. 2026, the 23 codes are exhaustive over the live column: 22 observed,
+every one of them in the číselník, none outside it. The bands are **not evenly
+wide** — `05` spans five employee counts and `11` spans twenty-five, while `07`
+is 20-24 and `08`-`10` do not exist. The two-digit code is therefore not a
+shorter way of writing the band, which is why no surface in the app shows it
+alone: each prints `04 — 3-4 zamestnanci`.
+
+**`00` is refused as a band, and that is the decision the section rests on.**
+205 840 of 325 337 active companies (63,3 %) carry it. Grouping them would draw a
+real table under a plausible heading, and the heading would be *unknown* — a
+category defined by what is not known about its members. The scope returns a
+refusal instead, and the refusal is not "we have no data": it names how many
+other firms are in the same position (206 240 — the `00` rows plus 400 active
+rows with no code at all and no empty strings). Measured 12. 9. 2026:
+
+```sql
+SELECT count(*) FILTER (WHERE "Dátum zrušenia UJ" IS NULL) AS active_00,
+       count(*) FILTER (WHERE "Dátum zrušenia UJ" IS NOT NULL) AS struck_00
+FROM "Companies and SZCO" WHERE "Veľkosť" = '00';
+-- 205840 | 120280
+```
+
+**What the section actually covers.** For band `04` the scope ranks 272 firms out
+of 16 342. 273 rows in that band are ranked-eligible (active, latest statement,
+`revenue` not null) and the subject is excluded from its own ranking: 273 - 1 =
+272. The band is the register's code, the label comes from `velkost.py`, and the
+counts reconcile because the register — not the app — is the authority for both.
+
+The honest limitation is the shape of the coverage, which rises with firm size:
+
+| code | band | active | ranked-eligible |
+|---|---|---|---|
+| `01` | 0 zamestnancov | 2 525 | 4 |
+| `02` | 1 zamestnanec | 45 397 | 128 |
+| `04` | 3-4 zamestnanci | 16 342 | 273 |
+| `06` | 10-19 zamestnancov | 8 615 | 552 |
+| `11` | 25-49 zamestnancov | 4 863 | 387 |
+| `21` | 100-149 zamestnancov | 757 | 64 |
+
+Band `01` ranks 4 of 2 525 (0,16 %), band `21` ranks 64 of 757 (8,5 %). The
+smallest firms are the least likely to have filed, so the section is nearly
+always empty exactly where there are the most firms to compare. That is why it
+prints both numbers rather than only the table: "272 of 16 342" is a true
+sentence and "the firms your size" is not.
+
+**The bug underneath.** The React admin builder offered
+`['mikro','small','medium','large']` as the options for `velkost_organizacie`.
+Both halves of that were the defect: the *options* matched no row of the table —
+so the filter returned nothing while looking like it had worked — and the labels
+were a vocabulary the register does not use. The words came from a `lead_scoring`
+test fixture (`velkost_organizacie='mikro'`), which no production code reads;
+inert there, authoritative-looking here.
+
+Two code paths reach this column and they are separate branches, so fixing one
+looked like a fix:
+
+- the builder's `filter_builder` JSON, via `_condition_to_q` — **the path the
+  admin UI actually takes**;
+- a flat `?velkost_organizacie=` parameter, via `apply`.
+
+Both used `iexact`, which compiles to `UPPER("Veľkosť") = UPPER(%s)` — and a
+function on the column cannot use `company_size_active_idx`, the composite
+`(velkost_organizacie, datum_zrusenia)` index the model declares. So the filter
+was correct and unindexed, scanning 445 626 rows to answer a question an index
+answers. Both now use an exact lookup: the column holds two digits, there is no
+case in a number to fold, and `contains` is read as a prefix. A test in
+`adminapi/tests/test_company_filters.py` asserts on the generated SQL for both
+paths, because the regression would be invisible in the result set — the same
+rows come back either way, just slower.
+
+**A population that is not the same population.** The admin listing is
+`Company.objects.all()` (445 626 rows, active and struck-off) and the
+company-page scope is active-only (325 337). The same filter therefore reports
+326 120 for `00` in the admin and 206 240 in the refusal panel, and both are
+right — an operator asking "who has no recorded size" is asking about the
+register, while a peer ranking is a claim about firms that still exist. The
+`00` option stays in the admin builder for that reason, even though the company
+page refuses to rank it.

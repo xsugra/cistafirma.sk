@@ -164,7 +164,12 @@ class CompanyFilterService:
             qs = qs.filter(tax_reliability__iexact=tax_reliability)
 
         if size := params.get("velkost_organizacie"):
-            qs = qs.filter(velkost_organizacie__iexact=size)
+            # Exact, not `iexact`. The column holds two digits from ŠÚ SR
+            # číselník 0073 (`00`-`38`), so there is no case to fold -- and
+            # `iexact` compiles to `UPPER("Veľkosť") = UPPER(%s)`, which cannot
+            # use `company_size_active_idx` and falls back to scanning all
+            # 445 626 rows. The same reasoning as `peers.py`'s `kraj` scope.
+            qs = qs.filter(velkost_organizacie=size)
 
         if region := params.get("region"):
             qs = qs.filter(kraj__iexact=region)
@@ -355,7 +360,18 @@ class CompanyFilterService:
             q = Q(ico__icontains=value) | Q(nazov_UJ__icontains=value) | Q(dic__icontains=value) | Q(ic_dph__icontains=value) | Q(ulica__icontains=value) | Q(mesto__icontains=value) | Q(psc__icontains=value) | Q(ruz_id__icontains=value)
             return q
 
-        if field in {"mesto", "psc", "kraj", "okres", "sidlo", "sk_nace", "tax_reliability", "pravna_forma", "velkost_organizacie"}:
+        if field == "velkost_organizacie":
+            # Held out of the `iexact` set below on purpose. The column is two
+            # digits from ŠÚ SR číselník 0073 (`00`-`38`), so there is no case to
+            # fold -- and `iexact` compiles to `UPPER("Veľkosť") = UPPER(%s)`,
+            # which cannot use `company_size_active_idx` and falls back to
+            # scanning all 445 626 rows. The builder only offers `equals` here;
+            # `contains` is read as a prefix, which is the one substring question
+            # a code has an answer to ("every band starting with 3").
+            lookup = {"contains": "startswith"}.get(operator, "exact")
+            return Q(**{f"velkost_organizacie__{lookup}": value})
+
+        if field in {"mesto", "psc", "kraj", "okres", "sidlo", "sk_nace", "tax_reliability", "pravna_forma"}:
             field_name = "sk_NACE" if field == "sk_nace" else field
             lookup = {
                 "contains": "istartswith" if field in {"mesto", "psc", "sidlo", "sk_nace"} else "iexact",
