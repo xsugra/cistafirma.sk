@@ -349,7 +349,7 @@ class FinancialAnalysisService:
         # turnover row is the same quantity and the two must not disagree.
         #
         # It is a fallback and not a preference: `total_revenue` is populated on
-        # 22.9 % of the 14 204 stored rows against 98.3 % for `revenue`, so a
+        # 22.9 % of the 14 236 stored rows against 98.1 % for `revenue`, so a
         # P&L that resolved the operating line without the financial-revenue
         # line is the common shape, not the exception.
         revenue_filed = _amount(fr.total_revenue)
@@ -374,8 +374,13 @@ class FinancialAnalysisService:
         # (`any` of revenue/profit/total_revenue/costs) let a filing that
         # carried `revenue` and no profit row through, and `0 / assets` then
         # became an ROA, an ROE and an ROS of 0.0 -- three verdicts, all of them
-        # about a line nobody read. Measured 2026-09-12: no row in the database
-        # is in that state today, so this closes the path rather than a leak.
+        # about a line nobody read. Measured 2026-09-12 after the full re-sync:
+        # 2 of the 14 236 rows are in that state (a revenue line, no profit row,
+        # and no `assets_total` or `total_revenue` either). Both would have been
+        # spared by `_ratio`'s own zero-denominator guard, so this closes the
+        # general path rather than those two in particular -- it is the rows
+        # that carry assets *and* a revenue line *and* no profit that the
+        # denominator guard cannot reach.
         profit_filed = fr.profit is not None
 
         # Assets detail. None-preserving, because each of these becomes a
