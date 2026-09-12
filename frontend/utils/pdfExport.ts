@@ -16,7 +16,7 @@ function eur(amount: number): string {
   return `${formatNumber(amount)} €`;
 }
 
-function eurCompact(amount: number | null): string {
+function eurCompact(amount: number | null | undefined): string {
   // A figure the statement did not carry is not a zero, and printing `0 €` in
   // an exported document is a claim about the company that nothing supports.
   if (amount == null) return '—';
@@ -448,7 +448,8 @@ function buildDebts(c: Company): string {
 function hasBreakdown(f: Financials): boolean {
   return [
     f.assetsIntangible, f.assetsTangible, f.assetsFinancial, f.assetsInventory,
-    f.assetsReceivablesLong, f.assetsReceivablesShort, f.assetsFinancialAccounts,
+    f.assetsReceivablesLong, f.assetsReceivablesShort, f.assetsFinancialShort,
+    f.assetsFinancialAccounts,
     f.assetsAccruals, f.equityBasic, f.equityCapitalFunds, f.equityProfitFunds,
     f.equityRetained, f.liabilitiesReserves, f.liabilitiesLong, f.liabilitiesShort,
     f.liabilitiesAccruals,
@@ -522,6 +523,7 @@ function buildFinancials(c: Company): string {
           <tr><td>Zásoby</td><td class="r">${eurCompact(bal.assetsInventory)}</td></tr>
           <tr><td>Dlhodobé pohľadávky</td><td class="r">${eurCompact(bal.assetsReceivablesLong)}</td></tr>
           <tr><td>Krátkodobé pohľadávky</td><td class="r">${eurCompact(bal.assetsReceivablesShort)}</td></tr>
+          <tr><td>Krátkodobý finančný majetok</td><td class="r">${eurCompact(bal.assetsFinancialShort)}</td></tr>
           <tr><td>Finančné účty</td><td class="r">${eurCompact(bal.assetsFinancialAccounts)}</td></tr>
           <tr class="total"><td><b>Aktíva celkom</b></td><td class="r"><b>${eurCompact(bal.assetsTotal)}</b></td></tr>
         </tbody></table>

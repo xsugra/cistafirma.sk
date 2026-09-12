@@ -659,9 +659,11 @@ class CompanyFinancialResult(models.Model):
     assets_intangible = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobý nehmotný majetok')
     assets_tangible = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobý hmotný majetok')
     assets_financial = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobý finančný majetok')
+    assets_current = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Obežný majetok celkom')
     assets_inventory = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Zásoby')
     assets_receivables_long = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Dlhodobé pohľadávky')
     assets_receivables_short = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Krátkodobé pohľadávky')
+    assets_financial_short = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Krátkodobý finančný majetok')
     assets_financial_accounts = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Finančné účty')
     assets_accruals = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True, verbose_name='Časové rozlíšenie (aktíva)')
 

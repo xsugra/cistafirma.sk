@@ -17,6 +17,7 @@ const COLORS = [
     '#1e40af', // blue-800
     '#bfdbfe', // blue-200
     '#7dd3fc', // sky-300
+    '#0ea5e9', // sky-500
 ];
 
 const CustomTooltip = ({ active, payload }: any) => {
@@ -44,6 +45,7 @@ export const AssetsPieChart: React.FC<AssetsPieChartProps> = ({ data }) => {
         { name: 'Zásoby', value: data.assetsInventory ?? 0 },
         { name: 'Dlhodobé pohľadávky', value: data.assetsReceivablesLong ?? 0 },
         { name: 'Krátkodobé pohľadávky', value: data.assetsReceivablesShort ?? 0 },
+        { name: 'Krátkodobý finančný majetok', value: data.assetsFinancialShort ?? 0 },
         { name: 'Finančné účty', value: data.assetsFinancialAccounts ?? 0 },
         { name: 'Časové rozlíšenie', value: data.assetsAccruals ?? 0 },
     ];

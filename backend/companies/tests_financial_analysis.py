@@ -72,6 +72,74 @@ class LiquidityRatioPresenceTests(SimpleTestCase):
         self.assertEqual(r.quick_ratio, 0.25)
         self.assertIsNone(r.cash_ratio)
 
+    def test_the_reported_total_wins_over_a_sum_of_the_same_lines(self):
+        # `Obežný majetok` (r.33) is on the statement, and the sum of its
+        # components is a reconstruction of it. Where both exist the filed
+        # figure is the one to believe -- the two disagree here on purpose, so
+        # a regression back to summing is visible rather than silent.
+        r = ratios(
+            assets_total=1000,
+            liabilities_short=400,
+            assets_current=800,
+            assets_inventory=200,
+            assets_receivables_short=100,
+        )
+
+        self.assertEqual(r.current_ratio, 2.0)
+
+    def test_the_fallback_is_the_four_term_sum_of_the_2013_template(self):
+        # No r.33 line read, so the components are all there is: the pre-2014
+        # statement totals four terms, not five.
+        r = ratios(
+            assets_total=1000,
+            liabilities_short=400,
+            assets_inventory=200,
+            assets_receivables_short=100,
+            assets_receivables_long=50,
+            assets_financial_accounts=50,
+        )
+
+        self.assertEqual(r.current_ratio, 1.0)  # 400 / 400
+
+    def test_the_fallback_adds_the_fifth_term_when_the_template_has_it(self):
+        # r.66 exists only from 2014 on. A filing carrying it is a 2014+
+        # statement, whose total has five terms -- and the fifth is not
+        # optional there, or the figure is short by the company's short-term
+        # financial assets.
+        r = ratios(
+            assets_total=1000,
+            liabilities_short=400,
+            assets_inventory=200,
+            assets_receivables_short=100,
+            assets_receivables_long=50,
+            assets_financial_accounts=50,
+            assets_financial_short=100,
+        )
+
+        self.assertEqual(r.current_ratio, 1.25)  # 500 / 400
+
+    def test_cash_read_from_the_2014_template_reaches_the_current_ratio(self):
+        # The defect, at the level a reader sees it. ŠÚ SR reformulated r.71 in
+        # 2014 as "Finančné účty r. 72 + r. 73", the parser's key stopped
+        # matching, and from 2015 on every `current_ratio` was computed without
+        # cash -- 2 440 of 2 440 rows in 2025. The reported total carries it now,
+        # so the ratio moves with it.
+        without_cash = ratios(
+            assets_total=1000,
+            liabilities_short=500,
+            assets_current=300,
+            assets_financial_accounts=200,
+        )
+        with_cash = ratios(
+            assets_total=1000,
+            liabilities_short=500,
+            assets_current=500,
+            assets_financial_accounts=200,
+        )
+
+        self.assertEqual(without_cash.current_ratio, 0.6)
+        self.assertEqual(with_cash.current_ratio, 1.0)
+
     def test_self_financing_needs_a_filed_equity(self):
         # Liabilities filed, equity line absent. `0/1000` would have read as
         # "nothing is financed by its own capital", which is `bad`.

@@ -2030,3 +2030,81 @@ right — an operator asking "who has no recorded size" is asking about the
 register, while a peer ranking is a claim about firms that still exist. The
 `00` option stays in the admin builder for that reason, even though the company
 page refuses to rank it.
+
+## The cash line that stopped being read in 2014
+
+ŠÚ SR template 699 (MF/18009/2014-74, platné od 2014-01-01) reformulated the
+balance-sheet row r.71. Before it, the row was a total and carried the word in
+its label — "Finančné účty súčet (r. 056 až r. 060)". After it, the row states
+its own arithmetic: "Finančné účty r. 72 + r. 73".
+
+The parser's key was `financne ucty sucet`. That is not a substring of the new
+label, and the lookup is `if label_key in row_label` — so the row stopped
+matching on the first filing that used the new template and never matched again.
+Measured 2026-09-12 against the live corpus, `assets_financial_accounts` holds a
+value for:
+
+| filing year | rows with `Finančné účty` | rows | coverage |
+|---|---|---|---|
+| 2013 | 547 | 2 576 | 21,2 % |
+| 2014 | 14 | 2 641 | 0,5 % |
+| 2015 – 2026 | **0** | 28 760 | 0 % |
+
+**Why it was dangerous rather than merely missing.** The component sum was not
+the only consumer; it was the *fallback* behind a total that was itself being
+re-derived. `current_assets` was computed as `_sum_present(inventory,
+receivables_short, receivables_long, financial_accounts)` — and `_sum_present`
+sums the lines it is handed and ignores the ones that are absent. It does not
+answer `None` unless every component is missing. So a line that stops being read
+does not make the total unknown; it makes the total **smaller**, by exactly the
+amount of the line that went missing. Here that was the company's cash.
+
+The consumers of that figure, all of them quietly wrong from 2015 on:
+
+- `current_ratio` and `quick_ratio` — of the ~2 450 filings a year that display
+  a current ratio, **every one** was computed without cash (2025: 2 440 of
+  2 440). A company whose current assets are mostly cash was shown as the
+  riskiest kind of illiquid.
+- X1 of the Altman Z-score, `working_capital / assets_total`, weight 0.717 —
+  the largest single weight in the score, and it read the same understated
+  figure, pushing every score built on a post-2014 filing toward "riskier".
+- Taffler's `t2`, `current_assets / liabilities_total`.
+- The sector medians printed beside the company's own ratio. Those were computed
+  by a *second copy* of the rule in `benchmarking.py`, which is its own defect:
+  two rules for one figure, either of which can drift from the other without
+  anything noticing.
+
+**A second, independent break in the same table.** r.66 (`Krátkodobý finančný
+majetok`, the fifth term of `Obežný majetok`) was listed as
+`"krabezny financny majetok"` — a typo that matched nothing — and pointed at
+`assets_financial_accounts`, the field r.71 already owns. So the five-term total
+was really a four-term one even before the template change, with two different
+statement lines given one destination.
+
+**The repair, and the trap in it.** The statement *reports* the total at r.33 —
+"Obežný majetok r. 34 + r. 41 + r. 53 + r. 66 + r. 71", five terms — so the
+figure is now read rather than reconstructed, and the component sum survives
+only as the fallback for a filing whose total line was not read. r.66 is read
+into its own field, and added to the fallback only when the template actually
+has that line: the pre-2014 template totalled four terms and has no separate
+short-term-financial-assets row, so requiring it there would turn a correct
+total into an unknown.
+
+The trap is the anchor. `Obežný majetok` is a *substring* of `Neobežný
+majetok`, and the non-current row comes first in the template — so the `in` test
+every other key in that dict uses would have read non-current assets into the
+current-assets total and stopped there. That is the largest single misstatement
+available in the table and it is one character wide, so r.33 is matched by
+`startswith`. `financne ucty` is deliberately bare rather than `… sucet`, which
+is what makes it match both spellings; verified against the live templates that
+it is the only row in the asset table carrying that phrase, so the bare key
+cannot shadow another line.
+
+**Planned repair for the stored corpus.** A filing already in the database keeps
+its old reading until it is read again — the fix changes the parser, not the
+rows. The affected population is identified by its own symptom
+(`year >= 2014 AND assets_financial_accounts IS NULL`): 31 893 rows across 2 771
+companies, every one of which re-syncs through the existing
+`fetch_ruz_financials --ico-file` path. The selection is self-clearing — a row
+leaves the population when it is successfully re-read — so an interrupted run
+resumes by being run again, with no cursor to keep.

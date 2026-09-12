@@ -21,6 +21,7 @@ from .financial_analysis import (
     _amount,
     _ratio_present,
     _sum_present,
+    current_assets_of,
 )
 from .nace import get_nace_section
 
@@ -72,8 +73,9 @@ def compute_sector_benchmarks(year: int | None = None) -> dict[str, int]:
             'year', 'company_id', 'company__sk_NACE',
             'profit', 'total_revenue', 'revenue', 'added_value',
             'assets_total', 'equity',
-            'assets_inventory', 'assets_receivables_short',
-            'assets_receivables_long', 'assets_financial_accounts',
+            'assets_current', 'assets_inventory', 'assets_receivables_short',
+            'assets_receivables_long', 'assets_financial_short',
+            'assets_financial_accounts',
             'liabilities_total', 'liabilities_short', 'equity_retained',
         )
         .iterator(chunk_size=2000)
@@ -169,15 +171,13 @@ def _compute_section_metrics(fr_list: list[CompanyFinancialResult], section: str
         liabilities_short = _amount(fr.liabilities_short)
         liabilities_accruals = _amount(fr.liabilities_accruals)
 
-        # Current assets. A partial sum is still the best reading the filing
-        # supports, and it is the same sum the per-company ratio set takes --
-        # so the median and the figure it is compared against agree.
-        current_assets = _sum_present(
-            _amount(fr.assets_inventory),
-            _amount(fr.assets_receivables_short),
-            _amount(fr.assets_receivables_long),
-            _amount(fr.assets_financial_accounts),
-        )
+        # Current assets -- the same call the per-company ratio set makes, not a
+        # second copy of the rule. These two were copies once, and the copy here
+        # still read the four-term sum after the statement was found to report
+        # the total outright at r.33: the median would have been built from
+        # figures excluding cash and short-term financial assets, and printed
+        # beside per-company ratios that included them.
+        current_assets = current_assets_of(fr)
 
         if revenue:
             revenues.append(revenue)

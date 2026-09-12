@@ -22,6 +22,9 @@ const ASSET_ROWS: SheetRow[] = [
     { label: 'Zásoby', value: (f) => f.assetsInventory },
     { label: 'Dlhodobé pohľadávky', value: (f) => f.assetsReceivablesLong },
     { label: 'Krátkodobé pohľadávky', value: (f) => f.assetsReceivablesShort },
+    // r.66 of the ŠÚ SR template. Read since 2026-09-12; before that its label
+    // key was a typo that matched no row, so this line was never populated.
+    { label: 'Krátkodobý finančný majetok', value: (f) => f.assetsFinancialShort },
     { label: 'Finančné účty', value: (f) => f.assetsFinancialAccounts },
     { label: 'Časové rozlíšenie', value: (f) => f.assetsAccruals },
     { label: 'Aktíva spolu', value: (f) => f.assetsTotal, total: true },

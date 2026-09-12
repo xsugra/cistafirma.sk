@@ -211,9 +211,11 @@ export interface Financials {
   assetsIntangible: number | null;
   assetsTangible: number | null;
   assetsFinancial: number | null;
+  assetsCurrent?: number | null;
   assetsInventory: number | null;
   assetsReceivablesLong: number | null;
   assetsReceivablesShort: number | null;
+  assetsFinancialShort?: number | null;
   assetsFinancialAccounts: number | null;
   assetsAccruals: number | null;
   equity: number | null;

@@ -107,3 +107,31 @@ class MedianOfFiledLinesTests(SimpleTestCase):
         )
 
         self.assertEqual(metrics['median_debt_ratio'], 25)
+
+    def test_the_median_current_ratio_is_built_from_the_reported_total(self):
+        # The median is printed beside the company's own current ratio, so the
+        # two have to be the same figure. This module used to hold its own copy
+        # of the rule, and the copy kept summing the components after the
+        # statement was found to report the total at r.33 -- the median would
+        # have excluded cash from every filing since 2015 while the ratios next
+        # to it included it.
+        #
+        # Each company's components sum to 100 and its reported total is 300,
+        # so a median built by summing reads 10 % and one built from the
+        # statement reads 30 %. Both are far from the other; neither can pass
+        # for the other by rounding.
+        rows = [
+            row(
+                assets_total=1000,
+                liabilities_short=1000,
+                assets_current=300,
+                assets_inventory=100,
+                assets_receivables_short=0,
+                assets_financial_accounts=0,
+            )
+            for _ in range(3)
+        ]
+
+        metrics = _compute_section_metrics(rows, 'G')
+
+        self.assertEqual(metrics['median_current_ratio'], 30.0)

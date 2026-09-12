@@ -1059,6 +1059,137 @@ class RuzFinancialsSyncServiceTests(SimpleTestCase):
         self.assertEqual(self.service._extract_with_template(table, template), {})
 
 
+class CurrentAssetsTests(SimpleTestCase):
+    """The five lines of `Obežný majetok`, and the total the statement reports.
+
+    ŠÚ SR template 699 (MF/18009/2014-74, platné od 2014-01-01) reformulated
+    r.71 as "Finančné účty r. 72 + r. 73". The parser's key was
+    `financne ucty sucet`, which is not a substring of that, so the cash line
+    stopped being read at the template change and nothing said so. Measured on
+    the live corpus 2026-09-12: `assets_financial_accounts` holds a value for
+    547 of the 2 576 filings of 2013 and for **0 of every year from 2015 on**.
+
+    The tests below pin the labels of *both* templates, because a fix that
+    matches only the new one trades a 2014+ hole for a pre-2014 one.
+    """
+
+    def setUp(self):
+        self.service = RuzFinancialsSyncService()
+
+    def _assets_table(self, labels, values):
+        """One four-column asset table: gross, correction, netto, netto prior."""
+        rows = [{"text": {"sk": label}} for label in labels]
+        data = []
+        for value in values:
+            data.extend([value, "", value, ""])
+        return (
+            {"data": data},
+            {
+                "nazov": {"sk": "Strana aktív"},
+                "pocetDatovychStlpcov": 4,
+                "hlavicka": _assets_header(),
+                "riadky": rows,
+            },
+        )
+
+    def test_the_obezny_majetok_total_is_read_and_neobezny_is_not(self):
+        # `Obežný majetok` is a substring of `Neobežný majetok`, and the
+        # non-current row comes FIRST in the template -- so the plain `in` test
+        # every other key uses would have read 2 004 309 into the current-assets
+        # total and stopped there. The largest single misstatement available in
+        # this table, and it is one character wide.
+        table, template = self._assets_table(
+            [
+                "Neobežný majetok r. 03 + r. 11 + r. 21",
+                "Obežný majetok r. 34 + r. 41 + r. 53 + r. 66 + r. 71",
+            ],
+            ["2004309", "3194728"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_current"), Decimal("3194728"))
+
+    def test_the_2013_template_total_is_read_too(self):
+        # Šablóna 21 writes the same total over four terms, not five: the
+        # pre-2014 statement has no separate short-term-financial-assets row.
+        # The prefix match has to be indifferent to which.
+        table, template = self._assets_table(
+            [
+                "Neobežný majetok r. 003 + r. 011 + r. 021",
+                "Obežný majetok r. 031 + r. 038 + r. 046 + r. 055",
+            ],
+            ["2004309", "3194728"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_current"), Decimal("3194728"))
+
+    def test_financne_ucty_survives_both_spellings_of_the_row(self):
+        # Both spellings, in one test, because the whole defect was that only
+        # one of them matched: "súčet" before 2014, a bare formula after.
+        for label, value in (
+            ("Finančné účty súčet (r. 056 až r. 060)", "158700"),
+            ("Finančné účty r. 72 + r. 73", "176879"),
+        ):
+            with self.subTest(label=label):
+                table, template = self._assets_table([label], [value])
+
+                result = self.service._extract_with_template(table, template)
+
+                self.assertEqual(result.get("assets_financial_accounts"), Decimal(value))
+
+    def test_the_short_term_financial_assets_row_lands_in_its_own_field(self):
+        # r.66, the fifth term. It used to be listed as
+        # `"krabezny financny majetok"` -- a typo matching nothing -- pointing at
+        # `assets_financial_accounts`, which r.71 already owns. Two lines, one
+        # destination: one of the five terms of the total was never read.
+        table, template = self._assets_table(
+            [
+                "Krátkodobý finančný majetok súčet (r. 67 až r. 70)",
+                "Finančné účty r. 72 + r. 73",
+            ],
+            ["30000", "176879"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertEqual(result.get("assets_financial_short"), Decimal("30000"))
+        self.assertEqual(result.get("assets_financial_accounts"), Decimal("176879"))
+
+    def test_an_itemised_row_without_sucet_is_not_the_total(self):
+        # r.67-r.70 are the components of r.66, and their labels all begin with
+        # the same words. Only the `súčet` row is the total; the others are
+        # lines inside it, and reading one as the total would understate it.
+        table, template = self._assets_table(
+            [
+                "Krátkodobý finančný majetok v prepojených účtovných jednotkách "
+                "(251A, 253A, 256A, 257A, 25XA) - /291A, 29XA/",
+                "Obstarávaný krátkodobý finančný majetok (259, 314A) - /291A/",
+            ],
+            ["30000", "5000"],
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertIsNone(result.get("assets_financial_short"))
+
+    def test_a_note_row_does_not_shadow_the_cash_line(self):
+        # "Náklady na krátkodobý finančný majetok (566)" is a profit-and-loss
+        # row that shares the phrase. The bare `financne ucty` key must not
+        # reach it, and it must not reach r.71 either -- r.71 is the only row
+        # carrying that phrase in the asset table, which is what makes the bare
+        # key safe there.
+        table, template = self._assets_table(
+            ["Náklady na krátkodobý finančný majetok (566)"], ["15933"]
+        )
+
+        result = self.service._extract_with_template(table, template)
+
+        self.assertIsNone(result.get("assets_financial_accounts"))
+
+
 class _CountingRuzApi(_ScriptedRuzApi):
     """`_ScriptedRuzApi` that remembers which templates it was asked for.
 

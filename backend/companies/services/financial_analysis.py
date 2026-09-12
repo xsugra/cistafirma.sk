@@ -231,6 +231,35 @@ def _sum_present(*values: float | None) -> float | None:
     return sum(present) if present else None
 
 
+def current_assets_of(fr) -> float | None:
+    """A filing's current assets: the reported total, else the component sum.
+
+    One definition for the company page and for the sector median printed beside
+    it. The two were separate copies of the same rule, and the copies had
+    already drifted in what they claimed: `benchmarking` still called the
+    four-term sum "the best reading the filing supports" after the statement was
+    found to report the total outright at r.33.
+
+    A component is added to the fallback only when the template has that line --
+    `assets_financial_short` (r.66) is absent from the pre-2014 template, where
+    the other four terms *are* the total.
+    """
+    reported = _amount(fr.assets_current)
+    if reported is not None:
+        return reported
+
+    components = [
+        _amount(fr.assets_inventory),
+        _amount(fr.assets_receivables_short),
+        _amount(fr.assets_receivables_long),
+        _amount(fr.assets_financial_accounts),
+    ]
+    financial_short = _amount(fr.assets_financial_short)
+    if financial_short is not None:
+        components.append(financial_short)
+    return _sum_present(*components)
+
+
 def _ratio_present(a: float | None, b: float | None) -> float | None:
     """`a / b` as a percentage, or `None` if either side was not filed."""
     if a is None or b is None:
@@ -394,9 +423,7 @@ class FinancialAnalysisService:
         # a filed zero, and a company whose statement never carried a financial
         # account was being shown a cash ratio of 0.0 % -- filed as `bad`, i.e.
         # "no cash", which is a claim about the company and not about the filing.
-        inventory = _amount(fr.assets_inventory)
         receivables_short = _amount(fr.assets_receivables_short)
-        receivables_long = _amount(fr.assets_receivables_long)
         financial_accounts = _amount(fr.assets_financial_accounts)
 
         # Liabilities detail. `liabilities_total` stays zero-based: it is a term
@@ -408,14 +435,12 @@ class FinancialAnalysisService:
         equity_retained = _safe_float(fr.equity_retained)
 
         # --- compute current assets and working capital ---
-        # A partial sum is the reading the filing supports, and it is the same
-        # sum the sector medians take (`benchmarking._compute_section_metrics`),
-        # so the figure in the benchmark row and the median beside it are built
-        # the same way. Only "the filing carried none of the four lines" is
-        # unknown, and that is what `_sum_present` answers with None.
-        current_assets = _sum_present(
-            inventory, receivables_short, receivables_long, financial_accounts
-        )
+        # One definition, shared with the sector medians this figure is printed
+        # beside -- see `current_assets_of`, which reads the total the statement
+        # reports (r.33) and falls back to the component sum only when that line
+        # was not read. X1 of the Z-score -- weight 0.717 -- reads the same
+        # figure, so the two must never be two rules.
+        current_assets = current_assets_of(fr)
         # X1 of the Z-score still reads an absent component as 0, as it always
         # has (see the note above the formula); that understates rather than
         # fabricates, and it is deliberately not the ratio-set rule.

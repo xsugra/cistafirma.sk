@@ -116,10 +116,32 @@ ASSETS_LABELS = {
     "dlhodobe pohladavky spolu": "assets_receivables_long",
     "kratkodobe pohladavky sucet": "assets_receivables_short",
     "kratkodobe pohladavky spolu": "assets_receivables_short",
-    "financne ucty sucet": "assets_financial_accounts",
-    "financne ucty spolu": "assets_financial_accounts",
-    "krabezny financny majetok": "assets_financial_accounts",
+    # r.66, the fifth term of `Obežný majetok` (see CURRENT_ASSETS_PREFIX).
+    # It used to be listed as `"krabezny financny majetok"` -- a typo that
+    # matched nothing -- pointing at `assets_financial_accounts`, the field r.71
+    # already owns. Two different lines had been given one destination.
+    "kratkodoby financny majetok sucet": "assets_financial_short",
+    # `financne ucty` alone, not `financne ucty sucet`/`spolu`. ŠÚ SR template
+    # 699 (MF/18009/2014-74, platné od 2014-01-01) reformulated r.71 as
+    # "Finančné účty r. 72 + r. 73", which neither old key is a substring of.
+    # Measured 2026-09-12: `assets_financial_accounts` holds a value for 547 of
+    # the 2 576 filings of 2013 and for **0 of every year from 2015 on** -- the
+    # line stopped being read at the template change and nothing said so. No
+    # other asset row contains this phrase, so it cannot shadow one.
+    "financne ucty": "assets_financial_accounts",
 }
+
+# `Obežný majetok` (r.33) is a *substring* of `Neobežný majetok` (r.2), so the
+# `in` test every other key uses would read NON-current assets into the
+# current-assets total -- the largest single misstatement available here. The
+# row is therefore matched by prefix, and r.2 is excluded by that anchor.
+#
+# The statement already reports this total ("r. 34 + r. 41 + r. 53 + r. 66 +
+# r. 71", five terms), so it is read rather than re-derived. Re-deriving it was
+# silently wrong rather than visibly missing -- `_sum_present` ignores the
+# components it was not given, so a line that stops being read makes the total
+# smaller, not unknown.
+CURRENT_ASSETS_PREFIX = "obezny majetok"
 
 # The three totals, as prefixes for `_is_summary_row`, which anchors at the
 # start of the label and then accepts an empty remainder or `r.` / `sucet` /
@@ -794,6 +816,11 @@ class RuzFinancialsSyncService:
                 continue
 
             if not in_liabilities_section:
+                if row_label.startswith(CURRENT_ASSETS_PREFIX):
+                    if value is not None:
+                        extracted["assets_current"] = self._pick_better(extracted.get("assets_current"), value)
+                    continue
+
                 for label_key, field_name in ASSETS_LABELS.items():
                     if label_key in row_label and value is not None:
                         extracted[field_name] = self._pick_better(extracted.get(field_name), value)
