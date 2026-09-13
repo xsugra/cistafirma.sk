@@ -37,6 +37,7 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 82 | Kliknutie na rok vypíše dokumenty a stiahne ich | `fd23ba9` |
 | 84 | „Sledovať" prihlásene vedie na prihlásenie a vráti čitateľa späť na firmu | `0dd2565` |
 | — | Legenda stavu funkcie tvrdila o firme, že sme ju nečítali — pri riadku, ktorý je na stránke len preto, že sme ju čítali. Kreslí ju `roleState.ts` | `70271d1` |
+| — | Hĺbka fronty sa súdi per-frontovým prahom — `insurance` má vlastný, odvodený z návrhu (cap = odtok), takže kontrola prestala svietiť na dizajnový stav | `87d755a` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
