@@ -662,9 +662,11 @@ a **61 371** „nevieme", takže o aktuálnosti netvrdí nič tam, kde ju nevie.
 **Čo z toho ostáva:** už len dobehnutie histórie — #95.
 
 
-### #85 — Minimapa so sídlom firmy (rozhodnuté)
+### #85 — Minimapa so sídlom firmy — ✅ hotové
 
-Podobne ako to má FinStat.
+Podobne ako to má FinStat. Nasadené v `a6d7b8c` (oblasť z registra adries MV
+SR), `16c2ae3` (sídlo ako oblasť, nie bod) a `100f4d4` (karta s mapou) —
+a `d8e4944` sem dopísal, ako import dopadol.
 
 - `Company` má `ulica` / `mesto` / `psc` **štruktúrovane**: `mesto` a `psc` na
   100 %, `ulica` na 99,7 % z 445 626 riadkov
