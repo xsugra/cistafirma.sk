@@ -411,6 +411,18 @@ vrátiť a nie je vidieť:
 Preto sa zhlukuje **pri čítaní** a každá skupina sa čitateľovi **vypíše aj
 s riadkami, z ktorých vznikla** (`PersonRecordsNote`).
 
+**Jedna vec, ktorú zhlukovanie samo vytvorilo — a preto je moja.** Keď sa
+väzby z viacerých riadkov spoja, môže vedľa seba vzniknúť to, čo na jednom
+riadku nebolo: tá istá firma a tá istá funkcia raz **s dátumom** a raz **bez
+neho**. Naživo to je Vácha a firma `52366332` — `Spoločník v.o.s. / s.r.o.`
+s `vznik 2019-05-18` a hneď pod tým `spoločník` s `nevieme`. Legenda pritom
+`nevieme` vysvetľuje ako „túto firmu sme ešte nečítali", čo je pod riadkom,
+ktorý ju práve prečítal, **nepravda**. Väzba bez dátumov nie je druhé obdobie
+funkcie — neuvádza žiadne obdobie, takže ani nemôže byť — a keď pre tú istú
+funkciu existuje datovaná, zahodí sa. Datované väzby sa do seba **nikdy**
+nezlievajú, takže skutočné druhé obdobie prežije. Zmerané: **4 riadky v celej
+tabuli**, všetky štyri vznikli zhlukovaním.
+
 **Dve dôkazové pravidlá, nič viac.** Sú to jediné dva tvary, ktoré naozaj
 znamenajú „ten istý človek":
 
@@ -477,6 +489,47 @@ ani jednu stranu → 3 zhluky; `total_people` je `null`, keď okno nestačí.
 ---
 
 ## 3. Čaká na prácu
+
+### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra
+
+**Nález z #89, nie jeho súčasť.** Po zhlukovaní som na živej stránke osoby
+narazil na toto — a `records: 1`, takže zhlukovanie za to nemôže:
+
+```
+FREYSSINET CS, a. s.   (osoba 56172, jedna firma, jedna funkcia `ine`)
+  2026-07-07 -> teraz        active=True
+  2026-06-26 -> 2026-07-06
+  2022-06-15 -> 2026-06-25
+  …                        (12 riadkov)
+  2011-06-08 -> 2013-01-30
+```
+
+Register vykresľuje **jednu nepretržitú funkciu od 8. 6. 2011** ako dvanásť
+nadväzujúcich intervalov, pretože každý zápis ju ukončí a ďalší deň znovu
+otvorí. My každý interval ukladáme ako samostatnú väzbu, takže stránka osoby
+vypíše dvanásť riadkov a **odpoveď na „odkedy" je zahrabaná na dne** — čitateľ
+vidí `od 07.07.2026`.
+
+Zmerané 2026-09-13 na celej tabuľke:
+
+| | počet |
+|---|---|
+| skupín `(riadok, firma, funkcia)` celkom | 77 551 |
+| z toho s viac než jednou väzbou | 6 091 |
+| **obsahuje reťaz intervalov deň po dni** | **3 779 (62 %)** |
+| naozaj oddelené obdobia | 2 312 |
+| najdlhší reťaz | 10 intervalov |
+| čisto bez dátumov | **0** |
+
+**Odporúčanie (read-time, ako #89 krok 1):** spojiť nadväzujúce intervaly
+(deň po dni) do jednej funkcie s najskorším `vznik` a najneskorším `zanik`,
+a ak je za tým viac dokumentov, povedať to. Naozaj oddelené obdobia (2 312)
+zostať oddelené — tie sú dve funkcie a je to vidieť na diere medzi nimi.
+Zápis sa nemení, takže je to vratné a dá sa to vypnúť.
+
+**Prečo to nie je hotové teraz:** je to nová prírastka, nie dokončenie #89
+(zhlukovanie spája *riadky osôb*, toto spája *obdobia funkcie*), a mení to, čo
+stránka tvrdí o histórii — to patrí do samostatného rozhodnutia.
 
 ### Hľadanie osôb — „v akých firmách figuruje Miroslav Trnka"
 
