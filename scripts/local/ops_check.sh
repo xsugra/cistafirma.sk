@@ -25,7 +25,11 @@ set -Eeuo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 
 RUN_GAP_MAX_DAYS="${CISTAFIRMA_RUN_GAP_MAX_DAYS:-8}"
-QUEUE_WARN_DEPTH="${CISTAFIRMA_QUEUE_WARN_DEPTH:-50000}"
+# Left empty when unset on purpose: the resolver below has to tell "the operator
+# set this" from "nobody set this", so that a general override keeps applying to
+# every queue -- including the one with a default of its own.
+QUEUE_WARN_DEPTH="${CISTAFIRMA_QUEUE_WARN_DEPTH:-}"
+QUEUE_WARN_DEPTH_INSURANCE="${CISTAFIRMA_QUEUE_WARN_DEPTH_INSURANCE:-}"
 QUEUES="${CISTAFIRMA_QUEUES:-celery ruz_full orsr financials insurance}"
 SOURCE_WINDOW_HOURS="${CISTAFIRMA_SOURCE_WINDOW_HOURS:-24}"
 SOURCE_MIN_ATTEMPTS="${CISTAFIRMA_SOURCE_MIN_ATTEMPTS:-200}"
@@ -48,6 +52,44 @@ bad() {
     failures=$((failures + 1))
 }
 section() { printf '\n== %s\n' "$*"; }
+
+# The depth a queue may reach before the load is worth reporting. Two defaults,
+# because the queues are not the same shape.
+#
+# `celery`, `ruz_full`, `orsr` and `financials` drain to zero: they sit at 0 in
+# steady state, so a large depth means work arriving faster than it is consumed.
+#
+# `insurance` is the exception and it is designed to be. Its dispatcher is capped
+# at `INSURANCE_BATCH_PER_TICK` -- 20/min x 60 x 12 h = 14400 per tick, exactly
+# what a 20/m rate-limited worker drains over the same 12 h -- so arrivals equal
+# drain capacity: the depth is *conserved*, neither growing nor clearing, and it
+# sawtooths by one batch around whatever it inherited (measured 2026-09-13:
+# ~54 000 before a dispatch, ~68 000 just after, mean ~61 000). The single
+# 50000 default therefore warned permanently about a queue behaving exactly as
+# designed, and a control that is always red is one nobody reads.
+#
+# So the insurance bound sits where a backlog stops being a backlog: ten ticks,
+# i.e. five days of drain capacity. That is an order of magnitude above the
+# inherited sawtooth and ~58x below the 2026-09 flood (8.4 M messages enqueued in
+# a day, against 14 400 drained), so it fires on a flood or on a drain stalled
+# for days -- and on nothing else. It cannot tell those two apart, and it does
+# not try to: whether the drained work still *achieves* anything is Source
+# health's verdict, and depth has never been able to answer it.
+#
+# Precedence: an explicit per-queue override, then an explicit general override
+# (which has always meant "every queue", and still does), then the built-in
+# default for that queue. An unset override is the empty string, never a value.
+queue_warn_depth() {
+    if [ "$1" = "insurance" ] && [ -n "$QUEUE_WARN_DEPTH_INSURANCE" ]; then
+        printf '%s' "$QUEUE_WARN_DEPTH_INSURANCE"
+    elif [ -n "$QUEUE_WARN_DEPTH" ]; then
+        printf '%s' "$QUEUE_WARN_DEPTH"
+    elif [ "$1" = "insurance" ]; then
+        printf '%s' 144000
+    else
+        printf '%s' 50000
+    fi
+}
 
 printf 'CistaFirma operational check\n'
 printf '  host: %s   %s\n' "$(hostname -s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -101,10 +143,22 @@ for queue in $QUEUES; do
             ;;
     esac
     total=$((total + depth))
-    if [ "$depth" -gt "$QUEUE_WARN_DEPTH" ]; then
-        warn "queue '$queue' holds $depth message(s), above the $QUEUE_WARN_DEPTH threshold"
+    bound=$(queue_warn_depth "$queue")
+    if [ "$depth" -gt "$bound" ]; then
+        case "$queue" in
+            insurance)
+                warn "queue '$queue' holds $depth message(s), above the $bound threshold -- a flood (dispatched far faster than the 20/m drain) or a drain stalled for days; whether the work still achieves anything is Source health's verdict, not this one"
+                ;;
+            *)
+                warn "queue '$queue' holds $depth message(s), above the $bound threshold"
+                ;;
+        esac
     else
-        ok "queue '$queue' holds $depth message(s)"
+        # The bound is printed even when it passes: the insurance backlog is
+        # large by design, and a bare "holds 61000 message(s)" reads as a
+        # problem to anyone who does not know the number it is being judged
+        # against.
+        ok "queue '$queue' holds $depth message(s), within the $bound threshold"
     fi
 done
 printf '  total queued: %s\n' "$total"

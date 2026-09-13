@@ -274,8 +274,26 @@ all fails it immediately: that means no off-site protection exists yet.
 The gate prints the depth of every queue, because nothing else in the stack
 exposes it — a queue that has silently stopped draining looks exactly like one
 that is merely busy. A large backlog is not by itself a failure (the insurance
-queue is deliberately rate-limited and is normally saturated), so it only warns,
-above `CISTAFIRMA_QUEUE_WARN_DEPTH` (default 50000).
+queue is deliberately rate-limited and is normally saturated), so it only warns.
+
+The bound is per queue, because the queues are not the same shape.
+`celery`, `ruz_full`, `orsr` and `financials` drain to zero and warn above
+`CISTAFIRMA_QUEUE_WARN_DEPTH` (default 50000). `insurance` warns above
+`CISTAFIRMA_QUEUE_WARN_DEPTH_INSURANCE` (default 144000) instead: its dispatcher
+is capped at 14 400 messages per 12 h tick — exactly what the 20/m worker drains
+in the same window — so arrivals equal drain capacity, the depth is *conserved*
+rather than drained, and it sawtooths by one batch around whatever it inherited
+(measured 2026-09-13: ~54 000 before a dispatch, ~68 000 just after). Judged
+against the flat 50000 it warned permanently about a queue behaving as designed,
+which is how a gate teaches its reader to ignore it. 144000 is ten ticks, i.e.
+five days of drain capacity: an order of magnitude above that sawtooth and far
+below the 2026-09 flood of 8.4 M messages in a day.
+
+An explicit `CISTAFIRMA_QUEUE_WARN_DEPTH` still applies to every queue,
+`insurance` included; the per-queue variable is the more specific override and
+wins for its own queue. Whatever the bound, it judges load only — depth has never
+been able to say whether the work *achieves* anything, and Source health below is
+what answers that.
 
 ### Source health
 

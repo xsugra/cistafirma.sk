@@ -113,9 +113,13 @@ the directory.
 
 `/metrics` cannot see the broker, so queue backlog is reported by
 `make ops-check` instead — it prints the depth of every Celery queue and warns
-past `CISTAFIRMA_QUEUE_WARN_DEPTH`. Nothing else in the stack exposes this, and
-a queue that has silently stopped draining is otherwise indistinguishable from
-one that is merely busy. See `docs/DATA_PROTECTION.md` for the gate as a whole.
+past a per-queue bound: `CISTAFIRMA_QUEUE_WARN_DEPTH` (default 50000) for the
+queues that drain to zero, and `CISTAFIRMA_QUEUE_WARN_DEPTH_INSURANCE` (default
+144000, ten ticks of drain capacity) for the insurance queue, whose depth is
+conserved by design rather than drained. Nothing else in the stack exposes this,
+and a queue that has silently stopped draining is otherwise indistinguishable
+from one that is merely busy. See `docs/DATA_PROTECTION.md` for the gate as a
+whole, and for why the insurance bound is the one that differs.
 
 ### Sync jobs
 

@@ -970,14 +970,14 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
 - ⚠️ **Off-site záloha nie je pripojená** — `/Volumes/CistaFirmaBackups`
   nie je namontovaný, `make ops-check` preto hlási 1 FAIL. Lokálne zálohy
   aj posledný restore drill sú v poriadku.
-- ⚠️ **Kontrola poistného backlogu je pod ustáleným stavom, ktorý sama
-  dokumentácia opisuje ako normálny — takže svieti stále.** Overené naživo
-  2026-09-13: `make ops-check` hlási
+- ✅ **Kontrola poistného backlogu bola pod ustáleným stavom, ktorý sama
+  dokumentácia opisuje ako normálny — svietila stále. Opravené (delegované
+  rozhodnutie).** Overené naživo 2026-09-13: `make ops-check` hlásil
   `WARN queue 'insurance' holds 62 055 message(s), above the 50000 threshold`
   — a tá istá zostava má ustálený stav **vyššie** než ten prah, lebo poistný
   priechod je na ~15 dní (414 tis. neoverených firiem ÷ 14 400 za tick).
 
-  Namerané v ten deň: fronta **62 051 → 62 026** za ~5 minút (klesá),
+  Namerané v ten deň: fronta **62 051 → 62 026** za ~5 minút,
   `redis used_memory_human: 84.12M` (incident z 12. 9. mal ~5 GB), worker
   `celery_worker_insurance` **beží a každá firma uspeje** (~1,3 s), a fronta
   sa vyprázdňuje presne rýchlosťou, na ktorú je navrhnutá
@@ -990,12 +990,43 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   `last_run=2026-09-13 07:50`, `total_run_count=36`. To je dôležité, lebo
   `DatabaseScheduler` spúšťa riadok, nie `CELERY_BEAT_SCHEDULE`.
 
-  **Preto je prah 50 000 zlý nástroj, nie fronta.** Absolútna hĺbka nevie
-  rozlíšiť „beží záplava" od „beží návrh" — a keďže ustálený stav je vyššie
-  než prah, kontrola hlási poplach, ktorý sa nedá vypnúť. Prah odvodený
-  z návrhu (`INSURANCE_BATCH_PER_TICK` a jeho násobok) by tú istú situáciu
-  prečítal správne. Zámerne **nemenené** — je to zmena kontrolného prahu,
-  nie porucha, a patrí do samostatného rozhodnutia.
+  ***Oprava môjho vlastného čítania: fronta neklesá — je to píla.*** Cap
+  je **presne toľko, koľko 20/m worker stihne za tých istých 12 h**
+  (20 × 60 × 12 = 14 400). Príjmy sa teda rovnajú odtokovej kapacite a hĺbka
+  je **zachovaná**: ani nerastie, ani sa sama nevyprázdni. Kolíše o jednu
+  dávku okolo toho, čo zdedila — tesne pred dispečerom ~54 000, tesne po ňom
+  ~68 000, stred ~61 000. Dnešné čísla (63 140 / 62 055 / 61 062 / 60 912 /
+  60 859) sú **vzorky tej istej píly, nie trend**. Overené: medzi 13:59:37
+  a 14:10:28 žiadny dispečer nebežal (posledný 07:50:06, ďalší 19:50:06)
+  a fronta klesala ~19/min, čo je presne návrhová rýchlosť. Dôsledok, ktorý
+  stojí za zapamätanie: **cap zastaví rast, ale zdedený backlog sám
+  nevyčerpá** — na to by muselo byť due firiem v ticku menej než 14 400.
+
+  **Prah 50 000 bol preto zlý nástroj, nie fronta.** Absolútna hĺbka nevie
+  rozlíšiť „beží záplava" od „beží návrh", a keďže ustálený stav je vyššie
+  než prah, kontrola hlásila poplach, ktorý sa nedal vypnúť. Kontrola, ktorá
+  svieti vždy, je kontrola, ktorú nikto nečíta.
+
+  **Zmenené.** Prah je odteraz per-frontový (`scripts/local/ops_check.sh`):
+  `celery`, `ruz_full`, `orsr` a `financials` ostávajú na 50 000 (vyprázdňujú
+  sa do nuly), `insurance` má vlastný `CISTAFIRMA_QUEUE_WARN_DEPTH_INSURANCE`
+  s defaultom **144 000** — desať tickov, teda päť dní odtokovej kapacity,
+  rádovo nad zdedenou pílou a ~58× pod záplavou z 12. 9. (8,4 mil. správ za
+  deň). Precedencia zostala: explicitný `CISTAFIRMA_QUEUE_WARN_DEPTH` platí
+  ďalej pre **všetky** fronty vrátane `insurance` — per-frontová premenná je
+  len konkrétnejšia a vyhrá pre svoju frontu. Overené tromi behmi
+  s prepísanými prahmi a potom naostro: `Operational controls: 1 unmet,
+  0 warning(s)`, kde jediný FAIL je tá istá nenamontovaná off-site záloha.
+  Kontrola si **nezakrýva, čo nevie**: WARN text hovorí, že nevie rozlíšiť
+  záplavu od zastaveného odtoku, a že „či práca ešte niečo prináša" je
+  verdikt `Source health`, nie tento.
+
+  Rozhodujúce je, že ten verdikt už v repozitári je: `source_health.py`
+  v úvode hovorí, že hĺbka fronty „nič nehovorí o tom, či tá práca niečo
+  *prináša*", a jeho tretia podmienka zlyhania je **doslova mechanizmus,
+  ktorým sa táto fronta plní** (zdroj prestane hlásiť „žiadny dlh", firma
+  sa nikdy neoznačí za skontrolovanú a ostane due navždy). `vszp` aj
+  `social` tam majú vlastný riadok a `Source health: 0 unmet`.
 
 - ⚠️ **`expires` sa na `PeriodicTask` riadok nikdy nedostane.** Ten istý
   riadok má `expires=None`, hoci `CELERY_BEAT_SCHEDULE` preň hovorí
