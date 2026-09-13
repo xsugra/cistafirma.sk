@@ -578,6 +578,17 @@ export interface PersonSummary {
     title: string;
     /** The person's own IČO (a self-employed person has one). May be empty. */
     person_ico: string;
+    /**
+     * How many stored rows this one answer gathered.
+     *
+     * One for the common case, and more when the register wrote the same person
+     * twice -- under `Predstavenstvo` and again under `Spoločníci`, with
+     * different lines, which our extractor stores as two rows and two
+     * fingerprints. They are shown as one person because they are one person;
+     * this is the count that says so out loud rather than leaving the reader to
+     * wonder why one name has two offices with no company between them.
+     */
+    records: number;
     companies: PersonRelation[];
 }
 
@@ -585,7 +596,16 @@ export interface PersonSearchResponse {
     query: string;
     role: string;
     results: PersonSummary[];
+    /** Rows matched. Always exact, and always at least `total_people`. */
     total_matches: number;
+    /**
+     * People matched, or `null` when we did not read far enough to say.
+     *
+     * The same distinction `PersonCoverage` makes: a count we did not compute is
+     * not a count of zero, and a common surname matches more rows than one
+     * search reads. `null` means "more than we looked at", never "none".
+     */
+    total_people: number | null;
     truncated: boolean;
     /**
      * Why there are no results, in Slovak, when the question itself could not
@@ -598,12 +618,31 @@ export interface PersonSearchResponse {
     coverage: PersonCoverage | null;
 }
 
+/**
+ * One stored row behind a person card.
+ *
+ * The grouping is a judgement about identity made from text, so the page shows
+ * what it was made from: the reader who knows these are two people is the one
+ * who can say so, and they cannot say so about rows they are not shown.
+ */
+export interface PersonMember {
+    id: number;
+    name: string;
+    /** The address this row stored, verbatim. Often empty; sometimes a birth
+     * date, which is what the register puts there when the document has no
+     * address for that section. */
+    address: string;
+}
+
 /** One person, plus every relation we hold for them. */
 export interface PersonDetail {
     id: number;
     name: string;
     title: string;
     person_ico: string;
+    /** How many stored rows this person was gathered from; 1 for most. */
+    records: number;
+    members: PersonMember[];
     companies: PersonRelation[];
     coverage: PersonCoverage | null;
 }

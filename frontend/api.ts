@@ -14,6 +14,7 @@ import type {
   PeerScope,
   PersonCoverage,
   PersonDetail,
+  PersonMember,
   PersonRelation,
   PersonSearchResponse,
   PersonSummary,
@@ -250,7 +251,19 @@ function mapPersonSummary(data: any): PersonSummary {
     // reads `IČO: undefined`.
     title: data?.title ?? '',
     person_ico: data?.person_ico ?? '',
+    // One is the honest floor, not zero: a summary came from at least one row,
+    // and `Number(undefined) || 1` also covers an older response that predates
+    // the field -- which described a person we hold one row for.
+    records: Number(data?.records) || 1,
     companies: Array.isArray(data?.companies) ? data.companies.map(mapPersonRelation) : [],
+  };
+}
+
+function mapPersonMember(data: any): PersonMember {
+  return {
+    id: Number(data?.id),
+    name: data?.name ?? '',
+    address: data?.address ?? '',
   };
 }
 
@@ -261,6 +274,11 @@ export function mapPersonSearchResponse(data: any): PersonSearchResponse {
     role: data?.role ?? '',
     results: Array.isArray(data?.results) ? data.results.map(mapPersonSummary) : [],
     total_matches: Number(data?.total_matches) || 0,
+    // `typeof === 'number'`, not `Number(x) || 0`: `Number(null)` is `0`, so a
+    // conversion-first mapper would turn "we did not read far enough to count"
+    // into "there are no people" -- a claim the response did not make, and the
+    // exact opposite of the one it did.
+    total_people: typeof data?.total_people === 'number' ? data.total_people : null,
     truncated: Boolean(data?.truncated),
     detail: data?.detail ?? null,
     coverage: mapCoverage(data?.coverage),
@@ -273,6 +291,8 @@ export function mapPersonDetail(data: any): PersonDetail {
     name: data?.name ?? '',
     title: data?.title ?? '',
     person_ico: data?.person_ico ?? '',
+    records: Number(data?.records) || 1,
+    members: Array.isArray(data?.members) ? data.members.map(mapPersonMember) : [],
     companies: Array.isArray(data?.companies) ? data.companies.map(mapPersonRelation) : [],
     coverage: mapCoverage(data?.coverage),
   };

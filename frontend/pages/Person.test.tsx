@@ -24,6 +24,8 @@ const person = (overrides: Partial<PersonDetail> = {}): PersonDetail => ({
     name: 'Miroslav Trnka',
     title: 'Ing.',
     person_ico: '',
+    records: 1,
+    members: [],
     companies: [
         {
             ico: '35757442',
@@ -146,6 +148,47 @@ describe('Person page', () => {
 
         expect(await screen.findByText('Server error (500)')).toBeInTheDocument();
         expect(screen.queryByText('Osoba nebola nájdená')).not.toBeInTheDocument();
+    });
+
+    it('shows the rows a grouped person was gathered from', async () => {
+        // The register lists one officer under the predstavenstvo and again
+        // among the spoločníci, and the two sections carry different addresses,
+        // so the extractor stored two rows. Grouping them is a judgement made
+        // from a name and a postcode -- the reader who knows these are a father
+        // and a son can only correct it if the rows are shown.
+        mocks.api.getPerson.mockResolvedValue(
+            person({
+                records: 3,
+                members: [
+                    {id: 44903, name: 'Matej Vácha', address: 'Dátum narodenia: 20.08.1992'},
+                    {id: 44904, name: 'Matej Vácha', address: ''},
+                    {
+                        id: 45335,
+                        name: 'Matej Vácha',
+                        address: 'Beniakova, 3100/12, Bratislava, 841 05',
+                    },
+                ],
+            }),
+        );
+
+        renderPerson();
+
+        expect(await screen.findByText(/#44903/)).toBeInTheDocument();
+        expect(screen.getByText(/Beniakova, 3100\/12/)).toBeInTheDocument();
+        // A row whose address is the empty string says so, rather than printing
+        // an empty gap that reads as a rendering fault.
+        expect(screen.getByText('bez adresy')).toBeInTheDocument();
+    });
+
+    it('says nothing about grouping for the ordinary one-row person', async () => {
+        // The note has to be read when it appears, so it cannot appear on every
+        // person page.
+        mocks.api.getPerson.mockResolvedValue(person());
+
+        renderPerson();
+
+        await screen.findByText(/Osoby máme pre/);
+        expect(screen.queryByText(/Zobrazujeme ich spolu/)).not.toBeInTheDocument();
     });
 
     it('does not call the live register just by opening the page', async () => {

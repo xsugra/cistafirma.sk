@@ -6,6 +6,7 @@ import type { PersonDetail } from '../types';
 import { ROUTES } from '../constants';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { PersonCoverageNote } from '../components/person/PersonCoverageNote';
+import { PersonRecordsNote } from '../components/person/PersonRecordsNote';
 import { PersonRelationRow } from '../components/person/PersonRelationRow';
 import { OrsrRegisterGroup } from '../components/person/OrsrRegisterGroup';
 
@@ -153,6 +154,8 @@ export const Person: React.FC = () => {
                     </div>
                 </div>
             </header>
+
+            <PersonRecordsNote members={person.members} />
 
             <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:shadow-none">
                 <div className="border-b border-gray-200 bg-gray-50/50 px-6 py-4 dark:border-slate-700 dark:bg-slate-900/50">

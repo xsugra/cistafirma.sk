@@ -127,6 +127,32 @@ describe('mapPersonSearchResponse', () => {
         expect(person.companies).toEqual([]);
         expect(person.person_ico).toBe('');
     });
+
+    it('does not turn an uncounted number of people into zero', () => {
+        // `Number(null)` is 0, so a conversion-first mapper would answer "no
+        // people" for a window that simply stopped short -- the opposite of
+        // what the response said. Same trap as the coverage counts above.
+        const uncounted = {...base, total_people: null};
+
+        expect(mapPersonSearchResponse(uncounted).total_people).toBeNull();
+        expect(mapPersonSearchResponse({...base, total_people: undefined}).total_people).toBeNull();
+        expect(mapPersonSearchResponse({...base, total_people: 1}).total_people).toBe(1);
+    });
+
+    it('says how many rows a grouped answer gathered', () => {
+        const grouped = mapPersonSearchResponse({
+            ...base,
+            results: [{...base.results[0], records: 3}],
+        });
+
+        expect(grouped.results[0].records).toBe(3);
+    });
+
+    it('reads an answer from before the field as the one row it was', () => {
+        // One is the honest floor and not zero: a summary exists because at
+        // least one row produced it.
+        expect(mapPersonSearchResponse(base).results[0].records).toBe(1);
+    });
 });
 
 describe('mapPersonDetail', () => {
