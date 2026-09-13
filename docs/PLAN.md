@@ -690,6 +690,30 @@ o to, čo sa naozaj prečíta** — fronta je len medzikrok. Ak riadok nevystrel
 `date_changed` sa posunul znova a aj to je odpoveď; práve preto sa meria
 o 17:21 a o 17:50, nie „o hodinu".
 
+**Predletová kontrola, 14:50 UTC — štyri články reťaze, ktoré ten pokus
+o 17:20 mohol ticho zhodiť, a všetky štyri držia.** Bolo by trápne čakať
+2,5 hodiny na tick, ktorý nemá ako uspieť, tak som ich overil vopred:
+
+| článok | ako som ho overil | výsledok |
+|---|---|---|
+| dispatcher je na živom workerovi | `celery inspect registered` | `registers.tasks.schedule_person_history_resync` **aj** `read_person_history [rate_limit=15/m]` sú registrované |
+| fronta má svojho konzumenta | `inspect active_queues` | frontu `celery` aj `orsr` odoberá `worker_orsr` |
+| selektor je naozaj živý a je to cursors | `person_history_batch(5)` | vráti `[3901, 3896, 3904, 3905, 3903]`; najstaršie `last_synced_at` v populácii je **2026-08-05 07:39**, koniec fronty **2026-09-13 13:32** |
+| čítač nemôže zahodiť `rpo_id` | `refresh_person_history` (`rpo_sync.py:239-250`) | `payload = dict(profile.raw_payload or {})` — **zlúči**, neprepíše; a ORSR fallback je tam výslovne vypnutý práve preto, že `rpo_id` zhadzuje |
+
+K tomu **aritmetika sedí na jednotku**: `pending 22 223 + prečítaných 2 489 =
+24 712 =` presne počet profilov s `rpo_id`. To je nezávislé potvrdenie, že
+žiadny profil zatiaľ nezmizol ani jednou z troch ciest opísaných vyššie — a je
+to kontrola, ktorá sa dá zopakovať po každom ticku (identity rovnica prestane
+platiť presne vtedy, keď začne unikať).
+
+Overené bolo aj to, že **profilová rotácia `osoby_historia` nezmazáva**:
+`done` bolo 2 489 o 13:59:37 aj o 14:49, a to naprieč `sync-missing-orsr-
+profiles-every-4-hours`, ktorý vystrelil o 12:58:47. Dva vzorky nie sú dôkaz,
+takže som to dohľadal v kóde — a je to ten istý mechanizmus ako v riadku
+„čítač nemôže zahodiť `rpo_id`" vyššie: čítač payload zlučuje, takže cudzie
+kľúče prežijú.
+
 ---
 
 ## 3. Čaká na prácu
@@ -991,6 +1015,17 @@ Mutačný test: šesť zámerných chýb v `SeatMap.tsx` (pevný radius, zmazan�
 na kľúč, vypustená téma zo závislostí, chýbajúce uvoľnenie, zmenený Map ID,
 odstránený stub) — každú zhodel presne ten test, ktorý ju pomenúva. Sada nie je
 vatová.
+
+**Jedna z tých šiestich bola nepresná a musel som ju zopakovať.** Pri piatej
+(zmenené predvolené Map ID) som `sed`-om trafil `DEMO_MAP_ID;` aj vnútri
+`|| DEMO_MAP_ID;` v `mapId()`, takže v kóde vznikol **nedefinovaný identifikátor**
+— asynchrónna IIFE to chytila do `catch`, zavolala `setFailed(LOAD_FAILED)`
+a zhodilo sa **10 testov na timeout**, nie ten jeden, ktorý to pomenúva. Bol to
+teda pád, nie dôkaz, a ako dôkaz som ho pôvodne uvádzal. Zopakované presne
+(`|| 'DEMO_MAP_ID_X'`, 14:48 UTC) dalo to, čo malo: **18 testov, 1 zlyhanie**,
+a to práve `draws in the app theme, which needs a Map ID` s vetou
+`expected 'DEMO_MAP_ID_X' to be 'DEMO_MAP_ID'`. Šesť zo šiestich je teda
+čistých; poctivá formulácia je „šesť mutácií, päť čistých na prvý raz".
 
 ---
 
