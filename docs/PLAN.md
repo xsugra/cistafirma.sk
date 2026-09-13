@@ -1306,6 +1306,13 @@ osem firiem s najviac väzbami:
 |---|---|---|---|
 | 8 firiem | 1 953 | 872 | **1 081 (55 %)** |
 
+**Re-verifikované 2026-09-13 21:20Z na tej istej živej odpovedi** (a teda nie
+prevzaté): tých istých 8 firiem dáva presne 1 953 / 872 / 1 081 (55 %) — čísla
+sedia na jednotku. Na úrovni dát to potvrdzuje aj priama otázka do tabuľky:
+jediná dvojica `(osoba 56172, firma 31798446, rola 'ine')` má **12 riadkov**,
+teda presne to „12×" z názvu. #95 medzitým píše ďalej a tieto čísla zatiaľ
+nepohnul — ale je to práve to číslo, ktoré bude rásť, keď #95 dobehne.
+
 Príčina je v `CompanyGraphView`: slučka ide cez **každú väzbu** firmy
 (`views.py:275`) a vnútri nej sa `other_relations` (`:305`) pýta **znova pre
 každú väzbu**, bez dedup proti `edges`. Slučka teda nemá pojem „tá istá hrana":
