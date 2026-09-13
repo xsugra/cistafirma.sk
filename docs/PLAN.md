@@ -1248,6 +1248,49 @@ nie jeden — a to je presne to, čo musí #93 trafiť.
 stránka tvrdí o histórii — to patrí do samostatného rozhodnutia. Podklad preň
 je premeranie vyššie; rozhodnutie je Samuelovo.
 
+### #100 — Graf kreslí tú istú hranu 12× (a #95 to zhoršuje)
+
+**Nález pri overovaní #93, ale iná vec než #93.** Overené na živej odpovedi
+`GET /api/companies/<ico>/graph/` dňa 2026-09-13:
+
+```
+FREYSSINET CS, a. s. (31798446)   nodes=10  edges=21  distinct=9
+  12x  person_56172 -> company_31798446  role='Iné'
+   2x  person_56169 -> company_31798446  role='Iné'
+```
+
+osem firiem s najviac väzbami:
+
+| | spolu | rôznych | redundantných |
+|---|---|---|---|
+| 8 firiem | 1 953 | 872 | **1 081 (55 %)** |
+
+Príčina je v `CompanyGraphView`: slučka ide cez **každú väzbu** firmy
+(`views.py:275`) a vnútri nej sa `other_relations` (`:305`) pýta **znova pre
+každú väzbu**, bez dedup proti `edges`. Slučka teda nemá pojem „tá istá hrana":
+rovnaká väzba centrálnej firmy sa pripočíta raz za každý svoj interval.
+
+**Prečo to nie je #93 a dá sa schváliť samostatne.** #93 je otázka *významu*
+(má stránka osoby ukázať jednu funkciu alebo dvanásť období?) — tam sa rozhoduje
+o dátach. Toto je otázka *identity hrany*: graf nemá časovú os, takže dvanásť
+rovnakej hrany nevyjadruje „dvanásť období" — nevyjadruje nič. Zbaliť ich
+nestráca informáciu, ktorú by graf vedel ukázať.
+
+**Pasca, ktorá rozhoduje o správnej oprave.** Tá istá hrana má
+`isActive=False` **11×** a `isActive=True` **1×**. Naivný dedup (napr. `set`)
+teda s veľkou pravdepodobnosťou zobrazí **súčasného funkcionára ako
+bývalého** — presne chyba, ktorú odstránil #86, len naopak. `isActive` sa musí
+zdieľať tými istými pravidlami ako v `_merged_relations` (`active` vyhráva,
+`None` len keď nič lepšie nie je), nie výberom ľubovoľného zástupcu.
+
+**Čo oprava prinesie:** odpoveď grafu menšia o 55 % — a keďže redundancia
+rastie spolu s väzbami, po #95 by bola ~3× väčšia. Zmiznú aj dotazy navyše:
+`other_relations` sa dnes vykoná raz **na väzbu** namiesto raz na osobu.
+
+**Nemerané:** či je to vidieť aj na plátne. Hrany sa prekrývajú, takže
+vizuálne to môže vyzerať ako jedna čiara; overené je len to, že všetkých 21
+hrán ide do renderu (`useGraphData.ts:55` pri prvom načítaní nededuplikuje).
+
 ### Hľadanie osôb — ✅ hotové (#87, #88, #89)
 
 Návrh: `docs/PLAN-OSOBY.md`. ORSR to vie naživo (`search_osoba.asp`), ale
