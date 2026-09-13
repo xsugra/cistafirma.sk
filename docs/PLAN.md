@@ -2268,9 +2268,43 @@ naplánovaná, beat trikrát reštartoval a **najdlhší súvislý beh bol 16 h 
 (17:46 → 10:28) — teda menej než jej 24-hodinový interval. Nie je to chyba
 počítadla: počítadlo hovorí pravdu, úloha naozaj nebežala.
 
+**Odkiaľ ten riadok je — a to je nepríjemné.** Vytvorila ho moja vlastná
+host-side rekonciliácia `DatabaseScheduler` 2026-09-13 13:20:11.901; vtedy ešte
+neexistoval (merané pred/po, a je to zapísané v memory k tej kontrole, ktorá
+mala byť read-only). Beat ho potom zapísal znovu pri svojom štarte o
+18:34:00.116. Čiže úloha je naplánovaná v kóde od 12. 9., ale riadok, bez
+ktorého neexistuje, pochádza z ručnej kontroly — a keby tá kontrola nebola
+(pre)siahla tam, kde siahla, úloha by nemala riadok vôbec.
+
+**Neoverené a nebudem hádať:** prečo riadok neexistoval už skôr.
+`CELERY_BEAT_SCHEDULE` nesie tento záznam od 2026-09-12 13:13Z a beat odvtedy
+štartoval dvakrát (09-12 17:46:28, 09-13 10:28:15), pričom `setup_schedule()`
+volá `update_from_dict(self.app.conf.beat_schedule)` — teda `update_or_create`
+pre každý záznam — takže riadok mal vzniknúť. Nevznikol, a `Cannot add entry`
+(prekážka, ktorú tá cesta loguje) sa v logu v tých časoch nenachádza: všetkých
+14 výskytov je z 2026-09-12 01:20–03:50 a je to ten istý DNS výpadok „db".
+Dvoch kandidátov — settings v tej chvíli neboli na disku, alebo sa štart k
+rekonciliácii nedostal — som **nerozlíšil**. Rozlíšilo by to porovnanie počtu
+riadkov a `date_changed` pred a po riadenom reštarte beatu; to som **zámerne
+neurobil**, lebo reštart by posunul ten jediný nikdy nespustený riadok o celý
+ďalší interval — čiže by som odložil presne to, čo nižšie odporúčam spustiť.
+
 Toto nie je vlastnosť jednej úlohy, ale pasce pri zakladaní nového riadku:
 **nová periodická úloha s intervalom dlhším, než je bežná doba behu beatu, sa
 k prvému behu nedostane vôbec.** Štvorhodinové nové riadky prežijú, denné nie.
+
+**Žiadna kontrola si to nevšimne.** `scripts/local/ops_check.sh` — a teda aj
+týždenný launchd job, ktorý beží tou istou bránou — sleduje stack, databázu,
+hĺbky front, scrape health, `SyncJob`y, zálohy, off-site a to, či ešte beží
+týždenná záloha. `PeriodicTask` nesleduje **vôbec**: `grep -niE
+"periodictask|beat|last_run_at|scheduled"` nájde v celom skripte jediný riadok,
+a to o logu zálohy. Úloha, ktorá sa nikdy nespustí, teda nemá ako zakričať.
+
+Je to presne tá asymetria, ktorú tento plán pomenúva inde: `ops_check` vie
+zlyhať `SyncJob`, ktorý zostal `running` alebo skončil `failed` — lenže to sú
+všetko úlohy, ktoré **bežali**. Úloha, ktorá sa nespustí, po sebe `SyncJob`
+nezanechá, takže neexistuje riadok, o ktorý by sa kontrola oprela. Kontroly
+súdia behy; nikto nesúdi neexistenciu behu.
 
 **Dopad na dáta je menší, než to vyzerá** — a je iný, než by človek čakal:
 `SectorBenchmark` má 15 riadkov, ale všetky s `computed_at = 2026-09-12 19:55:43Z`,
