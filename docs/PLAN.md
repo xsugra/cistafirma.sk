@@ -1243,6 +1243,15 @@ nie jeden — a to je presne to, čo musí #93 trafiť.
 - **`vznik` = najskorší, `zanik` = najneskorší** a ak je za tým viac dokumentov
   registra, povedať to (plán to už žiada).
 
+**Read-time nie je preferencia, je to štrukturálne vynútené.** Tabuľka má
+unikátny kľúč `(person_id, company_id, role, vznik_funkcie)` — ten vysvetľuje
+nameraných 0 duplicít (re-import tej istej histórie je idempotentný), ale
+zároveň znamená, že **spojenie na strane zápisu by najbližší re-import vrátil
+späť**: zlúčený riadok si ponechá `vznik` prvého dokumentu, takže dokumenty
+2..12 by sa nemali na čo priradiť a `_create_relation` by ich založil znova.
+Zápis by teda musel buď obchádzať vlastný unikátny kľúč, alebo si pamätať, čo
+už zlúčil — a to je presne tá kniha, ktorú read-time nepotrebuje.
+
 **Prečo to nie je hotové teraz:** je to nová prírastka, nie dokončenie #89
 (zhlukovanie spája *riadky osôb*, toto spája *obdobia funkcie*), a mení to, čo
 stránka tvrdí o histórii — to patrí do samostatného rozhodnutia. Podklad preň
