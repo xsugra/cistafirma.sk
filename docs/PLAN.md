@@ -857,8 +857,15 @@ Zdroj: `frontend/companySections.ts`. Dvadsať sekcií, z toho sedemnásť hotov
 Sekcia `suvaha` počíta, či `aktíva = vlastné imanie + záväzky + časové
 rozlíšenie`. Chýbajúce časové rozlíšenie sa číta ako nula — v 2 326 z 2 336
 takých riadkov to tak naozaj je. Kontrola sedí presne v **13 816 zo 14 652
-riadkov (94,3 %)**. Keď závierke chýba iné číslo, kontrola to pomenuje a
-rovnicu neposudzuje — nesľubuje teda viac, než vie.
+riadkov (94,3 %)**.
+
+**Je to meranie k 2026-09-12, nie stála vlastnosť** — nad 14 818 vtedy
+uloženými riadkami (zdrojom je komentár v `BalanceSheetSection.tsx`, kde je
+aj základ merania). Riadkov pribúda s každým RUZ syncom, takže číslo starne.
+Jeden ďalší riadok je mimo o menej než euro a **835 (5,7 %) sú skutočné
+nezrovnalosti** — preto sa dá na tú kontrolu pozerať: kto vidí, že nesedí,
+pozerá na podozrivý riadok. Keď závierke chýba iné číslo, kontrola to pomenuje
+a rovnicu neposudzuje — nesľubuje teda viac, než vie.
 
 ---
 
