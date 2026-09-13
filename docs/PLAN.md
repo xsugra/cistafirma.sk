@@ -1154,7 +1154,10 @@ otvorí. My každý interval ukladáme ako samostatnú väzbu, takže stránka o
 vypíše dvanásť riadkov a **odpoveď na „odkedy" je zahrabaná na dne** — čitateľ
 vidí `od 07.07.2026`.
 
-Zmerané 2026-09-13 na celej tabuľke:
+Príklad vyššie je overený živý (osoba 56172 má naozaj 12 väzieb, najstaršia
+`2011-06-08`, najnovšia `2026-07-07`, takže čitateľ vidí „od 07.07.2026").
+Tabuľka pod ním je však **snímka urobená uprostred behu #95**, nie vlastnosť
+tabuľky:
 
 | | počet |
 |---|---|
@@ -1165,15 +1168,73 @@ Zmerané 2026-09-13 na celej tabuľke:
 | najdlhší reťaz | 10 intervalov |
 | čisto bez dátumov | **0** |
 
-**Odporúčanie (read-time, ako #89 krok 1):** spojiť nadväzujúce intervaly
-(deň po dni) do jednej funkcie s najskorším `vznik` a najneskorším `zanik`,
-a ak je za tým viac dokumentov, povedať to. Naozaj oddelené obdobia (2 312)
-zostať oddelené — tie sú dve funkcie a je to vidieť na diere medzi nimi.
-Zápis sa nemení, takže je to vratné a dá sa to vypnúť.
+#### Premerané o pár hodín neskôr — a prečo to nie je tvar registra
+
+Kľúč `(osoba, firma, funkcia)`, 2026-09-13 ~21:05 UTC:
+
+| | plán (skôr dnes) | teraz |
+|---|---|---|
+| skupín celkom | 77 551 | 91 209 |
+| s viac než jednou väzbou | 6 091 | 11 238 |
+| obsahuje reťaz deň po dni | 3 779 (62 %) | **10 273 (91 %)** |
+| naozaj oddelené obdobia | 2 312 | 965 |
+| najdlhší reťaz | 10 | 10 |
+| čisto bez dátumov | 0 | 0 |
+
+Tabuľka rástla **aj medzi dvoma mojimi meraniami** (110 654 → 110 744 väzieb
+za pár minút), takže rozdiel nie je iná metrika — niečo ju plní. Rozdelenie
+podľa `created_at` to pomenuje:
+
+| | väzieb | skupín s >1 | reťazí |
+|---|---|---|---|
+| vznikli **pred** 2026-09-13 | 59 714 | **276** | **16** |
+| vznikli **2026-09-13** | 51 030 | **10 097** | **9 478** |
+
+Reťaz deň po dni teda **nie je tvar registra, ktorý sme mali** — je to, čo
+dnes vyrobil dopĺňač histórie #95. Do dneška ich bolo **16**. To je dôležité
+pre rozhodnutie: #93 nie je čistenie starého dlhu, je to daň za #95, ktorá
+začala vznikať dnes.
+
+**A nie je to chyba zápisu.** Overené na celej tabuľke: **0** presných
+duplicít (ingest je idempotentný) a **0** prekryvov (nepočíta dvakrát).
+#93 je teda naozaj len prezentačná vec, ako plán tvrdí.
+
+**Koľko toho ešte bude.** #95 má pred sebou **21 633** firiem; dnešných 4 692
+prinieslo 51 147 väzieb, teda **10,9 na firmu**. Projekcia: **~235 819 ďalších
+väzieb** — graf z 110 744 na **~346 000 (3×)** a nadväzných dvojíc zo 17 148
+(15,5 % väzieb) na rádovo 60 000. Krížová kontrola zdarma: 21 633 / 900 za
+hodinu = **24,0 h** zdravej drenáže, čo nezávisle potvrdzuje odhad ~25 h z §2.
+
+#### Tri plochy, nie jedna
+
+Plán menoval stránku osoby. Reťaz sa premieta na tri miesta a dve z nich plán
+nezachytil:
+
+| plocha | kde | dnes |
+|---|---|---|
+| detail osoby + výsledky hľadania | `connections/views.py` `_merged_relations` | 12 riadkov |
+| **hrana grafu** | `CompanyGraphView`, `views.py:295` | **12 rovnobežných hrán** medzi tým istým párom |
+| admin počítadlo | `connections/admin.py:29` | surové riadky (staff-only, správne) |
+
+`CompanyGraphView` zhlukuje **osoby** (jeden uzol na človeka), ale hranu pridá
+**za každú väzbu** — a komentár na `views.py:266` to hovorí ako zámer. Graf je
+teda plocha, kde je redundancia najviditeľnejšia. Používateľské počty inde
+neobchádzajú spojenie (overené: `person_relations` sa v produkčnom kóde
+používa len ako filter grafu).
+
+**Odporúčanie (spresnené):** spojiť nadväzujúce intervaly raz, v **jednej
+zdieľanej pomocnej funkcii nad väzbami**, a použiť ju na všetkých troch
+plochách — inak sa detail osoby a graf rozídu v tom, čo tvrdia o tom istom
+človeku. Načasovanie je výhodnejšie než pri pôvodnom pláne: 91 % skupín
+s reťazou znamená, že bez spojenia bude graf po dobehnutí #95 kresliť 3× toľko
+hrán. Živý príklad výsledku: osoba 56172 má v reťazi **34-dňovú dieru**
+(`2013-04-10` → `2013-05-14`), takže správne spojenie dá **2 riadky z 12**,
+nie jeden — a to je presne to, čo musí #93 trafiť.
 
 **Prečo to nie je hotové teraz:** je to nová prírastka, nie dokončenie #89
 (zhlukovanie spája *riadky osôb*, toto spája *obdobia funkcie*), a mení to, čo
-stránka tvrdí o histórii — to patrí do samostatného rozhodnutia.
+stránka tvrdí o histórii — to patrí do samostatného rozhodnutia. Podklad preň
+je premeranie vyššie; rozhodnutie je Samuelovo.
 
 ### Hľadanie osôb — ✅ hotové (#87, #88, #89)
 
@@ -2021,6 +2082,34 @@ je pravda. Odhalí to len nezávislé počítadlo: `grep -oE
 **počítadlo, ktoré nevie, čo počíta, dá sebavedomé číslo.** Pri `docker compose
 logs` sa preto hodiny musia počítať z jedného časového poľa, nie z `grep -o`
 cez celý riadok.
+
+### Meranie tabuľky, do ktorej práve beží zápis, je pozorovanie s časom — nie vlastnosť
+
+Namerané 2026-09-13 pri premeriavaní #93, na chybe v tomto pláne. Tabuľka v #93
+stála na vete „Zmerané 2026-09-13 na celej tabuľke" a tvrdila **3 779 reťazí
+(62 %)**. O pár hodín: **10 273 (91 %)**. Po dobehnutí #95 projekcia rádovo
+**60 000**. Ani jedno z tých čísel nie je nesprávne — všetky sú pravdivé
+o inom okamihu.
+
+Tabuľku totiž celý ten čas zapisoval #95: 2026-09-13 vzniklo **51 030** väzieb,
+kým za všetky predchádzajúce týždne spolu **59 714**. Rozdelenie podľa
+`created_at` je to, čo oddelí tvar registra od našeho postupu:
+
+| | skupín s >1 | reťazí |
+|---|---|---|
+| pred 2026-09-13 | **276** | **16** |
+| 2026-09-13 | **10 097** | **9 478** |
+
+„62 % skupín má reťaz" teda nikdy nebola vlastnosť registra. Bol to **ukazovateľ
+postupu**, ktorý sa čítal ako fakt o dátach.
+
+Je to zákerné preto, že 62 % a 91 % vyzerajú rovnako ako nález a že číslo
+**rastie k svojej konečnej hodnote** — skoré čítanie ju teda vždy podhodnotí,
+a to bez toho, aby vyzeralo nesprávne. Rovnaká rodina ako prah `ops_check` na
+50 000 nižšie: číslo, ktoré raz bolo pravda. Odhalí to len rozpad podľa
+`created_at`. **Ak sa meria tabuľka so živým zapisovateľom, patrí k číslu čas
+a počet riadkov, pri ktorom bolo vzaté — a záver o *zdroji* sa smie urobiť až
+po rozpade podľa dátumu vzniku.**
 
 ---
 
