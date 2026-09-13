@@ -75,7 +75,25 @@ class RpoPerson:
 
     @property
     def display_name(self) -> str:
-        return self.formatted_name or self.full_name
+        """The person's name, assembled from whichever part RPO filled in.
+
+        The last resort is not decoration. The RPO API returns some natural
+        persons with `formatedName` empty *and* no `fullName`, but with
+        `givenNames` and `familyNames` populated -- 481 profiles here, mostly
+        schools and municipalities, e.g. entity 16257208, whose two directors
+        arrive as `givenNames: ["Marta"]`, `familyNames: ["Hanečáková"]`.
+
+        With only the first two fallbacks the name came out as `""`, and an
+        empty name is the one thing the person extractor refuses to write. So
+        each of those companies held a statutory body with a role, an address
+        and a start date, and not one byte of it reached the person graph.
+        """
+        if self.formatted_name:
+            return self.formatted_name
+        if self.full_name:
+            return self.full_name
+        parts = [*self.given_names, *self.family_names]
+        return " ".join(part for part in parts if part).strip()
 
 
 @dataclass

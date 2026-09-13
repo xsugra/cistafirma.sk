@@ -31,7 +31,13 @@ export function GraphLegend() {
       ))}
       <div className="flex items-center gap-1.5">
         <div className="w-3.5 h-0.5 border-t border-dashed border-gray-400" />
-        <span>Neakt.</span>
+        <span>Ukončené</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <div className="w-3.5 h-0.5 border-t border-dotted border-gray-400 dark:border-gray-500" />
+        <span title="Funkciu sme pre túto firmu ešte neoverili v registri">
+          Neznáme
+        </span>
       </div>
     </div>
   );

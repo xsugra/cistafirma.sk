@@ -3,7 +3,12 @@ from rest_framework.test import APITestCase
 
 from companies.models import Company
 from registers.models import OrsrCompanyProfile
-from .models import Person, PersonCompanyRelation, compute_fingerprint
+from .models import (
+    Person,
+    PersonCompanyRelation,
+    compute_fingerprint,
+    normalize_name,
+)
 from .services import PersonExtractionService
 
 
@@ -185,3 +190,294 @@ class PersonDetailAPITests(APITestCase):
     def test_person_not_found(self):
         response = self.client.get("/api/persons/99999/")
         self.assertEqual(response.status_code, 404)
+
+
+class NameNormalizationTests(TestCase):
+    """`name_normalized` is what search reads, so it has to be right by itself."""
+
+    def test_diacritics_are_stripped(self):
+        self.assertEqual(normalize_name("Ján Novák"), "jan novak")
+
+    def test_title_is_folded_in_not_dropped(self):
+        # The register keeps "Miroslav Trnka" and "Ing. Miroslav Trnka" as
+        # separate records. A reader typing either has to reach both, and a
+        # substring match on the folded form is what does it: "novak" is in
+        # "ing. novak".
+        self.assertIn("novak", normalize_name("Novák", "Ing."))
+
+    def test_whitespace_collapsed(self):
+        self.assertEqual(normalize_name("Ján   Novák"), "jan novak")
+        self.assertEqual(normalize_name("  Novák  "), "novak")
+
+    def test_save_fills_the_column(self):
+        person = Person.objects.create(
+            fingerprint="name:jan novak", name="Ján Novák", title="Ing."
+        )
+        person.refresh_from_db()
+        self.assertEqual(person.name_normalized, "ing. jan novak")
+
+    def test_save_recomputes_when_only_the_name_changes(self):
+        person = Person.objects.create(fingerprint="f1", name="Ján Novák")
+        person.name = "Štefan Kováč"
+        person.save(update_fields=["name", "updated_at"])
+        person.refresh_from_db()
+        self.assertEqual(person.name_normalized, "stefan kovac")
+
+
+class RelationCurrencyTests(TestCase):
+    """The three answers: áno, nie, nevieme -- and which source may give which.
+
+    The bug this covers: `extract_from_profile` hardcoded `is_active=True`, so
+    all 64 128 relations in the live database claimed to be current. Six people
+    were still marked active in a dissolved družstvo whose RPO record reports an
+    end date for every one of them.
+    """
+
+    def setUp(self):
+        self.service = PersonExtractionService()
+
+    def _company(self, ico="50059959"):
+        return Company.objects.create(ruz_id=1, ico=ico, nazov_UJ="Test s.r.o.")
+
+    def _profile(self, company, structured):
+        return OrsrCompanyProfile.objects.create(
+            company=company,
+            ico=company.ico,
+            raw_payload={"structured": structured},
+        )
+
+    def test_history_gives_both_answers(self):
+        company = self._company()
+        profile = self._profile(company, {
+            "osoby_historia": [
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2010-01-01",
+                 "zanik_funkcie": "2019-06-30"},
+                {"name": "Mária Kováčová", "role": "Konateľ", "vznik_funkcie": "2019-07-01"},
+            ],
+        })
+        self.service.extract_from_profile(profile)
+
+        ended = PersonCompanyRelation.objects.get(person__name="Ján Novák")
+        self.assertIs(ended.is_active, False)
+        self.assertEqual(ended.zanik_funkcie.isoformat(), "2019-06-30")
+
+        current = PersonCompanyRelation.objects.get(person__name="Mária Kováčová")
+        self.assertIs(current.is_active, True)
+        self.assertIsNone(current.zanik_funkcie)
+
+    def test_a_profile_without_history_says_nevieme_not_ano(self):
+        # An ORSR výpis (the HTML path) lists current office-holders and no end
+        # dates at all. "No end date" there means "not recorded", so the honest
+        # answer is null -- not the True the old code wrote.
+        company = self._company()
+        profile = self._profile(company, {
+            "statutarny_organ": [{"name": "Ján Novák", "role": "Konateľ"}],
+        })
+        self.service.extract_from_profile(profile)
+
+        relation = PersonCompanyRelation.objects.get()
+        self.assertIsNone(relation.is_active)
+
+    def test_re_extraction_closes_a_relation_we_already_held(self):
+        """The path that repairs the existing 64 128 rows.
+
+        A company read by the old code has relations claiming to be current. A
+        re-read must move them to "ended", or the backfill would rewrite every
+        profile and change nothing in the graph.
+        """
+        company = self._company()
+        # The service identifies people by fingerprint, so a row it is meant to
+        # recognise has to carry the fingerprint it computes.
+        person = Person.objects.create(
+            fingerprint=compute_fingerprint("Ján Novák"), name="Ján Novák"
+        )
+        relation = PersonCompanyRelation.objects.create(
+            person=person, company=company, role="konatel", is_active=True,
+        )
+
+        profile = self._profile(company, {
+            "osoby_historia": [
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2010-01-01",
+                 "zanik_funkcie": "2015-12-31"},
+            ],
+        })
+        self.service.extract_from_profile(profile)
+
+        relation.refresh_from_db()
+        self.assertIs(relation.is_active, False)
+        self.assertEqual(relation.zanik_funkcie.isoformat(), "2015-12-31")
+        self.assertEqual(PersonCompanyRelation.objects.count(), 1)
+
+    def test_re_extraction_refuses_to_guess_between_two_open_relations(self):
+        # The adoption rule above is bounded by "exactly one". With two open
+        # rows for the same (person, company, role), both without a start date,
+        # there is nothing to say which one the history entry is about -- and
+        # closing the wrong office is worse than holding a duplicate.
+        company = self._company()
+        person = Person.objects.create(
+            fingerprint=compute_fingerprint("Ján Novák"), name="Ján Novák"
+        )
+        for _ in range(2):
+            PersonCompanyRelation.objects.create(
+                person=person, company=company, role="konatel", is_active=True,
+            )
+
+        profile = self._profile(company, {
+            "osoby_historia": [
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2010-01-01",
+                 "zanik_funkcie": "2015-12-31"},
+            ],
+        })
+        self.service.extract_from_profile(profile)
+
+        # Neither was closed: the entry became its own row instead.
+        self.assertEqual(
+            PersonCompanyRelation.objects.filter(is_active=True).count(), 2
+        )
+        self.assertEqual(
+            PersonCompanyRelation.objects.filter(is_active=False).count(), 1
+        )
+
+    def test_a_current_office_list_cannot_reopen_a_closed_function(self):
+        # The two passes meet here. The same person is in `statutarny_organ`
+        # because the register still lists the company's office-holders, and in
+        # the history because the function ended. The section entry carries no
+        # end date, so it may not undo the history's verdict.
+        company = self._company()
+        profile = self._profile(company, {
+            "osoby_historia": [
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2010-01-01",
+                 "zanik_funkcie": "2015-12-31"},
+            ],
+            "statutarny_organ": [
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2010-01-01"},
+            ],
+        })
+        self.service.extract_from_profile(profile)
+
+        self.assertEqual(PersonCompanyRelation.objects.count(), 1)
+        relation = PersonCompanyRelation.objects.get()
+        self.assertIs(relation.is_active, False)
+        self.assertEqual(relation.zanik_funkcie.isoformat(), "2015-12-31")
+
+    def test_a_person_who_held_office_twice_gets_two_relations(self):
+        company = self._company()
+        profile = self._profile(company, {
+            "osoby_historia": [
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2005-01-01",
+                 "zanik_funkcie": "2010-12-31"},
+                {"name": "Ján Novák", "role": "Konateľ", "vznik_funkcie": "2015-01-01"},
+            ],
+        })
+        self.service.extract_from_profile(profile)
+
+        relations = PersonCompanyRelation.objects.order_by("vznik_funkcie")
+        self.assertEqual(relations.count(), 2)
+        self.assertIs(relations[0].is_active, False)
+        self.assertIs(relations[1].is_active, True)
+
+    def test_history_only_profile_does_not_double_count_its_own_sections(self):
+        # `osoby_historia` holds every person the register records; the section
+        # lists hold the current ones again. Both name the same konateľ with the
+        # same start date, and that is one relation, not two.
+        company = self._company()
+        profile = self._profile(company, {
+            "osoby_historia": [
+                {"name": "Mária Kováčová", "role": "Konateľ", "vznik_funkcie": "2019-07-01"},
+            ],
+            "statutarny_organ": [
+                {"name": "Mária Kováčová", "role": "Konateľ", "vznik_funkcie": "01.07.2019"},
+            ],
+        })
+        persons, relations = self.service.extract_from_profile(profile)
+
+        self.assertEqual(persons, 1)
+        self.assertEqual(relations, 1)
+        self.assertEqual(PersonCompanyRelation.objects.count(), 1)
+        self.assertIs(PersonCompanyRelation.objects.get().is_active, True)
+
+
+class PersonSearchAPITests(APITestCase):
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=1, ico="50059959", nazov_UJ="Test Firma s.r.o."
+        )
+        self.novak = Person.objects.create(
+            fingerprint="f-novak", name="Miroslav Trnka", title="Ing."
+        )
+        PersonCompanyRelation.objects.create(
+            person=self.novak, company=self.company, role="konatel", is_active=True,
+        )
+
+    def test_finds_by_diacritics_stripped_query(self):
+        person = Person.objects.create(fingerprint="f-kovac", name="Štefan Kováč")
+        PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role="spolocnik", is_active=False,
+        )
+
+        response = self.client.get("/api/persons/", {"q": "kovac"})
+
+        self.assertEqual(response.status_code, 200)
+        names = [r["name"] for r in response.json()["results"]]
+        self.assertEqual(names, ["Štefan Kováč"])
+
+    def test_token_order_does_not_matter(self):
+        for query in ("trnka miroslav", "miroslav trnka", "TRNKA"):
+            with self.subTest(query=query):
+                response = self.client.get("/api/persons/", {"q": query})
+                self.assertEqual(len(response.json()["results"]), 1)
+
+    def test_a_title_does_not_hide_the_person(self):
+        # The register stores "Ing. Miroslav Trnka" and search reads the folded
+        # form, so a reader who leaves the title out still reaches them.
+        response = self.client.get("/api/persons/", {"q": "trnka"})
+        self.assertEqual(len(response.json()["results"]), 1)
+
+    def test_short_query_is_refused_with_a_reason(self):
+        response = self.client.get("/api/persons/", {"q": "t"})
+        data = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["results"], [])
+        self.assertIn("2 znaky", data["detail"])
+
+    def test_person_without_relations_is_not_a_result(self):
+        Person.objects.create(fingerprint="f-lonely", name="Miroslav Trnka")
+        response = self.client.get("/api/persons/", {"q": "trnka"})
+        self.assertEqual(len(response.json()["results"]), 1)
+
+    def test_role_filter(self):
+        person = Person.objects.create(fingerprint="f-spol", name="Miroslav Trnka")
+        PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role="spolocnik", is_active=True,
+        )
+
+        response = self.client.get("/api/persons/", {"q": "trnka", "role": "spolocnik"})
+
+        results = response.json()["results"]
+        self.assertEqual([r["name"] for r in results], ["Miroslav Trnka"])
+        self.assertEqual([c["role"] for c in results[0]["companies"]], ["spolocnik"])
+
+    def test_three_valued_is_active_survives_the_serializer(self):
+        person = Person.objects.create(fingerprint="f-unknown", name="Miroslav Trnka")
+        PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role="spolocnik",
+        )
+
+        response = self.client.get("/api/persons/", {"q": "trnka"})
+        by_role = {
+            company["role"]: company["is_active"]
+            for result in response.json()["results"]
+            for company in result["companies"]
+        }
+
+        self.assertIs(by_role["konatel"], True)
+        self.assertIsNone(by_role["spolocnik"])
+
+    def test_coverage_is_reported_with_every_answer(self):
+        # An empty result has to be readable as "we do not cover this" rather
+        # than "this person is in no company".
+        response = self.client.get("/api/persons/", {"q": "nikto taky"})
+        coverage = response.json()["coverage"]
+
+        self.assertEqual(coverage["companies_with_persons"], 1)
+        self.assertEqual(coverage["companies_total"], 1)

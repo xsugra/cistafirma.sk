@@ -148,12 +148,46 @@ a nezamení si jedno za druhé.
 
 ### 4.3 Živé doplnenie z ORSR — to je tá „sync podľa mena", ale ohraničená
 
-Keď človek hľadá meno, ktoré u nás nie je (alebo chce overiť), spustí sa
-**jeden** request na ORSR. Ak nájde firmy, ktoré nemáme rozpracované:
+**Realizované 2026-09-13** ako `GET /api/persons/orsr/?q=` + `OrsrPersonSearch`,
+a to inak, než tento plán pôvodne čakal. Overené proti živému registru:
 
-- zobrazia sa hneď (názov + funkcia + odkaz na výpis)
-- vedľa je tlačidlo **„doplniť tieto firmy"**, ktoré pre ne zaradí náš
-  existujúci ORSR scraper do fronty `orsr` (už beží na `15/m`)
+- endpoint je `hladaj_osoba.asp`, stránka je **cp1250**, nie UTF-8;
+- **diakritika je presná**: `PR=novak` vráti 0 záznamov, `PR=Novák` 24. Preto sa
+  dotaz pošle raz tak, ako ho človek napísal, a **len ak nevrátil nič**, skúsi
+  sa druhý raz bez diakritiky. Výsledky sa nezlúčia — druhý pokus je náhrada,
+  nie rozšírenie, inak by počet z registra prestal opisovať to, čo je na obrazovke;
+- výsledkový riadok je `Meno | Obchodné meno subjektu | Výpis | Zbierka
+  dokumentov`. **Stĺpec s funkciou neexistuje** — register hovorí, *v akej
+  firme* človek figuruje, nie *ako*. Pôvodný plán tu rátal s „názov + funkcia";
+  funkcia by znamenala jeden `vypis.asp` request na firmu, čo je presne to
+  hromadné doťahovanie, ktorému sa chceme vyhnúť. Odpoveď to hovorí nahlas
+  (`note` v payloade) namiesto prázdneho stĺpca;
+- register ukazuje **len aktuálne záznamy** — kto z firmy odišiel v 2019, v tom
+  zozname nie je vôbec. To je presne dôvod, prečo musí existovať aj naša
+  skupina výsledkov, a prečo sa to v UI píše;
+- odpoveď sa **cachuje 900 s** (`ORSR_PERSON_CACHE_SECONDS`) a je
+  **rate-limitovaná 60/h** na volajúceho (`OrsrPersonThrottle`); cache kľúč je
+  normalizovaný, takže `trnka`, `Trnka` a `TRNKA` sú jeden request. Zlyhanie sa
+  necachuje — inak by minúta výpadku registra bola štvrťhodinou tej istej
+  nesprávnej odpovede.
+
+**Rozhodnutie (2026-09-13): v prvej verzii nie je tlačidlo „doplniť tieto
+firmy".** Register je formulár bez API a jeden request na firmu; tlačidlo vedľa
+výsledku by znamenalo, že o tom, koľko requestov proti cudziemu serveru pošleme,
+rozhoduje to, koľko priezvisko má zhod. Naša skupina výsledkov sa napĺňa
+vlastným dočítaním histórie (`schedule_person_history_resync`), ktoré je
+
+1. **ohraničené** — 2 000 firiem / 4 h, okolo 15 requestov/min,
+2. **nezávislé od vstupu z klávesnice** — beží samo, nie preto, že niekto
+   niečo napísal,
+3. **samovyprázdňujúce sa** — vyberá profily bez `osoby_historia` a ten istý
+   kľúč aj zapisuje, takže po poslednom prečítanom profile sa zastaví. To platí
+   len vtedy, ak **každú vybranú firmu vie čítač aj označiť**: čítanie histórie
+   preto beží v `read_person_history` bez `is_orsr_eligible_company`. Tá
+   podmienka patrí ORSR monitoringu (register vedie len aktuálne záznamy), nie
+   histórii osôb — a kým platila na obe, 92 profilov (zrušené firmy a cirkvi)
+   nemohlo kľúč získať nikdy, takže populácia nikdy nedosiahla nulu a riadok
+   beat-u by sa nedal vypnúť.
 
 **Prečo to nesmie byť automatické pri každom hľadaní:**
 
@@ -177,13 +211,16 @@ povie, odkiaľ údaje sú.
 
 ## 5. Poradie prác
 
-1. ⛔ **`zanik_funkcie` a `is_active`** — doplniť `valid_to` z RPO, prestať
-   tvrdiť „aktuálny" tam, kde to nevieme. *Bez tohto sa zvyšok nesmie spustiť.*
-2. `GET /api/persons/?q=` — hľadanie bez diakritiky, s filtrom funkcie
-3. Frontend: rozdelené výsledky v `SearchBar`, odkaz z `PersonCard`,
+1. ✅ **`zanik_funkcie` a `is_active`** — `osoby_historia` v `structured`,
+   trojstavové `is_active` (plná / čiarkovaná / bodkovaná hrana + legenda
+   „Ukončené" a „Neznáme"), dočítanie histórie pre 24 237 profilov.
+2. ✅ `GET /api/persons/?q=` — hľadanie bez diakritiky, s filtrom funkcie
+3. ⏳ Frontend: rozdelené výsledky v `SearchBar`, odkaz z `PersonCard`,
    routa `/osoba/:id`
-4. Živé doplnenie z ORSR + tlačidlo „doplniť tieto firmy"
-5. Stance k osobným údajom (rate limit, žiadny export)
+4. ✅ `GET /api/persons/orsr/?q=` — živý register (bez tlačidla „doplniť tieto
+   firmy", viď 4.3)
+5. ⏳ Stance k osobným údajom (rate limit ✅, žiadny export ✅, chýba veta
+   o pôvode údajov v UI — `note` v API ju už nesie)
 
 **Pokrytie je jediná skutočná hranica.** 4,5 % firiem znamená, že väčšina
 hľadaní u nás nič nenájde — a to je v poriadku, pokiaľ to sekcia povie

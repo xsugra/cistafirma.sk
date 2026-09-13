@@ -16,6 +16,9 @@ export const GRAPH_COLORS = {
   edge: {
     active: '#6B7280',
     inactive: '#D1D5DB',
+    // Between the two greys on purpose: a third stroke that reads as neither
+    // "current" nor "ended", because that is exactly what it means.
+    unknown: '#9CA3AF',
     label: '#374151',
     labelBg: 'rgba(255, 255, 255, 0.92)',
   },
@@ -52,6 +55,7 @@ export const GRAPH_COLORS_DARK = {
   edge: {
     active: '#9CA3AF',
     inactive: '#4B5563',
+    unknown: '#6B7280',
     label: '#D1D5DB',
     labelBg: 'rgba(17, 24, 39, 0.92)',
   },

@@ -91,3 +91,16 @@ class DocumentsThrottle(PublicRateThrottle):
     """
 
     scope = 'documents'
+
+
+class OrsrPersonThrottle(PublicRateThrottle):
+    """Scope for `GET /api/persons/orsr/`.
+
+    The one endpoint here whose input is free text typed by anyone, and it
+    spends a request against orsr.sk for each uncached query. `persons/` itself
+    needs no limit -- it answers from an indexed column -- but this one turns
+    keystrokes into traffic on someone else's server, so it is capped at a
+    level that a person reading results will never reach and a script will.
+    """
+
+    scope = 'orsr_person'
