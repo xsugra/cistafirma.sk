@@ -753,9 +753,44 @@ rovnicu neposudzuje — nesľubuje teda viac, než vie.
 - ⚠️ **Off-site záloha nie je pripojená** — `/Volumes/CistaFirmaBackups`
   nie je namontovaný, `make ops-check` preto hlási 1 FAIL. Lokálne zálohy
   aj posledný restore drill sú v poriadku.
-- ℹ️ **Poistný backlog** ~66 tis. firiem je zdokumentovaný ustálený stav:
-  jeden plný priechod trvá ~15 dní, 12-hodinový interval len vyberá, čo je
-  na rade.
+- ⚠️ **Kontrola poistného backlogu je pod ustáleným stavom, ktorý sama
+  dokumentácia opisuje ako normálny — takže svieti stále.** Overené naživo
+  2026-09-13: `make ops-check` hlási
+  `WARN queue 'insurance' holds 62 055 message(s), above the 50000 threshold`
+  — a tá istá zostava má ustálený stav **vyššie** než ten prah, lebo poistný
+  priechod je na ~15 dní (414 tis. neoverených firiem ÷ 14 400 za tick).
+
+  Namerané v ten deň: fronta **62 051 → 62 026** za ~5 minút (klesá),
+  `redis used_memory_human: 84.12M` (incident z 12. 9. mal ~5 GB), worker
+  `celery_worker_insurance` **beží a každá firma uspeje** (~1,3 s), a fronta
+  sa vyprázdňuje presne rýchlosťou, na ktorú je navrhnutá
+  (`rate_limit='20/m'`). Príčina rastu je vyriešená v kóde: 12. 9. bolo
+  **5 108 434 správ / ~5 GB** a `schedule_insurance_debt_checks` je odvtedy
+  capnutý na `INSURANCE_BATCH_PER_TICK = 20 × 60 × 12 = 14 400` za tick.
+
+  Cap je naozaj v tej vrstve, ktorá rozhoduje — overené na `PeriodicTask`
+  riadku, nie na dicte: `args='[14400]'`, `queue='celery'`,
+  `last_run=2026-09-13 07:50`, `total_run_count=36`. To je dôležité, lebo
+  `DatabaseScheduler` spúšťa riadok, nie `CELERY_BEAT_SCHEDULE`.
+
+  **Preto je prah 50 000 zlý nástroj, nie fronta.** Absolútna hĺbka nevie
+  rozlíšiť „beží záplava" od „beží návrh" — a keďže ustálený stav je vyššie
+  než prah, kontrola hlási poplach, ktorý sa nedá vypnúť. Prah odvodený
+  z návrhu (`INSURANCE_BATCH_PER_TICK` a jeho násobok) by tú istú situáciu
+  prečítal správne. Zámerne **nemenené** — je to zmena kontrolného prahu,
+  nie porucha, a patrí do samostatného rozhodnutia.
+
+- ⚠️ **`expires` sa na `PeriodicTask` riadok nikdy nedostane.** Ten istý
+  riadok má `expires=None`, hoci `CELERY_BEAT_SCHEDULE` preň hovorí
+  `'expires': 43000.0`. Potvrdené naživo, nie odvodené — je to tá istá trieda
+  ako `options`/`queue`, kde je rozhodujúci riadok a nie dict.
+
+- ⚠️ **Redis nemá `maxmemory`.** `maxmemory_human: 0B`,
+  `maxmemory_policy: noeviction`. Pri brokere je `noeviction` **správne** —
+  evikcia by ticho zahodila úlohy — ale bez limitu je poruchový mód „Redis
+  zožerie RAM hostiteľa", čo sa 12. 9. aj stalo (~5 GB). Limit (napr. 1–2 GB)
+  by z neobmedzeného rastu spravil hlasité a ohraničené zlyhanie zápisu.
+  Zámerne **nemenené**: je to zásah do bežiacej „produkčnej" zostavy.
 - ℹ️ **`ruz_statement_id`** je zatiaľ na 11 z 58 197 riadkov. Dopĺňa ho
   12-hodinový `schedule_ruz_financials_sync`. **Funkciu to neblokuje** —
   `ruz_documents` si id odvodí naživo a uloží, takže chýbajúci záznam
