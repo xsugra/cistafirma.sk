@@ -732,6 +732,44 @@ workera je jediná operácia, ktorá vie zmazať prácu bez jedinej stopy v logu
 a preto sa počas 17:20 dávky nemá robiť. Ak by ju bolo treba, správne poradie je
 počkať na `orsr=0`, nie reštartovať pod záťažou.
 
+#### Verdikt ticku o 17:20 — polovica predpovede vyšla, polovica nie
+
+Predpoveď vyššie bola zámerne konkrétna, aby sa dala vyvrátiť. Odčítané
+2026-09-13 o 17:21–17:23 UTC:
+
+| čo som predpovedal | namerané | |
+|---|---|---|
+| `Sending due task refresh-person-history-…` v beate | `17:20:12.941581` | ✅ |
+| fronta `orsr ≈ 2000` | **2 172** | ✅ |
+| populácia klesne len o to, čo sa naozaj prečíta | prečítaných 2 489 → **2 789** | ✅ |
+| `last_run_at ≈ 17:20:12,9` | **stále `None`** | ❌ |
+| `total_run_count = 1` | **stále `0`** | ❌ |
+
+**Riadok teda vystrelil a nezapísal o tom nič.** Tvrdenie na konci
+predchádzajúcej časti („`last_run_at=None`, takže dávku nespustil on") bolo
+v tom čase správne — dávku naozaj spustil môj ručný beh o 10:37 — ale **ako
+pravidlo je nesprávne** a dnešok to dokázal: `last_run_at=None` neznamená „úloha
+nebežala". Počítadlo je pri tejto úlohe nepoužiteľné oboma smermi a § 7 to
+zapisuje ako samostatný nález.
+
+**Tretí riadok v logu bol zasa tá istá pasca.** `Scheduled person-history resync
+for 2000 companies` sa objavil **trikrát**, ale fronta je 2 172 — keby to boli
+tri dispatche, čakalo by tam ~6 000. Je to **jeden** dispatch a tá hodnota sa
+v logu vypisuje viackrát; presne to isté, čo táto časť opisuje o hodinu vyššie
+pri dymovom teste s desiatimi firmami. Keby som frontu nemeral, zapíšem 6 000.
+
+**Kde je fronta teraz a či to stíha.** 2 172 správ čaká, z toho ~2 000 čítaní;
+worker `orsr` ale najprv dorába zvyšok profilovej rotácie z 16:58
+(`sync_company_orsr_data`), takže čítania stoja za nimi v rade. Strop je
+`rate_limit='15/m'` = **900/h** (a hodina 11:00 s 890 prečítaniami ukazuje, že sa
+naň naozaj dostane), takže jedna dávka 2 000 sa vyleje za **~133 min** a do
+4-hodinového intervalu sa vmestí. Dispatcher žiada 2 000 za 4 h = 500/h, teda
+**pod stropom** — fronta teda nerastie donekonečna a odhad ~44 h (11 tickov) na
+vyprázdnenie populácie 22 223 platí ďalej.
+
+**Identita drží aj po ticku:** 2 789 + 22 223 = **25 012** = presne počet
+profilov s `rpo_id`. Ani jeden profil nezmizol.
+
 ---
 
 ## 3. Čaká na prácu
@@ -1609,6 +1647,45 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   `orsr_profile__isnull=True` (profil existuje), `sync_orsr_filtered` chce
   `raw_payload.structured` (je `{}`). Firma s takým riadkom teda ostáva bez
   ORSR údajov. Zámerne **nemenené** — je to zmena selekcie, nie porucha.
+
+### #95 nemá ani jeden riadok `SyncJob` — jeho beh a zlyhanie sú neviditeľné
+
+Zmerané 2026-09-13 večer, keď #95 bežal:
+
+| `job_type` | riadkov | najnovší |
+|---|---|---|
+| `ruz_incremental` | 18 | 2026-09-13 13:50 |
+| `ruz_full_firmy` | 4 | 2026-08-04 13:55 |
+| **hocičo s „person" alebo „histor"** | **0** | **nikdy** |
+
+Dopĺňanie histórie funkcií teda nemá v `registers_syncjob` **žiadny** záznam —
+ani začiatok, ani koniec, ani počet zlyhaní. Jeho jediným dôkazom života je
+riadok v beat logu a to, že sa pohli dáta. To je presne trieda poruchy, ktorú
+tento projekt rieši inde („kontrola musí súdiť výsledok, nie záťaž"): keby táto
+úloha prestala fungovať, `make ops-check` to nepovie, lebo nemá čo čítať.
+
+Zámerne **nemenené** — doplniť `SyncJob` záznam znamená zasiahnuť do bežiacej
+úlohy a je to samostatná zmena, nie súčasť #95.
+
+### Počítadlo v `PeriodicTask` sa pri dvoch úlohách nepíše vôbec
+
+```
+NEVER     runs=0    refresh-person-history-every-4-hours
+NEVER     runs=0    compute-sector-benchmarks-daily
+2026-09-13 17:13  runs=355  detect-stuck-sync-jobs-every-10-min
+2026-09-13 17:18  runs=327  send-pending-notifications-every-15-min
+… 8 z 10 riadkov počítadlo má
+```
+
+**2 z 10 riadkov `last_run_at`/`total_run_count` nemajú nikdy**, hoci
+`refresh-person-history-every-4-hours` 2026-09-13 o 17:20:12 **naozaj vystrelil**
+(„Sending due task refresh-person-history-every-…") a rozposlal prácu. Počítadlo
+je teda pri týchto dvoch úlohách nepoužiteľné ako dôkaz behu — a čokoľvek, čo by
+sa oň oprelo, prehlási zdravú úlohu za mŕtvu.
+
+**Príčinu som neoveril** a nebudem ju hádať; rozdiel je medzi dvoma konkrétnymi
+riadkami a zvyškom, nie systematický, takže sa to dá zúžiť — ale to je
+samostatná práca. Zámerne **nemenené** a **nezapisujem domnienku**.
 
 ---
 
