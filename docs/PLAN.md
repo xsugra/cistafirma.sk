@@ -2175,6 +2175,50 @@ a to bez toho, aby vyzeralo nesprávne. Rovnaká rodina ako prah `ops_check` na
 a počet riadkov, pri ktorom bolo vzaté — a záver o *zdroji* sa smie urobiť až
 po rozpade podľa dátumu vzniku.**
 
+### Poisťovne: dávka sa presne rovná odtoku — ale docstring čaká o polovicu kratšie
+
+**Uzatvára test, ktorý som minul.** Nasadil som meranie, ktoré čakalo skok fronty
+`insurance` o ~14 400 okolo 21:11 — a nameralo 0. Chyba bola v načasovaní, nie
+v hypotéze: dispatcher naposledy bežal **20:01:21** a interval je 43 200 s
+(12 h), takže najbližší tik je **08:01:21**. O 21:11 nebolo čo skočiť.
+
+Priamy dôkaz je pritom v logu, nie v čakaní:
+
+```
+20:01:21.121  Task schedule_insurance_debt_checks received, args "[14400]"
+20:01:21.563  "Plánujem kontrolu dlhov pre 14400 z 440517 firiem … (z toho 9 sledovaných)."
+20:01:28.048  succeeded in 6.92s: 'Scheduled 14400 insurance debt checks'
+```
+
+A odtok, meraný z hosta (Redis je na `localhost:6380` dosiahnuteľný aj mimo
+Dockeru, takže na vzorkovanie netreba `docker compose exec`): **~21/min =
+~1 260/h**, teda ~15 120 za 12 h proti dávke 14 400. Fronta je **conserved**,
+presne ako tvrdí `INSURANCE_BATCH_PER_TICK = 20 × 60 × 12` — nesie 68 800
+správ a nerastie. Kapacita je teda naozaj vyčerpaná presne, nie prekročená.
+
+**Čo ale nesedí — docstring na `tasks.py:248`.** „an unwatched company waits
+roughly a week for its first check." A docstring si pritom odporuje **sám so
+sebou**, lebo tú populáciu aj dávku menuje o dva riadky vyššie:
+
+| | |
+|---|---|
+| nikdy nečítané (jeho vlastné číslo, `tasks.py:247`) | **~414 000** |
+| dávka na tik | **14 400** |
+| tikov na priechod | 414 000 ÷ 14 400 = **28,75** |
+| tik za 12 h → 2/deň | **14,4 dňa** |
+
+„A week" je teda polovica toho, čo dáva jeho vlastná aritmetika — a `CLAUDE.md`
+o insurance hovorí „one full pass takes ~15 days", teda to, čo vychádza.
+Oprava je jedno slovo, ale je to v kóde, tak to hlásim a nemením. (Kontext,
+v ktorom to stojí — že sledované firmy čakali rovnako dlho a watchlist bol preto
+sľub, ktorý rotácia nedodržala — tým nie je dotknutý; nesie ho poradie
+`nulls_first` a sledované-dopredu, nie to číslo.)
+
+**Redis je zdravý**: 92 MB teraz, `peak 5,08 GB` (tá istá hodnota, akú
+dokumentuje komentár k incidentu), `maxmemory 0B` / `noeviction`. 35 410 kľúčov
+sú z väčšiny `celery-task-meta-*`, a tie **majú TTL** (`result_expires = 1 deň`;
+zo 300 vzorkovaných 300 s expiráciou) — to nie je leak, len jeden deň výsledkov.
+
 ---
 
 ## 8. Nemenné pravidlá
