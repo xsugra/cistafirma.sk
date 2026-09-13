@@ -5,7 +5,7 @@ from rest_framework import serializers
 
 from core.constants import PERSON_SKIP_PREFIXES
 from registers.models import CompanySyncStatus
-from .models import Company, Watchlist, SectorBenchmark, SearchHistory
+from .models import Company, Watchlist, SectorBenchmark, SearchHistory, PostalCodeArea
 from .services.financial_analysis import (
     FinancialAnalysisService,
     _amount,
@@ -78,6 +78,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     ruz_portal_url = serializers.SerializerMethodField()
     ruz_statements = serializers.SerializerMethodField()
     ruz_annual_reports = serializers.SerializerMethodField()
+    seatLocation = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
@@ -119,6 +120,35 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         if status.consecutive_failures > 0:
             return FINANCIALS_STATE_FAILED
         return FINANCIALS_STATE_NOTHING_RECORDED
+
+    def get_seatLocation(self, obj):
+        """The registered seat as an area on the map, or `None`.
+
+        `None` is a real answer and means "we cannot place this seat", not "the
+        company has no seat": 1,92 % of our rows carry a PSČ the MV SR address
+        register does not list (post-office PSČ with no address point), plus
+        three rows with no PSČ at all. The map is omitted for those rather than
+        drawn from a guess.
+
+        The radius is not decoration. We join on PSČ, and a PSČ centroid sits a
+        median 1 980 m from its own address points (p90 4 118 m), so a bare
+        marker would claim the accuracy of a building entrance. The frontend
+        draws the circle this describes, and `precision` names the level so a
+        future street-level source can be told apart from this one.
+        """
+        psc = PostalCodeArea.normalize_psc(obj.psc)
+        if not psc:
+            return None
+        area = PostalCodeArea.objects.filter(psc=psc).first()
+        if area is None:
+            return None
+        return {
+            'lat': area.lat,
+            'lon': area.lon,
+            'radiusM': area.radius_m,
+            'psc': area.psc,
+            'precision': 'postal_code',
+        }
 
     def get_financials(self, obj):
         """Year rows with absent figures as `None`, never as 0.

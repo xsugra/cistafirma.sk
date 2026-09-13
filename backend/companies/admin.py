@@ -12,6 +12,7 @@ from io import BytesIO
 from .models import (
     Company,
     CompanyFinancialResult,
+    PostalCodeArea,
     SectorBenchmark,
     LEGAL_FORMS_SHORT,
     LEGAL_FORMS_CHOICES,
@@ -1002,6 +1003,39 @@ class SectorBenchmarkAdmin(UnfoldModelAdmin):
     ordering = ['-year', 'nace_section']
     readonly_fields = [
         f.name for f in SectorBenchmark._meta.fields
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PostalCodeArea)
+class PostalCodeAreaAdmin(UnfoldModelAdmin):
+    """Read-only mirror of the MV SR address import.
+
+    The table is derived wholesale from a published dataset, so editing a row
+    here would be undone by the next import without anyone noticing -- the same
+    reason `SectorBenchmark` is read-only. It is registered at all so the two
+    numbers that decide whether a seat gets a map can be inspected: `point_count`
+    (how many address points the centroid is measured from) and `radius_m` (how
+    far the pin's claim actually reaches).
+    """
+    list_display = [
+        'psc', 'dominant_obec', 'okres', 'kraj',
+        'radius_m', 'point_count', 'obec_count',
+        'source_version', 'imported_at',
+    ]
+    list_filter = ['kraj', 'okres']
+    search_fields = ['psc', 'dominant_obec']
+    ordering = ['psc']
+    readonly_fields = [
+        f.name for f in PostalCodeArea._meta.fields
     ]
 
     def has_add_permission(self, request):
