@@ -138,7 +138,10 @@ class RpoSyncService:
         profile, _ = OrsrCompanyProfile.objects.update_or_create(
             company=company,
             defaults={
-                "ico": self._storable(entity.ico, "ico", ico=company.ico) or company.ico,
+                # `.strip()` for the same reason the RUZ walk does it: this
+                # column is a search aid, and RPO formats an old 6-digit IČO
+                # with trailing spaces, which would make it unmatchable.
+                "ico": (self._storable(entity.ico, "ico", ico=company.ico) or company.ico).strip(),
                 "obchodne_meno": self._storable(entity.current_name, "obchodne_meno", ico=company.ico),
                 "sidlo": self._storable(
                     entity.current_address.format() if entity.current_address else "",

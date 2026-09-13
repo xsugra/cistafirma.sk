@@ -25,7 +25,10 @@ class OrsrSyncService:
             profile, _ = OrsrCompanyProfile.objects.update_or_create(
                 company=company,
                 defaults={
-                    "ico": payload.get("ico") or company.ico,
+                    # Stripped, like every other IČO write: ORSR echoes an old
+                    # 6-digit IČO space-padded, and storing it that way leaves a
+                    # value no lookup can match.
+                    "ico": str(payload.get("ico") or company.ico).strip(),
                     "oddiel": payload.get("oddiel", "") or "",
                     "oddiel_type": payload.get("oddiel_type", "") or "",
                     "vlozka_cislo": payload.get("vlozka_cislo", "") or "",

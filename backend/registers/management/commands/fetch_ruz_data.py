@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
-from django.db import DataError
+from django.db import DataError, IntegrityError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from datetime import timedelta
@@ -299,10 +299,19 @@ class Command(BaseCommand):
                             progress.record_progress(ruz_id=company_id, skipped=True)
                             run["processed"] += 1
                             run["skipped"] += 1
-                    except DataError as e:
+                    except (DataError, IntegrityError) as e:
                         # The record arrived and our schema refused it. Filed
                         # apart from the transport case on purpose: this one
                         # will not fix itself by being read again. See `run`.
+                        #
+                        # `IntegrityError` belongs here with `DataError`, and the
+                        # distinction matters more than it looks: a unique-index
+                        # refusal (a second entity under an IČO we already hold)
+                        # is just as deterministic as an over-long value. Filed
+                        # as `unreadable` it would hold the window, and because
+                        # re-reading returns the same collision, it would hold it
+                        # **forever** while every beat re-walked the whole window
+                        # -- the exact failure #83 closed.
                         self.stderr.write(
                             f"Unstorable record ID {company_id}: {e}"
                         )
@@ -482,8 +491,31 @@ class Command(BaseCommand):
             entity_type: Filter by entity type: 'companies', 'individuals', or 'both' (default)
         """
 
-        if 'ico' not in data:
-            self.stderr.write(f"Skipping record with RUZ ID {data.get('id')} because it has no ICO.")
+        # The register's own key, and the only thing that identifies a *record*.
+        # `ruz_id` is `unique` and every record the walk can see carries one.
+        #
+        # Keying the upsert on `ico` instead was a silent identity swap, not
+        # merely a collision: `update_or_create(ico=X, defaults={'ruz_id': Y})`
+        # finds the row **by IČO** and then re-stamps its `ruz_id` to `Y` --
+        # which succeeds without error whenever no row holds `Y` yet. The row
+        # that was entity `Z` then claims to be entity `Y`. Measured 2026-09-13:
+        # the register answers `00177474` with three distinct entities
+        # (ruz_id 1677, 1049449, 1070716).
+        ruz_id = data.get('id')
+
+        # `.strip()` and nothing else. The register pads old 6- and 7-digit IČO
+        # to eight characters with spaces (`'177474  '`), so an unstripped value
+        # never matches a lookup -- every lookup path does `.strip().zfill(8)`.
+        # But `.zfill(8)` must NOT be applied here: `'177474  '` (DHZ
+        # Sološnica) and `'00177474'` (DHZ Nová Kelča) are two *different*
+        # organisational units, and padding the first would merge them into one.
+        # Zero-padding is a query parameter, not a stored identity.
+        ico = str(data.get('ico') or '').strip()
+
+        if not ico:
+            self.stderr.write(
+                f"Skipping record with RUZ ID {ruz_id} because it has no usable ICO."
+            )
             return False, False
 
         # Determine if this is a SZCO/individual or a company
@@ -498,7 +530,8 @@ class Command(BaseCommand):
 
         # Common fields for both models
         common_defaults = {
-            'ruz_id': data.get('id'),
+            'ruz_id': ruz_id,
+            'ico': ico,
             'dic': data.get('dic'),
             'sid': data.get('sid'),
             'nazov_UJ': data.get('nazovUJ', ''),
@@ -527,7 +560,7 @@ class Command(BaseCommand):
         if is_szco:
             # Save to IndividualEntity
             entity, created = IndividualEntity.objects.update_or_create(
-                ico=data['ico'],
+                ruz_id=ruz_id,
                 defaults=common_defaults
             )
 
@@ -563,14 +596,18 @@ class Command(BaseCommand):
             new_zrusenie = common_defaults.get('datum_zrusenia')
             previous_zrusenie = None
             if new_zrusenie is not None:
+                # Keyed on `ruz_id`, matching the write below: reading the
+                # previous date by IČO would, for a duplicated IČO, compare this
+                # company's dissolution against a sibling's -- announcing a
+                # transition that did not happen, or missing one that did.
                 previous_zrusenie = (
-                    Company.objects.filter(ico=data['ico'])
+                    Company.objects.filter(ruz_id=ruz_id)
                     .values_list('datum_zrusenia', flat=True)
                     .first()
                 )
 
             company, created = Company.objects.update_or_create(
-                ico=data['ico'],
+                ruz_id=ruz_id,
                 defaults=common_defaults
             )
 

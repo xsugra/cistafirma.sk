@@ -362,7 +362,13 @@ def sync_single_company_from_ruz(ico: str):
     Ak firma neexistuje v DB, vytvorí ju. Ak existuje, aktualizuje ju.
     Neodpaľuje ďalšie tasky — to robí orchestrátor.
     """
-    ico = ico.strip().zfill(8)
+    # Two forms, and they are not interchangeable. What the register wants as a
+    # *query parameter* is zero-padded, and `get_company_id_by_ico` applies that
+    # itself. What we store is the stripped value the register sent -- so
+    # matching the local row with the padded form is what made a 6-digit IČO
+    # unfindable even when we already held it, and sent the lookup to the
+    # register to import a row we had. Padding outbound, strip locally.
+    ico = ico.strip()
     api = RuzApi()
 
     existing_company = Company.objects.filter(ico=ico).first()
@@ -392,12 +398,19 @@ def _update_company_from_ruz_data(data: dict):
     Pomocná funkcia pre aktualizáciu/vytvorenie firmy z RUZ dát.
     Replikuje logiku z fetch_ruz_data management command.
     """
-    if 'ico' not in data:
-        logger.warning(f"Preskakujem záznam s RUZ ID {data.get('id')} - chýba IČO.")
+    # `.strip()` only, and the upsert keyed on `ruz_id` -- see
+    # `fetch_ruz_data.update_or_create_company` for why both: `ico` is not the
+    # register's identity (three entities answer to `00177474`), and keying on it
+    # re-stamps another entity's row whenever the incoming `ruz_id` is not taken.
+    ruz_id = data.get('id')
+    ico = str(data.get('ico') or '').strip()
+    if not ico:
+        logger.warning(f"Preskakujem záznam s RUZ ID {ruz_id} - chýba IČO.")
         return None
-    
+
     defaults = {
-        'ruz_id': data.get('id'),
+        'ruz_id': ruz_id,
+        'ico': ico,
         'dic': data.get('dic'),
         'sid': data.get('sid'),
         'nazov_UJ': data.get('nazovUJ', ''),
@@ -434,13 +447,13 @@ def _update_company_from_ruz_data(data: dict):
     previous_zrusenie = None
     if new_zrusenie is not None:
         previous_zrusenie = (
-            Company.objects.filter(ico=data['ico'])
+            Company.objects.filter(ruz_id=ruz_id)
             .values_list('datum_zrusenia', flat=True)
             .first()
         )
 
     company, created = Company.objects.update_or_create(
-        ico=data['ico'],
+        ruz_id=ruz_id,
         defaults=defaults
     )
     
