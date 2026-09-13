@@ -38,6 +38,8 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 84 | „Sledovať" prihlásene vedie na prihlásenie a vráti čitateľa späť na firmu | `0dd2565` |
 | — | Legenda stavu funkcie tvrdila o firme, že sme ju nečítali — pri riadku, ktorý je na stránke len preto, že sme ju čítali. Kreslí ju `roleState.ts` | `70271d1` |
 | — | Hĺbka fronty sa súdi per-frontovým prahom — `insurance` má vlastný, odvodený z návrhu (cap = odtok), takže kontrola prestala svietiť na dizajnový stav | `87d755a` |
+| 96 | Mapa sídla je oficiálne Google Maps — Leaflet preč, kruh zostal tvrdením, kľúč a Map ID z prostredia | `ed50844` |
+| — | Produkčný frontend image dostane obe `VITE_` hodnoty ako `--build-arg`; bez toho sa postaví bez kľúča a každá mapa to ohlási, pri zelenom CI | `c493eed` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -850,15 +852,17 @@ dopyt, nie 2 919. OpenAddresses je tá istá dáta o vrstvu ďalej: v ich
    `obec`/`okres`/`kraj` sú **opisné**, odvodené od najčastejšej hodnoty
    v danej PSČ — pri 834 PSČ, ktoré ležia vo viac než jednej obci, to nie je
    identita, len popis. Kľúč je `psc`.
-3. **Dlaždice:** OpenStreetMap — jediná povolená URL
-   `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (subdomény `a/b/c` nie),
-   viditeľná atribúcia „© OpenStreetMap contributors", cache ≥ 7 dní, žiadny
-   prefetch. Číselný limit neexistuje, ale je to „best-effort" bez SLA — pre
-   verejný launch treba platený alebo self-hosted zdroj. Repo nemá CSP, takže
-   dlaždice nič neblokuje.
-4. **Knižnica:** `react-leaflet@5` (`peerDependencies: react ^19.0.0` — repo je
-   na 19.2.3, teda sedí) + `leaflet@1.9.4`, lenivo načítané. Verzie 4.x chcú
-   React 18 a pýtali by `--legacy-peer-deps`.
+3. **Mapový podklad: Google Maps JavaScript API** — prepnuté 2026-09-13 na
+   Samuelov pokyn, pôvodne tu bolo OpenStreetMap (viď „Zmenené" nižšie).
+   Kľúč `VITE_GOOGLE_MAPS_API_KEY` a Map ID `VITE_GOOGLE_MAPS_MAP_ID` žijú
+   v koreňovom `.env` a **inlinujú sa do buildu**. Pri mapovom kľúči je to
+   správne: je to verejná browserová credencia a chráni ho obmedzenie
+   referrera v konzole, nie tajnosť.
+4. **Knižnica:** oficiálny `@googlemaps/js-api-loader@2` — modulové funkcie
+   `setOptions()` + `importLibrary()`, **nie** trieda `Loader`: tá je vo v2 už
+   len deprecated obal a `importLibrary` na nej neexistuje. Načítava sa lenivo
+   v `SeatMap.tsx`. `leaflet`, `react-leaflet` aj `@types/leaflet` odišli
+   z `package.json`.
 5. **Umiestnenie:** kompaktná karta pod adresným riadkom v `CompanyHeader.tsx:199`
 6. **Čestnosť — tretia formulácia, a tá je meraná.** Adresný bod je zameraný
    bod vchodu do budovy, takže zdroj je presný; nepresné je **naše priradenie**
@@ -899,6 +903,94 @@ je slepá ulička, kým „nedali sme ju pod hranicu 20 bodov" je rozhodnutie to
 príkazu a jediný prípad, s ktorým sa dá niečo spraviť. Prvá verzia hlásila oba
 ako „zdroj nevedie", čo bola nepravda o zdroji — a práve tá veta je jediná,
 podľa ktorej by sa niekto zachoval.
+
+**Zmenené 2026-09-13 — podklad je Google Maps, nie OpenStreetMap.**
+
+Pôvodné body 3 a 4 stavili na OpenStreetMap a `react-leaflet@5`. Samuel to
+vrátil: *„ja nechcem openstreetmap či čo si to našiel, ja chcem oficiálne
+google maps"*. Nebolo to len o vkuse. Ten istý bod 3 sám priznával, že OSM je
+„best-effort bez SLA — pre verejný launch treba platený alebo self-hosted
+zdroj": Google Maps je presne ten platený zdroj, ktorý si plán vypýtal, a jeho
+SLA je zmluvné, nie dobrá vôľa.
+
+Čo sa tým mení vecne:
+
+- **Dlaždice prestali byť náš záväzok.** OSM politika (jediná povolená URL,
+  žiadne subdomény, cache ≥ 7 dní, žiadny prefetch) bola pravidlá, ktoré sme
+  museli držať v kóde. Google si dlaždice servíruje sám.
+- **Fakturácia je za každé načítanie mapy**, preto sa skript načíta až
+  v lenivom chunku `SeatMap` a **bez kľúča sa nežiada vôbec** — nasadenie bez
+  kľúča sa Googla ani nedotkne.
+- **Dark mode má oficiálnu cestu** (`colorScheme`), ale tá je len na vektorovej
+  mape, teda vyžaduje Map ID. Bez neho sa mapa kreslí ďalej a dark mode ticho
+  nerobí nič — to je dôvod, prečo je Map ID druhá premenná a nie konštanta.
+  A `colorScheme` je navyše **len pri vytvorení mapy**: Google ju v `setOptions`
+  ignoruje, takže živá mapa sa pretémať nedá. Prepnutie témy preto stavia druhú
+  mapu (jedno ďalšie fakturované načítanie) — prvá verzia to skúšala cez
+  `setOptions` a bol to tichý no-op, ktorý sa tváril ako hotová vec.
+- **Ticho zlyhať sa dá tromi spôsobmi a každý má vlastnú vetu**: chýbajúci kľúč,
+  nenačítaný skript, a kľúč odmietnutý Googlom. Tretí je záludný —
+  `gm_authFailure` príde **po** úspešnom načítaní skriptu, takže bez toho háčika
+  sa mapa vykreslí ako sivý obdĺžnik s vodoznakom a nikto sa nedozvie prečo.
+  Presne tomu sa tu vyhýbame.
+- **Špendlík zostal bodkou.** `AdvancedMarkerElement` je predvolene slzička, a
+  slzička má hrot, ktorý pomenúva vchod. Ten nemáme — patrí nám PSČ a jej
+  medián. Preto vlastný `content` (10 px bodka) a kruh ako vlastné tvrdenie.
+- **Súradnice sa nezmenili.** `Zdroj: Register adries MV SR` pod mapou platí
+  ďalej; Google je podklad, nie pôvod údajov.
+
+**Štyri veci, ktoré z tohto ostávajú na Samuela:**
+
+1. Vytvoriť Maps JavaScript API kľúč (s fakturáciou) a obmedziť ho na
+   `http://localhost:5173/*` aj na produkčnú doménu, a len na „Maps JavaScript
+   API". Kľúč je v balíku verejný — toto obmedzenie je jeho jediná ochrana.
+2. Vytvoriť produkčný Map ID. `DEMO_MAP_ID` je Googlova vzorka pre vývoj.
+3. Vložiť obe hodnoty ako **masked CI/CD premenné** v GitLabe (`VITE_GOOGLE_MAPS_API_KEY`,
+   `VITE_GOOGLE_MAPS_MAP_ID`). Produkčný frontendový image sa stavia s kontextom
+   `frontend/`, takže root `.env` sa do buildu **vôbec nedostane** — bez týchto
+   premenných sa image postaví bez kľúča a každá mapa sídla ohlási chýbajúci kľúč.
+   `build_frontend_image` ich odovzdáva cez `--build-arg` a `vite.config.ts` na
+   chýbajúcu premennú aspoň **pomenovane upozorní v logu**; build to nezhodí,
+   pretože aplikácia musí vedieť bežať aj bez kľúča (CI tak beží).
+4. `frontend/pages/Privacy.tsx` dnes v sekcii technických údajov menuje iba IP
+   adresu, typ prehliadača a prístupové logy. Google Maps je prvý **tok údajov
+   k tretej strane**, aký v aplikácii máme: otvorenie profilu firmy spraví
+   požiadavku na `maps.googleapis.com` s IP adresou návštevníka a adresou
+   stránky, a Google si pri tom nastaví vlastné cookies. Čo z toho musí byť
+   v zásadách a či to potrebuje súhlas pred načítaním mapy, je právne
+   rozhodnutie, nie moje — preto ho **nezapisujem sám**, navrhnem vetu
+   a počkám na slovo.
+
+**Druhé kolo: adversariálna verifikácia (2026-09-13).** Pätnásť agentov prešlo
+hotovú zmenu piatimi optikami (Google API, React, testy, env/build, integrácia)
+a každý nález sa musel nechať vyvrátiť. Deväť obstálo — a päť z nich boli moje
+vlastné chyby, opravené pred commitom:
+
+- `colorScheme` je len pri vytvorení mapy → efekt na `[isDark]` bol tichý no-op
+  (vyššie). Opravené: prepnutie témy mapu postaví znova a starú korektne pustí.
+- Mapa, kruh ani marker sa pri odmontovaní **nikdy neuvoľňovali**. Google nemá
+  `destroy()`, takže teardown je odpojenie overlayov a vyprázdnenie kontajnera —
+  bez neho ostáva za každým prečítaným profilom firmy živá mapa s WebGL kontextom.
+- Test „does not ask Google for the script at all" **nemohol zlyhať**: tvrdil
+  prázdny zoznam máp v momente, keď `render()` ešte len vrátil, kým mapa sa
+  vytvára až v mikroúlohe. Teraz tvrdí `libraryNames`, ktoré mock zapisuje
+  synchrónne — a mutačný test to potvrdil.
+- Test predvoleného Map ID závisel na **ambientnej** `VITE_GOOGLE_MAPS_MAP_ID`:
+  v momente, keď Samuel spraví krok 2 podľa tohto plánu, zčervenal na teste
+  o téme. Teraz si ho každý test explicitne vyprázdni.
+- `vite-env.d.ts` tvrdil, že `tsc` odchytí preklep v názve premennej. Neodchytil:
+  `vite/client` dáva `ImportMetaEnv` fallback `[key: string]: any`. Doplnené
+  `ViteTypeOptions.strictImportMetaEnv` ten fallback odstráni — až teraz to
+  tvrdenie platí (a `npm run typecheck` to overuje).
+- Komentár tvrdil, že sa karta medzi firmami **znovu použije** a preto sa
+  nefakturuje dvakrát. Neznovu použije: obe dnešné cesty ju medzi firmami
+  odmontujú, takže mapa sa stavia raz na profil. Komentár je opravený na to, čo
+  je pravda; vetva ostáva, lebo je správna pri znovupoužití.
+
+Mutačný test: šesť zámerných chýb v `SeatMap.tsx` (pevný radius, zmazaná poistka
+na kľúč, vypustená téma zo závislostí, chýbajúce uvoľnenie, zmenený Map ID,
+odstránený stub) — každú zhodel presne ten test, ktorý ju pomenúva. Sada nie je
+vatová.
 
 ---
 
