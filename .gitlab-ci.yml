@@ -177,7 +177,15 @@ build_frontend_image:
     - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
   script:
-    - docker build -f frontend/Dockerfile.prod -t "$FRONTEND_IMAGE:$IMAGE_TAG" frontend
+    # The two Google Maps values are compiled into the bundle, and this build
+    # context is `frontend/` -- the root `.env` is not in it. They come from
+    # masked CI/CD variables; unset, the image still builds and the seat map says
+    # the key is missing (vite.config.ts prints a warning naming it).
+    - >
+      docker build -f frontend/Dockerfile.prod
+      --build-arg VITE_GOOGLE_MAPS_API_KEY="$VITE_GOOGLE_MAPS_API_KEY"
+      --build-arg VITE_GOOGLE_MAPS_MAP_ID="$VITE_GOOGLE_MAPS_MAP_ID"
+      -t "$FRONTEND_IMAGE:$IMAGE_TAG" frontend
     - docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
     - |
       if [ "$CI_COMMIT_BRANCH" = "main" ]; then

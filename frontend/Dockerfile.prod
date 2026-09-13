@@ -4,6 +4,21 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY . .
+
+# Vite inlines `import.meta.env.VITE_*` into the bundle, so a value the app reads
+# has to be present at *build* time -- a static nginx image has no runtime
+# environment for it to come from instead. And this build context is `frontend/`,
+# so the root `.env` is not merely unread here, it is not in the context at all:
+# the values have to arrive as build args (see `.gitlab-ci.yml`,
+# `build_frontend_image`). Both are public browser values -- the key is protected
+# by its HTTP-referrer and API restriction, not by secrecy -- but an empty build
+# arg is a valid, honest build: the card then says the key is missing rather than
+# drawing an empty box, and `vite.config.ts` warns about it in the log.
+ARG VITE_GOOGLE_MAPS_API_KEY=""
+ARG VITE_GOOGLE_MAPS_MAP_ID=""
+ENV VITE_GOOGLE_MAPS_API_KEY=${VITE_GOOGLE_MAPS_API_KEY} \
+    VITE_GOOGLE_MAPS_MAP_ID=${VITE_GOOGLE_MAPS_MAP_ID}
+
 RUN npm run build
 
 FROM nginx:1.27-alpine
