@@ -11,7 +11,7 @@ from .scrapers.soc_poist_debt import check_socpoist_debt
 from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService
-from .services.ruz_financials_sync import sync_company_and_record
+from .services.ruz_financials_sync import PARSER_REVISION, sync_company_and_record
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company, Watchlist, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
@@ -881,6 +881,14 @@ def financials_sync_batch(
     the beat calls this task with only `limit` -- whether to import statements
     for every company rather than the eligible subset is a separate decision
     from making the rotation advance, and it is not being made by default here.
+
+    `stale_revision` is what makes a parser fix self-heal rather than wait for a
+    company to come round again. Rows an older `PARSER_REVISION` wrote are drawn
+    as retries -- bounded by `1 / RETRY_SHARE` of the batch -- so bumping the
+    constant re-reads the stored corpus over days at the rotation's normal
+    cadence. Without it the three parser fixes already committed would reach
+    only companies the rotation had not yet read, because a successful read sets
+    `next_retry_at` a year out.
     """
     return rotating_batch(
         source=CompanySyncStatus.SOURCE_FINANCIALS,
@@ -889,6 +897,7 @@ def financials_sync_batch(
         ),
         limit=limit,
         restrict_retries_to_candidates=missing_only,
+        stale_revision=PARSER_REVISION,
     )
 
 

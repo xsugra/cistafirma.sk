@@ -685,6 +685,33 @@ class CompanyFinancialResult(models.Model):
         default='manual',
         verbose_name='Zdroj',
     )
+
+    # Which revision of the RUZ parser read this row, stamped on every write
+    # from `ruz_financials_sync.PARSER_REVISION`.
+    #
+    # The row is otherwise the only record of how it was read: it stores no
+    # template id and no parser version, so before this field the only way to
+    # tell two vintages apart was `updated_at` plus a live re-read. That is how
+    # the accrual asymmetry was found (24 323 rows carrying only one side of
+    # `časové rozlíšenie` collapsed to 864 under a re-read) -- and it is also how
+    # a wrong explanation survived long enough to be written into
+    # docs/SOURCE_DATA_INTEGRITY.md and then refuted by the same measurement, a
+    # 97.7% gap in `assets_financial_short` that a fuller parser filled on 1.8%
+    # of fresh rows.
+    #
+    # NULL means "written before this field existed", which is not the same as
+    # "written by the oldest parser" and is not read as either. `profit_after_tax`
+    # above is the precedent for the rest of it: a row that has not been re-read
+    # genuinely does not carry the newer reading, and this field is what finally
+    # says *which* rows those are instead of leaving it to be guessed.
+    parser_revision = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+        db_index=True,
+        verbose_name='Revízia parsera',
+    )
+
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Aktualizované')
 
     class Meta:

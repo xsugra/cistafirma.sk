@@ -554,6 +554,29 @@ class CompanySyncStatus(models.Model):
         blank=True, default="", verbose_name="Detail posledného pokusu"
     )
 
+    # Which revision of the parser produced the rows this attempt wrote. Only
+    # `source='financials'` stamps it -- the other five sources have no parser
+    # whose vocabulary can change under stored data -- and it is NULL for every
+    # attempt made before the field existed.
+    #
+    # It lives on the *status* row, not only on the result rows, because the
+    # status row is what the rotation iterates. A successful read sets
+    # `next_retry_at` a year out (`ANSWERED_RETRY_AFTER`), so without a revision
+    # here a parser fix could only ever reach companies the rotation happened to
+    # revisit -- which is to say almost none. Measured 2026-09-13: the accrual
+    # asymmetry collapsed by a factor of 28 (24 323 -> 864) on the companies a
+    # re-read reached, and nothing would have reached the rest.
+    #
+    # `companies_due_for_sync(stale_revision=...)` reads it, so bumping
+    # `ruz_financials_sync.PARSER_REVISION` makes every row an older revision
+    # wrote eligible again -- through the retry population, which
+    # `rotating_batch` already caps at `1 / RETRY_SHARE` of a batch. Bounded by
+    # construction: a bump re-reads the corpus over days, it does not flood a
+    # queue. See docs/SOURCE_DATA_INTEGRITY.md.
+    parser_revision = models.PositiveSmallIntegerField(
+        null=True, blank=True, editable=False, verbose_name="Revízia parsera"
+    )
+
     consecutive_failures = models.PositiveIntegerField(default=0, verbose_name="Po sebe idúce chyby")
     next_retry_at = models.DateTimeField(null=True, blank=True, verbose_name="Ďalší pokus o")
     is_blocked = models.BooleanField(default=False, verbose_name="Manuálne zablokované")

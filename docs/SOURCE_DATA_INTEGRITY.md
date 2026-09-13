@@ -2653,6 +2653,35 @@ which fit the earlier pattern and needed no further work.
 
 The reading-vintage argument does not rest on this field and is unaffected: the
 accrual asymmetry above collapsed by a factor of 28 under a re-read, which is
-what a vintage gap looks like when it closes. What is still missing is any way to
-tell, from a row, which parser wrote it -- so the next such question again costs
-a timestamp comparison and a batch to answer.
+what a vintage gap looks like when it closes.
+
+**The gap this section kept naming is now closed, and the mechanism is worth
+stating plainly, because it is what makes every argument above repeatable
+instead of expensive.** Every row now carries `parser_revision`, and so does the
+`CompanySyncStatus` row the rotation reads. `PARSER_REVISION` is bumped whenever
+a change to `ruz_financials_sync` alters what a statement is *read as*; a status
+row below the current revision is treated as due regardless of `next_retry_at`,
+which is otherwise a year out for a company that answered.
+
+Two properties make it a self-heal rather than a flood, and both are structural:
+
+- **Stale rows enter through the retry population**, so they inherit
+  `rotating_batch`'s `1 / RETRY_SHARE` cap and a bump re-reads the corpus at the
+  rotation's ordinary cadence. It cannot dispatch the corpus at once.
+- **The rule is guarded by `last_succeeded_at IS NOT NULL`.** A failed row
+  carries no revision, so a rule keyed on `parser_revision` alone would read it
+  as stale and draw it every batch -- bypassing `compute_next_retry` and turning
+  exponential backoff into a no-op for exactly the companies that need it.
+
+NULL means "written before this existed", and it is read as stale, so deploying
+the field was itself the first repair: it re-read the whole stored corpus once
+with the parser as it stood. Measured 2026-09-13 at deploy: 4 628 of 4 639
+financials status rows were stale, against a 2 000-per-12 h batch whose retry
+share is 500 -- about 4.5 days for the pass, which is the bound working as
+intended rather than a delay to apologise for.
+
+The remaining asymmetry worth re-measuring after that pass is the `864` above:
+those are rows the earlier manual re-read did not happen to cover, and they are
+the concrete content of this pass. `parser_revision` is what makes that
+measurable now -- a count grouped by revision answers in one query the question
+that previously cost a batch and a timestamp comparison.

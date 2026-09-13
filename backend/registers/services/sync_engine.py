@@ -114,6 +114,7 @@ def update_company_status(
     error_type: str = "",
     retry_after: timedelta | None = None,
     detail: str | None = None,
+    parser_revision: int | None = None,
 ) -> CompanySyncStatus:
     """Upsert the per-company, per-source status after a sync attempt.
 
@@ -133,6 +134,12 @@ def update_company_status(
     VZP, Sociálna poisťovňa, RUZ dates) leave the column at whatever the last
     caller that did pass one wrote. They are different `source` rows, so
     nothing is overwritten.
+
+    `parser_revision` records which revision of the reading produced the rows
+    this attempt wrote, and only `financials` passes it. `None` leaves the
+    column alone rather than clearing it -- for the five sources that have no
+    parser, and for a financials attempt that failed at the transport, where
+    nothing was read and the stored rows keep the revision that wrote them.
     """
     now = timezone.now()
     with transaction.atomic():
@@ -154,6 +161,8 @@ def update_company_status(
             status.next_retry_at = compute_next_retry(status.consecutive_failures)
         if detail is not None:
             status.last_detail = detail[:4000]
+        if parser_revision is not None:
+            status.parser_revision = parser_revision
         status.save()
     return status
 
@@ -588,7 +597,9 @@ def sync_due_q(next_retry_field: str, now):
     )
 
 
-def companies_due_for_sync(source: str, *, limit: int = 200) -> Iterable[CompanySyncStatus]:
+def companies_due_for_sync(
+    source: str, *, limit: int = 200, stale_revision: int | None = None
+) -> Iterable[CompanySyncStatus]:
     """Return CompanySyncStatus rows that are eligible for a fresh attempt.
 
     Eligible = not blocked AND (next_retry_at is null OR next_retry_at <= now).
@@ -597,11 +608,34 @@ def companies_due_for_sync(source: str, *, limit: int = 200) -> Iterable[Company
     `last_attempted_at` to the microsecond, so without it the order within a
     batch is the database's to choose and two consecutive calls can return the
     same rows.
+
+    `stale_revision` widens eligible with the rows a **successful** attempt
+    stamped with an older parser revision, whatever `next_retry_at` says. It
+    exists because a success pushes the next attempt a year out
+    (`ANSWERED_RETRY_AFTER`), so without it a parser fix reaches only the
+    companies the rotation happens to revisit -- the rows already stored keep
+    the reading of a parser that no longer exists, and nothing marks them.
+
+    The `last_succeeded_at is not null` guard is what keeps this from becoming a
+    trap. Widening on `parser_revision` alone would pull in every row that has
+    *ever failed* -- a row that failed carries no revision, so it would read as
+    stale -- and those rows would then be drawn every batch, bypassing the
+    exponential backoff that `compute_next_retry` exists to apply. The stale
+    rule is about re-reading what we read; repetition of a failure stays
+    `next_retry_at`'s decision.
     """
     now = timezone.now()
+    due = sync_due_q("next_retry_at", now)
+
+    if stale_revision is not None:
+        stale = Q(last_succeeded_at__isnull=False) & (
+            Q(parser_revision__isnull=True) | Q(parser_revision__lt=stale_revision)
+        )
+        due = due | stale
+
     qs = (
         CompanySyncStatus.objects.filter(source=source, is_blocked=False)
-        .filter(sync_due_q("next_retry_at", now))
+        .filter(due)
         .order_by("last_attempted_at", "id")
         .select_related("company")[:limit]
     )
@@ -625,6 +659,7 @@ def rotating_batch(
     candidates,
     limit: int,
     restrict_retries_to_candidates: bool = False,
+    stale_revision: int | None = None,
 ) -> list[int]:
     """Choose one batch of company ids for a per-company source.
 
@@ -653,6 +688,13 @@ def rotating_batch(
     re-check the batch would dispatch companies the caller excluded. It costs a
     query over the due ids, so it is off by default.
 
+    `stale_revision` is passed straight to `companies_due_for_sync`, which is
+    where the argument is explained. What matters here is *where the stale rows
+    enter*: as retries, not as a third population, so they inherit the
+    `1 / RETRY_SHARE` cap and a parser bump re-reads the corpus at the
+    rotation's normal cadence instead of flooding a queue. That cap is the whole
+    reason this is a parameter rather than a separate pass.
+
     **This is the fix for a scheduled job that looks alive and never advances.**
     The previous shape was `Company.objects.order_by('id')[:limit]` with a beat
     argument of 500: no cursor, so every run chose the same 500 companies.
@@ -664,7 +706,9 @@ def rotating_batch(
 
     retry_ids: list[int] = []
     if retry_budget > 0:
-        due = companies_due_for_sync(source, limit=retry_budget)
+        due = companies_due_for_sync(
+            source, limit=retry_budget, stale_revision=stale_revision
+        )
         if restrict_retries_to_candidates:
             retry_ids = list(
                 candidates.filter(id__in=[status.company_id for status in due])

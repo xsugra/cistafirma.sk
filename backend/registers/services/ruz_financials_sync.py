@@ -87,6 +87,33 @@ _TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)\s*$")
 # See `_is_summary_row`, which is the only place it is stripped.
 _LEADING_SECTION_LETTER = re.compile(r"^[a-z]\.\s+")
 
+# The revision of the reading in this module. **Bump it whenever a change here
+# alters what a statement is read as** -- a new label, a fixed section marker, a
+# corrected period column. Bump it if a fix would change a stored value; do not
+# bump it for a refactor that cannot.
+#
+# Bumping it is not bookkeeping, it is the mechanism: every attempt stamps this
+# number onto `CompanySyncStatus.parser_revision` and onto each
+# `CompanyFinancialResult.parser_revision` it writes, and
+# `companies_due_for_sync` treats a row below the current revision as due
+# regardless of `next_retry_at`. So a bump is what makes a parser fix reach the
+# rows already stored -- without it a fix applies only to companies the rotation
+# happens to revisit, and a successful read is pushed a year out
+# (`ANSWERED_RETRY_AFTER`), so "happens to" means almost never.
+#
+# The re-read is bounded, not a flood: stale rows enter through
+# `rotating_batch`'s retry population, which is capped at `1 / RETRY_SHARE` of
+# each batch, so a bump re-reads the corpus over days at the rotation's normal
+# cadence. Measured 2026-09-13: 4 456 financials status rows, 2 000 per 12 h
+# batch with 500 of them retries -- about 4.5 days for a full re-read.
+#
+# 1 = the first stamped revision. Every row written before this existed carries
+# NULL, which is read as stale, so deploying this re-reads the whole existing
+# corpus once with the parser as it stands -- including the three fixes already
+# committed for the 2014 label break, the šablóna 687 vocabulary and the
+# balance-sheet section flag. That is the intent, not a side effect.
+PARSER_REVISION = 1
+
 BALANCE_SHEET_KEYS = (
     "suvaha",
     "bilancia",
@@ -507,6 +534,13 @@ class RuzFinancialsSyncService:
                 year=year,
                 defaults={
                     "source": "ruz_api",
+                    # Stamped on every write, and `update_or_create` rewrites it
+                    # even when the extracted values are identical to the stored
+                    # ones -- which is what makes a re-read visible. A row whose
+                    # revision is behind is a row read by a parser that has since
+                    # been fixed, and this is the only place that is recorded:
+                    # the row stores no template id and no other version marker.
+                    "parser_revision": PARSER_REVISION,
                     **{k: v for k, v in financials.items() if v is not None},
                 },
             )
@@ -1186,5 +1220,18 @@ def sync_company_and_record(
         # `error` is blanked there, so this is the only place the sentence
         # survives past the task's log line.
         detail=result.detail,
+        # Only on an answered attempt. A transport failure read nothing, so the
+        # stored rows still carry whatever revision wrote them and stamping this
+        # one would claim a re-reading that did not happen -- and would take the
+        # company out of the stale population without replacing its rows.
+        #
+        # Stamped on an answered attempt *even when it recorded no rows*, which
+        # is the deliberate half of this: the question the column answers is
+        # "has the current parser had its turn here", not "did the rows change".
+        # Keying it on `rows > 0` instead would leave a company the parser can
+        # read nothing from permanently stale, and it would be drawn again every
+        # batch for ever. The rows' own `parser_revision` still says what wrote
+        # them, so nothing is hidden by this.
+        parser_revision=PARSER_REVISION if result.succeeded else None,
     )
     return result
