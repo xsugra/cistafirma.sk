@@ -38,8 +38,9 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 84 | „Sledovať" prihlásene vedie na prihlásenie a vráti čitateľa späť na firmu | `0dd2565` |
 | — | Legenda stavu funkcie tvrdila o firme, že sme ju nečítali — pri riadku, ktorý je na stránke len preto, že sme ju čítali. Kreslí ju `roleState.ts` | `70271d1` |
 | — | Hĺbka fronty sa súdi per-frontovým prahom — `insurance` má vlastný, odvodený z návrhu (cap = odtok), takže kontrola prestala svietiť na dizajnový stav | `87d755a` |
-| 96 | Mapa sídla je oficiálne Google Maps — Leaflet preč, kruh zostal tvrdením, kľúč a Map ID z prostredia | `ed50844` |
-| — | Produkčný frontend image dostane obe `VITE_` hodnoty ako `--build-arg`; bez toho sa postaví bez kľúča a každá mapa to ohlási, pri zelenom CI | `c493eed` |
+| 96 | Mapa sídla je oficiálne Google Maps — Leaflet preč, kruh zostal tvrdením, kľúč a Map ID z prostredia. **Prekonané #97 v ten istý deň** | `ed50844` |
+| — | Produkčný frontend image dostane obe `VITE_` hodnoty ako `--build-arg`. **Prekonané #97** — build-argy aj obe premenné zmizli, image sa stavia z holého zdroja | `c493eed` |
+| 97 | Mapa sídla je OpenStreetMap s vlastnou kartografiou (`maplibre-gl`) — bez kľúča, účtu aj karty; druhá téma je `setStyle`, nie druhá mapa | tento commit |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -893,17 +894,16 @@ dopyt, nie 2 919. OpenAddresses je tá istá dáta o vrstvu ďalej: v ich
    `obec`/`okres`/`kraj` sú **opisné**, odvodené od najčastejšej hodnoty
    v danej PSČ — pri 834 PSČ, ktoré ležia vo viac než jednej obci, to nie je
    identita, len popis. Kľúč je `psc`.
-3. **Mapový podklad: Google Maps JavaScript API** — prepnuté 2026-09-13 na
-   Samuelov pokyn, pôvodne tu bolo OpenStreetMap (viď „Zmenené" nižšie).
-   Kľúč `VITE_GOOGLE_MAPS_API_KEY` a Map ID `VITE_GOOGLE_MAPS_MAP_ID` žijú
-   v koreňovom `.env` a **inlinujú sa do buildu**. Pri mapovom kľúči je to
-   správne: je to verejná browserová credencia a chráni ho obmedzenie
-   referrera v konzole, nie tajnosť.
-4. **Knižnica:** oficiálny `@googlemaps/js-api-loader@2` — modulové funkcie
-   `setOptions()` + `importLibrary()`, **nie** trieda `Loader`: tá je vo v2 už
-   len deprecated obal a `importLibrary` na nej neexistuje. Načítava sa lenivo
-   v `SeatMap.tsx`. `leaflet`, `react-leaflet` aj `@types/leaflet` odišli
-   z `package.json`.
+3. **Mapový podklad: OpenStreetMap, dlaždice OpenFreeMap** — výsledok troch
+   kôl toho istého dňa: pôvodne tu bolo OpenStreetMap, Samuel ho vrátil
+   a žiadal Google Maps, a keď Google neprešiel podmienkou „bez karty", vrátilo
+   sa to na OpenStreetMap s **vlastnou kartografiou**. Aktuálny stav je
+   v „Tretie kolo" nižšie; obe staršie kolá tam ostávajú ako záznam, nie ako
+   opis kódu. Žiadny kľúč, žiadny Map ID, žiadna fakturácia.
+4. **Knižnica:** `maplibre-gl@6.9.0` (BSD-3-Clause) — vykresľovač, ktorý sám
+   o sebe kartografiu nemá, takže štýl je vlastný (`frontend/map/style.ts`).
+   Načítava sa lenivo v `SeatMap.tsx`. `leaflet`, `react-leaflet`,
+   `@types/leaflet` aj `@googlemaps/js-api-loader` odišli z `package.json`.
 5. **Umiestnenie:** kompaktná karta pod adresným riadkom v `CompanyHeader.tsx:199`
 6. **Čestnosť — tretia formulácia, a tá je meraná.** Adresný bod je zameraný
    bod vchodu do budovy, takže zdroj je presný; nepresné je **naše priradenie**
@@ -946,6 +946,10 @@ ako „zdroj nevedie", čo bola nepravda o zdroji — a práve tá veta je jedin
 podľa ktorej by sa niekto zachoval.
 
 **Zmenené 2026-09-13 — podklad je Google Maps, nie OpenStreetMap.**
+**(PREKONANÉ v ten istý deň — Google Maps neprešlo podmienkou „bez
+akejkoľvek platobnej karty", viď „Tretie kolo" na konci tejto sekcie. Toto
+je záznam rozhodnutia a jeho odôvodnenia, nie opis toho, čo dnes beží;
+body 1 až 3 na konci sú bezpredmetné.)**
 
 Pôvodné body 3 a 4 stavili na OpenStreetMap a `react-leaflet@5`. Samuel to
 vrátil: *„ja nechcem openstreetmap či čo si to našiel, ja chcem oficiálne
@@ -981,26 +985,29 @@ SLA je zmluvné, nie dobrá vôľa.
   ďalej; Google je podklad, nie pôvod údajov.
 
 **Štyri veci, ktoré z tohto ostávajú na Samuela:**
+**(body 1–3 padli s rozhodnutím o OpenStreetMap — ostáva iba bod 4; pozri
+„Tretie kolo" nižšie, kde je ten istý bod preformulovaný na nový tok údajov)**
 
-1. Vytvoriť Maps JavaScript API kľúč (s fakturáciou) a obmedziť ho na
+1. **(neplatí)** Vytvoriť Maps JavaScript API kľúč (s fakturáciou) a obmedziť ho na
    `http://localhost:5173/*` aj na produkčnú doménu, a len na „Maps JavaScript
    API". Kľúč je v balíku verejný — toto obmedzenie je jeho jediná ochrana.
-2. Vytvoriť produkčný Map ID. `DEMO_MAP_ID` je Googlova vzorka pre vývoj.
-3. Vložiť obe hodnoty ako **masked CI/CD premenné** v GitLabe (`VITE_GOOGLE_MAPS_API_KEY`,
+2. **(neplatí)** Vytvoriť produkčný Map ID. `DEMO_MAP_ID` je Googlova vzorka pre vývoj.
+3. **(neplatí)** Vložiť obe hodnoty ako **masked CI/CD premenné** v GitLabe (`VITE_GOOGLE_MAPS_API_KEY`,
    `VITE_GOOGLE_MAPS_MAP_ID`). Produkčný frontendový image sa stavia s kontextom
    `frontend/`, takže root `.env` sa do buildu **vôbec nedostane** — bez týchto
    premenných sa image postaví bez kľúča a každá mapa sídla ohlási chýbajúci kľúč.
    `build_frontend_image` ich odovzdáva cez `--build-arg` a `vite.config.ts` na
    chýbajúcu premennú aspoň **pomenovane upozorní v logu**; build to nezhodí,
    pretože aplikácia musí vedieť bežať aj bez kľúča (CI tak beží).
-4. `frontend/pages/Privacy.tsx` dnes v sekcii technických údajov menuje iba IP
-   adresu, typ prehliadača a prístupové logy. Google Maps je prvý **tok údajov
-   k tretej strane**, aký v aplikácii máme: otvorenie profilu firmy spraví
-   požiadavku na `maps.googleapis.com` s IP adresou návštevníka a adresou
-   stránky, a Google si pri tom nastaví vlastné cookies. Čo z toho musí byť
-   v zásadách a či to potrebuje súhlas pred načítaním mapy, je právne
-   rozhodnutie, nie moje — preto ho **nezapisujem sám**, navrhnem vetu
-   a počkám na slovo.
+4. **(platí ďalej, s inou adresou)** `frontend/pages/Privacy.tsx` dnes v sekcii
+   technických údajov menuje iba IP adresu, typ prehliadača a prístupové logy.
+   Mapa je prvý **tok údajov k tretej strane**, aký v aplikácii máme. V google
+   verzii to bola požiadavka na `maps.googleapis.com` s IP adresou návštevníka
+   a adresou stránky, plus Googlove vlastné cookies; v dnešnej verzii je to
+   požiadavka na `tiles.openfreemap.org` s IP adresou a prezeranými súradnicami
+   a **bez cookies aj bez identifikátora**. Čo z toho musí byť v zásadách a či
+   to potrebuje súhlas pred načítaním mapy, je právne rozhodnutie, nie moje —
+   preto ho **nezapisujem sám**, navrhnem vetu a počkám na slovo.
 
 **Druhé kolo: adversariálna verifikácia (2026-09-13).** Pätnásť agentov prešlo
 hotovú zmenu piatimi optikami (Google API, React, testy, env/build, integrácia)
@@ -1043,6 +1050,108 @@ teda pád, nie dôkaz, a ako dôkaz som ho pôvodne uvádzal. Zopakované presne
 a to práve `draws in the app theme, which needs a Map ID` s vetou
 `expected 'DEMO_MAP_ID_X' to be 'DEMO_MAP_ID'`. Šesť zo šiestich je teda
 čistých; poctivá formulácia je „šesť mutácií, päť čistých na prvý raz".
+
+**Tretie kolo 2026-09-13 — Google Maps neprešlo podmienkou, podklad je OpenStreetMap.**
+
+Samuel tú štvoricu otázok prečítal a odpovedal na prvý bod:
+*„je to zadarmo? pretoze chcem verziu zadarmo. ak to nie je mozne zadarmo (uplne
+zadarmo), tak chcem prejst na uplne free verziu"*, a potom to zúžil:
+*„musi vyzerat podobne ako google maps a mat podobne funkcie ako GMaps. uz
+nemusis prehladavat. ale musia byt uplne zadarmo bez akehokolvek platenia alebo
+zadavania platobnej karty."*
+
+**Odpoveď na jeho otázku je nie.** Od 1. marca 2025 Google zrušil opakovaný
+kredit 200 $/mesiac a nahradil ho bezplatnými volaniami podľa SKU (Essentials
+10 000, Pro 5 000, Enterprise 1 000 za mesiac) — ale **fakturačný účet s kartou
+sa vyžaduje aj v bezplatnom pásme**. Bez karty existuje len „Maps Demo Key",
+ktorý Google sám licencuje ako *„only for testing, prototyping, evaluation, and
+learning — not designed for production use"*. To nie je verzia zadarmo; to je
+verzia, ktorá sa nesmie nasadiť. Podmienka „bez akejkoľvek platobnej karty" teda
+Google Maps vylučuje, a to je celé — zvyšok je dôsledok.
+
+**Čo to nahradilo:** `maplibre-gl@6.9.0` (BSD-3-Clause) ako vykresľovač
+a OpenFreeMap ako zdroj dlaždíc. Ani jedno nechce kľúč, účet ani kartu.
+`@googlemaps/js-api-loader` a `@types/google.maps` odišli z `package.json`,
+`@maplibre/maplibre-gl-style-spec` a `@types/geojson` pribudli ako výslovné
+devDependencies (prvý z nich `maplibre-gl` ťahá tranzitívne, ale importujeme
+z neho priamo).
+
+**MapLibre je len vykresľovač — štýl je odteraz náš.** `frontend/map/style.ts`
+je vlastná kartografia (svetlá aj tmavá): teplý svetlosivý podklad, `#aadaff`
+voda, jantárové diaľnice, `#242f3e` tmavý podklad — teda Googlove farby, aby
+jeho podmienka „musí vyzerať podobne" platila. Štyri veci o dátach ho formujú,
+a **všetky štyri boli odmerané dekódovaním skutočných dlaždíc, nie pamätané**:
+
+- **`boundary` nemá `class`.** Nesie `admin_level` (2, 4, 6, 8), `disputed`
+  a `maritime`. Filter na `class` je ten najsamozrejmejší tip a nezodpovedá
+  ničomu — Slovensko by sa vykreslilo **bez hraníc a bez chyby**.
+- **`building` tiež nemá `class`.** Nesie `render_height`, `colour`, `hide_3d`.
+  Tá istá pasca.
+- **`park.class` je voľný text** — reálne hodnoty zahŕňajú `Natura 2000`,
+  `Prírodná rezervácia`, `Národná prírodná rezervácia` popri anglických. `match`
+  na pamätaný slovník by vyhodil slovenské chránené územia a nechal generické;
+  to je to najhoršie čiastočné zlyhanie, lebo vyzerá, že funguje.
+- **Vektorové dlaždice vynechajú pole, ktoré nemá ani jeden prvok v tej
+  dlaždici.** `ref` je raz prítomný a raz nie, takže „neprítomné tu" nič
+  nedokazuje — a štýl sa proti jednej dlaždici validovať nedá.
+
+**Pasca, ktorá by inak ticho vyrobila prázdne plátno.** OpenFreeMap dlaždicová
+šablóna bez verzie — `…/planet/{z}/{x}/{y}.pbf`, tá, ktorú ukazuje takmer každý
+návod — vracia **HTTP 200 s prázdnym telom (0 B)** a hlavičkou
+`x-ofm-debug: empty tile`, pre každú dlaždicu. Mapa na nej vykreslí prázdne
+plátno a **do konzoly nenapíše nič**. Funguje len verzovaná cesta
+(`…/planet/20260906_080001_pt/…`, 558 261 B pre dlaždicu Bratislavy v z14),
+a práve tú inzeruje TileJSON na `https://tiles.openfreemap.org/planet`. Zdroj je
+preto `{type: 'vector', url: TILEJSON_URL}` — **dokument, nie šablóna** — a
+`style.test.ts` to drží: `source.tiles` musí byť `undefined`.
+
+**Čo sa zmenilo k lepšiemu, nielen k lacnejšiemu:**
+
+- **Téma sa mení na živej mape.** Googlov `colorScheme` bol len pri vytvorení,
+  takže prepnutie témy stavalo druhú mapu a bolo to druhé fakturované načítanie.
+  `setStyle()` preoblečie tú istú mapu a **zachová kameru** — čitateľ ostane
+  pozerať tam, kam sa pozeral.
+- **Žiadny kľúč, žiadny Map ID, žiadne build-argy.** `Dockerfile.prod`
+  a `build_frontend_image` v `.gitlab-ci.yml` ich stratili; produkčný image sa
+  stavia z holého zdroja. Bod 1 až 3 predošlého zoznamu tým **zmizli**.
+- **`VITE_*` je teraz prázdna množina.** Aplikácia nečíta ani jednu, a
+  `vite-env.d.ts` to **vynucuje** — prázdne `ImportMetaEnv` so
+  `strictImportMetaEnv` spraví z hocijakého `VITE_` mena chybu kompilácie.
+  Predtým to bolo len tvrdenie v komentári.
+
+**Čo sa zmenilo k horšiemu, a hovorím to rovno:**
+
+- **Chunk je väčší.** `SeatMap` je po builde 1,04 MB (285 kB gzip) plus 83 kB CSS
+  pre `maplibre-gl.css`. Je to stále **lenivý** chunk, takže sa netýka prvého
+  vykreslenia — ale je to najväčšia vec na stránke a `SeatLocationCard` ho drží
+  mimo všetkých ostatných stránok práve preto.
+- **Atribúcia je teraz náš záväzok.** OpenFreeMap + `© OpenMapTiles` + `Data from
+  OpenStreetMap` (s odkazom na `openstreetmap.org/copyright`) musia byť viditeľné.
+  Kreslíme si ich sami ako React odkazy — `attributionControl: false`, aby
+  licenčná poznámka nebola HTML reťazec z cudzieho dokumentu.
+
+**Overené, a overené tak, aby to mohlo zlyhať.** `map/style.test.ts` púšťa štýl
+cez vlastný validátor specifikácie (`validateStyleMin`; `validate` je v tomto
+builde rozbitý a na hocijakom štýle hodí výnimku) — a hneď vedľa je test, ktorý
+mu podstrčí zámerne pokazený štýl a **žiada nenulový počet chýb**. Bez neho by
+tvrdenie „validátor nič nenašiel" platilo aj o validátore, ktorý nenájde nikdy
+nič. To je tá istá chyba, akú tu už raz spravil `grep -c` nad spadnutým príkazom.
+
+Nad rámec testov prešiel hotový štýl **dvoma skriptami proti skutočným dlaždiciam**
+(15 vzoriek: Bratislava z7/z9/z12/z14, Košice, D1, Gerlachov štít, Nízke Tatry,
+Žitný ostrov, dve hranice, letisko): každý `source-layer`, ktorý štýl menuje,
+a každé pole, ktoré ktorýkoľvek výraz číta, v dátach existuje — a každý `match`
+na `class` má aspoň jeden reálny prvok. **Negatívne kontroly**: filter na
+neexistujúce pole aj neexistujúci `source-layer` skript odhalil, takže „nula
+problémov" niečo znamená. `landcover` matchuje všetko, čo sa vo vzorke vyskytlo
+(`grass farmland wood rock sand wetland`); `ice` ostáva deklarovaná a nepoužitá.
+
+**Zostáva na Samuela jediná vec, a je iná než predtým — bod 4, už nie body 1–3.**
+Tretia strana v toku údajov **nezanikla, len sa zmenila adresa**: otvorenie
+profilu firmy teraz spraví požiadavku na `tiles.openfreemap.org` s IP adresou
+návštevníka a prezeranými súradnicami. Nie je tam kľúč, cookie ani identifikátor
+— ale samotná požiadavka je poskytnutie údajov a v zásadách má byť pomenovaná.
+Rovnako ako minule to **nezapisujem sám**; navrhnem vetu a počkám na slovo.
 
 ---
 
