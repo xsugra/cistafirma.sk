@@ -18,6 +18,7 @@ from core.task_utils import BaseSyncTask
 from .models import CompanySyncStatus, OrsrCompanyProfile
 from .services.sync_engine import (
     _classify_error,
+    _env_int,
     claim_ruz_job,
     complete_job,
     detect_and_fail_stuck_jobs,
@@ -847,6 +848,60 @@ def read_person_history(company_id: int) -> str:
     return f"{company.ico}: {result}"
 
 
+# `read_person_history` and `sync_company_orsr_data` share the `orsr` queue and
+# its two concurrency slots, and each is capped at 15/m. When the register
+# answers, that ceiling is reached and the queue drains at ~900/h; when it does
+# not, one entity costs `timeout=30` five times over plus 22.5s of backoff, and
+# two slots then pass ~42 entities an hour. Measured 2026-09-13: a single
+# degraded window (18:00-20:00 UTC, one hour with 128 receives and 0
+# completions, 474 read timeouts) left ~1 400 messages in `orsr` for a healthy
+# window to clear.
+#
+# A fixed batch cannot see that. The dispatcher added 2 000 every four hours
+# whatever the queue already held, so a batch that could not drain sat in front
+# of the next one and the backlog was a random walk whose drift nobody measured.
+# Hence the bound below: the dispatcher checks the backlog first and shrinks its
+# batch to fit.
+#
+# It is a safety valve, not a throttle. The batch is 2 000 and the ORSR rotation
+# adds 200, so a healthy queue never passes ~2 200 and the bound below changes
+# nothing on the happy path -- `min()` only bites once a backlog that size has
+# accumulated. And it cannot stall for ever: draining is always positive, so the
+# backlog must fall back under the bound and dispatch resumes by itself.
+PERSON_HISTORY_MAX_BACKLOG_ENV = "CISTAFIRMA_PERSON_HISTORY_MAX_BACKLOG"
+DEFAULT_PERSON_HISTORY_MAX_BACKLOG = 6000
+
+
+def _person_history_max_backlog() -> int:
+    return _env_int(PERSON_HISTORY_MAX_BACKLOG_ENV, DEFAULT_PERSON_HISTORY_MAX_BACKLOG)
+
+
+def _orsr_backlog() -> int | None:
+    """Pending messages on the `orsr` queue, or None when the broker cannot say.
+
+    None is the fail-open answer on purpose. A broker hiccup must not stop the
+    backfill, and dispatching the full batch when the depth is unknown is what
+    this did before the check existed -- so the worst case of a broker outage is
+    the old behaviour, not a stalled population. The failure is still said out
+    loud: an exception message from a broker connection carries the connection
+    URL, and REDIS_URL may embed a password, so the detail stays in the log.
+    """
+    from backend.celery import app as celery_app
+
+    try:
+        with celery_app.connection_or_acquire() as conn:
+            _, count, _ = conn.default_channel.queue_declare(
+                queue='orsr', passive=True
+            )
+            return count
+    except Exception:
+        logger.warning(
+            "Could not read the orsr backlog; dispatching the full batch unthrottled",
+            exc_info=True,
+        )
+        return None
+
+
 @shared_task(queue='celery')
 def schedule_person_history_resync(limit: int = 2000):
     """Re-read the person history for companies the old reader left blank.
@@ -871,7 +926,27 @@ def schedule_person_history_resync(limit: int = 2000):
     `celery` too, but a row is DB state that a direct `.delay()` bypasses, so
     the queue is declared here as well and routed in `CELERY_TASK_ROUTES`. All
     three layers say the same thing on purpose.
+
+    The batch is sized against the backlog, because a dispatcher that cannot see
+    the queue it feeds is the one control here that never judged its own
+    outcome. See the bound's comment above for the measurements.
     """
+    bound = _person_history_max_backlog()
+    backlog = _orsr_backlog()
+
+    if backlog is not None:
+        headroom = max(0, bound - backlog)
+        if headroom < limit:
+            logger.info(
+                "Person-history resync throttled: orsr holds %s, so %s of %s "
+                "fits under the %s bound",
+                backlog, headroom, limit, bound,
+            )
+        limit = min(limit, headroom)
+
+    if limit <= 0:
+        return f"Held back: orsr backlog {backlog} is at or above the {bound} bound"
+
     company_ids = person_history_batch(limit)
     for company_id in company_ids:
         read_person_history.delay(company_id)

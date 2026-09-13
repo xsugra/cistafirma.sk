@@ -1,8 +1,10 @@
-"""The three things that make the person-history backfill safe to leave running.
+"""The four things that make the person-history backfill safe to leave running.
 
 It re-reads 24 237 companies against a register that has no API and answers 15
-requests a minute, so it has to be bounded, it has to stop on its own, and it
-must not be able to select the same companies for ever. Those are the three
+requests a minute, so it has to be bounded, it has to stop on its own, it must
+not be able to select the same companies for ever, and -- because that register
+sometimes stops answering and the ceiling then falls from ~900 an hour to ~42 --
+it must not pile a fresh batch onto one that could not drain. Those are the four
 properties pinned here.
 
 The population is a query over the profile's own payload -- the marker the new
@@ -38,6 +40,7 @@ from registers.services.rpo_sync import (
     pending_person_history,
 )
 from registers.tasks import (
+    _orsr_backlog,
     person_history_batch,
     read_person_history,
     schedule_person_history_resync,
@@ -197,6 +200,16 @@ class PendingPersonHistoryTests(TestCase):
 
 
 class SchedulePersonHistoryResyncTests(TestCase):
+    def setUp(self):
+        # The dispatcher now reads the `orsr` backlog off the broker before it
+        # sizes its batch. No test should depend on a live Redis -- one that
+        # inherited whatever depth the dev machine's queue happened to hold
+        # would pass or fail by accident -- so the depth is pinned here and
+        # overridden by the tests that care about it.
+        patcher = mock.patch("registers.tasks._orsr_backlog", return_value=0)
+        self.backlog = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_dispatches_one_task_per_company(self):
         first = _profile(_company("11111111", 1), {"rpo_id": 1}, synced_days_ago=2)
         second = _profile(_company("22222222", 2), {"rpo_id": 2}, synced_days_ago=1)
@@ -215,6 +228,61 @@ class SchedulePersonHistoryResyncTests(TestCase):
         with mock.patch("registers.tasks.read_person_history.delay") as delay:
             schedule_person_history_resync(10)
         delay.assert_not_called()
+
+    # --- sizing the batch against the backlog ---------------------------------
+    #
+    # The bound is 6 000 and the batch is 2 000, so only a backlog that has
+    # already accumulated changes anything. These pin both halves of that: the
+    # happy path is untouched, and a deep queue shrinks the batch instead of
+    # piling a second 2 000 on top of a batch that could not drain.
+
+    def test_dispatches_the_full_batch_while_the_backlog_is_shallow(self):
+        self.backlog.return_value = 2200  # the designed peak: 2 000 + rotation
+
+        with mock.patch("registers.tasks.person_history_batch") as batch:
+            batch.return_value = []
+            schedule_person_history_resync(2000)
+
+        batch.assert_called_once_with(2000)
+
+    def test_batch_shrinks_to_the_headroom_left_under_the_bound(self):
+        self.backlog.return_value = 5500  # 500 left under the 6 000 bound
+
+        with mock.patch("registers.tasks.person_history_batch") as batch:
+            batch.return_value = []
+            schedule_person_history_resync(2000)
+
+        batch.assert_called_once_with(500)
+
+    def test_holds_back_when_the_backlog_reaches_the_bound(self):
+        self.backlog.return_value = 6000
+
+        with mock.patch("registers.tasks.person_history_batch") as batch, \
+                mock.patch("registers.tasks.read_person_history.delay") as delay:
+            result = schedule_person_history_resync(2000)
+
+        batch.assert_not_called()
+        delay.assert_not_called()
+        self.assertIn("Held back", result)
+
+    def test_a_broker_that_cannot_be_read_does_not_stop_the_backfill(self):
+        # Fail-open on purpose: the worst case of a broker outage has to be the
+        # behaviour this had before the check existed, not a stalled population.
+        self.backlog.return_value = None
+
+        with mock.patch("registers.tasks.person_history_batch") as batch:
+            batch.return_value = []
+            schedule_person_history_resync(2000)
+
+        batch.assert_called_once_with(2000)
+
+
+class OrsrBacklogTests(TestCase):
+    def test_returns_none_when_the_broker_cannot_be_reached(self):
+        with mock.patch(
+            "backend.celery.app.connection_or_acquire", side_effect=OSError("no broker")
+        ):
+            self.assertIsNone(_orsr_backlog())
 
 
 class RefreshPersonHistoryCommandTests(TestCase):
