@@ -36,6 +36,14 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 81 | Závierky sa sťahujú z nášho API, nie odkazom na register | `fd23ba9` |
 | 82 | Kliknutie na rok vypíše dokumenty a stiahne ich | `fd23ba9` |
 | 84 | „Sledovať" prihlásene vedie na prihlásenie a vráti čitateľa späť na firmu | `0dd2565` |
+| 85 | Sídlo firmy na minimape — ako **oblasť**, nie ako bod (`a6d7b8c`, `16c2ae3`, `100f4d4`); dnešná podoba je z #97 | `100f4d4` |
+| 86 | Graf osôb už netvrdí, že každá väzba je súčasná — „nevieme" nestojí pod riadkom, ktorý to práve vyvrátil | `79745d7` |
+| 87 | Hľadanie osoby podľa mena, a jedna stránka na osobu | `0963f21` |
+| 88 | Výsledky sa delia na naše dáta a živý register | `0963f21` |
+| 89 | Jedna osoba je viac riadkov `Person` — zhlukuje sa **pri čítaní**, kľúč je zamrznutý | `9c0b652` |
+| 90 | RUZ vracia IČO, ktoré schéma neudrží — stĺpce na 20 znakov, orezanie a spätný import | `dcb839c` |
+| 91 | #89 krok 1 — zhlukovanie osôb pri čítaní | `9c0b652` |
+| 92 | #89 krok 1 — testy a frontend | `2c469c4` |
 | — | Legenda stavu funkcie tvrdila o firme, že sme ju nečítali — pri riadku, ktorý je na stránke len preto, že sme ju čítali. Kreslí ju `roleState.ts` | `70271d1` |
 | — | Hĺbka fronty sa súdi per-frontovým prahom — `insurance` má vlastný, odvodený z návrhu (cap = odtok), takže kontrola prestala svietiť na dizajnový stav | `87d755a` |
 | 96 | Mapa sídla je oficiálne Google Maps — Leaflet preč, kruh zostal tvrdením, kľúč a Map ID z prostredia. **Prekonané #97 v ten istý deň** | `ed50844` |
@@ -792,19 +800,49 @@ súpisné aj orientačné číslo a súradnice. `import_postal_codes.py` z neho 
 len `PSC`, `OBEC`, `OKRES`, `KRAJ` a súradnice a zvyšok zahodí. Držíme teda kľúč
 od presnej adresy a nepoužívame ho.
 
-**Zmerané 2026-09-13 na 4 000 firmách** (`Company.ulica` + `Company.psc`; 99,7 %
-zo všetkých 449 764 firiem má obe, takže vzorka nie je vybraná skupina):
+**Zmerané 2026-09-13 na všetkých 449 764 firmách** (`match_seat_addresses
+--dry-run` po naimportovaní registra — celá tabuľka, nie vzorka):
 
-| úroveň | podiel |
-|---|---|
-| **budova** (ulica + číslo, jeden konkrétny bod) | **69,3 %** |
-| ulica (stred ulice, kruh medián 138 m / p90 384 m) | 4,3 % |
-| **lepšie než PSČ spolu** | **73,5 %** |
-| zamietnuté — kľúč ukazuje na viac miest | 2,0 % |
-| zhoda nenájdená | 24,4 % |
+| úroveň | firiem | podiel |
+|---|---|---|
+| **budova** (ulica + číslo, jeden konkrétny bod) | 353 463 | **78,6 %** |
+| ulica (stred ulice, kruh) | 30 977 | 6,9 % |
+| **lepšie než PSČ spolu** | **384 440** | **85,5 %** |
+| register to neumiestni — zostáva kruh PSČ | 65 324 | 14,5 % |
 
-Cesta k číslu bola päť meraní a **štyri z nich opravovali môj nástroj, nie dáta** —
-to je podstatná časť nálezu:
+Ktorá vrstva odpovedala: `psc_ulica_orient` 281 663 (62,6 %), `psc_ulica_supisne`
+38 382 (8,5 %), `psc_ulica` 29 494 (6,6 %), `obec_ulica_supisne` 20 399 (4,5 %),
+`obec_ulica_orient` 13 019 (2,9 %), `obec_ulica` 1 483 (0,3 %).
+
+**Ostrý beh to zopakoval na cifru** (dokončený 21:01, 53 minút, 449 764 firiem):
+`Considered 449 764 companies; 384 440 changed` — 353 463 budova, 30 977 ulica,
+65 324 neumiestnených, a rozpad vrstiev **presne** 281 663 / 38 382 / 29 494 /
+20 399 / 13 019 / 1 483. Zhoda suchého behu s ostrým nie je formalita: suchý beh
+počíta tou istou funkciou, ale **nič nezapisuje**, takže zhoda je dôkaz, že zápis
+nezmenil vstup ani pre jednu firmu — matcher je idempotentný, čo je pri 384 440
+zápisoch do zdieľanej tabuľky to, čo chceš vedieť predtým, než ho pustíš druhý raz.
+
+Polomer ulice na celej tabuľke je `min 50 m, medián 296 m, p90 906 m, max 3 793 m`
+(50 m je podlaha `MIN_STREET_RADIUS_M`, nie pozorovanie), a budova má polomer
+**0** vo všetkých 353 463 prípadoch — čo je presne to, čo karta nesmie vytlačiť
+ako „±0 m".
+
+**A import je overený do posledného riadku — pretože diera v spojovacom kľúči je
+presne tá chyba, ktorú tu celý čas pomenúvame.** Súbor má 1 739 536 riadkov,
+tabuľka `companies_addresspoint` 1 704 346. Rozdiel 35 190 riadkov (2,0 %) som
+nenechal ako „asi to sedí": prehnal som **tou istou** postupnosťou preskokov
+celý súbor a dostal 1 704 346 a zvyšok **nula**. Celý rozdiel je jediná vec —
+35 190 riadkov nemá `ADRBOD_X`/`ADRBOD_Y` alebo sa nedá prečítať ako číslo.
+Nula riadkov bez obce, nula bez oboch čísel. Príkaz to hlási ako `no_coordinate`,
+takže to nie je tichý preskok, ale ani to nebolo overené, kým sa to nespočítalo.
+
+Vidiecke riadky pritom stoja za zmienku: **943 949** z nich (z 973 318, ktoré zdroj
+takto označuje) sa do tabuľky dostane a nesú adresu bez ulice. To je 55,4 %
+tabuľky, takže dedinský kľúč nie je okrajový prípad — je to väčšinový tvar
+adresy v registri.
+
+**Cesta k číslu bolo šesť meraní a päť z nich opravovalo mňa, nie dáta** — to je
+podstatná časť nálezu:
 
 1. 19,8 % presných, 42,4 % „bez zhody" — ale príklady (`Bratislavská 1458/71`)
    ukázali, že register drží súpisné a orientačné číslo v dvoch stĺpcoch a ja som
@@ -815,38 +853,90 @@ to je podstatná časť nálezu:
    s tromi ulicami sa to isté číslo vyskytlo trikrát a kľúč vyzeral nejednoznačný.
 4. 47,9 % — **regresia, ktorú som si spôsobil sám**: osamotené číslo na skutočnej
    ulici (`Starohájska 3`) som skúšal len proti dedinskému kľúču.
-5. 69,3 % — a navyše čítač „zamietnuté" som mal vo vnútri slučky kandidátov, takže
-   jedna firma sa napočítala viackrát a nafúkla menovateľ (4 886 namiesto 4 101).
+5. 79,1 % — a navyše čítač „zamietnuté" som mal vo vnútri slučky kandidátov, takže
+   jedna firma sa napočítala viackrát a nafúkla menovateľ.
+6. **85,5 % — a to posledné meranie neopravilo kód, ale vzorku.** Vzorka bola
+   `order_by("ruz_id")[:4000]`, teda zoradený začiatok, nie náhodný výber; `ruz_id`
+   prideľujú krajské súdy v blokoch, takže vzorka obsahovala len tri prefixy PSČ
+   (0: 42,9 %, 8: 15,9 %, 9: 41,2 %) a v inom pomere než celá tabuľka (32,2 / 29,2
+   / 38,6 %). Dôsledok nebol malý: vo vzorke odpovedala `psc_ulica_orient` v 39,9 %
+   prípadov, v celej tabuľke v 62,6 % — posunuté firmy padali na obecnú vrstvu.
+   Overené tak, že tá istá vzorka prehnaná **produkčnou** fetch funkciou
+   (`match_seat_addresses._fetch_points`, nie kópiou logiky) dala na tie isté riadky
+   presne tie isté čísla 2 979 / 185 / 836 — takže kód ani index z CSV sa
+   nerozchádzajú a rozdiel bol celý vo výbere. Náhodná vzorka tej istej veľkosti
+   dáva 86,2 % a rozloženie vrstiev do 0,4 bodu zhodné s celou tabuľkou.
+7. **Tá istá vychýlená vzorka podhodnotila aj samotné jadro metódy.** Skracovanie
+   názvov ulíc (`Bratislavská` vs `bratislavska ulica`, `17. novembra` vs
+   `17.novembra`, `J. L. Bellu` vs `j. l. bellu`) bolo zmerané na 4 000-vzorke
+   a vyšlo z toho „+72 firiem, −13 kľúčov". Na 20 000 náhodných firmiach je to
+   **15 333 umiestnených bez skracovania proti 17 106 so skracovaním — 76,7 %
+   proti 85,5 %**. Nie je to kozmetika, ktorá pridá zlomok percenta: bez nej
+   vypadne skoro každá jedenásta firma o úroveň nižšie. Že ide o skutočný údaj
+   a nie o artefakt vzorky, potvrdzuje tretia nezávislá cesta — náhodná vzorka
+   dáva 85,53 %, celá tabuľka (`--dry-run`) 85,5 %.
 
 **Pravidlo, ktoré z toho robí čestný údaj — a nie je to detail.** Veľa kľúčov
 ukazuje na viac než jeden bod a správna reakcia závisí od toho, **ako ďaleko od
 seba tie body sú**:
 
 * **≤ 150 m** — jedna budova s dvoma vchodmi, spriemerovať a je to stále presnosť
-  budovy (namerané: medián 0 m, maximum 51 m);
+  budovy;
 * **> 150 m** — dve rôzne miesta; nevyberať. Padá sa na nižšiu úroveň.
 
-Bez tohto pravidla by sme pri 2 % firiem pribili špendlík na nesprávnu obec.
-Zamietnuté kľúče mali rozpätie **2,5 – 73 km** — nie preto, že by dáta boli zlé,
-ale preto, že **názov obce nie je na Slovensku jedinečný** (`Nevidzany` existuje
-v dvoch okresoch, 62 km od seba).
+**Zmerané znovu na 100 000 firmách vybraných náhodne** (`md5(ico)`), pretože
+pôvodné čísla k tomuto pravidlu pochádzali z tej istej vychýlenej vzorky ako
+bod 6 nižšie — a tá inde podhodnotila výsledok dvadsaťpäťkrát, takže sa nedalo
+predpokladať, že tu je v poriadku:
 
-**Druhý nález z merania:** dedinský kľúč sa nesmie viazať na PSČ. Dedinské PSČ
-pokrýva viac obcí, takže súpisné číslo 52 existuje v každej z nich — rozpätie
-2,6 – 5,6 km. Viazaný na obec je presný (1 037 zhôd, všetky 0 m).
+| | kľúčov | |
+|---|---|---|
+| kľúč dosiahne **presne jeden** bod | 78 208 | nemá čo merať, rozpätie je 0 |
+| kľúč dosiahne **2 a viac** bodov | 6 712 | z toho **485 prejde** (7,2 %), 6 227 padá |
+
+Rozpätie kľúčov, ktoré **prejdú**: medián **30,4 m**, p90 83,6 m, p99 136,1 m,
+maximum **145,1 m**. Rozpätie tých, ktoré **padnú**: minimum **154,5 m**, medián
+4,23 km, maximum **337 km**. Hranica 150 m teda sedí v medzere **145 – 155 m**,
+ktorá je v dátach prázdna: pravidlo neoddeľuje dva podobné prípady, oddeľuje
+dvojicu vchodov od dvoch rôznych miest. (Pôvodný text tvrdil „medián 0 m, maximum
+51 m" — medián 0 m platí len vtedy, ak sa doň počítajú jednobodové kľúče, ktoré
+žiadne rozpätie nemajú; medzi viacbodovými je medián 30 m a maximum 145 m, teda
+takmer na hranici.)
+
+Bez tohto pravidla by sme časti firiem pribili špendlík na nesprávnu obec.
+Zamietnuté kľúče siahajú od **154 m po 337 km** (medián 4,23 km) — nie preto, že
+by dáta boli zlé, ale preto, že **názov obce nie je na Slovensku jedinečný**
+(`Nevidzany` existuje v dvoch okresoch, 62 km od seba).
+
+**Druhý nález z merania — a rozhodnutie, ktoré z neho padlo:** dedinské PSČ
+pokrýva viac obcí, takže súpisné číslo 52 existuje v každej z nich (rozpätie
+2,6 – 5,6 km). Ponúkalo sa preto dedinský kľúč na PSČ **neviazať vôbec**.
+Nakoniec sa viaže, ale **ide prvý a spread pravidlo ho zahodí**, keď je rozptýlený:
+keď dedinské PSČ sedí na jednu obec, je to silnejšie tvrdenie než obecný kľúč
+(firma je v tom PSČ), a keď nesedí, zahodí ho presne to isté pravidlo, ktoré by
+inak bránilo obecnému kľúču. Poradie teda nie je detail — je to celá politika:
+**úzky rozsah prvý, pretože chyba úzkeho rozsahu je vynechanie a chyba širokého
+je lož.** Že to nie je kozmetika, ukazuje 8,5 % firiem, ktoré nakoniec odpovie
+práve `psc_ulica_supisne`.
 
 **Návrh — jedno zobrazenie, ktorého tvar nesie presnosť:**
 
-| presnosť | čo sa kreslí |
-|---|---|
-| `building` | plný bod (69 %) |
-| `street` | malý krúžok, medián 138 m (4 %) |
-| `postal_code` | terajší kruh (24 %) |
+| presnosť | čo sa kreslí | podiel |
+|---|---|---|
+| `building` | plný bod, **žiadny kruh** | **78,6 %** |
+| `street` | stred ulice + kruh tej ulice | 6,9 % |
+| `postal_code` | terajší kruh PSČ | 14,5 % |
 
-Kruh teda nezmizne preto, že sme prestali priznávať nepresnosť — zmizne pre **73 %
+Kruh teda nezmizne preto, že sme prestali priznávať nepresnosť — zmizne pre **85,5 %
 firiem preto, že bod sa stal skutočným**. Tam, kde presnejšie dáta nemáme, zostane
 a dostane vetu, ktorá povie prečo. Jedno zobrazenie, nie dve (dnes kreslíme bod
 **aj** kruh).
+
+Podiel je zámerne ten istý, aký dáva meranie vyššie, nie odhad: tabuľka sa plnila
+z `--dry-run` na celej tabuľke. Že to nie je to isté číslo ako „koľko firiem
+odpovie ktorá vrstva", je tiež zámer: vrstva hovorí *odkiaľ* odpoveď prišla,
+`precision` hovorí *čo sa dá nakresliť*. `psc_ulica_supisne` odpovie 8,5 % firiem,
+ale kreslí bod — číslo je to isté, menovateľ nie.
 
 **Práca:** nový model + migrácia v `companies` (za `0021_alter_company_ico`) pre
 vyhľadávacie kľúče ulica/číslo → bod; `import_postal_codes.py` sa rozšíri, aby
@@ -860,9 +950,82 @@ spread pravidlo.
 DB — pred ňou čerstvá overená záloha (`make db-backup` +
 `make db-backup-verify BACKUP_FILE=…`).
 
-**Prečo to nie je hotové teraz:** je to nová prírastka — nový import, nová
-tabuľka, migrácia a zmena toho, čo mapa tvrdí. Podľa trvalého pravidla patrí
-rozhodnutie Samuelovi.
+**Stav: hotové a nasadené** (schválené vetou „pokracuj a vyber vsetko odporucane"
+nad #98). Deväť súborov, migrácia `0022_company_seat_lat_company_seat_lon_and_more`
+(pridáva stĺpce a jednu tabuľku, nič nemazne), nový `import_address_points`
+a `match_seat_addresses`.
+
+**Ale tá istá prírastka prešla aj protirečivou kontrolou — a tá našla deväť vecí.**
+Dvadsať agentov, 15 nálezov, 11 prežilo protirečenie, po odstránení duplikátov
+9 skutočných chýb. Dve boli v meraniach, ktoré som do tohto plánu napísal vyššie
+(a sú opravené), jedna je vážna a je o **tom, čo kruh vlastne zaručuje**:
+
+* **VÁŽNÉ — `is_one_place` je pravidlo o rozptyle, nie o rozsahu.** Funkcia vracia
+  `True` pre `len(points) < 2`, a to je ako odpoveď na *rozptyl* správne: jeden bod
+  žiadny rozptyl nemá. Lenže to isté pravidlo sa nedá použiť na kľúč, ktorému
+  zúženie/rozšírenie zmenilo **rozsah** a ktorý potom dosiahne práve jeden bod.
+  `normalize_obec` skladá 17 rôznych hodnôt `Bratislava-*` na `bratislava`, obecné
+  vrstvy idú pred PSČ vrstvou ulice — takže neoveriteľné tvrdenie širokého rozsahu
+  predbehne kruh ulice, ktorý by sa nakreslil vnútri vlastného PSČ tej firmy.
+  Rozsah je zmeraný a **obmedzený**: 34 901 firiem (9,1 % umiestnených) umiestňujú
+  obecné vrstvy, z toho **7 415** sedí na jedinom bode v obci, ktorú register na
+  časti **delí** (40,1 % umiestnených firiem nejakú časť menuje) — tam sa časť
+  zahodí a jediný bod sa nedá overiť. To je 1,9 % umiestnených, 1,6 % všetkých
+  firiem. Čísla sú z **hotového behu** nižšie, merané **produkčnou**
+  `normalize_obec` (nie jej kópiou) proti tabuľke, ktorú matcher práve zapísal;
+  skoršie znenie tu malo 28 283 / 6 781 / 39,4 %, čo boli čísla z behu, ktorý
+  ešte nebol dokončený. **Nemenil som to potichu**: vypnúť obecné vrstvy by
+  zahodilo 9,1 % umiestnení, aby sa predišlo menšej škode, a zmeniť výstup pre
+  7 415 riadkov je rozhodnutie, nie oprava (viď otvorená otázka nižšie).
+  Pôvodné tvrdenie v kóde („kolízia sa stane zamietnutým kľúčom, nikdy
+  premiestneným špendlíkom") bolo **nepravdivé** a je nahradené zmeraným znením.
+* **Vážne, ale tiché — diera v spojovacom kľúči.** `Company.psc` nesie tri hodnoty
+  s medzerou (`602 00`, `024 01`, `941 01`), register ich píše bez. Import medzeru
+  odstránil, matcher ju `normalize_text`-om **nechal** — takže každá PSČ vrstva pre
+  tie firmy ticho minula. Kľúč je teraz jedna funkcia (`psc_key` v `address.py`,
+  volaná z modelu, matchera aj importu; inak by vznikol cyklus, lebo `models.py`
+  importuje `seat_matching`). Zmerané dopady: `id=435544` (Kysucké Nové Mesto)
+  a `id=437237` (Bánov) sa tým stanú umiestniteľnými, `id=421376` (Brno, ČR) nie —
+  register na `60200` nemá ani bod. Všetky tri sú dnes neumiestnené, takže
+  **dnešný výstup sa nemení ani o riadok**; bola to latentná chyba.
+* **`import_address_points` prijme skrátený súbor a skončí s 0.** Hlavičková
+  kontrola nemôže odhaliť odseknuté telo (hlavičku má aj odseknutý súbor) a ani
+  kontrola po riadkoch: `csv.DictReader` doplní chýbajúce kľúče `None` a každý
+  prístup tu krátky riadok toleruje — takže sa súbor dočíta do konca, commitne
+  a vráti 0. Skrátený súbor vyzerá presne ako „register tie adresy nepozná", takže
+  by to ticho vymazalo umiestnenia. Nový prah `MAX_SHRINK = 5 %` to odmietne vo
+  vnútri transakcie (predchádzajúci stav prežije) a `--allow-shrink` je explicitná
+  výnimka.
+* **`--limit 0` obišiel vlastný limit.** `if limit:` je pre nulu nepravdivé, takže
+  sa slice nikdy neaplikoval a prešla celá tabuľka. `--limit -N` je bezpečný —
+  Django naň vyhodí `ValueError` pred iteráciou.
+* **Poistka `NO_DATA` na mape nemohla nikdy zabrať.** `queryRenderedFeatures()`
+  bez argumentov sa pýta **celého výrezu a všetkých zdrojov** — vrátane našej
+  vlastnej vrstvy bodu, ktorá je pridaná skôr, než sa poistka naozaj spustí. Takže
+  `features.length === 0` nemohlo nastať, kým mapa čokoľvek kreslí, a zlyhanie
+  dlaždíc sa čítalo ako „prázdne plátno s jednou modrou bodkou a bez správy".
+  Poistka sa teraz pýta len vrstiev základného štýlu (`SEAT_LAYER_IDS` z `SEAT_LAYERS`).
+* **Karta tvrdila jednu vetu pre všetky tri úrovne.** Text pre `postal_code`
+  („register pozná len stred PSČ") zostal stáť pre **každé** sídlo — takže 85,5 %
+  firiem, ktoré register umiestni, čítalo opak toho, čo vedľa kreslila mapa.
+  Budova nemá kruh vôbec a kruh ulice je rozptyl tej ulice, nie PSČ.
+* Tri zastarané čísla v próze kódu (`20,9 %`, „2,5 – 73 km", „zmizne pre 73 %")
+  pochádzali z tej istej vychýlenej 4 000-riadkovej vzorky ako bod 6 vyššie.
+
+**Otvorená otázka, ktorú nechávam Samuelovi — nie je to chyba, je to politika:**
+má `obec`-úrovňový kľúč (obec bez ulice, teda najširší) smieť umiestniť firmu na
+**jediný** bod, keď register tú obec delí na časti? Dnešná odpoveď je „áno",
+pretože pravidlo o rozptyle na jeden bod nemá čo povedať. Správna oprava by
+vyžadovala kľúč, ktorý si časť obce nesie ďalej — a to znamená zmeniť **import**
+(`AddressPoint.obec` je už poskladaná, časť sa v nej stratila), teda ďalšiu
+prírastku. Alternatíva je lacnejšia: nechať to a v karte pre `postal_code` povedať,
+že register obec pozná, ale jej časti nie. **Odporúčam druhú cestu** — 1,5 %
+firiem neznesie ďalší import, a veta je presne to, čo tu celý čas chýbalo.
+
+**Dva nálezy, ktoré som zámerne neopravil** (mimo schválenej prírastky, hlásim):
+`serializers.py:152` nemá cestu, ktorá by po zmene adresy v RUZ zneplatnila
+`seat_*` — umiestnenie teda prežije zmenu adresy, kým sa matcher znova nespustí;
+a § 1 tabuľka nižšie vynecháva #85 – #92.
 
 ### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra
 
@@ -1686,6 +1849,46 @@ sa oň oprelo, prehlási zdravú úlohu za mŕtvu.
 **Príčinu som neoveril** a nebudem ju hádať; rozdiel je medzi dvoma konkrétnymi
 riadkami a zvyškom, nie systematický, takže sa to dá zúžiť — ale to je
 samostatná práca. Zámerne **nemenené** a **nezapisujem domnienku**.
+
+### `make test` na SQLite vôbec nebeží — a dokumentácia tvrdí opak
+
+`CLAUDE.md` aj `Makefile` hovoria, že mimo Dockeru sa pri prázdnom `DATABASE_URL`
+padá na SQLite (`backend/db.sqlite3`). Pre **testy** to neplatí:
+`companies/migrations/0014_add_pattern_ops_structured_indexes.py` je nechránené
+`RunSQL` s `text_pattern_ops`, čo je operátorová trieda len pre Postgres. SQLite
+na nej padne ešte pri stavaní testovacej databázy:
+
+```
+django.db.utils.OperationalError: near "text_pattern_ops": syntax error
+```
+
+`Makefile` pritom `DATABASE_URL` nikdy nenastavuje ani nečíta `.env`, takže
+`make test` v shelli, ktorý ju nemá exportovanú, **vždy** skončí takto. Testovacia
+databáza sa stavia migráciami, takže jedna postgresová migrácia zablokuje celý
+suite — nielen `companies`.
+
+**Zmerané 2026-09-13:** na Postgrese (loopback, `test_cistafirma` sa vytvorí
+a zhodí, živá `cistafirma` sa neotvorí) suite beží. Riešenie je jednorazové —
+obaliť `RunSQL` v 0014 na `vendor == 'postgresql'`, alebo doplniť `DATABASE_URL`
+do `make test` — a je to **samostatná zmena**: zasahuje do odovzdanej migrácie,
+takže zámerne **nemenené**.
+
+### Spustenie testov z koreňa repa nájde 0 testov a vráti 0
+
+```
+$ venv/bin/python backend/manage.py test          # z koreňa repa
+Found 0 test(s).
+Ran 0 tests in 0.000s
+NO TESTS RAN
+[exited with code 0]
+```
+
+Django objavuje testy od **aktuálneho adresára**, a `tests*.py` žijú
+v `backend/<app>/`. `make test` preto robí `cd $(BACKEND_DIR)` — ale nič to
+nevynucuje a ručný beh z koreňa je ticho zelený. Je to tá istá trieda ako
+`grep -c` vracia 0 aj pre spadnutý príkaz: **údaj, ktorý nevie zobraziť zlyhanie,
+sa nedá použiť ako dôkaz.** `NO TESTS RAN` je jediná stopa a je ľahké ju prehliadnuť
+cez `| tail`, ktorý navyše prepíše návratový kód na 0.
 
 ---
 
