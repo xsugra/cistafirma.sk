@@ -2610,3 +2610,29 @@ older readings, and the row itself is the only record of how it was read -- so
 nothing distinguishes them afterwards, exactly as recorded above for 687. The
 asymmetry is not a defect in the current parser; it is the size of the backlog
 the restart clears.
+
+**Measured again 2026-09-13, after that backlog cleared.** The prediction above
+is now a reading rather than an inference, and it holds: re-reading collapsed the
+asymmetry by a factor of 28. Across the same 34 508 rows,
+
+| | 2026-09-12 | 2026-09-13 |
+|---|---|---|
+| `liabilities_accruals` only | 24 323 | **864** |
+| `assets_accruals` only | 1 709 | 1 713 |
+| both present | — | 28 998 |
+| `assets_current` empty | — | **144** (0.4 %) |
+
+The direction reversed as well: the residue is now the *smaller* of the two
+one-sided counts, where before it was fourteen times the other. Nothing about the
+accounting changed between the two readings -- the rows did.
+
+**One gap survives, and it has a different cause.** 33 721 of the 34 508 rows
+(97.7 %) carry no `assets_financial_short`, the field `b54ce4a` introduced. The
+re-read that closed the accrual gap ran on a worker holding `d519c81` but not
+`b54ce4a` or `e3f8107`, so it stamped one fix into the corpus and left the other
+two unread -- the same mechanism, one wave later. The tell is that
+`assets_financial_accounts`, which `d519c81` does fill, is empty on only 178
+rows. Distinguishing those two vintages took a timestamp comparison, because
+nothing in the row says which parser wrote it; that is the argument for the
+reading-vintage field recorded as open work, not a re-read to be scheduled by
+hand each time.
