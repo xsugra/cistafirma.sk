@@ -736,6 +736,96 @@ počkať na `orsr=0`, nie reštartovať pod záťažou.
 
 ## 3. Čaká na prácu
 
+### #98 — Kruh okolo sídla je tvrdenie o presnosti; dá sa nahradiť skutočnou budovou
+
+**Otázka Samuela (2026-09-13):** „načo tam je ten kruh okolo toho miesta? to je
+zbytočné, ja potrebujem len jedno presné zobrazenie na mape."
+
+**Odpoveď: kruh nie je dekorácia, je to miera nevedomosti.** Dnes spájame výhradne
+na PSČ (`PostalCodeArea`, `get_seatLocation`). Stred PSČ je od svojich vlastných
+adresných bodov vzdialený **medián 1 980 m (p90 4 118 m)**. Bodka na tom mieste by
+tvrdila presnosť vchodu do budovy, ktorú nemáme — a to je horšie než kruh, lebo
+tomu číslu nikto nevidí na pravdu. Preto je kruh.
+
+**Ale presnosť sa dá kúpiť za nulu.** Ten istý register MV SR, ktorý už sťahujeme
+(zadarmo, bez karty, bez tretej strany), nesie v hlavičke aj
+`ULICA;SUPISNE_CISLO;ORIENTACNE_CISLO_CELE;ADRBOD_X;ADRBOD_Y` — teda ulicu,
+súpisné aj orientačné číslo a súradnice. `import_postal_codes.py` z neho dnes číta
+len `PSC`, `OBEC`, `OKRES`, `KRAJ` a súradnice a zvyšok zahodí. Držíme teda kľúč
+od presnej adresy a nepoužívame ho.
+
+**Zmerané 2026-09-13 na 4 000 firmách** (`Company.ulica` + `Company.psc`; 99,7 %
+zo všetkých 449 764 firiem má obe, takže vzorka nie je vybraná skupina):
+
+| úroveň | podiel |
+|---|---|
+| **budova** (ulica + číslo, jeden konkrétny bod) | **69,3 %** |
+| ulica (stred ulice, kruh medián 138 m / p90 384 m) | 4,3 % |
+| **lepšie než PSČ spolu** | **73,5 %** |
+| zamietnuté — kľúč ukazuje na viac miest | 2,0 % |
+| zhoda nenájdená | 24,4 % |
+
+Cesta k číslu bola päť meraní a **štyri z nich opravovali môj nástroj, nie dáta** —
+to je podstatná časť nálezu:
+
+1. 19,8 % presných, 42,4 % „bez zhody" — ale príklady (`Bratislavská 1458/71`)
+   ukázali, že register drží súpisné a orientačné číslo v dvoch stĺpcoch a ja som
+   ich hľadal spolu.
+2. 38,5 % budova — dedinské adresy (`Krajné 52`) majú v `ulica` názov obce
+   a register má `ULICA` prázdnu.
+3. 55,7 % — ale dedinský kľúč som staval nad všetkými riadkami, takže v obci
+   s tromi ulicami sa to isté číslo vyskytlo trikrát a kľúč vyzeral nejednoznačný.
+4. 47,9 % — **regresia, ktorú som si spôsobil sám**: osamotené číslo na skutočnej
+   ulici (`Starohájska 3`) som skúšal len proti dedinskému kľúču.
+5. 69,3 % — a navyše čítač „zamietnuté" som mal vo vnútri slučky kandidátov, takže
+   jedna firma sa napočítala viackrát a nafúkla menovateľ (4 886 namiesto 4 101).
+
+**Pravidlo, ktoré z toho robí čestný údaj — a nie je to detail.** Veľa kľúčov
+ukazuje na viac než jeden bod a správna reakcia závisí od toho, **ako ďaleko od
+seba tie body sú**:
+
+* **≤ 150 m** — jedna budova s dvoma vchodmi, spriemerovať a je to stále presnosť
+  budovy (namerané: medián 0 m, maximum 51 m);
+* **> 150 m** — dve rôzne miesta; nevyberať. Padá sa na nižšiu úroveň.
+
+Bez tohto pravidla by sme pri 2 % firiem pribili špendlík na nesprávnu obec.
+Zamietnuté kľúče mali rozpätie **2,5 – 73 km** — nie preto, že by dáta boli zlé,
+ale preto, že **názov obce nie je na Slovensku jedinečný** (`Nevidzany` existuje
+v dvoch okresoch, 62 km od seba).
+
+**Druhý nález z merania:** dedinský kľúč sa nesmie viazať na PSČ. Dedinské PSČ
+pokrýva viac obcí, takže súpisné číslo 52 existuje v každej z nich — rozpätie
+2,6 – 5,6 km. Viazaný na obec je presný (1 037 zhôd, všetky 0 m).
+
+**Návrh — jedno zobrazenie, ktorého tvar nesie presnosť:**
+
+| presnosť | čo sa kreslí |
+|---|---|
+| `building` | plný bod (69 %) |
+| `street` | malý krúžok, medián 138 m (4 %) |
+| `postal_code` | terajší kruh (24 %) |
+
+Kruh teda nezmizne preto, že sme prestali priznávať nepresnosť — zmizne pre **73 %
+firiem preto, že bod sa stal skutočným**. Tam, kde presnejšie dáta nemáme, zostane
+a dostane vetu, ktorá povie prečo. Jedno zobrazenie, nie dve (dnes kreslíme bod
+**aj** kruh).
+
+**Práca:** nový model + migrácia v `companies` (za `0021_alter_company_ico`) pre
+vyhľadávacie kľúče ulica/číslo → bod; `import_postal_codes.py` sa rozšíri, aby
+popri PSČ agregáte postavil aj tento (ten istý 162 MB súbor, ktorý už leží
+v `backend/data/adresy/` — **žiadna nová tretia strana, žiadna karta**); služba
+na párovanie so spread pravidlom; `get_seatLocation` vráti `precision` a bod;
+frontend kreslí jeden objekt podľa `precision`; testy na všetky tri úrovne aj na
+spread pravidlo.
+
+**Bezpečnosť dát:** migrácia pridáva tabuľku (nič nemazne), ale ide na zdieľanú
+DB — pred ňou čerstvá overená záloha (`make db-backup` +
+`make db-backup-verify BACKUP_FILE=…`).
+
+**Prečo to nie je hotové teraz:** je to nová prírastka — nový import, nová
+tabuľka, migrácia a zmena toho, čo mapa tvrdí. Podľa trvalého pravidla patrí
+rozhodnutie Samuelovi.
+
 ### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra
 
 **Nález z #89, nie jeho súčasť.** Po zhlukovaní som na živej stránke osoby
