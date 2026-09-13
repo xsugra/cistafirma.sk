@@ -598,6 +598,48 @@ V logu workera `orsr` je za tých 12 h **2 001** prečítaní a **0** trvalých
 zlyhaní `read_person_history` (všetkých 68 `failed permanently` patrí
 `sync_company_orsr_data`, teda monitorovacej rotácii, nie tomuto čítaniu).
 
+**Tá dávka bola moja a „tri dispatche po 10" bol môj vlastný grep.** Postupnosť
+je v logoch `celery_default` a `celery_orsr` presne takáto:
+
+| čas (UTC) | čo sa stalo |
+|---|---|
+| 10:28:56 | `schedule_person_history_resync.delay(10)`, prvý dymový test → **zahodený**: `Received unregistered task of type 'registers.tasks.schedule_person_history_resync'. The message has been ignored and discarded.` Worker bežal kód spred tejto úlohy. |
+| 10:30:05 | reštart `celery_default` (ready 10:30:06) |
+| 10:30:06 | druhé `.delay(10)` prešlo — `succeeded in 0.81s: 'Scheduled person-history resync for 10 companies'` |
+| 10:35:59 | reštart `celery_orsr` (ready 10:36:00), aby načítal nový čítač |
+| 10:37:00 | `refresh_person_history --limit 2000` — 2 000 úloh |
+
+Môj merací skript hlásil **tri** dispatche po 10 firmách. Grep na
+`Scheduled person-history resync for [0-9]+ companies` totiž chytí aj riadok
+`succeeded in …: 'Scheduled person-history resync for 10 companies'` — teda
+návratovú hodnotu tej istej jednej úlohy, vytlačenú druhýkrát. Bol to **jeden**
+dispatch. Je to tá istá chyba ako `grep -c` v § 7: počítadlo, ktoré nevie
+rozlíšiť, čo vlastne počíta, dá sebavedomé číslo.
+
+**Deväť z desiatich úloh zmizlo bez stopy — a to je nález, nie anomália.**
+Reštart workera `orsr` o 10:35:59 prišiel po dispatche o 10:30:08. Namerané:
+z desiatich úloh sa vykonala **jedna** (10:36:13, `31681271`, 62 záznamov),
+`read_person_history` v logu má **2 001** prijatí a 2 001 úspechov, a keďže
+dávka o 10:37:00 poslala presne 2 000, na tých zvyšných deväť neexistuje
+žiadna stopa — žiadna chyba, žiadny záznam vo `SyncJob`, fronta `orsr` nula.
+Práca jednoducho nie je.
+
+Mechanizmus je s tým konzistentný, ale **nie je dosvedčený**: `orsr` beží
+`--concurrency=2` a `worker_prefetch_multiplier` nie je v `settings.py`
+nastavený, takže platí default `4` — **4 × 2 = 10**, presne toľko, koľko sa ich
+dispatchlo, a teda všetky sa v tom okamihu mohli nachádzať v rukách workera.
+`task_acks_late` tiež nie je nastavené (default `False`) a `visibility_timeout`
+tiež nie. Ktorá z tých páčok to spôsobila, som nemeral; namerané je len to, že
+deväť úloh po reštarte nebežalo a nikde to nie je zapísané.
+
+Nič sa teda nestratilo z dávky; stratilo sa z dymového testu spusteného tesne
+pred reštartom. Pre #95 to znamená, že **fronta ani dispatch log nie sú miera
+pokroku** — miera je počet prečítaných (`osoby_historia`). Tých deväť prežilo
+len preto, že selektor je idempotentný a tie firmy vyberie v ďalšom kole;
+nebyť toho, je to ticho stratená práca a nikto by si nevšimol. Cena za reštart
+workera kvôli novému kódu je až (prefetch × concurrency) rozbehnutých správ —
+a je to tá istá trieda chyby ako „unregistered task" vyššie, len bez hlásenia.
+
 **Dve čítania plnia tú istú populáciu a je to zámer.** `osoby_historia`
 zapisuje aj `sync_company` (`rpo_sync.py:377`), aj `read_person_history` —
 a `_drop_person_history_marker` ju **zoberie späť**, keď extrakcia zlyhá, aby
@@ -620,12 +662,30 @@ zmizne — potichu. Nameraných 16 takých profilov; mechanizmus je v § 7.
 
 **Jedna vec, ktorá sa dá prečítať zle.** Beat riadok
 `refresh-person-history-every-4-hours` má `last_run_at=None`
-a `total_run_count=0`, takže dávku **nespustil on** — spustil ju ručný beh.
+a `total_run_count=0`, takže dávku **nespustil on** — spustil ju môj ručný beh
+o 10:37:00 (a pred ním dva dymové testy, vyššie).
 Prvý beh beat riadku čakám **2026-09-13 17:20:12,9 UTC** (a nie 14:28:25, ako
 tu stálo; referenčný bod je `date_changed` riadku, ktorý som si posunul sám
 svojím overovacím skriptom — oboje v § 7). To nie je druhá chyba, len
 iný spúšťač; ale kým `total_run_count` ostane 0, **nedá sa z neho čítať, či
 dopĺňanie napreduje** — a to je presne tá pasca z § 7.
+
+**Meranie, ktoré to rozhodne.** Východisko, odčítané 13:59:37 UTC priamo
+z bežiacej databázy:
+
+```
+riadok  last_run_at=None  total_run_count=0  date_changed=2026-09-13 13:20:12.935493
+pending 22 223     prečítaných (osoby_historia) 2 489
+fronty   celery=0  orsr=0  financials=0  insurance=61062  ruz_full=0
+```
+
+Ak riadok naozaj vystrelí, o 17:20:12,9 čakám `last_run_at≈17:20:12,9`,
+`total_run_count=1`, frontu `orsr≈2000`, `Sending due task` v beatoovi
+a `Scheduled person-history resync for 2000 companies` v logu workera.
+Dávka sa potom leje 133 minút (2 000 ÷ 15/m) a **populácia sa zmenší len
+o to, čo sa naozaj prečíta** — fronta je len medzikrok. Ak riadok nevystrelí,
+`date_changed` sa posunul znova a aj to je odpoveď; práve preto sa meria
+o 17:21 a o 17:50, nie „o hodinu".
 
 ---
 
@@ -941,6 +1001,27 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   riadok má `expires=None`, hoci `CELERY_BEAT_SCHEDULE` preň hovorí
   `'expires': 43000.0`. Potvrdené naživo, nie odvodené — je to tá istá trieda
   ako `options`/`queue`, kde je rozhodujúci riadok a nie dict.
+
+- ⚠️ **Reštart workera ticho zahodí rozpracované správy — a nikde to nie je
+  vidieť.** Namerané 2026-09-13 pri #95: dispatcher poslal o 10:30:08 desať
+  úloh `read_person_history` do fronty `orsr`, o 10:35:59 som worker reštartoval
+  (aby načítal nový kód) a vykonala sa **jedna** z nich. Na zvyšných deväť
+  neexistuje žiadna stopa: žiadna chyba, žiadny záznam vo `SyncJob`, fronta
+  `orsr` nula. Práca jednoducho nie je.
+
+  Mechanizmus je konzistentný, nie dosvedčený: `orsr` beží `--concurrency=2`,
+  `worker_prefetch_multiplier` nie je nastavený (default `4`), teda 4 × 2 = 10
+  správ mohlo byť v rukách workera naraz; `task_acks_late` ani
+  `visibility_timeout` nastavené nie sú. Ktorá z tých páčok to spôsobila, som
+  nemeral — namerané je, že deväť úloh nebežalo.
+
+  **Netýka sa to len #95.** Rovnaký mechanizmus platí pre každú frontu, a tá
+  poistná má v ustálenom stave ~61 000 správ (vyššie), takže každý reštart
+  `celery_worker_insurance` môže ticho zahodiť až (prefetch × concurrency)
+  kusov rozpracovanej práce. `make ops-check` to nevidí, lebo hĺbka fronty sa
+  tým vráti do normálu. Zámerne **nemenené** — `task_acks_late` je zmena
+  správania celej fronty a patrí do samostatného rozhodnutia; dnes to
+  prežijeme len preto, že selektory sú idempotentné a prácu vyberú znova.
 
 - ⚠️ **Nový `PeriodicTask` riadok nezačne bežať hneď — jeho prvý beh čaká
   celý interval.** Rozhodujúci riadok je `ModelEntry.__init__`
