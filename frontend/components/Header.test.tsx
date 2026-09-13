@@ -6,7 +6,14 @@ import type {User} from '../types';
 
 // vi.mock factories are hoisted above imports, so mutable handles go through vi.hoisted.
 const authMock = vi.hoisted(() => ({useAuth: vi.fn()}));
-vi.mock('../context/AuthContext', () => ({useAuth: authMock.useAuth}));
+// `useAuth` is stubbed so a spec can say who is signed in; everything else --
+// `AuthProvider` in particular, which `renderWithProviders` mounts -- stays
+// real, because a partial mock that drops it breaks every render that mounts
+// the provider rather than the one thing the spec meant to control.
+vi.mock('../context/AuthContext', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../context/AuthContext')>()),
+    useAuth: authMock.useAuth,
+}));
 
 const signedInUser: User = makeUser({firstName: 'Ján', username: 'jan', isStaff: false});
 

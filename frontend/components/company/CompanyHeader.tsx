@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { Company } from '../../types';
 import { StatusBadge } from '../StatusBadge';
 import { api } from '../../api';
+import { useAuth } from '../../context/AuthContext';
+import { ROUTES } from '../../constants';
 import { DetailItem } from './DetailItem';
 import { formatDate } from './helpers';
 import { exportCompanyPDF } from '../../utils/pdfExport';
@@ -13,13 +16,26 @@ interface CompanyHeaderProps {
 }
 
 export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }) => {
+    const { isAuthenticated } = useAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
     const [isWatching, setIsWatching] = useState(false);
     const [watchLoading, setWatchLoading] = useState(false);
+    const [watchError, setWatchError] = useState<string | null>(null);
     const [pdfLoading, setPdfLoading] = useState(false);
     const [copied, setCopied] = useState(false);
     const orsrProfile = company.orsr_profile;
 
+    // Only ask which companies are watched when there is an account to ask
+    // about. `getWatchlist` is `IsAuthenticated`, so for an anonymous visitor
+    // this was a guaranteed 401 on every company page -- which the client
+    // turned into a global `auth:unauthorized` event and a console warning, for
+    // a question nobody had asked.
     useEffect(() => {
+        if (!isAuthenticated) {
+            setIsWatching(false);
+            return;
+        }
         let cancelled = false;
         api.getWatchlist().then(list => {
             if (!cancelled) {
@@ -27,7 +43,7 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
             }
         }).catch(() => {});
         return () => { cancelled = true; };
-    }, [company.ico]);
+    }, [company.ico, isAuthenticated]);
 
     const handleCopyIco = useCallback(() => {
         navigator.clipboard.writeText(company.ico).then(() => {
@@ -36,8 +52,33 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
         }).catch(() => {});
     }, [company.ico]);
 
+    /**
+     * Watch, or send the visitor to sign in first.
+     *
+     * A watch belongs to an account -- `POST /api/watchlist/` is
+     * `IsAuthenticated` -- so an anonymous click used to do nothing at all: the
+     * request 401'd, the catch logged it to a console nobody was reading, and
+     * the button sat there looking like it had worked. That is the silent
+     * failure this project treats as a defect class, and here it cost the
+     * reader the only thing they had asked for.
+     *
+     * So the click now leads to sign-in, carrying where they were. The watch
+     * itself is deliberately **not** re-issued automatically once they are
+     * back: it is a write to their account, and replaying it from a remembered
+     * intent means a change they confirmed on one page happening silently after
+     * a login page they may have reached for an unrelated reason. They land
+     * back on this company and click again -- one click, and it is theirs.
+     */
     const handleWatchToggle = async () => {
+        if (!isAuthenticated) {
+            navigate(ROUTES.LOGIN, {
+                state: { from: location.pathname + location.search },
+            });
+            return;
+        }
+
         setWatchLoading(true);
+        setWatchError(null);
         try {
             if (isWatching) {
                 const list = await api.getWatchlist();
@@ -48,7 +89,12 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
             }
             setIsWatching(!isWatching);
         } catch (e) {
-            console.error("Watch toggle failed", e);
+            // Shown, not swallowed. The button is the only feedback this action
+            // has, so a failure that stays in the console is a failure the
+            // reader reads as success.
+            setWatchError(
+                e instanceof Error ? e.message : 'Sledovanie sa nepodarilo zmeniť.',
+            );
         } finally {
             setWatchLoading(false);
         }
@@ -98,6 +144,11 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                         onClick={handleWatchToggle}
                         disabled={watchLoading}
                         className={`btn ${isWatching ? 'bg-green-600 hover:bg-green-700 text-white' : 'btn-primary'}`}
+                        title={
+                            isAuthenticated
+                                ? undefined
+                                : 'Na sledovanie firmy sa musíš prihlásiť'
+                        }
                     >
                         {watchLoading ? (
                             <i className="fas fa-spinner animate-spin"></i>
@@ -108,6 +159,15 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                     </button>
                 </div>
             </div>
+            {watchError && (
+                <p
+                    role="alert"
+                    className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+                >
+                    <i className="fas fa-circle-exclamation mr-2" aria-hidden="true" />
+                    {watchError}
+                </p>
+            )}
             <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 border-t border-gray-200 dark:border-slate-800 pt-6">
                 <div className="flex items-start space-x-3">
                     <i className="fas fa-hashtag text-blue-500 dark:text-blue-400 mt-1 w-4 text-center"></i>

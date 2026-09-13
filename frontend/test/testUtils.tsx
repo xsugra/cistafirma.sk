@@ -1,6 +1,7 @@
 import {render} from '@testing-library/react';
 import type {ReactElement} from 'react';
 import {MemoryRouter} from 'react-router-dom';
+import {AuthProvider} from '../context/AuthContext';
 import {ThemeProvider} from '../context/ThemeContext';
 import type {Company, Financials, User} from '../types';
 
@@ -130,10 +131,30 @@ export const makeCompany = (overrides: Partial<Company> = {}): Company => ({
     ...overrides,
 });
 
-/** Router + ThemeProvider wrapper. Auth is supplied per-spec via vi.mock of AuthContext. */
-export const renderWithProviders = (ui: ReactElement, {route = '/'}: {route?: string} = {}) =>
-    render(
+/**
+ * Render inside the providers a company page actually runs under.
+ *
+ * `AuthProvider` is here because parts of the page read the session: the
+ * "Sledovať" button leads to sign-in when there is no account, and a component
+ * that calls `useAuth` outside a provider throws rather than degrading. With no
+ * token in `localStorage` -- the state every test starts in -- the provider
+ * settles to `isAuthenticated: false` without calling the API, which is the
+ * anonymous case and the one most of these tests want.
+ */
+export const renderWithProviders = (
+    ui: ReactElement,
+    {route = '/', authenticated = false}: {route?: string; authenticated?: boolean} = {},
+) => {
+    if (authenticated) {
+        localStorage.setItem('token', 'test-token');
+    } else {
+        localStorage.removeItem('token');
+    }
+    return render(
         <MemoryRouter initialEntries={[route]}>
-            <ThemeProvider>{ui}</ThemeProvider>
+            <AuthProvider>
+                <ThemeProvider>{ui}</ThemeProvider>
+            </AuthProvider>
         </MemoryRouter>
     );
+};

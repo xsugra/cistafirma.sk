@@ -1,12 +1,14 @@
 import React, {useState} from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {useAuth} from '../context/AuthContext';
 import {AuthLayout} from '../components/AuthLayout';
 import {ROUTES} from '../constants';
+import {postAuthDestination} from '../utils/postAuthDestination';
 
 export const Login: React.FC = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const {login} = useAuth();
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
@@ -21,7 +23,7 @@ export const Login: React.FC = () => {
         try {
             const data: any = await api.login(identifier, password);
             login(data.user, data.token);
-            navigate(ROUTES.HOME);
+            navigate(postAuthDestination(location.state), {replace: true});
         } catch (err: any) {
             setError(err.message || 'Prihlásenie zlyhalo. Skontrolujte svoje údaje.');
         } finally {
@@ -117,7 +119,9 @@ export const Login: React.FC = () => {
                 <p className="text-gray-500 dark:text-gray-400 text-sm">
                     Ešte nemáte účet?{' '}
                     <button
-                        onClick={() => navigate(ROUTES.REGISTER)}
+                        onClick={() =>
+                            navigate(ROUTES.REGISTER, { state: location.state })
+                        }
                         className="text-blue-600 dark:text-blue-400 font-bold hover:underline transition-colors"
                     >
                         Zaregistrujte sa zadarmo

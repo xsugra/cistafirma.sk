@@ -1,11 +1,13 @@
 import React, {useState} from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {AuthLayout} from '../components/AuthLayout';
 import {ROUTES} from '../constants';
+import {postAuthDestination} from '../utils/postAuthDestination';
 
 export const Register: React.FC = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const [formData, setFormData] = useState({
         firstName: '',
         lastName: '',
@@ -37,7 +39,7 @@ export const Register: React.FC = () => {
         setError('');
         try {
             await api.register(formData);
-            navigate(ROUTES.HOME);
+            navigate(postAuthDestination(location.state), {replace: true});
         } catch (error: any) {
             setError(error.message || 'Registrácia zlyhala. Skúste to prosím znova.');
         } finally {

@@ -17,7 +17,13 @@ const mocks = vi.hoisted(() => ({
 
 // Same module ids Profile.tsx resolves (this spec lives in pages/, like Profile).
 vi.mock('../api', () => ({api: mocks.api}));
-vi.mock('../context/AuthContext', () => ({useAuth: mocks.auth.useAuth}));
+// `useAuth` stubbed, the rest of the module real: `renderWithProviders` mounts
+// the actual `AuthProvider`, and a partial mock that drops it fails every
+// render rather than only the behaviour this spec means to pin.
+vi.mock('../context/AuthContext', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../context/AuthContext')>()),
+    useAuth: mocks.auth.useAuth,
+}));
 
 const user: User = makeUser({
     firstName: 'Jana',

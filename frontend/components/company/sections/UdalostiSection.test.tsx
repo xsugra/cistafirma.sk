@@ -10,7 +10,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../api', () => ({api: {getCompanyEvents: mocks.getCompanyEvents}}));
-vi.mock('../../../context/AuthContext', () => ({useAuth: mocks.useAuth}));
+// `useAuth` stubbed, the rest of the module real: `renderWithProviders` mounts
+// the actual `AuthProvider`, and a partial mock that drops it fails every
+// render rather than only the behaviour this spec means to pin.
+vi.mock('../../../context/AuthContext', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../../context/AuthContext')>()),
+    useAuth: mocks.useAuth,
+}));
 
 const event = (overrides: Partial<NotificationEvent> = {}): NotificationEvent => ({
     id: 1,
