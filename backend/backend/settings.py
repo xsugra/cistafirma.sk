@@ -83,6 +83,12 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "report": os.getenv('REPORT_THROTTLE_RATE', '30/hour'),
         "peers": os.getenv('PEERS_THROTTLE_RATE', '120/hour'),
+        # Each call re-reads the company's statement list from RUZ, and the
+        # download behind it moves a PDF of up to a few megabytes. Fitted to a
+        # person working through a company's years rather than to a page load:
+        # the section withholds the list until a year is clicked, so ordinary
+        # reading costs one call per year looked at.
+        "documents": os.getenv('DOCUMENTS_THROTTLE_RATE', '120/hour'),
     },
 }
 

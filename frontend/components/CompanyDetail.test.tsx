@@ -81,7 +81,14 @@ describe('CompanyDetail', () => {
         const {container} = renderWithProviders(<CompanyDetail company={makeCompany()}/>);
         await user.click(within(tabBar(container)).getByRole('button', {name: zaverky.label}));
 
-        expect(await screen.findByText(/sa do tejto databázy nesťahujú/)).toBeInTheDocument();
+        // The sentence this asserts used to be "sa do tejto databázy nesťahujú
+        // a nemáme ich tu odkiaľ stiahnuť" -- true when it was written, and
+        // false from the moment the register's document routes were found. The
+        // assertion had to move with it; a test that kept the old text would
+        // have been holding the section to a claim it had outgrown.
+        expect(
+            await screen.findByText(/stahujú priamo odtiaľto, z registra účtovných závierok/),
+        ).toBeInTheDocument();
         expect(screen.queryByText(zaverky.note)).not.toBeInTheDocument();
     });
 

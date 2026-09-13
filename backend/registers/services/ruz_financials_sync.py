@@ -87,6 +87,30 @@ _TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)\s*$")
 # See `_is_summary_row`, which is the only place it is stripped.
 _LEADING_SECTION_LETTER = re.compile(r"^[a-z]\.\s+")
 
+
+def statement_year(statement: Dict) -> Optional[int]:
+    """The year a RUZ statement belongs to, or `None` if it does not say.
+
+    Module-level rather than a method because a second caller needs the *same*
+    rule and not a similar one: `companies/services/ruz_documents.py` matches a
+    year back to the statement a stored row was read from, and two rules that
+    disagreed would send a reader to a different filing than the figures on the
+    page came from.
+
+    `obdobieDo` first and `obdobieOd` second -- the end of the period, falling
+    back to its start. A statement covering 2020-01 to 2020-12 is the 2020 one;
+    so is one that records only where it began.
+    """
+    for key in ("obdobieDo", "obdobieOd"):
+        value = statement.get(key)
+        if not value:
+            continue
+        match = re.match(r"^(\d{4})", str(value))
+        if match:
+            return int(match.group(1))
+    return None
+
+
 # The revision of the reading in this module. **Bump it whenever a change here
 # alters what a statement is read as** -- a new label, a fixed section marker, a
 # corrected period column. Bump it if a fix would change a stored value; do not
@@ -112,7 +136,14 @@ _LEADING_SECTION_LETTER = re.compile(r"^[a-z]\.\s+")
 # corpus once with the parser as it stands -- including the three fixes already
 # committed for the 2014 label break, the šablóna 687 vocabulary and the
 # balance-sheet section flag. That is the intent, not a side effect.
-PARSER_REVISION = 1
+#
+# 2 = the row records the `účtovná závierka` it was read from
+# (`ruz_statement_id`), which is what the "Účtovné závierky" download anchors
+# on. Not a reading fix -- the figures are unchanged -- but the field it adds is
+# as absent from the 54 519 stored rows as a new label would be, and the reason
+# to bump is the same one: without it the backfill would be a manual job instead
+# of the rotation doing what it already does.
+PARSER_REVISION = 2
 
 BALANCE_SHEET_KEYS = (
     "suvaha",
@@ -541,6 +572,12 @@ class RuzFinancialsSyncService:
                     # been fixed, and this is the only place that is recorded:
                     # the row stores no template id and no other version marker.
                     "parser_revision": PARSER_REVISION,
+                    # Already in hand: `statement_id` is this loop's own
+                    # variable, so recording which filing the row came from
+                    # costs nothing here and saves a lookup later -- it is what
+                    # `companies/services/ruz_documents.py` anchors a download
+                    # on. See the field's comment in `companies/models.py`.
+                    "ruz_statement_id": statement_id,
                     **{k: v for k, v in financials.items() if v is not None},
                 },
             )
@@ -625,14 +662,7 @@ class RuzFinancialsSyncService:
         return clauses
 
     def _extract_year(self, statement: Dict) -> Optional[int]:
-        for key in ("obdobieDo", "obdobieOd"):
-            value = statement.get(key)
-            if not value:
-                continue
-            match = re.match(r"^(\d{4})", str(value))
-            if match:
-                return int(match.group(1))
-        return None
+        return statement_year(statement)
 
     def _extract_financials_from_reports(self, report_ids: List[int]) -> ExtractionOutcome:
         """Read a statement's reports, and report what there was to read.

@@ -1,8 +1,15 @@
-import {describe, expect, it} from 'vitest';
-import {screen} from '@testing-library/react';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {screen, waitFor} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import {ZaverkySection, plural} from './ZaverkySection';
 import {DEFAULT_COMPANY, makeCompany, makeFinancials, renderWithProviders} from '../../../test/testUtils';
-import type {Company} from '../../../types';
+import type {Company, DocumentListing} from '../../../types';
+
+const mocks = vi.hoisted(() => ({
+    api: {getFinancialDocuments: vi.fn()},
+}));
+
+vi.mock('../../../api', () => ({api: mocks.api}));
 
 const company = (overrides: Partial<Company> = {}): Company =>
     makeCompany({
@@ -47,8 +54,8 @@ describe('ZaverkySection', () => {
 
     it('mentions annual reports only when there are some', () => {
         // The counted forms, not the stem: the closing paragraph names "výročná
-        // správa" among the attachments we do not download, and a bare
-        // `not.toContain('výročn')` would read that as a count.
+        // správa" among the attachments, and a bare `not.toContain('výročn')`
+        // would read that sentence as a count.
         const counted = /výročn(ú správu|é správy|ých správ)/;
 
         const {unmount} = renderWithProviders(
@@ -110,14 +117,19 @@ describe('ZaverkySection', () => {
         expect(bodyText()).toContain('IFRS');
     });
 
-    it('offers the RUZ portal instead of a download it cannot serve', () => {
+    it('still offers the register’s own page, alongside the downloads', () => {
+        // The closing sentence used to read "sa do tejto databázy nesťahujú a
+        // nemáme ich tu odkiaľ stiahnuť", which was true until the register's
+        // document routes were found. The link stays -- a reader checking our
+        // figures against the source should be able to reach it -- but it is no
+        // longer offered *instead of* a download.
         renderWithProviders(
             <ZaverkySection company={company({ruzPortalUrl: 'https://www.ruz.gov.sk/vyhladavanie/12345678'})}/>
         );
 
         const link = screen.getByRole('link', {name: /RUZ portáli/i});
         expect(link).toHaveAttribute('href', 'https://www.ruz.gov.sk/vyhladavanie/12345678');
-        expect(bodyText()).toContain('sa do tejto databázy nesťahujú');
+        expect(bodyText()).toContain('stahujú priamo odtiaľto, z registra účtovných závierok');
     });
 
     it('renders without a portal link when the response carried no URL', () => {
@@ -144,5 +156,140 @@ describe('plural', () => {
 
     it('is exercised by the default fixture, which is a company that files nothing', () => {
         expect(DEFAULT_COMPANY.ruzStatements).toBe(0);
+    });
+});
+
+/**
+ * The downloadable years.
+ *
+ * Four outcomes the section must keep apart, and only one of them is a promise
+ * that a download will work. Collapsing any pair would make the section claim
+ * something it does not know -- most seriously, rendering an unreachable
+ * register as a year with no documents, which states as fact about the company
+ * what is really a fact about our connection.
+ */
+describe('ZaverkySection — downloadable years', () => {
+    const ico = '48097781';
+
+    const listing = (overrides: Partial<DocumentListing> = {}): DocumentListing => ({
+        year: 2023,
+        state: 'listed',
+        documents: [],
+        ...overrides,
+    });
+
+    beforeEach(() => {
+        mocks.api.getFinancialDocuments.mockReset();
+    });
+
+    it('does not ask the register anything until a year is clicked', () => {
+        // Each year costs the backend several calls to registeruz.sk, and a
+        // company with 37 statements would spend all of them to render a
+        // section most readers scroll past.
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+
+        expect(mocks.api.getFinancialDocuments).not.toHaveBeenCalled();
+    });
+
+    it('lists the documents of the clicked year, pointing at our own site', async () => {
+        const user = userEvent.setup();
+        mocks.api.getFinancialDocuments.mockResolvedValue(
+            listing({
+                documents: [
+                    {
+                        id: 'priloha-10831315',
+                        kind: 'priloha',
+                        name: 'Príloha k účtovnej závierke MÚJ.PDF',
+                        mimeType: 'application/pdf',
+                        size: 852398,
+                        pages: 4,
+                        url: `/api/companies/${ico}/financials/2023/documents/priloha-10831315/`,
+                    },
+                ],
+            }),
+        );
+
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+        await user.click(screen.getByRole('button', {name: /2023/}));
+
+        const link = await screen.findByRole('link', {
+            name: /Príloha k účtovnej závierke MÚJ\.PDF/,
+        });
+        expect(link).toHaveAttribute(
+            'href',
+            `/api/companies/${ico}/financials/2023/documents/priloha-10831315/`,
+        );
+        // The whole point of the section: the file arrives from here, not from
+        // a link out to the register.
+        expect(link.getAttribute('href')).not.toContain('registeruz.sk');
+        expect(screen.getByText(/832 kB|833 kB/)).toBeInTheDocument();
+    });
+
+    it('renders an unreachable register as not-knowing, never as an empty year', async () => {
+        const user = userEvent.setup();
+        mocks.api.getFinancialDocuments.mockResolvedValue(listing({state: 'unreachable'}));
+
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+        await user.click(screen.getByRole('button', {name: /2023/}));
+
+        expect(await screen.findByText(/je momentálne nedostupný/)).toBeInTheDocument();
+        expect(screen.getByText(/Nie je to tvrdenie o firme/)).toBeInTheDocument();
+    });
+
+    it('says a year we hold no filing for is about our records, not the register', async () => {
+        const user = userEvent.setup();
+        mocks.api.getFinancialDocuments.mockResolvedValue(listing({state: 'no_statement'}));
+
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+        await user.click(screen.getByRole('button', {name: /2023/}));
+
+        expect(
+            await screen.findByText(/nemáme v našich záznamoch uloženú závierku/),
+        ).toBeInTheDocument();
+    });
+
+    it('distinguishes a listed-but-empty year from both of those', async () => {
+        const user = userEvent.setup();
+        mocks.api.getFinancialDocuments.mockResolvedValue(listing({documents: []}));
+
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+        await user.click(screen.getByRole('button', {name: /2023/}));
+
+        expect(
+            await screen.findByText(/neeviduje žiadny dokument, ktorý by sa dal stiahnuť/),
+        ).toBeInTheDocument();
+    });
+
+    it('shows a failed request as a failure, not as an empty year', async () => {
+        const user = userEvent.setup();
+        mocks.api.getFinancialDocuments.mockRejectedValue(new Error('503'));
+
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+        await user.click(screen.getByRole('button', {name: /2023/}));
+
+        expect(await screen.findByText(/sa nepodarilo načítať/)).toBeInTheDocument();
+    });
+
+    it('opens one year at a time rather than stacking every list', async () => {
+        const user = userEvent.setup();
+        mocks.api.getFinancialDocuments.mockImplementation(
+            () => new Promise<DocumentListing>(() => {}),
+        );
+
+        renderWithProviders(<ZaverkySection company={company({ico})}/>);
+
+        await user.click(screen.getByRole('button', {name: /2023/}));
+        await waitFor(() => expect(mocks.api.getFinancialDocuments).toHaveBeenCalledTimes(1));
+
+        await user.click(screen.getByRole('button', {name: /2022/}));
+        await waitFor(() =>
+            expect(mocks.api.getFinancialDocuments).toHaveBeenLastCalledWith(ico, 2022),
+        );
+
+        // Only the newest year is present -- the 2023 panel is replaced, not
+        // appended to. The mock never resolves, so both years are stuck in the
+        // loading state and the 2023 line is what would linger if they stacked.
+        expect(screen.getByText(/Načítavam závierky za rok 2022/)).toBeInTheDocument();
+        expect(screen.queryByText(/Načítavam závierky za rok 2023/)).not.toBeInTheDocument();
     });
 });

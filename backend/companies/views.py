@@ -4,15 +4,43 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from django.db.models import Q
 from django.utils import timezone
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
+from urllib.parse import quote as urlquote
 from .models import Company, Watchlist, SearchHistory
 from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer, SearchHistorySerializer
 from .services.pdf_report import get_company_report
 from .services.peers import PEER_SCOPES, peers_for
-from .throttles import PeersThrottle, ReportThrottle
+from .services import ruz_documents
+from .throttles import DocumentsThrottle, PeersThrottle, ReportThrottle
+from registers.integrations.ruz_api import RuzUnreachable
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+def _content_disposition(name: str) -> str:
+    """An attachment header that survives a Slovak filename.
+
+    HTTP header values are latin-1, and RUZ's attachment names are full of
+    characters that are not -- `Príloha k účtovnej závierke`, `Účtovný výkaz`.
+    A bare `filename="..."` would either raise or reach the browser mojibake'd,
+    so the name goes out twice: an ASCII-only `filename` for anything that
+    predates RFC 5987, and the real name percent-encoded in `filename*`, which
+    every browser this app targets prefers.
+
+    Control characters and quotes are removed rather than escaped: the value
+    comes from a third-party register, and a name carrying CRLF would inject a
+    header -- `strip()` would not catch one in the middle of a name.
+    """
+    cleaned = ''.join(ch for ch in name if ch.isprintable())
+    ascii_name = (
+        cleaned.encode('ascii', 'ignore').decode('ascii').replace('"', '').replace('\\', '').strip()
+        or 'zavierka'
+    )
+    return (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{urlquote(cleaned, safe='')}"
+    )
 
 
 @api_view(['GET'])
@@ -149,6 +177,8 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             return [ReportThrottle()]
         if self.action == 'peers':
             return [PeersThrottle()]
+        if self.action in ('documents', 'document'):
+            return [DocumentsThrottle()]
         return []
 
     def retrieve(self, request, *args, **kwargs):
@@ -241,6 +271,132 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'financials/(?P<year>[0-9]{4})/documents',
+    )
+    def documents(self, request, ico=None, year=None):
+        """The účtovné závierky that can be downloaded for one year.
+
+        Answers two different questions and keeps them apart: whether there is
+        anything to download, and whether we were able to find out. A failure to
+        reach the register is a `503` with an explicit state, never an empty
+        list -- an empty list here reads as "this company filed nothing", which
+        is a claim about the company rather than about our connection.
+
+        The reader is told the truth about a year we hold no filing for, too:
+        `no_statement` is about our records, and it is the honest answer for a
+        year whose row predates the field until the backfill reaches it.
+        """
+        company = self._company_or_404(ico)
+        if company is None:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        listing = ruz_documents.list_documents(company, int(year))
+        payload = {
+            'year': listing.year,
+            'state': listing.state,
+            'documents': [
+                {
+                    'id': document.id,
+                    'kind': document.kind,
+                    'name': document.name,
+                    'mimeType': document.mime_type,
+                    'size': document.size,
+                    'pages': document.pages,
+                    'url': self._document_url(company, listing.year, document.id),
+                }
+                for document in listing.documents
+            ],
+        }
+        if listing.state == ruz_documents.STATE_UNREACHABLE:
+            return Response(payload, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(payload)
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'financials/(?P<year>[0-9]{4})/documents/(?P<document_id>[a-z]+-[0-9]+)',
+    )
+    def document(self, request, ico=None, year=None, document_id=None):
+        """Stream one závierka document from this site.
+
+        The bytes come from RUZ and go straight to the browser; nothing is
+        written to disk or kept in memory whole. `open_document` re-derives the
+        listing and answers `None` for an id this company and year do not
+        actually have, which is what stops the endpoint being an open proxy onto
+        a register we do not own.
+        """
+        company = self._company_or_404(ico)
+        if company is None:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            opened = ruz_documents.open_document(company, int(year), document_id)
+        except RuzUnreachable as exc:
+            # Same distinction the listing makes, and it matters more here: a
+            # register we could not reach must not be rendered as "this company
+            # has no such document", which is what a 404 would say.
+            logger.warning(
+                'RUZ unreachable downloading %s for ICO %s: %s', document_id, ico, exc
+            )
+            return Response(
+                {"state": ruz_documents.STATE_UNREACHABLE,
+                 "detail": "Registr účtovných závierok je momentálne nedostupný."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if opened is None:
+            return Response(
+                {"detail": "Tento dokument pre túto firmu a rok k dispozícii nie je."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        upstream = opened.response
+        response = StreamingHttpResponse(
+            self._stream(upstream),
+            content_type=upstream.headers.get('Content-Type', 'application/octet-stream'),
+        )
+        response['Content-Disposition'] = _content_disposition(opened.document.name)
+        # The register's own length when it gave one, so the browser can show a
+        # real progress bar rather than an indeterminate spinner.
+        if upstream.headers.get('Content-Length'):
+            response['Content-Length'] = upstream.headers['Content-Length']
+        return response
+
+    @staticmethod
+    def _stream(upstream):
+        """Yield the body in chunks, always closing the upstream response.
+
+        The `finally` is the point: a reader who navigates away mid-download
+        raises `GeneratorExit` into this generator, and without it the connection
+        to RUZ would be left open holding a socket and a half-read body.
+        """
+        try:
+            for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    @staticmethod
+    def _document_url(company, year, document_id):
+        return f"/api/companies/{company.ico}/financials/{year}/documents/{document_id}/"
+
+    def _company_or_404(self, ico):
+        try:
+            return Company.objects.get(ico=ico)
+        except Company.DoesNotExist:
+            logger.warning(f"Company with ICO {ico} not found.")
+            return None
 
     @action(detail=True, methods=['get'], url_path='peers')
     def peers(self, request, ico=None):

@@ -712,6 +712,35 @@ class CompanyFinancialResult(models.Model):
         verbose_name='Revízia parsera',
     )
 
+    # The RUZ `účtovná závierka` this row was read from -- the filing for one
+    # year, and the anchor the documents are reached through.
+    #
+    # Deliberately the *statement* and not the `účtovný výkaz` inside it: one
+    # závierka holds a list of výkazy (súvaha, výkaz ziskov a strát, poznámky),
+    # and which of them carried a given figure is a property of the parser run,
+    # not of the year. Anchoring on the statement is what makes "every document
+    # for this year" well defined; the výkazy are enumerated from it when
+    # someone actually asks (`companies/services/ruz_documents.py`).
+    #
+    # Why store rather than resolve on demand: `_read_company` already holds this
+    # id when it writes the row -- it is that loop's own variable -- so recording
+    # it costs no request at all. Resolving year -> statement at page-view time
+    # instead would mean walking the company's whole statement list and calling
+    # `uctovna-zavierka` for each until one matched the year.
+    #
+    # Nullable because the 54 519 rows already stored were written before this
+    # existed. `ruz_documents` resolves those live and caches the answer here, so
+    # an un-backfilled row costs a request once rather than once per view. NULL
+    # means "we have not recorded this", never "RUZ has no document for this
+    # year" -- the distinction this whole section is built on.
+    ruz_statement_id = models.BigIntegerField(
+        null=True,
+        blank=True,
+        editable=False,
+        db_index=True,
+        verbose_name='ID účtovnej závierky v RUZ',
+    )
+
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Aktualizované')
 
     class Meta:

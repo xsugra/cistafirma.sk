@@ -3,6 +3,7 @@ import {ENABLE_MOCK_DATA} from './constants';
 import {apiRequest} from './lib/apiClient';
 import type {
   Company,
+  DocumentListing,
   HistoryEntry,
   NotificationEvent,
   NotificationPreferences,
@@ -477,6 +478,59 @@ export const api = {
     }
     const data = await apiRequest<any>(`/companies/${ico}/peers/?scope=${encodeURIComponent(scope)}`);
     return mapPeerListResponse(data);
+  },
+
+  /**
+   * The závierky downloadable for one company-year.
+   *
+   * The backend answers `503` with `state: 'unreachable'` when the register
+   * cannot be read, so this rejects rather than resolving to an empty list --
+   * and the rejection is caught by the caller, which says so. Resolving to
+   * `documents: []` here would be the same substitution the state exists to
+   * prevent, moved one layer up where it is harder to see.
+   */
+  getFinancialDocuments: async (ico: string, year: number): Promise<DocumentListing> => {
+    if (ENABLE_MOCK_DATA) {
+      return new Promise((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              year,
+              state: 'listed',
+              documents: [
+                {
+                  id: `vykaz-${year}001`,
+                  kind: 'vykaz',
+                  name: `Účtovný výkaz ${year}`,
+                  mimeType: 'application/pdf',
+                  size: null,
+                  pages: null,
+                  url: `/api/companies/${ico}/financials/${year}/documents/vykaz-${year}001/`,
+                },
+                {
+                  id: `priloha-${year}002`,
+                  kind: 'priloha',
+                  name: 'Príloha k účtovnej závierke MÚJ.PDF',
+                  mimeType: 'application/pdf',
+                  size: 852398,
+                  pages: 4,
+                  url: `/api/companies/${ico}/financials/${year}/documents/priloha-${year}002/`,
+                },
+              ],
+            }),
+          400,
+        ),
+      );
+    }
+    const data = await apiRequest<any>(`/companies/${ico}/financials/${year}/documents/`);
+    return {
+      year: Number(data?.year ?? year),
+      // `?? 'unreachable'` and not `?? 'listed'`: a response that did not carry
+      // a state is one we cannot read, and defaulting to `listed` would render
+      // an empty list as "this company filed nothing".
+      state: (data?.state ?? 'unreachable') as DocumentListing['state'],
+      documents: Array.isArray(data?.documents) ? data.documents : [],
+    };
   },
 
   login: async (identifier: string, password: string): Promise<LoginResult> => {

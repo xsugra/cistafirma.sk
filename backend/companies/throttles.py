@@ -79,3 +79,15 @@ class PeersThrottle(PublicRateThrottle):
     """Scope for `GET /api/companies/<ico>/peers/`."""
 
     scope = 'peers'
+
+
+class DocumentsThrottle(PublicRateThrottle):
+    """Scope for the two `Účtovné závierky` document endpoints.
+
+    Both are `AllowAny` and both spend requests against registeruz.sk, so both
+    take the same bucket: a listing and the download it leads to are one
+    intention, and splitting them into two scopes would let a caller spend the
+    listing budget to enumerate years while the download budget stayed full.
+    """
+
+    scope = 'documents'

@@ -114,8 +114,12 @@ describe('Company page', () => {
         );
 
         // A sentence only the body has: the section's own label is also in the
-        // rail, so matching the title would pass on the navigation alone.
-        expect(await screen.findByText(/sa do tejto databázy nesťahujú/)).toBeInTheDocument();
+        // rail, so matching the title would pass on the navigation alone. It
+        // used to read "sa do tejto databázy nesťahujú" -- true until the
+        // register's document routes were found, and false after.
+        expect(
+            await screen.findByText(/stahujú priamo odtiaľto, z registra účtovných závierok/),
+        ).toBeInTheDocument();
         expect(screen.queryByText('Zatiaľ nemáme')).not.toBeInTheDocument();
     });
 

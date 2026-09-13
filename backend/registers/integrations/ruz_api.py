@@ -26,6 +26,15 @@ class RuzApi:
     Documentation: https://www.registeruz.sk/cruz-public/home/api
     """
     BASE_URL = "https://www.registeruz.sk/cruz-public/api"
+
+    #: Where RUZ serves the documents themselves, one path segment below the
+    #: JSON API. The API documentation names both routes explicitly -- a
+    #: statement's generated PDF at `pdf/<id-vykazu>` and each filed attachment
+    #: at `attachment/<id-prilohy>` -- and says why they sit outside `/api`:
+    #: "Prílohy výkazov sú sprístupňované mimo API cez URL zhodnú so samotnou
+    #: web aplikáciou". There is no JSON endpoint that returns a document body.
+    DOCUMENT_BASE_URL = "https://www.registeruz.sk/cruz-public/domain/financialreport"
+
     HEADERS = {"User-Agent": "CistaFirma SK App / 1.0"}
 
     def __init__(self, timeout: int = 20, raise_on_transport_error: bool = False):
@@ -198,6 +207,47 @@ class RuzApi:
         except requests.exceptions.RequestException as e:
             logger.error("Network error fetching financial report %s: %s", report_id, e)
             self._on_transport_error(f"RUZ unreachable reading report {report_id}", e)
+            return None
+
+    def fetch_document(self, kind: str, document_id: int) -> Optional[requests.Response]:
+        """Open a document from RUZ, or `None` when RUZ has no such document.
+
+        `kind` is `"pdf"` (the generated PDF of one `účtovný výkaz`) or
+        `"attachment"` (one filed attachment). Anything else is a programming
+        error and raises rather than returning `None` -- a caller that mistyped
+        a path would otherwise read it as "RUZ does not have this", which is the
+        exact confusion `RuzUnreachable` exists to prevent elsewhere in this
+        class.
+
+        **The caller owns the returned response and must close it.** It is
+        opened with `stream=True` on purpose: these are PDFs of up to a few
+        megabytes and the caller copies the body straight into an HTTP response,
+        so buffering one here as well would hold it twice.
+
+        A 404 is `None` and not an unreachable registry: RUZ answered, and its
+        answer was that the document is gone. The API documentation says a
+        deleted attachment answers 404, which makes this distinction a real one
+        rather than a defensive habit.
+        """
+        if kind not in ("pdf", "attachment"):
+            raise ValueError(f"unknown RUZ document kind: {kind!r}")
+
+        url = f"{self.DOCUMENT_BASE_URL}/{kind}/{document_id}"
+        try:
+            response = self.session.get(url, timeout=self.timeout, stream=True)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status == 404:
+                logger.info("RUZ %s %s is gone (404).", kind, document_id)
+            else:
+                logger.error("HTTP error fetching RUZ %s %s: %s", kind, document_id, e)
+                self._on_transport_error(f"RUZ refused {kind} {document_id}", e)
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error("Network error fetching RUZ %s %s: %s", kind, document_id, e)
+            self._on_transport_error(f"RUZ unreachable reading {kind} {document_id}", e)
             return None
 
     def get_report_template_details(self, template_id: int) -> Optional[Dict[str, Any]]:

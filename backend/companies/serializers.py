@@ -265,8 +265,27 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         }
 
     def get_ruz_portal_url(self, obj):
+        """The register's own page for this entity.
+
+        **This URL was wrong for as long as it existed, and wrong in the way
+        that looks like it works.** It pointed at
+        `home/uctovna-jednotka?id=<id>`, which is a route RUZ's front end does
+        not serve: requesting it answers with the site's WAF rejection page
+        ("The requested URL was rejected. Please consult your administrator.")
+        and a support id, not a 404 and not the company. Every reader who
+        clicked through from the Účtovné závierky section hit that page.
+
+        The working route is `domain/accountingentity/show/<ruz_id>`, verified
+        against the live register for the id in that report (`1587213`): it
+        answers 200 and renders the correct entity. The id itself was never the
+        problem -- the API accepts it -- so only the path changed.
+
+        Kept as a link even though the documents are now downloadable here: it
+        is the register's own record of the filing, and a reader checking our
+        figures against the source should be able to reach it.
+        """
         if obj.ruz_id:
-            return f"https://www.registeruz.sk/cruz-public/home/uctovna-jednotka?id={obj.ruz_id}"
+            return f"https://www.registeruz.sk/cruz-public/domain/accountingentity/show/{obj.ruz_id}"
         return None
 
     def get_ruz_statements(self, obj):

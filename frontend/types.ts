@@ -364,6 +364,42 @@ export interface PeerList {
     results: PeerRow[];
 }
 
+/**
+ * What can be downloaded for one company-year, and how sure the answer is.
+ *
+ * Four outcomes, and only the first is a promise that a download will work:
+ *
+ * - `listed` with documents — there is something to download.
+ * - `listed` with none — the register answered, and holds nothing for that year.
+ * - `no_statement` — we have no filing tied to that year in our own records.
+ *   A statement about *us*, not about the register.
+ * - `unreachable` — the register could not be read, so we do not know. The
+ *   endpoint answers 503 for this, and it must never be rendered as "no
+ *   documents": that would be a claim about the company invented out of a
+ *   network failure.
+ */
+export type DocumentListingState = 'listed' | 'no_statement' | 'unreachable';
+
+export type RuzDocumentKind = 'vykaz' | 'priloha';
+
+export interface RuzDocument {
+    /** This app's own handle (`'priloha-8736666'`), not a register URL. */
+    id: string;
+    kind: RuzDocumentKind;
+    name: string;
+    mimeType: string | null;
+    size: number | null;
+    pages: number | null;
+    /** Where to download it from *here*. Never a registeruz.sk address. */
+    url: string;
+}
+
+export interface DocumentListing {
+    year: number;
+    state: DocumentListingState;
+    documents: RuzDocument[];
+}
+
 export interface Executive {
     name: string;
     role: string;
