@@ -13,6 +13,7 @@ neither. Only the first is implemented, and the tests below are as much about
 what refuses to join as about what joins.
 """
 
+from datetime import date
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -269,6 +270,62 @@ class PersonGroupingAPITests(APITestCase):
         second = self.client.get(f"/api/persons/{self.empty_row.pk}/").json()
         self.assertEqual(first["companies"], second["companies"])
         self.assertEqual(first["members"], second["members"])
+
+    def test_an_undated_relation_does_not_contradict_a_dated_one(self):
+        """Grouping can put two relations for one office side by side where a
+        single row never did. The register's legend spells "nevieme" out as
+        "this company has not been read yet" -- printed under a dated relation
+        for the same office in the same company, that sentence is false: we
+        demonstrably read it. The undated row states no period, so it cannot be
+        a second tenure, and it is the one that goes."""
+        dated = Person.objects.create(
+            fingerprint="name:jozef novak|addr:bratislava, 811 03",
+            name="Jozef Novák",
+            address="Bratislava, 811 03",
+        )
+        undated = Person.objects.create(
+            fingerprint="name:jozef novak|addr:",
+            name="Jozef Novák",
+        )
+        PersonCompanyRelation.objects.create(
+            person=dated, company=self.company, role="konatel",
+            is_active=True, vznik_funkcie=date(2019, 5, 18),
+        )
+        PersonCompanyRelation.objects.create(
+            person=undated, company=self.company, role="konatel", is_active=None,
+        )
+
+        companies = self.client.get(f"/api/persons/{dated.pk}/").json()["companies"]
+
+        self.assertEqual(len(companies), 1)
+        self.assertIs(companies[0]["is_active"], True)
+        self.assertEqual(companies[0]["vznik_funkcie"], "2019-05-18")
+
+    def test_a_real_second_tenure_is_not_collapsed(self):
+        """The rule above drops rows that state no period. It must not become a
+        rule that hides history: two dated tenures in one office are two facts
+        and both stay."""
+        person = Person.objects.create(
+            fingerprint="name:jozef novak|addr:bratislava, 811 03",
+            name="Jozef Novák",
+            address="Bratislava, 811 03",
+        )
+        PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role="konatel",
+            is_active=False, vznik_funkcie=date(2005, 1, 1),
+            zanik_funkcie=date(2010, 6, 30),
+        )
+        PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role="konatel",
+            is_active=True, vznik_funkcie=date(2019, 5, 18),
+        )
+
+        companies = self.client.get(f"/api/persons/{person.pk}/").json()["companies"]
+
+        self.assertEqual(
+            sorted(c["vznik_funkcie"] for c in companies),
+            ["2005-01-01", "2019-05-18"],
+        )
 
     def test_the_company_graph_draws_one_node_per_person(self):
         data = self.client.get(f"/api/companies/{self.company.ico}/graph/").json()

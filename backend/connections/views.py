@@ -191,6 +191,16 @@ def _merged_relations(member_ids, grouped):
     is one fact. The richer copy wins -- an `is_active` we actually read beats
     the `null` that means we never read that company's history, and the
     register's own wording beats the enum's label.
+
+    A relation with no dates at all is then dropped when the same company and
+    role has one that is dated. It is not a second tenure: it states no period,
+    so it cannot be one, and it renders as "nevieme" -- which the register's own
+    legend spells out as "we have not read this company yet". Next to a dated
+    relation for the same office in the same company, that sentence is false:
+    we demonstrably did read it. Measured on 2026-09-13, this drops 4 lines in
+    the whole table, all of them created by grouping -- one row alone never
+    showed the pair. Dated relations are never collapsed into each other, so a
+    real second tenure survives.
     """
     payloads = [
         item for person_id in member_ids for item in grouped.get(person_id, [])
@@ -207,7 +217,18 @@ def _merged_relations(member_ids, grouped):
             order.append(key)
         elif _is_richer(item, current):
             best[key] = item
-    return [best[key] for key in order]
+
+    merged = [best[key] for key in order]
+    dated_offices = {
+        (item["ico"], item["role"])
+        for item in merged
+        if item["vznik_funkcie"] or item["zanik_funkcie"]
+    }
+    return [
+        item for item in merged
+        if item["vznik_funkcie"] or item["zanik_funkcie"]
+        or (item["ico"], item["role"]) not in dated_offices
+    ]
 
 
 class CompanyGraphView(APIView):
