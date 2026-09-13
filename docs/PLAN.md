@@ -508,6 +508,27 @@ adresu nemal vôbec. Zvyšných 13 sú skutočné zahraničné adresy
   dátum aj k adrese, z našich dát **nezistíme** — to by chcelo čítanie
   z registra, nie dopyt do databázy.
 
+**Odporúčanie (na jedno slovo).** Spraviť **krok 2 a krok 4 spolu, v jednom
+incrementu a úzko**: stĺpec pribudne a parser dostane **jednu** vetvu pre
+prefix `Dátum narodenia:` — tá hodnota sa uloží do stĺpca a do `address_lines`
+sa nepridá. Všeobecné pravidlo „riadok s dvojbodkou nie je adresa" **nie** —
+13 platných zahraničných adries je dôkaz, že je nesprávne.
+
+Prečo úzko a prečo vôbec: záchytná vetva na riadku 468 je **všeobecná chyba
+(všetko nespoznané sa stane adresou), ale NIE je to všeobecne opraviteľné** —
+register píše do toho istého miesta adresy aj ďalšie údaje a my nevieme, ktoré.
+Prefix `Dátum narodenia:` je jediný tvar, o ktorom to vieme **isto**, lebo ho
+register pomenúva. Test naň patrí k zmene; dnešný stav (14 riadkov, kde je
+dátum celá adresa) je meranie, nie odhad.
+
+**Existujúcich 14 riadkov sa nedotkneme** — rovnako ako pri #89 sa neprepisuje
+to, čo už je uložené. Opraví ich **#95 sám**: tie firmy sú v rotácii, ktorá
+beží, a keď sa prečítajú znova, zapíšu sa už správne. Migrácia dát by teda
+robila ručne to, čo bežiaca rotácia spraví za sebou.
+
+Bez tohto rozhodnutia sa nič nedeje a nič nestráca — krok 2 ostáva aditívny
+a vratný, `address` sa nemení, kým sa krok 4 nedokončí.
+
 **Testy.** `connections/tests_identity.py` — 34 testov (holé funkcie aj API).
 Sada `connections` je **72 OK** (38 pôvodných + 34 nových); frontend 239 OK,
 `typecheck`, `build`. Kľúčové prípady: skutočné Vácha riadky 44903/44904/45335
