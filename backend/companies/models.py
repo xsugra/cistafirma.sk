@@ -2,6 +2,9 @@ from django.db import models
 from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
+from companies import seat_matching
+from companies.address import psc_key
+
 
 # Číselník právnych foriem s gettext markermi pre i18n
 LEGAL_FORMS = {
@@ -319,6 +322,60 @@ class Company(
         null=True,
         help_text="Adresa účtovnej jednotky, PSČ",
         db_column="PSČ",
+    )
+
+    # Sídlo umiestnené na skutočný adresný bod, nad rámec `PostalCodeArea`.
+    #
+    # `postal_code` je to, čo mapa kreslila doteraz — kruh okolo stredu PSČ,
+    # ktorého stred je od vlastných adresných bodov medián 1 980 m. `building`
+    # je budova z registra adries (`AddressPoint`); `street` je stred ulice,
+    # keď budova známa nie je. Prázdne pole znamená, že firmu umiestniť nevieme
+    # — a to je čestný stav, nie chyba: **14,5 %** riadkov (65 324 zo 449 764)
+    # má adresu, ktorú register adries neumiestni, a tie si nechajú PSČ kruh.
+    #
+    # To číslo je z celého behu, nie zo vzorky. Skoršie znenie tu malo 20,9 %,
+    # čo je doplnok k 79,1 % — k číslu z 4 000-firmového výseku `order_by(
+    # "ruz_id")[:4000]`, ktorý je geografická hlava krajiny a ktorý #98 zahodil.
+    # Rozdiel 6,4 bodu je presne tá chyba, ktorú tu celý čas pomenúvame: číslo,
+    # ktorého populácia nie je tá, ktorú veta tvrdí.
+    #
+    # `seat_precision` je **tvrdenie o presnosti**, preto je to vlastný stĺpec
+    # a nie odvodenina z toho, či súradnica existuje: budova sa kreslí ako bod
+    # a ulica ako kruh, a zámena tých dvoch je presne tá nadsázka, ktorú #98
+    # pomenoval.
+    #
+    # Stĺpce sú odvodené a prepočítateľné (`match_seat_addresses`); zdrojom
+    # pravdy zostáva `ulica`/`mesto`/`psc` vyššie. Nepíše ich synchronizácia
+    # z RUZ, takže import firmy ich neprepíše.
+    seat_lat = models.FloatField(blank=True, null=True, verbose_name='Sídlo — zemepisná šírka')
+    seat_lon = models.FloatField(blank=True, null=True, verbose_name='Sídlo — zemepisná dĺžka')
+    seat_precision = models.CharField(
+        max_length=20,
+        blank=True,
+        choices=seat_matching.SEAT_PRECISION_CHOICES,
+        verbose_name='Presnosť sídla',
+        help_text='building = budova, street = stred ulice, postal_code = len PSČ',
+    )
+    seat_radius_m = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name='Polomer sídla (m)',
+        help_text='0 pri budove; pri ulici polomer, ktorý pokryje 90 % jej bodov',
+    )
+    seat_point_count = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name='Počet adresných bodov',
+        help_text='Z koľkých bodov registra je sídlo počítané',
+    )
+    seat_tier = models.CharField(
+        max_length=40,
+        blank=True,
+        verbose_name='Vrstva párovania',
+        help_text='Ktorá vrstva odpovedala (psc_ulica_orient, …) — dôkaz, nie popis',
+    )
+    seat_matched_at = models.DateTimeField(
+        blank=True, null=True, verbose_name='Sídlo spárované'
     )
     datum_zalozenia = models.DateField(
         blank=True,
@@ -898,9 +955,85 @@ class PostalCodeArea(models.Model):
         nesadli. Presne tá chyba, ktorú má #90 pomenovanú pri IČO: dve rôzne
         normalizácie na dvoch koncoch toho istého toku.
 
-        Zámerne sa **nedopĺňajú** chýbajúce znaky ani sa neodhaduje krajina —
-        čo nesedí na päťznakový kľúč, to sa jednoducho nenájde a vypíše sa.
+        Telo je `companies.address.psc_key`, pretože ten istý kľúč stavia aj
+        `match_seat_addresses` a `import_address_points`. Kým bol tento kód
+        napísaný dvakrát, tie dve strany sa rozišli presne na tých troch
+        hodnotách: import medzeru odstránil, matcher ju `normalize_text`-om
+        nechal, a každá PSČ vrstva pre tie firmy ticho minula. Definícia je
+        preto v `address.py` — `models.py` importuje `seat_matching`, takže
+        opačný smer by bol cyklus.
         """
-        if not value:
-            return ''
-        return ''.join(str(value).split())
+        return psc_key(value)
+
+
+class AddressPoint(models.Model):
+    """Jeden adresný bod registra adries MV SR — budova, nie oblasť.
+
+    `PostalCodeArea` je hrubá vrstva: PSČ, ktorého stred je od vlastných
+    adresných bodov medián 1 980 m. Toto je jemná vrstva — **ten istý súbor**,
+    ktorý už sťahujeme, len s ulicou, oboma číslami a súradnicou, takže firma
+    sa dá umiestniť na svoju budovu namiesto na stred PSČ. Žiadny nový zdroj,
+    žiadna registrácia, žiadna karta.
+
+    `ulica` je **kľúč, nie popis**: je to výstup `companies.address.street_key`
+    a tou istou funkciou prechádzajú obe strany spojenia — tento import aj naše
+    vlastné riadky. Rovnaká disciplína ako pri `PostalCodeArea.psc`. Zdroj píše
+    `Bratislavská ulica`, `17.novembra` a `m. schneidra trnavskeho`, naše riadky
+    `Bratislavská`, `17. novembra` a `M. Schneidra-Trnavského`; bez spoločnej
+    normalizácie by tie riadky ticho nesadli.
+
+    Riadok s **prázdnym `ulica` je vidiecky** — register tak označuje 973 318
+    zo svojich 1 739 536 riadkov a číslo potom nesie adresu samo. Do tejto
+    tabuľky sa ich dostane **943 949**, zvyšok nemá súradnicu; to je celý rozdiel
+    medzi 1 739 536 riadkami súboru a 1 704 346 riadkami tabuľky. Preto
+    neexistuje druhá sada stĺpcov pre vidiek: je to ten istý kľúč s prázdnym
+    názvom ulice.
+
+    Tabuľka je **referenčná a nahradzovaná celá** pri každom importe (štvrťročne,
+    ako zdroj), preto nemá `imported_at` po riadkoch — to by 1,7-miliónkrát
+    zopakovalo jeden údaj. Kedy je snímka z dátumu zdroja nesie `source_version`
+    a hlásenie príkazu.
+    """
+
+    psc = models.CharField(max_length=5, verbose_name='PSČ')
+    obec = models.CharField(
+        max_length=200,
+        verbose_name='Obec',
+        help_text='Normalizovaná podoba — kľúč spojenia s Company.mesto',
+    )
+    ulica = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name='Ulica',
+        help_text='Normalizovaný kľúč; prázdne = vidiecky riadok, adresu nesie číslo',
+    )
+    supisne_cislo = models.CharField(max_length=20, blank=True, verbose_name='Súpisné číslo')
+    orientacne_cislo = models.CharField(max_length=20, blank=True, verbose_name='Orientačné číslo')
+
+    lat = models.FloatField(verbose_name='Zemepisná šírka')
+    lon = models.FloatField(verbose_name='Zemepisná dĺžka')
+
+    source_version = models.CharField(
+        max_length=40,
+        blank=True,
+        verbose_name='Verzia zdroja',
+        help_text='dct:modified datasetu, z ktorého dáta sú (formát YYYY-MM-DD)',
+    )
+
+    class Meta:
+        verbose_name = 'Adresný bod'
+        verbose_name_plural = 'Adresné body'
+        indexes = [
+            # Štyri sady stĺpcov a nič viac. Uličná vrstva je obslúžená
+            # vedúcimi stĺpcami budovového indexu a vidiek je tá istá trojica
+            # s prázdnou ulicou, takže na obe netreba index zvlášť.
+            models.Index(fields=['psc', 'ulica', 'orientacne_cislo'], name='addr_psc_ul_orient_idx'),
+            models.Index(fields=['psc', 'ulica', 'supisne_cislo'], name='addr_psc_ul_supis_idx'),
+            models.Index(fields=['obec', 'ulica', 'orientacne_cislo'], name='addr_obec_ul_orient_idx'),
+            models.Index(fields=['obec', 'ulica', 'supisne_cislo'], name='addr_obec_ul_supis_idx'),
+        ]
+
+    def __str__(self):
+        street = self.ulica or self.obec
+        number = self.orientacne_cislo or self.supisne_cislo
+        return f'{street} {number}, {self.psc}'.strip()
