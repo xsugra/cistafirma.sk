@@ -2062,6 +2062,59 @@ tento projekt rieši inde („kontrola musí súdiť výsledok, nie záťaž"): 
 Zámerne **nemenené** — doplniť `SyncJob` záznam znamená zasiahnuť do bežiacej
 úlohy a je to samostatná zmena, nie súčasť #95.
 
+### Keď sa #99 zasekne, nemá to ako zakričať — prah je nad maximum, ktoré systém dokáže vyrobiť
+
+Predošlý nález hovorí, že #95 nemá `SyncJob`. Toto je **mechanizmus**, ktorým
+jeho zaseknutie zostane tiché aj tak — a je to nález o #99, nie o #95.
+
+Od chvíle, keď je #99 nasadené, platí pre frontu `orsr` tvrdenie, ktoré sa dá
+overiť z kódu: dispatcher nikdy nedovolí, aby fronta prekročila `bound`.
+
+```python
+headroom = max(0, bound - backlog)      # tasks.py:938
+limit = min(limit, headroom)            # tasks.py:945
+if limit <= 0: return f"Held back: …"   # tasks.py:948
+```
+
+Pri `backlog = 6 000` je `headroom = 0`, teda `limit = 0` a **odošle sa nula**.
+Fronta `orsr` teda z person-history práce nikdy neprekročí ~6 000 (plus 200
+z ORSR rotácie). A teraz ten prah, ktorý ju má strážiť:
+
+| miesto | hodnota |
+|---|---|
+| `scripts/local/ops_check.sh:59` — zdôvodnenie | `orsr` „drain to zero … sit at 0 in steady state" |
+| `scripts/local/ops_check.sh:92` — prah | **50 000** |
+| maximum, ktoré #99 dokáže vyrobiť | **~6 000** |
+
+Prah je **osemkrát nad tým, čo systém dokáže vyrobiť**. Nemôže sa teda nikdy
+spustiť — a to ani vtedy, keď je #95 naozaj zaseknuté, čo je presne ten stav,
+pre ktorý existuje. Je to tá istá trieda ako `sync_health` a jeho slepé okno
+`failed`: kontrola, ktorá nemá ako zlyhať, lebo jej prah leží mimo dosahu.
+
+A čo naozaj zakričí, keď sa to zasekne? Nič:
+
+```python
+logger.info("Person-history resync throttled: orsr holds %s, …")   # :941  INFO
+return f"Held back: orsr backlog {backlog} is at or above …"       # :948  reťazec
+```
+
+`logger.info` nikto nečíta a návratový reťazec je výsledok Celery tasku — ten
+expiruje za deň a nemá ho kto prečítať. Úloha navyše **nie je `BaseSyncTask`**,
+takže nevznikne ani `SyncJob`, a `grep person_history scripts/local/ops_check.sh`
+je prázdny. Overené: jediné miesto v celom repe, ktoré to slovo vôbec
+spomína, je `tests_person_history.py:266` (`assertIn("Held back", result)`).
+
+**Dôsledok:** #95 sa môže zaseknúť na tom bounde a navonok to vyzerá ako
+„beží" — fronta stojí presne na 6 000, dáta sa nehýbu a `make ops-check`
+prejde. To je horšie než pred #99: pred ním fronta rástla donekonečna, čo bolo
+aspoň vidieť.
+
+**Odporúčanie** (neimplementované, patrí k #99, nie k #95): strážiť nemá hĺbku
+fronty, ale **stav held-back** — to je jediná vec, ktorá naozaj znamená poruchu.
+Prah hĺbky treba znížiť pod maximum (`> 6 000` je nedosiahnuteľné) alebo
+prepísať ako `warning`, aby aspoň zostala stopa. Presné číslo nechávam na
+rozhodnutie, lebo meniť prah operatívnej kontroly je samostatná vec.
+
 ### Počítadlo v `PeriodicTask` sa pri dvoch úlohách nepíše vôbec
 
 ```
