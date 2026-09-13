@@ -697,7 +697,7 @@ o 17:20 mohol ticho zhodiť, a všetky štyri držia.** Bolo by trápne čakať
 | článok | ako som ho overil | výsledok |
 |---|---|---|
 | dispatcher je na živom workerovi | `celery inspect registered` | `registers.tasks.schedule_person_history_resync` **aj** `read_person_history [rate_limit=15/m]` sú registrované |
-| fronta má svojho konzumenta | `inspect active_queues` | frontu `celery` aj `orsr` odoberá `worker_orsr` |
+| fronta má svojho konzumenta | `inspect active_queues` | každý worker odoberá **práve jednu** frontu: `celery`→`worker_default`, `orsr`→`worker_orsr`. Dispatcher teda nepristane na tom istom workerovi, ktorý sa o chvíľu zaplaví 2 000 úlohami |
 | selektor je naozaj živý a je to cursors | `person_history_batch(5)` | vráti `[3901, 3896, 3904, 3905, 3903]`; najstaršie `last_synced_at` v populácii je **2026-08-05 07:39**, koniec fronty **2026-09-13 13:32** |
 | čítač nemôže zahodiť `rpo_id` | `refresh_person_history` (`rpo_sync.py:239-250`) | `payload = dict(profile.raw_payload or {})` — **zlúči**, neprepíše; a ORSR fallback je tam výslovne vypnutý práve preto, že `rpo_id` zhadzuje |
 
@@ -713,6 +713,23 @@ profiles-every-4-hours`, ktorý vystrelil o 12:58:47. Dva vzorky nie sú dôkaz,
 takže som to dohľadal v kóde — a je to ten istý mechanizmus ako v riadku
 „čítač nemôže zahodiť `rpo_id`" vyššie: čítač payload zlučuje, takže cudzie
 kľúče prežijú.
+
+**Dva workery boli medzitým reštartované a tabuľka v § 2 to neuvádza.**
+`docker inspect` dáva `celery_worker_default` **12:13:05,8** a
+`celery_worker_orsr` **12:13:06,3** (`celery_beat` beží od 10:28:12,5).
+Tabuľka vyššie pozná len reštarty 10:30:05 a 10:35:59 — tie boli moje, kvôli
+novému kódu; o 12:13 som nič reštartovať nešiel. Podľa mechanizmu, ktorý § 2
+opisuje, mohol reštart `orsr` workera o 12:13:06 ticho zhodiť až
+(prefetch 4 × concurrency 2) = **10** rozbehnutých čítaní — a padol **doprostred
+ručnej dávky**, ktorá bežala 10:37:00 → 12:51:16.
+
+Že sa tak nestalo, sa dá povedať len nepriamo: `done` je 2 489 a dávka bola
+2 000, takže ak pred dávkou bolo 489, sedí to na jednotku a nič sa nestratilo.
+To „ak" je poctivá hranica tohto tvrdenia — počiatočný stav som si pred dávkou
+nezapísal. Je to tá istá trieda ako deväť stratených z dymového testu: **reštart
+workera je jediná operácia, ktorá vie zmazať prácu bez jedinej stopy v logu**,
+a preto sa počas 17:20 dávky nemá robiť. Ak by ju bolo treba, správne poradie je
+počkať na `orsr=0`, nie reštartovať pod záťažou.
 
 ---
 
