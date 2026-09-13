@@ -545,15 +545,25 @@ nedoplnil, takže graf o všetkých väzbách tvrdil, že trvajú. Nový číta�
 (`read_person_history`) to vie a **beží** — toto je stav dopĺňania, nie nová
 práca. Overené 2026-09-13 na bežiacej databáze:
 
-| | |
-|---|---|
-| RPO profily (`rpo_id`) | 24 601 |
-| z toho s prečítanou históriou (`osoby_historia`) | 2 398 |
-| **čaká** | **22 223** |
-| väzby celkom | 92 928 |
-| — `is_active=True` | 5 454 |
-| — `is_active=False` | 26 103 |
-| — `is_active IS NULL` (nevieme) | 61 371 |
+| | 11:00 | 13:34 |
+|---|---|---|
+| RPO profily (`rpo_id`) | 24 601 | **24 712** |
+| z toho s prečítanou históriou (`osoby_historia`) | 2 398 | **2 489** |
+| **čaká** | **22 223** | **22 223** |
+| väzby celkom | 92 928 | — |
+| — `is_active=True` | 5 454 | — |
+| — `is_active=False` | 26 103 | — |
+| — `is_active IS NULL` (nevieme) | 61 371 | — |
+
+**Fronta sa nedá čítať ako pokrok — a to je druhá pasca tohto čísla.** Za tie
+necelé tri hodiny stúpol počet prečítaných histórií o **91** (2 398 → 2 489),
+ale `pending_person_history()` je **22 223 v oboch meraniach**: populácia
+`rpo_id` totiž rastie tiež (+111), lebo rotácia ORSR priebežne pridáva nové
+profily. Prírastok a úbytok sú takmer rovnaké, takže fronta stojí na mieste,
+hoci práca pribúda. Identita `rpo_id − osoby_historia = čaká` sedí presne
+(24 712 − 2 489 = 22 223); v pôvodnej tabuľke nesedela o 20, čo znamená, že
+tie tri čísla neboli namerané v jednom okamihu. **Miera pokroku je počet
+prečítaných (2 489), nie dĺžka fronty.**
 
 Jedna dávka **2 000** firiem prebehla **ručne** 10:36:14 → 12:51:16 UTC, teda
 2 h 15 min pri ~14,8 firmy za minútu — presne na strope `rate_limit='15/m'`.
@@ -567,10 +577,19 @@ a `_drop_person_history_marker` ju **zoberie späť**, keď extrakcia zlyhá, ab
 firma ostala na čakaní a skúsila sa zas, namiesto toho aby ticho zmizla.
 Populácia sa preto zmenšuje z oboch strán.
 
-**Odhad dobehu.** 22 223 ÷ 2 000 na tick ≈ **11 tickov ≈ 44 hodín**. Jedna
-dávka trvá 2 h 15 min, takže sa do 4-hodinového intervalu vmestí s ~1 h 45 min
-rezervou — **úzkym miestom nie je fronta, ale interval**. Fronta `orsr` má 127
-správ a prah varovania je 50 000, takže 2 000-ový skok je bezpečný.
+**Odhad dobehu.** 22 223 ÷ 2 000 na tick ≈ **11 tickov ≈ 44 hodín** — ale len
+ak populácia `rpo_id` prestane rásť. Keďže medzitým rastie (vyššie), je to
+skôr horná hranica než plán; správne meranie je prírastok `osoby_historia`
+za tick, nie úbytok fronty. Jedna dávka trvá 2 h 15 min, takže sa do
+4-hodinového intervalu vmestí s ~1 h 45 min rezervou — **úzkym miestom nie je
+fronta, ale interval**. Fronta `orsr` má 127 správ a prah varovania je 50 000,
+takže 2 000-ový skok je bezpečný.
+
+**Tretí spôsob, ako firma z fronty zmizne — a tiež to nie je pokrok.** Keď RPO
+k IČO nevráti entitu, `RpoSyncService.sync_company` zalomí na HTML čítačku
+(`rpo_sync.py:131-133`), a tá `raw_payload` prepíše **celý a bez `rpo_id`**.
+Profil tým z `pending_person_history()` vypadne a jeho už prečítaná história
+zmizne — potichu. Nameraných 16 takých profilov; mechanizmus je v § 7.
 
 **Jedna vec, ktorá sa dá prečítať zle.** Beat riadok
 `refresh-person-history-every-4-hours` má `last_run_at=None`
@@ -916,6 +935,17 @@ rovnicu neposudzuje — nesľubuje teda viac, než vie.
   zožerie RAM hostiteľa", čo sa 12. 9. aj stalo (~5 GB). Limit (napr. 1–2 GB)
   by z neobmedzeného rastu spravil hlasité a ohraničené zlyhanie zápisu.
   Zámerne **nemenené**: je to zásah do bežiacej „produkčnej" zostavy.
+- ⚠️ **V `.git/config` je remote s heslom v čistom texte.** Overené
+  2026-09-13: `git remote -v` vracia pre `gitlab`
+  `http://root:<heslo>@localhost:8088/web/cistafirma.git` — meno aj heslo sú
+  súčasťou URL. Súbor nepatrí do repa, takže sa nikam necommitne; je to ale
+  čitateľný poverený údaj na disku a pri použití tohto remote sa objaví
+  v zozname procesov aj v histórii shellu. Kanonický remote je pritom
+  **`gitlab-home`** (`ssh://git@gitlab.home.arpa:2222/web/cistafirma.sk.git`),
+  čiže `gitlab` je aj zastaraný. Zámerne **nemenené**: `git remote remove`
+  je zásah do konfigurácie repa a nie je moje. Správny krok je remote
+  odstrániť **a** to heslo v GitLabe rotovať — odstránenie samotné nestačí,
+  keďže hodnota už raz na disku v čitateľnej podobe bola.
 - ℹ️ **`ruz_statement_id`** je zatiaľ na 11 z 58 197 riadkov. Dopĺňa ho
   12-hodinový `schedule_ruz_financials_sync`. **Funkciu to neblokuje** —
   `ruz_documents` si id odvodí naživo a uloží, takže chýbajúci záznam
@@ -952,6 +982,39 @@ rovnicu neposudzuje — nesľubuje teda viac, než vie.
   späť. Nič z tej zmeny nebolo commitnuté a nie je čo riešiť; záznam
   ostáva len preto, aby bolo vidno, že sa to stratilo zámerne a nie
   omylom.
+
+- ⚠️ **Fallback v `RpoSyncService.sync_company` ticho zmaže `rpo_id` aj
+  prečítanú históriu funkcií.** Keď RPO k IČO nevráti entitu, služba zalomí
+  na HTML čítačku (`rpo_sync.py:131-133`:
+  `return OrsrSyncService().sync_company(company)`). Tá zapisuje
+  `raw_payload` **celý naraz** (`orsr_sync.py:56`) — a jej `structured`
+  (vlastná `_build_structured`, `orsr_scraper.py:96`) `osoby_historia`
+  neobsahuje a `rpo_id` nevysiela vôbec. Dôsledok pre #95: profil vypadne
+  z `pending_person_history()` (ktorá vyžaduje `raw_payload__has_key='rpo_id'`)
+  a jeho už prečítaná história zmizne — **potichu, a navonok to vyzerá ako
+  pokrok**, lebo fronta sa skráti.
+
+  Namerané 2026-09-13: z 24 948 profilov má **236** bez `rpo_id`, z toho
+  **16** nesie presne tento odtlačok (`structured` bez `rpo_id`). Je to teda
+  reálna, ale **malá a približne stabilná** populácia — `pending_person_history`
+  ju sama dokumentuje na 231, takže nejde o záplavu. Zámerne **nemenené**:
+  správna oprava je, aby fallback zapísal len polia, ktoré HTML čítačka
+  naozaj čítala, a `raw_payload` nechal na pokoji — a to je zmena správania
+  synchronizácie.
+
+- ⚠️ **220 profilov sú čisté zlyhania a nevyzdvihne ich ani jeden selektor.**
+  `OrsrSyncService.sync_company` pri `OrsrScraperError` založí profil cez
+  `get_or_create(company=..., defaults={"ico": ...})` (`orsr_sync.py:67-70`),
+  teda riadok s `fetch_ok=False`, `last_error`, prázdnym `obchodne_meno`
+  aj `sidlo` a `raw_payload={}`. Overené 2026-09-13: prázdne `obchodne_meno`
+  má **220** profilov a je to **presne tá istá množina** ako `fetch_ok=False`
+  (220), `raw_payload={}` (220), `last_error` nastavený (220) a `rpo_id`
+  (0) — päť rôznych počtov, jeden zhodný riadok. Ani jeden z troch
+  selektorov, ktoré som čítal, ich nevyzdvihne: `pending_person_history()`
+  chce `rpo_id`, `fetch_orsr_data --only-missing` chce
+  `orsr_profile__isnull=True` (profil existuje), `sync_orsr_filtered` chce
+  `raw_payload.structured` (je `{}`). Firma s takým riadkom teda ostáva bez
+  ORSR údajov. Zámerne **nemenené** — je to zmena selekcie, nie porucha.
 
 ---
 
