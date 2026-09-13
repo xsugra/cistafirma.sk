@@ -98,6 +98,18 @@ všetky s nulou spracovaných položiek.
 
 ## 3. Čaká na prácu
 
+### Hľadanie osôb — „v akých firmách figuruje Miroslav Trnka"
+
+Samostatný návrh: `docs/PLAN-OSOBY.md`. Zhrnutie: ORSR to vie naživo
+(`search_osoba.asp`), ale **sync podľa mena netreba** — graf osôb už máme
+(44 897 osôb, 64 128 väzieb, 19 906 firiem) a endpoint
+`/api/persons/<id>/` na „v akých firmách figuruje" už existuje. Chýba len
+hľadanie podľa mena. **Blokuje to jedna chyba:** `is_active` sa zapisuje
+natvrdo ako `True` a `zanik_funkcie` sa nikdy nedopĺňa, hoci RPO `validTo`
+posiela a klient ho aj parsuje — takže naša databáza dnes o všetkých
+64 128 väzbách tvrdí, že sú aktuálne.
+
+
 ### #85 — Minimapa so sídlom firmy (rozhodnuté)
 
 Podobne ako to má FinStat. Prieskum dopadol výborne:
