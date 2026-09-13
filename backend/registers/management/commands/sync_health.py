@@ -58,6 +58,15 @@ register's changes went unread. Every condition above was green, and correctly
 so: nothing had failed. The window was the only place the truth was written
 down, and nothing was reading it.
 
+**Except while Focus Mode is on**, which switches the RUZ beat entry off
+(`fetch_ruz_data_task` is deliberately absent from `FOCUS_KEEP_TASKS`). Then no
+run is meant to move the window, its age is a fact about the operator rather
+than about the sync, and the condition is skipped with the reason printed --
+the same carve-out `source_health` already makes for the sources Focus Mode
+silences. Without it, entering Focus Mode and leaving it running for a few days
+would redden the gate for a documented action and explain it with a sentence
+that is false: there were no runs to report success.
+
 Read-only: it issues SELECTs and writes nothing.
 """
 
@@ -70,7 +79,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from registers.models import SyncJob, SyncProgress
+from registers.models import SyncFocusModeState, SyncJob, SyncProgress
 from registers.services.sync_engine import is_stuck, stuck_heartbeat_threshold
 
 DEFAULT_QUEUED_MINUTES = 720
@@ -309,6 +318,17 @@ class Command(BaseCommand):
                 "    (no incremental sync has ever been recorded -- not judged, "
                 "because an absence is not evidence of a stall)"
             )
+        # Focus Mode switches the RUZ beat entry off -- `fetch_ruz_data_task`
+        # is deliberately absent from `FOCUS_KEEP_TASKS` -- so while it is
+        # active no run is meant to move this window and its age says nothing
+        # about the sync. Judging it would redden the gate for a documented
+        # operator action, and would explain it with "every run since has
+        # reported success" -- a sentence that is false precisely because there
+        # were no runs. The sibling control settled this first: `source_health`
+        # names the sources Focus Mode silences instead of judging them.
+        focus_mode_active = self._focus_mode_active()
+        paused_by_focus_mode: list[str] = []
+
         for progress in windows:
             if progress.zmenene_od is None:
                 # Written by a run that never got as far as choosing a window.
@@ -321,7 +341,10 @@ class Command(BaseCommand):
 
             age_days = (now.date() - progress.zmenene_od).days
             judged = progress.status in WINDOW_JUDGED_STATUSES
-            if judged and age_days > window_max_age_days:
+            if judged and focus_mode_active:
+                verdict = "--"
+                paused_by_focus_mode.append(progress.sync_type)
+            elif judged and age_days > window_max_age_days:
                 verdict = "FAIL"
                 unmet += 1
                 notes.append(
@@ -341,6 +364,13 @@ class Command(BaseCommand):
                 f"{str(progress.zmenene_od):<12}  {age_days}d old  {verdict}"
             )
 
+        if paused_by_focus_mode:
+            self.stdout.write(
+                "  (Focus Mode is active, which switches the RUZ beat entry "
+                "off, so no run is meant to move this window -- not judged for: "
+                f"{', '.join(paused_by_focus_mode)})"
+            )
+
         for note in notes:
             self.stdout.write(f"  ({note})")
 
@@ -349,3 +379,17 @@ class Command(BaseCommand):
 
         if unmet:
             sys.exit(1)
+
+    def _focus_mode_active(self) -> bool:
+        """Whether Focus Mode is on, read without creating the singleton row.
+
+        `SyncFocusModeState.load()` is `get_or_create`, so calling it here
+        would make this command write on a fresh database -- and it says of
+        itself that it issues SELECTs and writes nothing. Same reading as
+        `source_health`, for the same reason.
+        """
+        return bool(
+            SyncFocusModeState.objects.filter(pk=1)
+            .values_list("active", flat=True)
+            .first()
+        )

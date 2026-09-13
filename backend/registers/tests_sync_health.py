@@ -13,7 +13,7 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
-from registers.models import SyncJob, SyncProgress
+from registers.models import SyncFocusModeState, SyncJob, SyncProgress
 from registers.services import sync_engine
 
 
@@ -426,3 +426,43 @@ class SyncWindowTests(TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("no incremental sync has ever been recorded", output)
+
+    def test_focus_mode_does_not_redden_the_window_it_switched_off(self):
+        """Focus Mode takes the RUZ beat entry out of the schedule, so no run is
+        meant to move this window while it is on.
+
+        Without the carve-out the gate would fail after three days -- and would
+        explain itself with "every run since has reported success", a sentence
+        that is false precisely because there were no runs. The sibling control
+        settled this first: `source_health` names the sources Focus Mode
+        silences rather than judging them.
+        """
+        self._window(days_old=40)
+        SyncFocusModeState.objects.update_or_create(pk=1, defaults={"active": True})
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Sync jobs: 0 unmet", output)
+
+    def test_leaving_focus_mode_brings_the_judgement_back(self):
+        """The carve-out is scoped to Focus Mode being *on*.
+
+        A gate that stayed silent after Focus Mode ended would be the same
+        defect one state later: the window would still be stalled, and nothing
+        would say so. The reason line is checked too, so the skip is visible
+        rather than the row simply going quiet.
+        """
+        self._window(days_old=40)
+        SyncFocusModeState.objects.update_or_create(pk=1, defaults={"active": True})
+
+        paused, code = self._run(window_max_age_days=3)
+        self.assertEqual(code, 0)
+        self.assertIn("Focus Mode is active", paused)
+        self.assertIn("incremental", paused)
+
+        SyncFocusModeState.objects.filter(pk=1).update(active=False)
+
+        judged, code = self._run(window_max_age_days=3)
+        self.assertEqual(code, 1)
+        self.assertIn("no longer covers its changes", judged)
