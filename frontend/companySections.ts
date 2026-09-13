@@ -72,7 +72,7 @@ export const COMPANY_SECTIONS = [
     },
     {
         id: 'zaverky', label: 'Účtovné závierky', icon: 'fa-file-invoice', group: 'Financie', status: 'ready',
-        note: 'Koľko závierok pre firmu eviduje RUZ a koľko z nich sme prečítali, s odkazom na portál RUZ. Prílohy — správa audítora, výročná správa, PDF — sa do databázy nesťahujú; na ne je odkaz, nie sťahovanie.',
+        note: 'Koľko závierok pre firmu eviduje RUZ a koľko z nich sme prečítali. Po kliknutí na rok sa vypíšu jednotlivé dokumenty — súvaha, výkaz ziskov a strát, prílohy, správa audítora, výročná správa — a stiahnu sa odtiaľto, z našej stránky, nie odkazom na register. Odkaz na portál RUZ ostáva popri tom, pre čitateľa, ktorý si chce naše čísla overiť pri zdroji.',
     },
 
     {
