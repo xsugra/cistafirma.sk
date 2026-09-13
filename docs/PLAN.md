@@ -1231,6 +1231,18 @@ hrán. Živý príklad výsledku: osoba 56172 má v reťazi **34-dňovú dieru**
 (`2013-04-10` → `2013-05-14`), takže správne spojenie dá **2 riadky z 12**,
 nie jeden — a to je presne to, čo musí #93 trafiť.
 
+**Čo musí spojenie zachovať** (inak to vybuchne až pri implementácii):
+
+- **Kľúč je `(firma, funkcia)`**, nie `(firma)` — `konateľ` do 31. 12. a
+  `prokurista` od 1. 1. sú dve funkcie, nie jedna, a musia ostať dve.
+- **Nadväznosť potrebuje oba dátumy.** Interval s `zanik_funkcie = None`
+  nemôže byť ničím, čo sa spája dozadu — je otvorený, takže reťaz ním končí.
+- **`is_active` pochádza z najnovšieho článku**, lebo spojená funkcia trvá práve
+  vtedy, keď trvá jej posledný interval. A `is_active = None` („túto firmu sme
+  nečítali", #86) musí ostať `None` — spojenie nesmie vymyslieť „aktívna".
+- **`vznik` = najskorší, `zanik` = najneskorší** a ak je za tým viac dokumentov
+  registra, povedať to (plán to už žiada).
+
 **Prečo to nie je hotové teraz:** je to nová prírastka, nie dokončenie #89
 (zhlukovanie spája *riadky osôb*, toto spája *obdobia funkcie*), a mení to, čo
 stránka tvrdí o histórii — to patrí do samostatného rozhodnutia. Podklad preň
