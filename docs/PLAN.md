@@ -36,6 +36,7 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 81 | Závierky sa sťahujú z nášho API, nie odkazom na register | `fd23ba9` |
 | 82 | Kliknutie na rok vypíše dokumenty a stiahne ich | `fd23ba9` |
 | 84 | „Sledovať" prihlásene vedie na prihlásenie a vráti čitateľa späť na firmu | `0dd2565` |
+| — | Legenda stavu funkcie tvrdila o firme, že sme ju nečítali — pri riadku, ktorý je na stránke len preto, že sme ju čítali. Kreslí ju `roleState.ts` | `70271d1` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -416,12 +417,15 @@ väzby z viacerých riadkov spoja, môže vedľa seba vzniknúť to, čo na jedn
 riadku nebolo: tá istá firma a tá istá funkcia raz **s dátumom** a raz **bez
 neho**. Naživo to je Vácha a firma `52366332` — `Spoločník v.o.s. / s.r.o.`
 s `vznik 2019-05-18` a hneď pod tým `spoločník` s `nevieme`. Legenda pritom
-`nevieme` vysvetľuje ako „túto firmu sme ešte nečítali", čo je pod riadkom,
-ktorý ju práve prečítal, **nepravda**. Väzba bez dátumov nie je druhé obdobie
-funkcie — neuvádza žiadne obdobie, takže ani nemôže byť — a keď pre tú istú
-funkciu existuje datovaná, zahodí sa. Datované väzby sa do seba **nikdy**
-nezlievajú, takže skutočné druhé obdobie prežije. Zmerané: **4 riadky v celej
-tabuli**, všetky štyri vznikli zhlukovaním.
+`nevieme` vysvetľuje vetou „Funkciu sme pre túto firmu ešte neoverili
+v registri", a postavená pod funkciu, ktorú register práve datoval, je to
+**nepravda** — datovaná väzba pre tú istú funkciu *je* to overenie. (Do
+`70271d1` bola tá veta ešte voľnejšia, „túto firmu sme ešte nečítali", hoci
+firma je na stránke len preto, že sme ju čítali.) Väzba bez dátumov nie je
+druhé obdobie funkcie — neuvádza žiadne obdobie, takže ani nemôže byť — a keď
+pre tú istú funkciu existuje datovaná, zahodí sa. Datované väzby sa do seba
+**nikdy** nezlievajú, takže skutočné druhé obdobie prežije. Zmerané: **4 riadky
+v celej tabuli**, všetky štyri vznikli zhlukovaním.
 
 **Dve dôkazové pravidlá, nič viac.** Sú to jediné dva tvary, ktoré naozaj
 znamenajú „ten istý človek":
@@ -784,6 +788,31 @@ rovnicu neposudzuje — nesľubuje teda viac, než vie.
   riadok má `expires=None`, hoci `CELERY_BEAT_SCHEDULE` preň hovorí
   `'expires': 43000.0`. Potvrdené naživo, nie odvodené — je to tá istá trieda
   ako `options`/`queue`, kde je rozhodujúci riadok a nie dict.
+
+- ⚠️ **Nový `PeriodicTask` riadok nezačne bežať hneď — jeho prvý beh čaká
+  celý interval.** `BaseScheduleEntry.__init__` v Celery robí
+  `self.last_run_at = last_run_at or self._default_now()`, takže riadok
+  s `last_run_at = NULL` sa pri **načítaní rozvrhu** počíta tak, akoby práve
+  dobehol. Namerané 2026-09-13 na `refresh-person-history-every-4-hours`
+  (`task = registers.tasks.schedule_person_history_resync`, `args='[2000]'`,
+  `enabled=True`, `last_run_at=None`, `total_run_count=0`, riadok vytvorený
+  10:28:23 UTC): beat ho odvtedy **nikdy nevyslal** a `entry.is_due()`
+  o 13:18 vracia `is_due=False, next=14399.9` — teda „dobehol pred 0,05 s".
+
+  Hodiny sa pritom štartujú **načítaním rozvrhu**, nie vytvorením riadku:
+  v logu je `DatabaseScheduler: Schedule changed.` naposledy 10:28:25, a to
+  je referenčný bod. Prvý beh preto čakám **14:28:25 UTC**. Kým `last_run_at`
+  ostane `NULL`, posunie ho ďalej každé prepísanie rozvrhu (mení ho
+  `date_changed` na ktoromkoľvek `PeriodicTask` riadku) — hodiny sa vždy
+  resetujú na „teraz".
+
+  **Nie je to naša chyba a nie je to jedovaté samo o sebe** — po prvom behu
+  si riadok `last_run_at` zapíše a je z neho obyčajná 4-hodinovka. Je to ale
+  pasca pre každý ručne pridávaný riadok: „pridal som ho a je `enabled`"
+  neznamená „beží". **Overený obchvat** (in-memory, bez zápisu): ak má riadok
+  `last_run_at` v minulosti, `is_due()` vráti `True` hneď na prvom ticku —
+  namerané `schedstate(is_due=True, next=14400.0)` pri posune o 5 hodín.
+  Zámerne **nemenené** v kóde aj v dátach.
 
 - ⚠️ **Redis nemá `maxmemory`.** `maxmemory_human: 0B`,
   `maxmemory_policy: noeviction`. Pri brokere je `noeviction` **správne** —
