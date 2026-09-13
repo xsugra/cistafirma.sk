@@ -7,7 +7,7 @@ import { GraphTooltip } from './GraphTooltip';
 import { GraphLegend } from './GraphLegend';
 import { useGraphData } from './useGraphData';
 import type { GraphNode } from './graphTypes';
-import { companyPath } from '../../constants';
+import { companyPath, personPath } from '../../constants';
 
 interface ConnectionGraphProps {
   ico: string;
@@ -89,9 +89,23 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
     setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
   }, []);
 
+  /**
+   * A person node carries the id we hold for them (`person_12345`), so it can
+   * be opened. This is the only place on a company page where a person link is
+   * legitimate: the ORSR-derived officers in the Osoby section have no id, and
+   * a link built from a name would point at whoever the search returned first.
+   *
+   * The `^\d+$` guard is not decoration -- it is what keeps an id that is not
+   * one from becoming `/osoba/person_...` and a page that cannot load.
+   */
   const handleNodeDoubleClick = useCallback((node: GraphNode) => {
     if (node.type === 'company' && node.ico) {
       navigate(companyPath(node.ico));
+      return;
+    }
+    if (node.type === 'person') {
+      const personId = node.id.replace('person_', '');
+      if (/^\d+$/.test(personId)) navigate(personPath(personId));
     }
   }, [navigate]);
 
@@ -167,7 +181,7 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
         />
       </div>
       <p className="absolute bottom-2 left-3 text-xs text-gray-400 dark:text-gray-500 pointer-events-none">
-        {isFullscreen ? 'Esc pre zatvorenie. ' : ''}Klikni na firmu pre rozbalenie prepojení. Dvojklik pre otvorenie detailu.
+        {isFullscreen ? 'Esc pre zatvorenie. ' : ''}Klikni na firmu pre rozbalenie prepojení. Dvojklik na firmu alebo osobu otvorí jej stránku.
       </p>
     </div>
   );

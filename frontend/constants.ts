@@ -9,6 +9,7 @@ export const ROUTES = {
   HOME: '/',
   MONITORING: '/monitoring',
   COMPANY: '/firma',
+  PERSON: '/osoba',
   BLOG: '/blog',
   ABOUT: '/about',
   PRIVACY: '/privacy',
@@ -33,3 +34,14 @@ export type RouteKey = keyof typeof ROUTES;
  */
 export const companyPath = (ico: string, section?: string): string =>
   section ? `${ROUTES.COMPANY}/${ico}/${section}` : `${ROUTES.COMPANY}/${ico}`;
+
+/**
+ * `/osoba/:id` — one person from our own graph, by the id we hold for them.
+ *
+ * Built here for the same reason as `companyPath`, and one more: this is the
+ * only id that may be turned into a person link. The ORSR-derived people on a
+ * company page (`OrsrPerson`) carry no id, so there is nothing here for them --
+ * a link built from a name would point at whichever person the search happened
+ * to return first, which is a different person with the same name.
+ */
+export const personPath = (id: number | string): string => `${ROUTES.PERSON}/${id}`;

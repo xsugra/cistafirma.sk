@@ -7,9 +7,16 @@ import type {
   HistoryEntry,
   NotificationEvent,
   NotificationPreferences,
+  OrsrPersonHit,
+  OrsrPersonSearchResponse,
   OrsrProfile,
   PeerList,
   PeerScope,
+  PersonCoverage,
+  PersonDetail,
+  PersonRelation,
+  PersonSearchResponse,
+  PersonSummary,
   User,
   WatchlistEntry,
 } from './types';
@@ -182,6 +189,116 @@ function mapPeerListResponse(data: any): PeerList {
           profit: toFiledAmount(item.profit),
         }))
       : [],
+  };
+}
+
+/**
+ * The coverage counts, or `null` when the response did not carry them.
+ *
+ * `Number(undefined)` is NaN, which a `Number.isFinite` guard already rejects --
+ * but `Number(null)` is `0`, and `0 z 0 firiem` is a flat statement about our
+ * coverage that no response made. So absence is checked before conversion
+ * rather than after it, and `null` travels to the screen, which says it cannot
+ * quantify instead of saying zero.
+ */
+function mapCoverage(data: any): PersonCoverage | null {
+  if (data?.companies_with_persons == null || data?.companies_total == null) return null;
+  const withPersons = Number(data.companies_with_persons);
+  const total = Number(data.companies_total);
+  if (!Number.isFinite(withPersons) || !Number.isFinite(total)) return null;
+  return { companies_with_persons: withPersons, companies_total: total };
+}
+
+/**
+ * One relation: a company, a role, and whether the function still runs.
+ *
+ * **`is_active` keeps its third value.** `Boolean(data.is_active)` -- and any
+ * `!!` or `|| false` beside it -- turns `null` into `false`, which is the one
+ * thing this feature exists to prevent: it would print "skončila" about a
+ * company whose history nobody has read. The comparison is written out three
+ * ways so that an unrecognised value falls to `null` (we do not know) rather
+ * than to a claim.
+ *
+ * The company arrives flat (`ico`, `name`, ...) from the backend's
+ * `_relation_payload`. A nested `company: {ico, nazov_UJ}` was described for
+ * this contract at one point and is read here too: choosing the wrong one would
+ * render every person as being in no company at all, which is the same false
+ * claim as above and harder to notice.
+ */
+export function mapPersonRelation(data: any): PersonRelation {
+  const company = data?.company ?? null;
+  return {
+    ico: company?.ico ?? data?.ico ?? '',
+    name: company?.nazov_UJ ?? data?.name ?? '',
+    role: data?.role ?? '',
+    // Empty and not the enum code: an unrecognised code is not a label, and a
+    // row with no role reads as a missing field rather than as a role called
+    // "konatel".
+    role_display: data?.role_display ?? '',
+    is_active: data?.is_active === true ? true : data?.is_active === false ? false : null,
+    vznik_funkcie: data?.vznik_funkcie ?? null,
+    zanik_funkcie: data?.zanik_funkcie ?? null,
+  };
+}
+
+function mapPersonSummary(data: any): PersonSummary {
+  return {
+    id: Number(data?.id),
+    name: data?.name ?? '',
+    // Empty strings, not `undefined`: these are rendered directly, and the
+    // difference between "absent" and "the string undefined" is a line that
+    // reads `IČO: undefined`.
+    title: data?.title ?? '',
+    person_ico: data?.person_ico ?? '',
+    companies: Array.isArray(data?.companies) ? data.companies.map(mapPersonRelation) : [],
+  };
+}
+
+/** Exported for its own spec, like the two mappers above and for the same reason. */
+export function mapPersonSearchResponse(data: any): PersonSearchResponse {
+  return {
+    query: data?.query ?? '',
+    role: data?.role ?? '',
+    results: Array.isArray(data?.results) ? data.results.map(mapPersonSummary) : [],
+    total_matches: Number(data?.total_matches) || 0,
+    truncated: Boolean(data?.truncated),
+    detail: data?.detail ?? null,
+    coverage: mapCoverage(data?.coverage),
+  };
+}
+
+export function mapPersonDetail(data: any): PersonDetail {
+  return {
+    id: Number(data?.id),
+    name: data?.name ?? '',
+    title: data?.title ?? '',
+    person_ico: data?.person_ico ?? '',
+    companies: Array.isArray(data?.companies) ? data.companies.map(mapPersonRelation) : [],
+    coverage: mapCoverage(data?.coverage),
+  };
+}
+
+export function mapOrsrPersonSearchResponse(data: any): OrsrPersonSearchResponse {
+  return {
+    query: data?.query ?? '',
+    hits: Array.isArray(data?.hits)
+      ? data.hits.map((hit: any): OrsrPersonHit => ({
+          person_name: hit?.person_name ?? '',
+          company_name: hit?.company_name ?? '',
+          current_url: hit?.current_url ?? '',
+          full_url: hit?.full_url ?? '',
+        }))
+      : [],
+    total: Number(data?.total) || 0,
+    truncated: Boolean(data?.truncated),
+    source_url: data?.source_url ?? '',
+    // Not defaulted away. An empty string means the register answered; a
+    // non-empty one means it did not, and the group renders the two
+    // differently.
+    error: data?.error ?? '',
+    note: data?.note ?? '',
+    detail: data?.detail ?? null,
+    cached: Boolean(data?.cached),
   };
 }
 
@@ -683,6 +800,51 @@ export const api = {
       );
     }
     return apiRequest<HistoryEntry[]>('/history/');
+  },
+
+  // ── Persons ──
+
+  /**
+   * Our own person graph, searched by name.
+   *
+   * Ours, and therefore partial: we hold relations for a fraction of the
+   * register, which is why every response carries `coverage` and why the screen
+   * that renders the results is required to print it. An empty list without it
+   * reads as "this person is in no company", which is a different and false
+   * claim.
+   *
+   * `options` exists for the same reason `searchCompanies` has it: the search
+   * box aborts the previous request as the reader keeps typing, and a request
+   * that cannot be aborted keeps a third keystroke's answer on screen.
+   */
+  searchPersons: async (
+    query: string,
+    role?: string,
+    options: RequestInit = {},
+  ): Promise<PersonSearchResponse> => {
+    const params = new URLSearchParams({ q: query });
+    if (role) params.set('role', role);
+    const data = await apiRequest<any>(`/persons/?${params.toString()}`, options);
+    return mapPersonSearchResponse(data);
+  },
+
+  getPerson: async (id: number | string): Promise<PersonDetail> => {
+    const data = await apiRequest<any>(`/persons/${id}/`);
+    return mapPersonDetail(data);
+  },
+
+  /**
+   * The live ORSR register, asked by name.
+   *
+   * Deliberately not part of any autocomplete: this is somebody else's server,
+   * rate-limited to 60 requests an hour per caller and cached for 15 minutes,
+   * and it must be reached only from a button the reader pressed. Nothing that
+   * reacts to typing may call this, ever -- see `OrsrRegisterGroup`, which is
+   * the only caller, and `SearchBar`, which must not become the second one.
+   */
+  searchOrsrPersons: async (query: string): Promise<OrsrPersonSearchResponse> => {
+    const data = await apiRequest<any>(`/persons/orsr/?q=${encodeURIComponent(query)}`);
+    return mapOrsrPersonSearchResponse(data);
   },
 
   // ── Notifications ──

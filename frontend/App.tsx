@@ -8,6 +8,7 @@ import { VantaBackground } from './components/VantaBackground';
 import { Home } from './pages/Home';
 import { Monitoring } from './pages/Monitoring';
 import { Company } from './pages/Company';
+import { Person } from './pages/Person';
 import { Blog } from './pages/Blog';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
@@ -127,6 +128,10 @@ const AppContent: React.FC = () => {
               <Route path={ROUTES.COMPANY} element={<Navigate to={ROUTES.MONITORING} replace />} />
               <Route path={`${ROUTES.COMPANY}/:ico`} element={<Company />} />
               <Route path={`${ROUTES.COMPANY}/:ico/:sekcia`} element={<Company />} />
+              {/* Same reasoning as `/firma`: `/osoba` on its own names nobody,
+                  so it goes to the search that can find someone. */}
+              <Route path={ROUTES.PERSON} element={<Navigate to={ROUTES.MONITORING} replace />} />
+              <Route path={`${ROUTES.PERSON}/:id`} element={<Person />} />
               <Route path={ROUTES.BLOG} element={<Blog />} />
               <Route path={ROUTES.ABOUT} element={<About />} />
               <Route path={ROUTES.PRIVACY} element={<Privacy />} />

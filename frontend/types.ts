@@ -499,6 +499,122 @@ export interface OrsrProfile {
     structured?: OrsrStructured;
 }
 
+// --- PERSONS ---
+
+/**
+ * One company, as seen from a person.
+ *
+ * `role` is the enum code and `role_display` the words -- the opposite way
+ * round from the graph's edges, deliberately, so that a row can be filtered and
+ * round-tripped by the code while still rendering a label. See
+ * `_relation_payload` in `connections/views.py`.
+ *
+ * `is_active` is **three-valued** and that is the point of the whole feature:
+ * `true` the register states the function is current, `false` it states it
+ * ended, `null` we have never read that company's history, so we do not know.
+ * `null` is not "no". It is typed as a union rather than a boolean so that a
+ * mapper which collapses the third answer fails the typecheck instead of
+ * printing a claim about a company nobody checked.
+ */
+export interface PersonRelation {
+    ico: string;
+    name: string;
+    role: string;
+    role_display: string;
+    is_active: boolean | null;
+    vznik_funkcie: string | null;
+    zanik_funkcie: string | null;
+}
+
+/**
+ * What our person graph covers, as a count.
+ *
+ * It travels with every response rather than living in the interface as a fixed
+ * sentence, because it is a moving number -- the coverage grows with each ORSR
+ * sync, and a hardcoded claim would drift into a lie the first time it stopped
+ * being true. `null` when the response did not carry it, which is not the same
+ * fact as a coverage of zero.
+ */
+export interface PersonCoverage {
+    companies_with_persons: number;
+    companies_total: number;
+}
+
+/** One person as a search result: who they are, and every company we hold. */
+export interface PersonSummary {
+    id: number;
+    name: string;
+    /** The academic title, as its own field. May be empty. */
+    title: string;
+    /** The person's own IČO (a self-employed person has one). May be empty. */
+    person_ico: string;
+    companies: PersonRelation[];
+}
+
+export interface PersonSearchResponse {
+    query: string;
+    role: string;
+    results: PersonSummary[];
+    total_matches: number;
+    truncated: boolean;
+    /**
+     * Why there are no results, in Slovak, when the question itself could not
+     * be asked -- a query shorter than two characters, say. It must be shown
+     * instead of the empty list, which would read as "this person is in no
+     * company" about a search nobody ran.
+     */
+    detail: string | null;
+    /** `null` when the response carried no counts; see `PersonCoverage`. */
+    coverage: PersonCoverage | null;
+}
+
+/** One person, plus every relation we hold for them. */
+export interface PersonDetail {
+    id: number;
+    name: string;
+    title: string;
+    person_ico: string;
+    companies: PersonRelation[];
+    coverage: PersonCoverage | null;
+}
+
+/**
+ * One row of the register's own answer.
+ *
+ * The register names the company, never the capacity -- it has no column for it
+ * -- so a hit says "this name is recorded in this company" and nothing more.
+ */
+export interface OrsrPersonHit {
+    person_name: string;
+    company_name: string;
+    /** The register's výpis, current records only. Empty when it gave no id. */
+    current_url: string;
+    /** The same výpis including the historical entries. Empty likewise. */
+    full_url: string;
+}
+
+/**
+ * What the live register answered, and how sure we are of it.
+ *
+ * `error` non-empty means the register could not be read -- which must never be
+ * rendered as "no records": that is a claim about a person invented out of a
+ * request that never completed. `note` is the register's own limitation, in
+ * Slovak, and belongs next to the results it describes.
+ */
+export interface OrsrPersonSearchResponse {
+    query: string;
+    hits: OrsrPersonHit[];
+    total: number;
+    truncated: boolean;
+    source_url: string;
+    error: string;
+    note: string;
+    /** Set on the short-query case, where the question was never asked. */
+    detail: string | null;
+    /** True when this answer came from our cache and not from the register now. */
+    cached: boolean;
+}
+
 // --- USER & PROFILE TYPES ---
 
 export interface User {
