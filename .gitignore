@@ -98,6 +98,10 @@ backend/data/fs_data/**/*.xml
 backend/data/fs_data/**/*.xsd
 backend/data/fs_data/**/*.zip
 
+# Downloaded register datasets (MV SR address register, 162 MB) — re-fetchable
+# from the URL in `registers/management/commands/import_postal_codes.py`
+backend/data/adresy/*.csv
+
 # Keep docs and source files by default (no blanket excludes below)
 graphify-out/
 

@@ -801,3 +801,92 @@ class SectorBenchmark(models.Model):
 
     def __str__(self):
         return f"NACE {self.nace_section} — {self.year} ({self.company_count} firiem)"
+
+
+# Najmenšia vzorka adresných bodov, z ktorej vôbec umiestnime špendlík.
+#
+# Register má päť PSČ s menej než 20 bodmi a tie pokrývajú 26 z našich
+# 449 763 riadkov (0,01 %). Jednobodová „oblasť" dáva polomer 0 m, teda
+# špendlík tvrdiaci presnosť vchodu do budovy — presne tá nadsázka, ktorú
+# chceme vylúčiť. Pod touto hranicou sa neukladá nič a UI mapu neukáže;
+# rovnaká disciplína ako pri 224 riadkoch registra, ktoré nemajú PSČ.
+MIN_ADDRESS_POINTS = 20
+
+
+class PostalCodeArea(models.Model):
+    """PSČ ako miesto na mape, odvodené z registra adries MV SR.
+
+    Toto je spojenie medzi sídlom firmy a súradnicou — a je to **PSČ, nie
+    `mesto`**, zámerne. Pri 2 817 obciach zdroja leží 95 názvov vo viac než
+    jednom okrese a náš zápis je iný než registrový (`Bratislava - mestská
+    časť Ružinov` vs `Bratislava-Ružinov`), takže spojenie na názov by bolo
+    fuzzy párovanie. PSČ pokrýva 441 165 zo 449 763 riadkov (98,09 %) a názvy
+    nepotrebuje vôbec.
+
+    Presnosť je **polomer, nie bod**: `radius_m` je polomer, ktorý pokryje
+    90 % adresných bodov danej PSČ. Medián je 1 980 m, p90 4 118 m — preto to
+    UI kreslí ako kruh a nie ako holý špendlík.
+    """
+
+    psc = models.CharField(
+        max_length=5,
+        unique=True,
+        verbose_name='PSČ',
+        help_text='Normalizovaná podoba bez medzier — kľúč spojenia s Company.psc',
+    )
+    lat = models.FloatField(verbose_name='Zemepisná šírka')
+    lon = models.FloatField(verbose_name='Zemepisná dĺžka')
+    radius_m = models.PositiveIntegerField(
+        verbose_name='Polomer (m)',
+        help_text='Pokryje 90 % adresných bodov tejto PSČ. Medián 1 980 m',
+    )
+    point_count = models.PositiveIntegerField(
+        verbose_name='Počet adresných bodov',
+        help_text=f'Z koľkých bodov je počítaný; pod {MIN_ADDRESS_POINTS} sa oblasť neukladá',
+    )
+
+    # Opisné, NIE kľúč. `dominant_obec` je najčastejšia obec v danej PSČ a pri
+    # 836 PSČ, ktoré ležia vo viac než jednej obci, to nie je identita.
+    # `obec_count` je práve to počítadlo — je to dôkaz o povahe kľúča, nie popis.
+    dominant_obec = models.CharField(max_length=200, blank=True, verbose_name='Prevažujúca obec')
+    obec_count = models.PositiveSmallIntegerField(
+        default=1,
+        verbose_name='Počet obcí v PSČ',
+        help_text='Koľko obcí táto PSČ pokrýva; 1 = sedí s obcou',
+    )
+    okres = models.CharField(max_length=200, blank=True, verbose_name='Okres')
+    kraj = models.CharField(max_length=100, blank=True, verbose_name='Kraj')
+
+    source_version = models.CharField(
+        max_length=40,
+        blank=True,
+        verbose_name='Verzia zdroja',
+        help_text='dct:modified datasetu, z ktorého dáta sú (formát YYYY-MM-DD)',
+    )
+    imported_at = models.DateTimeField(auto_now=True, verbose_name='Importované')
+
+    class Meta:
+        verbose_name = 'PSČ oblasť'
+        verbose_name_plural = 'PSČ oblasti'
+        ordering = ['psc']
+        indexes = [models.Index(fields=['okres'], name='pscarea_okres_idx')]
+
+    def __str__(self):
+        where = self.dominant_obec or self.okres or '?'
+        return f'{self.psc} {where} (±{self.radius_m} m)'
+
+    @staticmethod
+    def normalize_psc(value):
+        """PSČ bez medzier — jediná normalizácia v tomto toku.
+
+        `Company.psc` má tri hodnoty s medzerou (`602 00`, `024 01`, `941 01`)
+        a register ich píše bez, takže bez tohto by tie tri firmy ticho
+        nesadli. Presne tá chyba, ktorú má #90 pomenovanú pri IČO: dve rôzne
+        normalizácie na dvoch koncoch toho istého toku.
+
+        Zámerne sa **nedopĺňajú** chýbajúce znaky ani sa neodhaduje krajina —
+        čo nesedí na päťznakový kľúč, to sa jednoducho nenájde a vypíše sa.
+        """
+        if not value:
+            return ''
+        return ''.join(str(value).split())
