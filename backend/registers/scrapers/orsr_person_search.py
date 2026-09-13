@@ -80,6 +80,31 @@ class OrsrPersonResult:
         return self.total > len(self.hits)
 
 
+# Titles the registers write in front of a name, and the ones they append after
+# it. They are not decoration here: `MENO` is matched against the given names
+# alone, so a title left in that field is a filter that matches nobody. Measured
+# against the live register on 2026-09-13: `PR=Trnka&MENO=Miroslav` returns 18
+# records, `PR=Trnka&MENO=Ing. Miroslav` returns **0**.
+#
+# This matters more than it looks, because our own `Person.name` carries the
+# title rather than filling the separate `title` field -- 20 121 of 45 606 people
+# (44%). The register group is shown to a reader precisely when our own data is
+# thin, so without this it would answer "the register has nothing" for nearly
+# half the people we can show it for.
+_TITLE_TOKENS = frozenset({
+    "ing", "mgr", "mga", "bc", "bca", "judr", "mudr", "mvdr", "pharmdr",
+    "rndr", "phdr", "thdr", "thlic", "paeddr", "dr", "drs", "csc", "drsc",
+    "phd", "artd", "dis", "mba", "llm", "msc", "mph", "doc", "prof",
+    # The second word of the multi-word titles: `Ing. arch.`, `Mgr. art.`,
+    # `mim. prof.`, `hosť. prof.`.
+    "arch", "art", "mim", "hosť", "host",
+})
+
+
+def _is_title(token: str) -> bool:
+    return token.strip(".").lower() in _TITLE_TOKENS
+
+
 def split_name(query: str) -> tuple[str, str]:
     """Split a typed name into (surname, given names) the way the form wants it.
 
@@ -87,10 +112,26 @@ def split_name(query: str) -> tuple[str, str]:
     when we display a name. The surname is taken as the last token, which is
     right for Slovak names in both orders and for the `Ing. Miroslav Trnka`
     shape the register itself returns.
+
+    Titles are removed from the ends before that, and only from the ends: a
+    token that looks like one in the middle of a name is part of the name. The
+    stripping stops while more than one token remains, so a query that is
+    nothing but a title is passed through unchanged rather than becoming an
+    empty search across the whole register.
     """
-    tokens = [t for t in re.split(r"\s+", (query or "").strip()) if t]
+    tokens = [
+        cleaned
+        for raw in re.split(r"\s+", (query or "").strip())
+        if (cleaned := raw.strip(",."))
+    ]
     if not tokens:
         return "", ""
+
+    while len(tokens) > 1 and _is_title(tokens[0]):
+        tokens.pop(0)
+    while len(tokens) > 1 and _is_title(tokens[-1]):
+        tokens.pop()
+
     if len(tokens) == 1:
         return tokens[0], ""
     return tokens[-1], " ".join(tokens[:-1])

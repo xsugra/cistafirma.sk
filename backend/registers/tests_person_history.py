@@ -515,6 +515,40 @@ class OrsrPersonSearchTests(TestCase):
         self.assertEqual(split_name("Trnka"), ("Trnka", ""))
         self.assertEqual(split_name("  "), ("", ""))
 
+    def test_a_title_never_reaches_the_given_names_field(self):
+        # Measured against the live register 2026-09-13: `PR=Trnka&MENO=Miroslav`
+        # returns 18 records, `PR=Trnka&MENO=Ing. Miroslav` returns 0. The title
+        # is not decoration in this field, it is a filter that matches nobody --
+        # and our own `Person.name` carries one for 20 121 of 45 606 people.
+        self.assertEqual(split_name("Ing. Miroslav Trnka"), ("Trnka", "Miroslav"))
+        self.assertEqual(split_name("Ing. Andrej Chudík"), ("Chudík", "Andrej"))
+
+    def test_titles_are_dropped_from_both_ends_and_stacked_ones_too(self):
+        self.assertEqual(split_name("Miroslav Trnka, PhD."), ("Trnka", "Miroslav"))
+        self.assertEqual(split_name("doc. Ing. Ján Novák, CSc."), ("Novák", "Ján"))
+        # The second word of the multi-word titles is a token of its own.
+        self.assertEqual(split_name("Ing. arch. Ján Novák"), ("Novák", "Ján"))
+        self.assertEqual(split_name("Mgr. art. Jana Nováková"), ("Nováková", "Jana"))
+
+    def test_a_name_that_is_only_a_title_is_not_emptied(self):
+        # Stripping must not be able to empty the query: `PR=&MENO=` is a search
+        # across the whole register, which is the one thing this must never do.
+        # The trailing dot goes -- punctuation has no place in a form field --
+        # but a surname is still a surname.
+        self.assertEqual(split_name("Ing."), ("Ing", ""))
+        self.assertEqual(split_name("Ing. Mgr."), ("Mgr", ""))
+
+    def test_a_title_like_token_inside_a_name_is_left_alone(self):
+        # Only the ends are stripped. Something that looks like a title between
+        # a given name and a surname is part of the name, so it stays -- minus
+        # the dot, which no field on the form wants.
+        self.assertEqual(split_name("Ján Ing. Novák"), ("Novák", "Ján Ing"))
+
+    def test_commas_and_dots_never_reach_the_form_fields(self):
+        # `Novák,` as a surname is a different string from `Novák` to anything
+        # that matches fields, and people do write the comma.
+        self.assertEqual(split_name("Miroslav Trnka,"), ("Trnka", "Miroslav"))
+
     def test_parse_reads_the_rows_and_the_total(self):
         # 18, not 181. The header is followed by the table, whose first cell is
         # the row number `1`; read from the page's whole text the count pattern
