@@ -98,6 +98,19 @@ html.dark body {
     }
 }
 
+/* The Profile tab rail scrolls horizontally on a narrow screen, and asks for
+   this class so the scrollbar stays out of the way. Tailwind v4 ships no such
+   utility, so the class was inert and the rail showed a scrollbar. Declared
+   with `@utility` so it lands in the utilities layer like any built-in. */
+@utility no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
+}
+
 /* --- UTILITIES & ANIMATIONS --- */
 .animate-fade-in {
     animation: fadeIn 0.5s ease-out forwards;
