@@ -4,32 +4,20 @@ import {defineConfig, loadEnv} from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-export default defineConfig(({command, mode}) => {
+export default defineConfig(({mode}) => {
     // Load root .env file (local dev) and merge process env (Docker runtime).
     const env = {
         ...process.env,
         ...loadEnv(mode, '../', ''),
     };
 
-    // A build that has no key ships a bundle whose every seat map announces the
-    // missing key -- and exits 0, so nothing downstream notices. This is the one
-    // place that sees both the build and the environment it was handed, so it is
-    // where the silence is broken. Not an error: the app is expected to build and
-    // run without a key (CI does exactly that), it just must not do so quietly.
-    if (command === 'build') {
-        const missing = ['VITE_GOOGLE_MAPS_API_KEY', 'VITE_GOOGLE_MAPS_MAP_ID'].filter(
-            (name) => !env[name],
-        );
-        if (missing.length) {
-            console.warn(
-                `\n[vite] Google Maps: ${missing.join(' and ')} not set.\n` +
-                    '        The bundle will show "no Google Maps key configured" instead\n' +
-                    '        of a map on every company profile. For a deployed image the\n' +
-                    '        root .env does not reach the build -- pass it as a build arg\n' +
-                    '        (frontend/Dockerfile.prod, .gitlab-ci.yml build_frontend_image).\n',
-            );
-        }
-    }
+    // There is no build-time map check any more, and that is not a loss of
+    // vigilance. The map used to need a Google key, so a build without one shipped
+    // a bundle in which every seat map announced the missing key while exiting 0 --
+    // and this was the only place that saw both the build and its environment, so
+    // it was where that silence was broken. MapLibre and OpenStreetMap want no key,
+    // so there is nothing to be missing, and a check here could only ever warn
+    // about a variable that no longer exists.
 
     // Backend configuration from root .env
     const BACKEND_HOST = env.BACKEND_HOST || 'localhost';
@@ -65,9 +53,9 @@ export default defineConfig(({command, mode}) => {
         //
         // Either way the prefix is the whole boundary: only `VITE_` names are
         // exposed, so a root-`.env` value without it cannot reach the bundle.
-        // That matters more here than it looks -- see `vite-env.d.ts`, and
-        // `frontend/Dockerfile.prod` for how a production build is given the two
-        // `VITE_` values it needs (its build context cannot see the root `.env`).
+        // That matters more here than it looks -- see `vite-env.d.ts`, where the
+        // set of `VITE_` names this app may read is now empty and a stray one is a
+        // compile error rather than a silently published secret.
         envDir: '../',
         build: {
             // Priečinok, kam sa uloží build

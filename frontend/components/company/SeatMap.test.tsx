@@ -1,102 +1,135 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import type {FeatureCollection, Polygon} from 'geojson';
+import type {StyleSpecification} from '@maplibre/maplibre-gl-style-spec';
 import {ThemeProvider, useTheme} from '../../context/ThemeContext';
-import {SeatMap, zoomFor} from './SeatMap';
+import {SEAT_SOURCE, SeatMap, zoomFor} from './SeatMap';
+import {TILEJSON_URL, TILES_SOURCE} from '../../map/style';
 import type {SeatLocation} from '../../types';
 
 /**
- * Google's renderer cannot be asserted through the DOM here: jsdom has no
- * layout, so it would draw nothing and every assertion would pass for the wrong
- * reason. What *can* be asserted is what we ask Google for -- and that is also
- * where every defect in this component has to live, because a circle that never
+ * MapLibre cannot be asserted through the DOM here: jsdom has no WebGL and no
+ * layout, so a real map would draw nothing and every assertion would pass for the
+ * wrong reason. What *can* be asserted is what we ask MapLibre for -- and that is
+ * also where every defect in this component has to live, because a ring that never
  * receives `radiusM` still renders, and still lies.
  *
- * So `@googlemaps/js-api-loader` is replaced by a recorder. The fake classes
- * capture their options; the tests read them back. Nothing below asserts
- * Google's own behaviour, and nothing below needs a network.
+ * So `maplibre-gl` is replaced by a recorder. The fake captures constructor
+ * options, sources, layers, controls and camera moves; the tests read them back.
+ * Nothing below asserts MapLibre's own behaviour, and nothing below needs a
+ * network.
+ *
+ * The one piece of real behaviour the fake keeps is the awkward part: `style.load`
+ * is asynchronous, and it fires again on every `setStyle`, dropping every source
+ * and layer with the old style. That is the state machine the seat layers have to
+ * survive, so it is the state machine the fake models.
  */
 const g = vi.hoisted(() => {
     type Options = Record<string, unknown>;
+    type Handler = (event: unknown) => void;
+
     const state = {
-        maps: [] as Options[],
-        circles: [] as Options[],
-        markers: [] as Options[],
-        mapUpdates: [] as Options[],
-        libraryNames: [] as string[],
-        /** A single slot, not a list: `setOptions` is called once per page. */
-        configured: null as unknown,
+        maps: [] as FakeMap[],
+        /** What `querySourceFeatures` answers; the empty case is a test. */
+        sourceFeatures: [{}] as unknown[],
     };
 
+    /** Stands in for MapLibre's `GeoJSONSource`. */
+    class FakeGeoJSONSource {
+        readonly setDataCalls: unknown[] = [];
+
+        constructor(
+            readonly id: string,
+            public data: unknown,
+        ) {}
+
+        setData(data: unknown): void {
+            this.data = data;
+            this.setDataCalls.push(data);
+        }
+    }
+
     class FakeMap {
-        constructor(_container: unknown, options: Options) {
-            state.maps.push(options);
+        readonly handlers = new Map<string, Handler[]>();
+        readonly controls: Array<{control: unknown; position: string}> = [];
+        readonly sources = new Map<string, FakeGeoJSONSource>();
+        readonly layers: unknown[] = [];
+        /** Every `setStyle` argument, in order. The constructor's is not one. */
+        readonly styles: unknown[] = [];
+        readonly jumps: unknown[] = [];
+        removed = false;
+
+        constructor(readonly options: Options) {
+            state.maps.push(this);
+            // The real one fires this once its style has been fetched and parsed.
+            // Nothing about the style is synchronous, so neither is the fake.
+            queueMicrotask(() => this.emit('style.load', {}));
         }
-        setCenter(): void {}
-        setZoom(): void {}
-        setOptions(options: Options): void {
-            state.mapUpdates.push(options);
+
+        on(event: string, handler: Handler): void {
+            const list = this.handlers.get(event) ?? [];
+            list.push(handler);
+            this.handlers.set(event, list);
+        }
+
+        emit(event: string, payload: unknown): void {
+            for (const handler of this.handlers.get(event) ?? []) handler(payload);
+        }
+
+        addControl(control: unknown, position?: string): void {
+            this.controls.push({control, position: position ?? 'top-right'});
+        }
+
+        addSource(id: string, definition: {data?: unknown}): void {
+            // The real one throws, and the component relies on it not happening.
+            if (this.sources.has(id)) throw new Error(`source "${id}" already exists`);
+            this.sources.set(id, new FakeGeoJSONSource(id, definition.data));
+        }
+
+        getSource(id: string): FakeGeoJSONSource | undefined {
+            return this.sources.get(id);
+        }
+
+        addLayer(layer: unknown): void {
+            this.layers.push(layer);
+        }
+
+        setStyle(style: unknown): void {
+            this.styles.push(style);
+            // A real `setStyle` takes every source and layer with it.
+            this.sources.clear();
+            this.layers.length = 0;
+            queueMicrotask(() => this.emit('style.load', {}));
+        }
+
+        jumpTo(options: unknown): void {
+            this.jumps.push(options);
+        }
+
+        querySourceFeatures(): unknown[] {
+            return state.sourceFeatures;
+        }
+
+        remove(): void {
+            this.removed = true;
         }
     }
 
-    class FakeCircle {
-        constructor(private readonly options: Options) {
-            state.circles.push(options);
-        }
-        setCenter(centre: unknown): void {
-            this.options.center = centre;
-        }
-        setRadius(radius: unknown): void {
-            this.options.radius = radius;
-        }
-        /** The only way Google lets a circle be detached from its map. */
-        setMap(map: unknown): void {
-            this.options.map = map;
-        }
+    class FakeNavigationControl {
+        constructor(readonly options: unknown) {}
     }
 
-    /**
-     * The real element exposes `position`, `title` and `map` as accessors, and
-     * detaches through `map = null` rather than a `setMap` method.
-     */
-    class FakeMarker {
-        constructor(private readonly options: Options) {
-            state.markers.push(options);
-        }
-        set position(value: unknown) {
-            this.options.position = value;
-        }
-        get position(): unknown {
-            return this.options.position;
-        }
-        set title(value: unknown) {
-            this.options.title = value;
-        }
-        get title(): unknown {
-            return this.options.title;
-        }
-        set map(value: unknown) {
-            this.options.map = value;
-        }
-        get map(): unknown {
-            return this.options.map;
-        }
+    class FakeScaleControl {
+        constructor(readonly options: unknown) {}
     }
 
-    return {state, FakeMap, FakeCircle, FakeMarker};
+    return {state, FakeMap, FakeNavigationControl, FakeScaleControl};
 });
 
-vi.mock('@googlemaps/js-api-loader', () => ({
-    setOptions: (options: unknown) => {
-        g.state.configured = options;
-    },
-    importLibrary: (name: string) => {
-        g.state.libraryNames.push(name);
-        return Promise.resolve(
-            name === 'maps'
-                ? {Map: g.FakeMap, Circle: g.FakeCircle}
-                : {AdvancedMarkerElement: g.FakeMarker},
-        );
-    },
+vi.mock('maplibre-gl', () => ({
+    Map: g.FakeMap,
+    NavigationControl: g.FakeNavigationControl,
+    ScaleControl: g.FakeScaleControl,
 }));
 
 /** A real row: PSČ 82109 Bratislava, the median-sized area in the table. */
@@ -107,6 +140,18 @@ const seat: SeatLocation = {
     psc: '82109',
     precision: 'postal_code',
 };
+
+/** A second real row, far enough away that a wrong coordinate cannot pass. */
+const other: SeatLocation = {
+    lat: 48.7164,
+    lon: 21.2611,
+    radiusM: 4118,
+    psc: '04001',
+    precision: 'postal_code',
+};
+
+/** How many overlay layers the component puts on the base style. */
+const SEAT_LAYER_COUNT = 3;
 
 const draw = (value: SeatLocation = seat) =>
     render(
@@ -132,6 +177,57 @@ const drawWithToggle = (value: SeatLocation = seat) =>
             <SeatMap seat={value} />
         </ThemeProvider>,
     );
+
+const mapAt = (index = 0) => {
+    const instance = g.state.maps[index];
+    if (!instance) throw new Error(`no map at index ${index}`);
+    return instance;
+};
+
+/**
+ * Let the fake map's `style.load` microtask run, without `waitFor`.
+ *
+ * `waitFor` is the right tool everywhere else, but under fake timers it depends
+ * on the library recognising them, and a mis-detection there does not fail the
+ * test -- it hangs it. The watchdog tests install fake timers, so they settle
+ * explicitly instead.
+ */
+const settle = () =>
+    act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+    });
+
+/**
+ * The map, once its style has landed and the seat layers are on it.
+ *
+ * Every test that inspects drawing starts here rather than right after `render`,
+ * because the constructor returns before the style exists -- the same gap that
+ * makes the mount-time seat a ref rather than a closure.
+ */
+const drawnMap = async () => {
+    await waitFor(() => expect(g.state.maps).toHaveLength(1));
+    await waitFor(() =>
+        expect(mapAt().sources.get(SEAT_SOURCE)).toBeDefined(),
+    );
+    return mapAt();
+};
+
+const styleName = (style: unknown) => (style as StyleSpecification).name;
+
+/**
+ * Degrees of latitude to metres, at Slovakia's latitude. Independent of
+ * `geometry.ts` on purpose: this is the measurement that catches a ring built
+ * with the wrong radius, so it must not reuse the code that built it.
+ */
+const METRES_PER_DEGREE_LAT = 111132;
+
+/** North-south extent of the drawn ring, in metres. */
+const ringHeightM = (data: unknown) => {
+    const ring = ((data as FeatureCollection).features[0].geometry as Polygon)
+        .coordinates[0];
+    const lats = ring.map(([, lat]) => lat);
+    return (Math.max(...lats) - Math.min(...lats)) * METRES_PER_DEGREE_LAT;
+};
 
 describe('zoomFor', () => {
     // The stored radii run 270 m to 8 717 m, so these are ordinary rows rather
@@ -167,235 +263,253 @@ describe('zoomFor', () => {
 describe('SeatMap', () => {
     beforeEach(() => {
         g.state.maps.length = 0;
-        g.state.circles.length = 0;
-        g.state.markers.length = 0;
-        g.state.mapUpdates.length = 0;
-        g.state.libraryNames.length = 0;
-        // `g.state.configured` is deliberately *not* cleared: the loader is
-        // configured once for the life of the module, so the slot keeps whatever
-        // the first successful load put there for the rest of this file.
-        vi.unstubAllEnvs();
-        // Nobody stubs this in most of the cases below, and `mapId()` reads it at
-        // render time. `vi.unstubAllEnvs` restores rather than clears, so without
-        // this line the moment an operator does what `.env.default` and the plan
-        // tell them to -- put a real Map ID in the root `.env` -- the theme test
-        // fails with a message about a variable it never mentions.
-        vi.stubEnv('VITE_GOOGLE_MAPS_MAP_ID', '');
+        g.state.sourceFeatures = [{}];
     });
 
     afterEach(() => {
-        vi.unstubAllEnvs();
+        vi.useRealTimers();
     });
 
-    describe('without a key', () => {
-        beforeEach(() => vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', ''));
+    it('reads its tiles from the TileJSON document, never from a tile template', () => {
+        // The single most important line in this file. OpenFreeMap's *unversioned*
+        // template -- `.../planet/{z}/{x}/{y}.pbf`, the one nearly every tutorial
+        // shows -- answers HTTP 200 with a zero-byte body and an
+        // `x-ofm-debug: empty tile` header, for every tile, so a style built on it
+        // draws a blank canvas and logs nothing at all. The working path is a
+        // versioned one, and it is the versioned path the TileJSON advertises, so
+        // the source has to be the document. A `tiles` array here would be that
+        // mistake.
+        draw();
 
-        it('names the missing variable instead of drawing an empty box', () => {
-            draw();
+        const style = mapAt().options.style as StyleSpecification;
+        const source = style.sources[TILES_SOURCE] as {
+            type: string;
+            url?: string;
+            tiles?: unknown;
+        };
 
-            expect(screen.getByText(/VITE_GOOGLE_MAPS_API_KEY/)).toBeInTheDocument();
-            // The one outcome that must not happen: a blank grey rectangle that
-            // looks like a slow network rather than a misconfiguration.
-            expect(screen.queryByRole('region')).not.toBeInTheDocument();
-            expect(g.state.maps).toHaveLength(0);
-        });
-
-        it('does not ask Google for the script at all', async () => {
-            // Billing is per map load, and a key-less deployment should not even
-            // reach Google's servers.
-            draw();
-            // The load-bearing observable is `libraryNames`, because the mocked
-            // loader records it *synchronously*, before its promise resolves.
-            // Asserting on the map or the circle here would hold whatever the
-            // component did: both are created a microtask after `render()`
-            // returns, so an empty list proves only that the test had not waited.
-            await act(async () => {});
-
-            expect(g.state.libraryNames).toEqual([]);
-        });
+        expect(source.type).toBe('vector');
+        expect(source.url).toBe(TILEJSON_URL);
+        expect(source.tiles).toBeUndefined();
     });
 
-    describe('with a key', () => {
-        beforeEach(() => vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key'));
+    it('draws without a credential of any kind', () => {
+        // The reason this component stopped being a Google one: no key, no Map
+        // ID, no account, no card. Asserted rather than assumed, because a
+        // reintroduced credential is exactly the kind of thing that arrives
+        // quietly in a diff.
+        draw();
 
-        it('configures the script from the environment, once, with both libraries', async () => {
-            // The option names are the loader's, not ours: v2 renamed `apiKey` to
-            // `key` and `version` to `v`, and a stale name is accepted silently
-            // by the bootstrap and then fails as an unbilled or unauthorised
-            // request. `setOptions` throws if it runs twice, so the fact that
-            // this file mounts eight maps and the slot still holds one call is
-            // the assertion that the guard works.
-            draw();
+        const options = mapAt().options;
+        for (const credential of ['apiKey', 'key', 'mapId', 'authOptions']) {
+            expect(options).not.toHaveProperty(credential);
+        }
+    });
 
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-            expect(g.state.configured).toEqual({
-                key: 'test-key',
-                v: 'weekly',
-                language: 'sk',
-                region: 'SK',
+    it('centres on the seat and frames it by the radius it was given', async () => {
+        draw();
+        await drawnMap();
+
+        // Longitude first: MapLibre takes `[lng, lat]`, and getting that backwards
+        // draws perfectly and puts Bratislava in the Indian Ocean.
+        expect(mapAt().options.center).toEqual([17.14051, 48.14748]);
+        expect(mapAt().options.zoom).toBe(14);
+    });
+
+    it('does not let the map capture the page scroll', () => {
+        draw();
+
+        expect(mapAt().options.scrollZoom).toBe(false);
+    });
+
+    it('turns off the gestures that would spin the map under the reader', () => {
+        draw();
+
+        expect(mapAt().options.dragRotate).toBe(false);
+        expect(mapAt().options.pitchWithRotate).toBe(false);
+        expect(mapAt().options.renderWorldCopies).toBe(false);
+    });
+
+    it('draws the ring at the measured radius, not at a guessed one', async () => {
+        // The drawn circle *is* the claim about precision, so it has to be the
+        // stored radius. Measured north-to-south in metres, from the geometry
+        // itself, so a ring built from the wrong number cannot pass.
+        draw();
+        const instance = await drawnMap();
+
+        const data = instance.sources.get(SEAT_SOURCE)?.data;
+        expect(ringHeightM(data)).toBeCloseTo(2 * 737, -2);
+    });
+
+    it('puts the credits on the map as links, visible rather than collapsed', async () => {
+        // A licence obligation, not decoration: OpenStreetMap's attribution
+        // guidelines ask for the credit to be readable by anyone looking at the
+        // map, and OpenFreeMap and OpenMapTiles require their own.
+        draw();
+
+        expect(
+            screen.getByRole('link', {name: 'OpenFreeMap'}),
+        ).toHaveAttribute('href', 'https://openfreemap.org');
+        expect(
+            screen.getByRole('link', {name: '© OpenMapTiles'}),
+        ).toHaveAttribute('href', 'https://www.openmaptiles.org/');
+        expect(
+            screen.getByRole('link', {name: 'Data from OpenStreetMap'}),
+        ).toHaveAttribute('href', 'https://www.openstreetmap.org/copyright');
+    });
+
+    it('re-dresses the live map on a theme change instead of building another', async () => {
+        // The improvement over Google, and worth asserting: `colorScheme` was an
+        // initialization-only option there, so following a toggle meant a second
+        // map -- and a second billed load. `setStyle` keeps the camera, so the
+        // reader stays where they were looking.
+        drawWithToggle();
+        const instance = await drawnMap();
+        expect(styleName(instance.options.style)).toBe('CistaFirma light');
+
+        fireEvent.click(screen.getByRole('button', {name: 'Prepnúť tému'}));
+
+        await waitFor(() => expect(instance.styles).toHaveLength(1));
+        expect(styleName(instance.styles[0])).toBe('CistaFirma dark');
+        expect(g.state.maps).toHaveLength(1);
+    });
+
+    it('puts the seat back after a re-dress, which drops every source with the style', async () => {
+        // `setStyle` clears the sources and layers the previous style carried, so
+        // a handler that only ran at mount would leave a correctly themed map with
+        // no circle on it -- and no error anywhere.
+        drawWithToggle();
+        const instance = await drawnMap();
+
+        fireEvent.click(screen.getByRole('button', {name: 'Prepnúť tému'}));
+
+        await waitFor(() =>
+            expect(instance.sources.get(SEAT_SOURCE)).toBeDefined(),
+        );
+        expect(instance.layers).toHaveLength(SEAT_LAYER_COUNT);
+        expect(ringHeightM(instance.sources.get(SEAT_SOURCE)?.data)).toBeCloseTo(
+            2 * 737,
+            -2,
+        );
+    });
+
+    it('lets the map go on unmount instead of leaving it alive', async () => {
+        // The card unmounts once per company profile read, so a teardown that
+        // skipped this would leave one live map -- listeners and WebGL context
+        // included -- behind every profile the reader opens.
+        const {unmount} = draw();
+        const instance = await drawnMap();
+
+        unmount();
+
+        expect(instance.removed).toBe(true);
+    });
+
+    it('moves the drawn map to a new seat instead of rebuilding it', async () => {
+        const {rerender} = draw();
+        const instance = await drawnMap();
+
+        rerender(
+            <ThemeProvider>
+                <SeatMap seat={other} />
+            </ThemeProvider>,
+        );
+
+        await waitFor(() => expect(instance.jumps).toHaveLength(1));
+        expect(instance.jumps[0]).toEqual({center: [21.2611, 48.7164], zoom: 11});
+        expect(g.state.maps).toHaveLength(1);
+
+        const source = instance.sources.get(SEAT_SOURCE);
+        expect(source?.setDataCalls).toHaveLength(1);
+        expect(ringHeightM(source?.data)).toBeCloseTo(2 * 4118, -2);
+    });
+
+    it('draws the newest seat when it changes before the style has landed', async () => {
+        // The map is created a network round-trip before its style exists. Reading
+        // the seat from the mount closure would draw the *previous* company and
+        // leave no later effect to correct it, since the seat-change effect bails
+        // while no seat layers exist yet.
+        const {rerender} = draw();
+        rerender(
+            <ThemeProvider>
+                <SeatMap seat={other} />
+            </ThemeProvider>,
+        );
+
+        const instance = await drawnMap();
+
+        expect(ringHeightM(instance.sources.get(SEAT_SOURCE)?.data)).toBeCloseTo(
+            2 * 4118,
+            -2,
+        );
+    });
+
+    it('says so when the tiles never arrive', async () => {
+        // Eight seconds of blank canvas is indistinguishable from a slow network,
+        // so the watchdog names the outcome instead. The reader is scrolling a
+        // long page and would otherwise sit looking at it.
+        vi.useFakeTimers();
+        draw();
+        await settle();
+        expect(mapAt().sources.get(SEAT_SOURCE)).toBeDefined();
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(9000);
+        });
+
+        expect(screen.getByText(/dlaždice sa nepodarilo stiahnuť/)).toBeInTheDocument();
+        // The message takes the container away from the map and nothing re-runs
+        // the effect when it does, so the map is released here or it outlives its
+        // own box.
+        expect(mapAt().removed).toBe(true);
+    });
+
+    it('says so when the tiles arrive empty, which is the failure that logs nothing', async () => {
+        // The measured trap: a 200 response, a zero-byte body, no console error.
+        // The source reports itself loaded, so "did anything arrive" is not the
+        // question -- the question is whether the viewport holds a single
+        // feature, and for a Slovak PSČ at zoom 10 or closer it always does.
+        vi.useFakeTimers();
+        g.state.sourceFeatures = [];
+        draw();
+        await settle();
+
+        await act(async () => {
+            const instance = mapAt();
+            instance.emit('sourcedata', {
+                sourceId: TILES_SOURCE,
+                isSourceLoaded: true,
             });
-            expect([...g.state.libraryNames].sort()).toEqual(['maps', 'marker']);
+            await vi.advanceTimersByTimeAsync(9000);
         });
 
-        it('gives the circle the measured radius, not a default', async () => {
-            draw();
+        expect(screen.getByText(/Dlaždice prišli prázdne/)).toBeInTheDocument();
+    });
 
-            await waitFor(() => expect(g.state.circles).toHaveLength(1));
-            expect(g.state.circles[0].radius).toBe(737);
-            expect(g.state.circles[0].center).toEqual({lat: 48.14748, lng: 17.14051});
-        });
+    it('does not cry wolf when the tiles do arrive', async () => {
+        vi.useFakeTimers();
+        draw();
+        await settle();
 
-        it('centres the dot on the centroid, the same place as the circle', async () => {
-            draw();
-
-            await waitFor(() => expect(g.state.markers).toHaveLength(1));
-            expect(g.state.markers[0].position).toEqual({lat: 48.14748, lng: 17.14051});
-            expect(g.state.markers[0].title).toBe('Stred PSČ 82109');
-        });
-
-        it('does not let the map capture the page scroll', async () => {
-            draw();
-
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-            expect(g.state.maps[0].scrollwheel).toBe(false);
-            expect(g.state.maps[0].gestureHandling).toBe('cooperative');
-        });
-
-        it('draws in the app theme, which needs a Map ID', async () => {
-            // Light is what this project's ThemeProvider resolves to under
-            // jsdom's `prefers-color-scheme: dark -> false` stub.
-            draw();
-
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-            expect(g.state.maps[0].colorScheme).toBe('LIGHT');
-            expect(g.state.maps[0].mapId).toBe('DEMO_MAP_ID');
-        });
-
-        it('takes the Map ID from the environment when one is configured', async () => {
-            // The whole reason vite-env.d.ts and `envDir` exist: a production Map
-            // ID that never reaches the bundle would leave dark mode silently
-            // doing nothing.
-            vi.stubEnv('VITE_GOOGLE_MAPS_MAP_ID', 'cistafirma-prod');
-
-            draw();
-
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-            expect(g.state.maps[0].mapId).toBe('cistafirma-prod');
-        });
-
-        it('rebuilds the map when the theme changes, because it cannot re-theme it', async () => {
-            // `colorScheme` is an initialization-only option: Google documents it
-            // as settable when the map is created and ignored afterwards, so the
-            // effect that used to call `map.setOptions({colorScheme})` did
-            // nothing at all. Following a theme toggle therefore costs a second
-            // map and a second billable load -- which is why it is asserted here
-            // rather than assumed, and why `mapUpdates` is asserted empty: the
-            // no-op must not come back.
-            drawWithToggle();
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-            expect(g.state.maps[0].colorScheme).toBe('LIGHT');
-
-            fireEvent.click(screen.getByRole('button', {name: 'Prepnúť tému'}));
-
-            await waitFor(() => expect(g.state.maps).toHaveLength(2));
-            expect(g.state.maps[1].colorScheme).toBe('DARK');
-            expect(g.state.maps[1].center).toEqual({lat: 48.14748, lng: 17.14051});
-            // The map the reader can no longer see is let go of, not forgotten:
-            // Google has no destroy(), so the overlays are detached by hand.
-            expect(g.state.circles[0].map).toBeNull();
-            expect(g.state.markers[0].map).toBeNull();
-            expect(g.state.circles[1].radius).toBe(737);
-            expect(g.state.mapUpdates).toEqual([]);
-        });
-
-        it('lets the map go on unmount instead of leaving it alive', async () => {
-            // The card unmounts once per company profile read, so a teardown that
-            // skipped this would leave one live map -- listeners and WebGL context
-            // included -- behind every profile the reader opens.
-            const {unmount} = draw();
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-
-            unmount();
-
-            expect(g.state.circles[0].map).toBeNull();
-            expect(g.state.markers[0].map).toBeNull();
-        });
-
-        it('moves the drawn map to a new seat instead of billing for a second', async () => {
-            const next: SeatLocation = {
-                lat: 48.7164,
-                lon: 21.2611,
-                radiusM: 4118,
-                psc: '04001',
-                precision: 'postal_code',
-            };
-            const {rerender} = draw();
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-
-            rerender(
-                <ThemeProvider>
-                    <SeatMap seat={next} />
-                </ThemeProvider>,
-            );
-
-            await waitFor(() => expect(g.state.circles[0].radius).toBe(4118));
-            expect(g.state.circles[0].center).toEqual({lat: 48.7164, lng: 21.2611});
-            expect(g.state.markers[0].title).toBe('Stred PSČ 04001');
-            // One map and one circle for the whole session: a second of either
-            // would be a second load, and a second load is a second charge.
-            expect(g.state.maps).toHaveLength(1);
-            expect(g.state.circles).toHaveLength(1);
-        });
-
-        it('redraws when the seat changes before the script has landed', async () => {
-            // The map is created a network round-trip after mount. Reading the
-            // seat from the mount closure would draw the *previous* company and
-            // leave no later effect to correct it.
-            const next: SeatLocation = {
-                lat: 48.7164,
-                lon: 21.2611,
-                radiusM: 4118,
-                psc: '04001',
-                precision: 'postal_code',
-            };
-            const {rerender} = draw();
-            rerender(
-                <ThemeProvider>
-                    <SeatMap seat={next} />
-                </ThemeProvider>,
-            );
-
-            await waitFor(() => expect(g.state.circles).toHaveLength(1));
-            expect(g.state.circles[0].radius).toBe(4118);
-            expect(g.state.circles[0].center).toEqual({lat: 48.7164, lng: 21.2611});
-        });
-
-        it('reports a rejected key instead of showing a watermark', async () => {
-            // Google calls this global when the key is invalid, unbilled or
-            // restricted to the wrong referrer -- after the script has loaded
-            // successfully. Without the hook the map renders as a grey box.
-            draw();
-            await waitFor(() => expect(g.state.maps).toHaveLength(1));
-
-            act(() => {
-                (window as {gm_authFailure?: () => void}).gm_authFailure?.();
+        await act(async () => {
+            mapAt().emit('sourcedata', {
+                sourceId: TILES_SOURCE,
+                isSourceLoaded: true,
             });
-
-            expect(screen.getByText(/kľúč odmietli/)).toBeInTheDocument();
-            expect(screen.queryByRole('region')).not.toBeInTheDocument();
-            // The message takes the container away from the map and nothing
-            // re-runs the effect when it does, so the map is released here or it
-            // outlives its own box.
-            expect(g.state.circles[0].map).toBeNull();
-            expect(g.state.markers[0].map).toBeNull();
+            await vi.advanceTimersByTimeAsync(9000);
         });
 
-        it('labels the region with the PSČ it is drawing', async () => {
-            draw();
+        expect(screen.queryByText(/Mapa sa nenačítala/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/prázdne/)).not.toBeInTheDocument();
+        expect(mapAt().removed).toBe(false);
+        expect(screen.getByRole('region')).toBeInTheDocument();
+    });
 
-            expect(
-                await screen.findByRole('region', {name: /PSČ 82109/}),
-            ).toBeInTheDocument();
-        });
+    it('labels the region with the PSČ it is drawing', async () => {
+        draw();
+
+        expect(
+            await screen.findByRole('region', {name: /PSČ 82109/}),
+        ).toBeInTheDocument();
     });
 });

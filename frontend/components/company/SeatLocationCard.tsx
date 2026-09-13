@@ -2,10 +2,11 @@ import React, { lazy, Suspense } from 'react';
 import type { SeatLocation } from '../../types';
 import { formatNumber } from '../../utils/format';
 
-// Lazily: the map pulls in the Maps JavaScript API loader, and no other part of
-// the company page needs it. The card itself is tiny, so it still renders its
-// heading and its sentence while the chunk is in flight -- and the Google script
-// itself is not requested until `SeatMap` mounts and finds a key.
+// Lazily: the renderer is MapLibre GL and it is the largest thing on the page,
+// while no other part of the company page needs it. The card itself is tiny, so
+// it still renders its heading and its sentence while the chunk is in flight --
+// and because MapLibre comes with its own stylesheet, deferring the component is
+// also what keeps those ~83 kB of CSS off every other page.
 const SeatMap = lazy(() =>
     import('./SeatMap').then((m) => ({ default: m.SeatMap })),
 );

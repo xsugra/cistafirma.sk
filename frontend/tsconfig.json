@@ -13,14 +13,15 @@
     // tsconfig has no `include`, so source files are picked up by default -- but
     // `types` *replaces* the automatic @types inclusion, so every ambient
     // package the app relies on has to be named here or its globals vanish.
-    // `google.maps` carries the `google` namespace that SeatMap.tsx annotates
-    // its map, circle and marker refs with. `vite/client`, which types
-    // `import.meta.env`, is pulled in by the triple-slash reference at the top of
-    // vite-env.d.ts instead -- it belongs next to the variable declarations it
-    // types, not here.
+    // `geojson` carries the global `GeoJSON` namespace that MapLibre's
+    // `GeoJSONSource.setData()` is typed against; the `Feature`, `Polygon` and
+    // `FeatureCollection` types the map modules import by name come from the same
+    // package as a module. `vite/client`, which types `import.meta.env`, is
+    // pulled in by the triple-slash reference at the top of vite-env.d.ts
+    // instead -- it belongs next to the variable declarations it types, not here.
     "types": [
       "node",
-      "google.maps"
+      "geojson"
     ],
     "moduleResolution": "bundler",
     "isolatedModules": true,
