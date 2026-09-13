@@ -44,7 +44,15 @@ class NormalizePscTests(TestCase):
         self.assertEqual(PostalCodeArea.normalize_psc('6020'), '6020')
 
 
-class SeatLocationSerializerTests(TestCase):
+class _SeatFixtures(TestCase):
+    """The rows these two suites share. No tests of its own, by design.
+
+    Both suites need the same company, the same `PostalCodeArea` and the same
+    one-line way to ask the serializer, and inheriting from `TestCase` directly
+    in each would mean writing all three twice. A base class rather than a
+    mixin because `setUp` is involved.
+    """
+
     def setUp(self):
         # Both `ruz_id` and `ico` are unique on Company, and a test that asks for
         # two companies in one body is normal here.
@@ -74,6 +82,10 @@ class SeatLocationSerializerTests(TestCase):
 
     def _seat(self, company):
         return CompanyDetailSerializer(company).data['seatLocation']
+
+
+class SeatLocationSerializerTests(_SeatFixtures):
+    """The PSČ join itself: the normalisation that makes it happen, and the `None`."""
 
     def test_a_placed_seat_carries_the_area_not_just_a_point(self):
         """The radius travels with the coordinate because the UI draws it.
@@ -119,3 +131,128 @@ class SeatLocationSerializerTests(TestCase):
         for either alone would pass while the promise was broken.
         """
         self.assertIsNone(self._seat(self._company(psc='83004')))
+
+
+class SeatPrecisionTests(_SeatFixtures):
+    """The three levels, and which one wins when more than one is available.
+
+    These drive the same rows `match_seat_addresses` writes, so what is pinned
+    is not "the serializer can read a column" but the ordering the whole feature
+    rests on: the most precise claim that exists is the one that reaches the map.
+    """
+
+    def test_a_building_match_is_a_point_with_no_circle(self):
+        """78,6 % of our rows, and the reason this task exists.
+
+        `radiusM` is 0 and it is load-bearing: the frontend draws the point and
+        *no ring at all*, because a building has no spread to draw. A non-zero
+        radius here would put the circle back around a company we can place
+        exactly -- the decoration the whole change removes.
+        """
+        self._area()
+        seat = self._seat(self._company(
+            psc='82108',
+            seat_lat=48.15231,
+            seat_lon=17.12987,
+            seat_precision='building',
+            seat_radius_m=None,
+            seat_point_count=1,
+            seat_tier='psc_ulica_orient',
+        ))
+
+        self.assertEqual(seat['lat'], 48.15231)
+        self.assertEqual(seat['lon'], 17.12987)
+        self.assertEqual(seat['radiusM'], 0)
+        self.assertEqual(seat['precision'], 'building')
+
+    def test_a_street_match_carries_the_measured_spread(self):
+        """The circle is a 90th percentile of that street's own points, not a constant."""
+        self._area()
+        seat = self._seat(self._company(
+            psc='82108',
+            seat_lat=48.15300,
+            seat_lon=17.13000,
+            seat_precision='street',
+            seat_radius_m=184,
+            seat_point_count=37,
+            seat_tier='psc_ulica',
+        ))
+
+        self.assertEqual(seat['radiusM'], 184)
+        self.assertEqual(seat['precision'], 'street')
+
+    def test_a_placed_seat_wins_over_the_psc_circle_even_when_both_exist(self):
+        """The fallback is chosen once, here, rather than blended.
+
+        Both sources are computed from the same register at different levels, so
+        a merged answer would have two independent ways to go stale and no way
+        to say which one moved. The row below has *both* a matched point and a
+        `PostalCodeArea`, and the matched point is the answer.
+        """
+        area = self._area()
+        seat = self._seat(self._company(
+            psc='82108',
+            seat_lat=48.15231,
+            seat_lon=17.12987,
+            seat_precision='building',
+            seat_radius_m=None,
+        ))
+
+        self.assertEqual(seat['precision'], 'building')
+        self.assertNotEqual(seat['lat'], area.lat)
+        self.assertEqual(area.radius_m, 800, 'the circle is still there to fall back to')
+
+    def test_an_unplaced_company_falls_back_to_the_circle(self):
+        """The 14,5 % the register cannot place keep a true, weaker claim.
+
+        The `seat_*` columns are empty for them -- that is what "unplaced" means
+        -- and the answer must be the PSČ circle rather than `None` whenever the
+        PSČ is one the register lists.
+        """
+        self._area()
+        seat = self._seat(self._company(psc='82108'))
+
+        self.assertEqual(seat['precision'], 'postal_code')
+        self.assertEqual(seat['radiusM'], 800)
+
+    def test_a_precision_without_a_point_is_ignored(self):
+        """The columns are written together, so a half-written row is a bug.
+
+        Defending against it here rather than trusting the writer: a
+        `seat_precision` with no coordinate would index `SEAT_LABEL` on the
+        frontend and then draw `undefined` on the map.
+        """
+        self._area()
+        seat = self._seat(self._company(psc='82108', seat_precision='building'))
+
+        self.assertEqual(seat['precision'], 'postal_code')
+
+    def test_an_unknown_precision_is_ignored(self):
+        """A value the column does not allow must not reach the map either."""
+        self._area()
+        seat = self._seat(self._company(
+            psc='82108',
+            seat_lat=48.15231,
+            seat_lon=17.12987,
+            seat_precision='',
+        ))
+
+        self.assertEqual(seat['precision'], 'postal_code')
+
+    def test_a_placed_seat_with_no_psc_still_has_a_position(self):
+        """224 register rows carry no PSČ, so a match may have none.
+
+        The label falls back to the address rather than to an empty PSČ, but the
+        pin is real and is drawn -- dropping it would discard a match we earned.
+        """
+        seat = self._seat(self._company(
+            psc=None,
+            seat_lat=48.15231,
+            seat_lon=17.12987,
+            seat_precision='building',
+            seat_radius_m=0,
+        ))
+
+        self.assertIsNotNone(seat)
+        self.assertEqual(seat['psc'], '')
+        self.assertEqual(seat['precision'], 'building')

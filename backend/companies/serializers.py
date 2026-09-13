@@ -6,6 +6,7 @@ from rest_framework import serializers
 from core.constants import PERSON_SKIP_PREFIXES
 from registers.models import CompanySyncStatus
 from .models import Company, Watchlist, SectorBenchmark, SearchHistory, PostalCodeArea
+from .seat_matching import BUILDING, POSTAL_CODE, STREET
 from .services.financial_analysis import (
     FinancialAnalysisService,
     _amount,
@@ -122,20 +123,43 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         return FINANCIALS_STATE_NOTHING_RECORDED
 
     def get_seatLocation(self, obj):
-        """The registered seat as an area on the map, or `None`.
+        """The seat on the map at whatever precision we can honestly claim.
 
-        `None` is a real answer and means "we cannot place this seat", not "the
-        company has no seat": 1,92 % of our rows carry a PSČ the MV SR address
-        register does not list (post-office PSČ with no address point), plus
-        three rows with no PSČ at all. The map is omitted for those rather than
-        drawn from a guess.
+        Three levels, tried best first, and the order is the policy:
 
-        The radius is not decoration. We join on PSČ, and a PSČ centroid sits a
-        median 1 980 m from its own address points (p90 4 118 m), so a bare
-        marker would claim the accuracy of a building entrance. The frontend
-        draws the circle this describes, and `precision` names the level so a
-        future street-level source can be told apart from this one.
+        1. **`building`** — the register's own address point for this house
+           number, in `seat_lat`/`seat_lon`, matched offline by
+           `match_seat_addresses`. `radiusM` is 0 and the map draws a bare point,
+           because there is no uncertainty left to draw. Measured 2026-09-13:
+           78,6 % of our rows.
+        2. **`street`** — the centroid of the company's street, with `radiusM`
+           being the 90th-percentile distance to that street's own points, so the
+           circle is a measured spread rather than a constant. 6,9 %.
+        3. **`postal_code`** — the `PostalCodeArea` circle, unchanged. 14,5 %.
+
+        The two sources are deliberately *not* merged. `seat_*` and
+        `PostalCodeArea` are computed at different times from different levels of
+        the same register, so a single blended answer would be a claim with two
+        independent ways to go stale and no way to say which one moved. The
+        fallback is chosen once, here, and each level names itself.
+
+        `None` is a real answer and means "we cannot place this seat at all", not
+        "the company has no seat": 1,92 % of our rows carry a PSČ the MV SR
+        address register does not list (post-office PSČ with no address point),
+        plus three rows with no PSČ at all. The map is omitted for those rather
+        than drawn from a guess.
         """
+        if obj.seat_precision in (BUILDING, STREET) and obj.seat_lat is not None:
+            return {
+                'lat': obj.seat_lat,
+                'lon': obj.seat_lon,
+                # The column is nullable and `street` is never 0, so the `or 0`
+                # only ever fires for a building -- which is the value it wants.
+                'radiusM': obj.seat_radius_m or 0,
+                'psc': obj.psc or '',
+                'precision': obj.seat_precision,
+            }
+
         psc = PostalCodeArea.normalize_psc(obj.psc)
         if not psc:
             return None
@@ -147,7 +171,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'lon': area.lon,
             'radiusM': area.radius_m,
             'psc': area.psc,
-            'precision': 'postal_code',
+            'precision': POSTAL_CODE,
         }
 
     def get_financials(self, obj):
