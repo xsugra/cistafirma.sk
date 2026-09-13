@@ -621,8 +621,9 @@ zmizne — potichu. Nameraných 16 takých profilov; mechanizmus je v § 7.
 **Jedna vec, ktorá sa dá prečítať zle.** Beat riadok
 `refresh-person-history-every-4-hours` má `last_run_at=None`
 a `total_run_count=0`, takže dávku **nespustil on** — spustil ju ručný beh.
-Prvý beh beat riadku čakám **~17:20:15 UTC** (a nie 14:28:25, ako tu stálo —
-referenčný bod sa medzitým dvakrát posunul, § 7). To nie je druhá chyba, len
+Prvý beh beat riadku čakám **2026-09-13 17:20:12,9 UTC** (a nie 14:28:25, ako
+tu stálo; referenčný bod je `date_changed` riadku, ktorý som si posunul sám
+svojím overovacím skriptom — oboje v § 7). To nie je druhá chyba, len
 iný spúšťač; ale kým `total_run_count` ostane 0, **nedá sa z neho čítať, či
 dopĺňanie napreduje** — a to je presne tá pasca z § 7.
 
@@ -942,39 +943,72 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   ako `options`/`queue`, kde je rozhodujúci riadok a nie dict.
 
 - ⚠️ **Nový `PeriodicTask` riadok nezačne bežať hneď — jeho prvý beh čaká
-  celý interval.** `BaseScheduleEntry.__init__` v Celery robí
-  `self.last_run_at = last_run_at or self._default_now()`, takže riadok
-  s `last_run_at = NULL` sa pri **načítaní rozvrhu** počíta tak, akoby práve
-  dobehol. Namerané 2026-09-13 na `refresh-person-history-every-4-hours`
+  celý interval.** Rozhodujúci riadok je `ModelEntry.__init__`
+  v `django-celery-beat`, nie základná trieda Celery:
+
+      if not model.last_run_at:
+          model.last_run_at = model.date_changed or self._default_now()
+
+  Riadok s `last_run_at = NULL` sa teda nepočíta od „teraz pri načítaní
+  rozvrhu" — to je správanie `celery.beat.ScheduleEntry`, ktoré tu stálo
+  predtým a je **nesprávne** — ale od **`date_changed`**, obyčajného stĺpca
+  v DB. Overené v oboch verziách, ktoré tu bežia: kontajner `2.9.0`, host
+  venv `2.8.1`; riadok je v oboch identický, takže dokumentovaný verzný
+  posun je pre toto správanie bez následku.
+
+  **Dôsledok je opačný, než tu stálo:** načítanie rozvrhu
+  (`DatabaseScheduler: Schedule changed.`) tie hodiny **neposúva** — číta
+  ten istý stĺpec. Posunúť ich môže len **zápis toho riadku**: jeho vlastný
+  dispatch (beat si ho pri ňom zapíše) alebo rekonciliácia rozvrhu.
+
+  Namerané 2026-09-13 na `refresh-person-history-every-4-hours`
   (`task = registers.tasks.schedule_person_history_resync`, `args='[2000]'`,
-  `enabled=True`, `last_run_at=None`, `total_run_count=0`, riadok vytvorený
-  10:28:23 UTC): beat ho odvtedy **nikdy nevyslal** a `entry.is_due()`
-  o 13:18 vracia `is_due=False, next=14399.9` — teda „dobehol pred 0,05 s".
+  `enabled=True`, `last_run_at=None`, `total_run_count=0`): beat ho od
+  vytvorenia **nikdy nevyslal**, `entry.is_due()` o 13:18 vracia
+  `is_due=False, next=14399.9`, a `date_changed = 13:20:12.935493`. Prvý beh
+  preto čakám **2026-09-13 17:20:12,9 UTC** — a to je teraz pevný údaj, nie
+  odhad, práve preto, že hodiny visia na stĺpci a nie na prevádzke iných
+  úloh.
 
-  Hodiny sa pritom štartujú **načítaním rozvrhu**, nie vytvorením riadku.
-  Text tu predtým stál, že `DatabaseScheduler: Schedule changed.` je naposledy
-  10:28:25 a prvý beh preto čaká **14:28:25 UTC** — to už neplatí. Kontrola
-  2026-09-13 13:53: odvtedy boli v logu **ďalšie dve** načítania rozvrhu,
-  `13:18:35` a `13:20:15`, a samotný riadok má `date_changed = 13:20:12.935`
-  (tri riadky sa vtedy zapísali v rozmedzí 13 ms, takže je to zápis rozvrhu
-  a nie beh). Referenčný bod je preto **13:20:15** a prvý beh čakám
-  **~17:20:15 UTC**. Riadok je stále `last_run_at=None, total_run_count=0`.
+  ⚠️ **Ten `date_changed` som si posunul sám — a moja „read-only" kontrola
+  bola zápis.** Riadok som vytvoril ja o 10:27:50 (`get_or_create`), a o
+  13:20:11.757 som spustil overenie obchvatu, ktoré si postavilo
+  `DatabaseScheduler(app=app)`. Lenže konštruktor volá `setup_schedule()`,
+  a to je zápis do zdieľanej tabuľky:
 
-  **Preto sa ten odhad nedá brať ako istý** — a to je podstatnejšie než ten
-  posun. `date_changed` sa hýbe aj bežnou prevádzkou: `fetch-ruz-data-every-6-hours`
-  malo `13:50:26` pri behu, ktorý sa dispatchol o `13:50:06`, a
-  `detect-stuck-sync-jobs-every-10-min` `13:45:05`. Každé ďalšie prepísanie
-  rozvrhu pred 17:20 teda posunie tento riadok ďalej — hodiny sa vždy
-  resetujú na „teraz". Overiť sa to dá len tak, že sa o 17:21 pozrie, či
-  naozaj bežal.
+      def setup_schedule(self):
+          self.install_default_entries(self.schedule)
+          self.update_from_dict(self.app.conf.beat_schedule)
 
-  **Nie je to naša chyba a nie je to jedovaté samo o sebe** — po prvom behu
-  si riadok `last_run_at` zapíše a je z neho obyčajná 4-hodinovka. Je to ale
-  pasca pre každý ručne pridávaný riadok: „pridal som ho a je `enabled`"
-  neznamená „beží". **Overený obchvat** (in-memory, bez zápisu): ak má riadok
-  `last_run_at` v minulosti, `is_due()` vráti `True` hneď na prvom ticku —
-  namerané `schedstate(is_due=True, next=14400.0)` pri posune o 5 hodín.
-  Zámerne **nemenené** v kóde aj v dátach.
+  `update_from_dict` prejde `CELERY_BEAT_SCHEDULE` a pre každú položku
+  spraví `ModelEntry.from_entry` → `PeriodicTask.objects.update_or_create`.
+  Sedem riadkov sa preto zapísalo v 47 ms (`.901392` → `.948508`), presne
+  v poradí `install_default_entries` (`celery.backend_cleanup` prvý) a potom
+  dict zo settings. „Schedule changed." o 13:20:15 je **následok** tohto
+  zápisu, nie jeho príčina.
+
+  Skript pritom tvrdil „in memory only, never saved" a na konci vypísal
+  `db row unchanged` — lenže kontroloval `last_run_at`, ktorý
+  `_unpack_fields` do `defaults` nedáva a naozaj sa nezmenil. Zmenil sa
+  `date_changed`, teda stĺpec, na ktorý sa ten test nepozeral. **Kontrola,
+  ktorá číta jeden stĺpec, nemôže dosvedčiť, že zápis nenastal.**
+
+  **Vedľajší, ale skutočný následok:** `compute-sector-benchmarks-daily`
+  dostal tým istým zápisom **prvý riadok v histórii** a je due
+  **2026-09-14 13:20:12,9 UTC**. Dovtedy `SectorBenchmark` ostáva prázdna
+  a benchmark blok sa nevykresľuje — presne to, čo opisuje komentár
+  v `settings.py:493`. Ten komentár („no entry here and no `PeriodicTask`
+  row ever existed") je tým **zastaraný**; zámerne nemenený, je to kód.
+
+  **Mechanizmus sám nie je vada** — po prvom behu si riadok `last_run_at`
+  zapíše a je z neho obyčajná 4-hodinovka. Je to pasca pre každý ručne
+  pridávaný riadok („pridal som ho a je `enabled`" neznamená „beží")
+  a pre každý overovací skript, ktorý si postaví `DatabaseScheduler`.
+  **Obchvat** (overený v pamäti, bez zápisu): ak má riadok `last_run_at`
+  v minulosti, `is_due()` vráti `True` hneď na prvom ticku — namerané
+  `schedstate(is_due=True, next=14400.0)` pri posune o 5 hodín. Teraz ho
+  netreba, riadok je due o 17:20:12,9 sám. Zámerne **nemenené** v kóde
+  aj v dátach.
 
 - ⚠️ **Redis nemá `maxmemory`.** `maxmemory_human: 0B`,
   `maxmemory_policy: noeviction`. Pri brokere je `noeviction` **správne** —
