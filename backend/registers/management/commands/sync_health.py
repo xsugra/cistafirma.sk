@@ -12,14 +12,17 @@ reaper that exists for this had never once been called.
 
 This command answers the question the other two cannot.
 
-Three conditions fail a job, and each is a control that looks alive but is not:
+Four conditions fail a job, and each is a control that looks alive but is not:
 
 - `running` with a heartbeat past the watchdog's staleness threshold -- the
   worker is gone and nothing will ever finish the work;
 - `queued` far past any plausible wait and never claimed -- work was accepted
   and then silently dropped;
 - the newest attempt of a **beat-scheduled** job type ended `failed` -- the
-  schedule is unattended, so a run that dies has nobody watching it.
+  schedule is unattended, so a run that dies has nobody watching it;
+- an incremental sync window that has stopped moving -- the run that is meant
+  to advance it completes, so nothing looks wrong, and the source is read
+  through a window that grows older every day.
 
 The third is judged on the newest attempt, not on any failed one: a failing run
 that the next run supersedes is history, and a gate that stays red for it would
@@ -40,6 +43,21 @@ The counters of recent jobs are printed but never judged: how many items a job
 *should* process depends on the run, not on its type, so there is no honest
 threshold to apply.
 
+**The fourth condition is the answer to that gap, and it is not a counter
+threshold either.** `SyncProgress.zmenene_od` is the start of the window an
+incremental sync reads through, and `fetch_ruz_data` moves it forward on every
+walk that reaches the end -- so its *age* is a state, not a volume. A window
+older than a few days on a row whose last walk completed means the walks are
+not reaching the end, whatever the job rows say the counters were.
+
+This is the one that was missing. From 2026-09-11 the RUZ incremental resumed
+from a cursor a previous run had left at the end of its own window, asked for
+changes past that point, read an empty page, and stored `completed` with zero
+items -- ten runs over three days, while `zmenene_od` sat on 2026-08-04 and the
+register's changes went unread. Every condition above was green, and correctly
+so: nothing had failed. The window was the only place the truth was written
+down, and nothing was reading it.
+
 Read-only: it issues SELECTs and writes nothing.
 """
 
@@ -52,12 +70,20 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from registers.models import SyncJob
+from registers.models import SyncJob, SyncProgress
 from registers.services.sync_engine import is_stuck, stuck_heartbeat_threshold
 
 DEFAULT_QUEUED_MINUTES = 720
 DEFAULT_FAILED_JOB_HOURS = 24
+DEFAULT_WINDOW_MAX_AGE_DAYS = 3
 RECENT_LIMIT = 8
+
+# The statuses in which an incremental window is expected to be moving. A
+# `paused` row was stopped by an operator who knows, and a `running` one is a
+# walk in progress -- both legitimately hold an old window, and judging either
+# would be reporting on the operator rather than on the sync. See the module
+# docstring for why `completed` is the one that carries the signal.
+WINDOW_JUDGED_STATUSES = ("completed", "idle")
 
 # The one trigger whose runs nobody is watching. See the module docstring.
 BEAT_TRIGGER = "beat_schedule"
@@ -88,8 +114,9 @@ def _humanize(delta: timedelta) -> str:
 class Command(BaseCommand):
     help = (
         "Report active sync jobs and fail when one is still `running` after its "
-        "heartbeat went stale, has sat `queued` far past any plausible wait, or "
-        "is the newest run of a beat-scheduled job type and failed."
+        "heartbeat went stale, has sat `queued` far past any plausible wait, is "
+        "the newest run of a beat-scheduled job type and failed, or has left an "
+        "incremental sync window that stopped moving."
     )
 
     def add_arguments(self, parser):
@@ -117,10 +144,25 @@ class Command(BaseCommand):
                 "stops being read."
             ),
         )
+        parser.add_argument(
+            "--window-max-age-days",
+            type=int,
+            default=_env_int(
+                "CISTAFIRMA_SYNC_WINDOW_DAYS", DEFAULT_WINDOW_MAX_AGE_DAYS
+            ),
+            help=(
+                "How old an incremental sync's window may be before it counts as "
+                "stalled (default: CISTAFIRMA_SYNC_WINDOW_DAYS or 3). Generous "
+                "on purpose: the window advances on every finished walk, the "
+                "fastest beat interval here is 6h, and even a million changed "
+                "companies take about a day at the sync's own rate."
+            ),
+        )
 
     def handle(self, *args, **options):
         queued_minutes = options["queued_minutes"]
         failed_job_hours = options["failed_job_hours"]
+        window_max_age_days = options["window_max_age_days"]
         stuck_minutes = int(stuck_heartbeat_threshold().total_seconds() // 60)
         now = timezone.now()
         queued_cutoff = now - timedelta(minutes=queued_minutes)
@@ -244,6 +286,59 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"    {job_type:<18} job #{job.pk:<5} {job.status:<10} "
                 f"{age:>8} ago  {verdict}"
+            )
+
+        # --- The incremental windows -------------------------------------
+        # Printed for every incremental row and judged on age alone. The row is
+        # the only place the truth is recorded when a walk stops reaching the
+        # end: the job rows still say `completed`, because the run did complete
+        # -- it just completed over nothing.
+        windows = list(
+            SyncProgress.objects.filter(sync_type__startswith="incremental").order_by(
+                "sync_type"
+            )
+        )
+
+        self.stdout.write("")
+        self.stdout.write(
+            f"  incremental sync windows (judged: window may be at most "
+            f"{window_max_age_days}d old)"
+        )
+        if not windows:
+            self.stdout.write(
+                "    (no incremental sync has ever been recorded -- not judged, "
+                "because an absence is not evidence of a stall)"
+            )
+        for progress in windows:
+            if progress.zmenene_od is None:
+                # Written by a run that never got as far as choosing a window.
+                # Nothing to age, so nothing to judge.
+                self.stdout.write(
+                    f"    {progress.sync_type:<22} {progress.status:<10} "
+                    f"{'no window set':<12}  --"
+                )
+                continue
+
+            age_days = (now.date() - progress.zmenene_od).days
+            judged = progress.status in WINDOW_JUDGED_STATUSES
+            if judged and age_days > window_max_age_days:
+                verdict = "FAIL"
+                unmet += 1
+                notes.append(
+                    f"sync window '{progress.sync_type}': the last completed walk "
+                    f"left the window starting {progress.zmenene_od} ({age_days}d "
+                    f"old), and every run since has reported success without "
+                    f"moving it -- so the source is being read through a window "
+                    f"that no longer covers its changes. The runs themselves are "
+                    f"green; this is the only row that records it."
+                )
+            elif not judged:
+                verdict = "--"
+            else:
+                verdict = "OK"
+            self.stdout.write(
+                f"    {progress.sync_type:<22} {progress.status:<10} "
+                f"{str(progress.zmenene_od):<12}  {age_days}d old  {verdict}"
             )
 
         for note in notes:

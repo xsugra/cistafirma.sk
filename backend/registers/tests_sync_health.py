@@ -13,7 +13,7 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
-from registers.models import SyncJob
+from registers.models import SyncJob, SyncProgress
 from registers.services import sync_engine
 
 
@@ -296,3 +296,133 @@ class FailedBeatJobTests(TestCase):
         self.assertEqual(code, 0)
         self.assertIn("beat-scheduled job types", output)
         self.assertIn("none recorded in the window", output)
+
+
+class SyncWindowTests(TestCase):
+    """The fourth condition: a window that stopped moving.
+
+    The three conditions above cannot see this one, and that is the whole
+    point. From 2026-09-11 the RUZ incremental resumed from a cursor a previous
+    run had left at the end of its own window, asked for changes past that
+    point, read an empty page, and stored `completed` with zero items. Nothing
+    failed. Ten runs over three days, every job row honest, and the register's
+    changes went unread because `zmenene_od` sat on 2026-08-04.
+
+    The window is the one row that recorded it.
+    """
+
+    def _window(self, *, status="completed", days_old=1, sync_type="incremental"):
+        return SyncProgress.objects.create(
+            sync_type=sync_type,
+            status=status,
+            zmenene_od=timezone.localdate() - timedelta(days=days_old),
+        )
+
+    def _run(self, **options):
+        out = StringIO()
+        try:
+            call_command("sync_health", stdout=out, **options)
+        except SystemExit as exc:
+            return out.getvalue(), exc.code
+        return out.getvalue(), 0
+
+    def test_a_window_that_stopped_moving_is_unmet(self):
+        self._window(days_old=40)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 1)
+        self.assertIn("Sync jobs: 1 unmet", output)
+        self.assertIn("no longer covers its changes", output)
+
+    def test_a_window_inside_the_threshold_is_fine(self):
+        self._window(days_old=1)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Sync jobs: 0 unmet", output)
+
+    def test_it_is_judged_on_age_alone_not_on_a_count_of_items(self):
+        """The reason this condition exists at all.
+
+        The command prints item counters and refuses to judge them, because how
+        many items a run *should* process depends on the run. Window age does
+        not: `fetch_ruz_data` advances it on every walk that reaches the end, so
+        an old window on a completed row is a state, not a threshold on volume.
+        """
+        self._window(days_old=40)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 1)
+        self.assertIn("every run since has reported success without moving it", output)
+
+    def test_a_paused_window_is_not_judged(self):
+        """Stopped by an operator who knows -- judging it would be reporting on
+        the operator, not on the sync."""
+        self._window(status="paused", days_old=40)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("paused", output)
+
+    def test_a_running_window_is_not_judged(self):
+        """A walk in progress legitimately holds an old window until it ends."""
+        self._window(status="running", days_old=40)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+
+    def test_a_failed_window_is_not_judged(self):
+        """Consistent with the rest of the command, which judges `failed` only
+        for the unattended schedule -- a failed manual run has a person on it."""
+        self._window(status="failed", days_old=40)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+
+    def test_a_window_that_was_never_set_is_not_judged(self):
+        """Written by a run that never got as far as choosing a window. There
+        is nothing to age, so there is nothing to say about it."""
+        SyncProgress.objects.create(sync_type="incremental", status="completed")
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("no window set", output)
+
+    def test_the_window_is_printed_even_when_it_is_healthy(self):
+        """Visible rather than silent: the verdict is `OK`, and the date it was
+        judged on is on screen next to it."""
+        self._window(days_old=1)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("incremental sync windows", output)
+        self.assertIn("incremental", output)
+        self.assertIn("OK", output)
+
+    def test_the_threshold_is_configurable_and_can_come_from_the_env(self):
+        self._window(days_old=10)
+
+        _, strict = self._run(window_max_age_days=3)
+        self.assertEqual(strict, 1)
+
+        _, lenient = self._run(window_max_age_days=30)
+        self.assertEqual(lenient, 0)
+
+        with patch.dict("os.environ", {"CISTAFIRMA_SYNC_WINDOW_DAYS": "3"}):
+            output, code = self._run()
+        self.assertEqual(code, 1)
+        self.assertIn("Sync jobs: 1 unmet", output)
+
+    def test_no_incremental_row_at_all_says_so_instead_of_going_quiet(self):
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("no incremental sync has ever been recorded", output)

@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
+from datetime import timedelta
 from companies.models import Company
 from registers.models import IndividualEntity, SyncJob, SyncProgress
 from registers.integrations.ruz_api import RuzApi, apply_ruz_dates
@@ -135,7 +136,23 @@ class Command(BaseCommand):
         else:
             created = False
         
-        # Ak pokračujeme v existujúcej synchronizácii
+        # The resume cursor belongs to the run that set it. Only `--resume` may
+        # pick it up again.
+        #
+        # This branch used to fall back to `progress.last_processed_ruz_id` for
+        # a *fresh* run too, and that is what stopped the incremental sync
+        # dead from 2026-09-11 without ever reporting a failure. A run that
+        # walks its window to the end leaves the field on that window's last
+        # id; the next run then asked RUZ for changes *after the end of a list
+        # it had already finished*, got an empty page, and `break` reads an
+        # empty page as "reached the end". So it called `complete_job` and was
+        # stored as `completed` with zero items -- ten times, every six hours,
+        # while `zmenene_od` sat still and the window it described grew.
+        #
+        # Verified against the live register: `zmenene-od=2026-08-04` alone
+        # returned 1000 ids, the same request with `pokracovat-za-id=2624307`
+        # returned none. A cursor that outlives its run turns a working sync
+        # into a no-op that reports success.
         if options['resume'] and not created:
             if progress.status in ['paused', 'failed']:
                 self.stdout.write(self.style.SUCCESS(
@@ -151,7 +168,7 @@ class Command(BaseCommand):
             else:
                 pokracovat_za_id = progress.last_processed_ruz_id
         else:
-            pokracovat_za_id = progress.last_processed_ruz_id if not created else None
+            pokracovat_za_id = None
         
         # Determine the start date for fetching
         if sync_type == 'full':
@@ -197,6 +214,10 @@ class Command(BaseCommand):
         # 6367 after handling 17 records. The job row is per-run, so the counts
         # belong there.
         run = {"processed": 0, "created": 0, "updated": 0, "skipped": 0, "errors": 0}
+
+        # The day this run started, read once. It is what the window advances
+        # to if the walk completes -- see the end of the loop.
+        run_started_on = timezone.localdate()
 
         try:
             while True:
@@ -268,6 +289,30 @@ class Command(BaseCommand):
                 
                 time.sleep(1)  # Wait a bit before fetching the next page of IDs
             
+            # The window this run walked is finished, so the next run must not
+            # walk it again from the start. Clearing the cursor alone would
+            # have every beat run re-scan everything back to 2026-08-04; the
+            # cursor and the window have to move together or the sync is either
+            # stuck or wasteful.
+            #
+            # `zmenene_od` is a *date*, the coarsest cursor the register
+            # offers, so the new start is the run's own start day minus one day
+            # of overlap. Without the overlap a company that changed in the
+            # last hours of the window -- after the page carrying its id had
+            # already been read -- would fall between the two windows and never
+            # be seen at all. With it, the tail day is simply re-read, which
+            # the upserts absorb.
+            #
+            # `>` and not `>=`: a run that finishes on the same day it started
+            # would otherwise write the window backwards.
+            window_end = run_started_on - timedelta(days=1)
+            if window_end > parse_date(zmenene_od):
+                progress.zmenene_od = window_end
+                progress.save(update_fields=['zmenene_od'])
+                self.stdout.write(self.style.SUCCESS(
+                    f'Okno posunuté: ďalšia synchronizácia pôjde od {window_end}.'
+                ))
+
             # Synchronizácia dokončená
             progress.complete()
             if owns_job_lifecycle:

@@ -289,8 +289,14 @@ class _FakeRuzApi:
     def __init__(self, pages):
         self._pages = list(pages)
         self.detail_calls = []
+        # Every `(zmenene_od, pokracovat_za_id)` pair the command asked with,
+        # in order. The window and the resume cursor are the two halves of the
+        # incremental sync's state, and neither is visible in the job row -- so
+        # the only place a test can read them is here.
+        self.window_calls = []
 
     def get_changed_company_ids(self, zmenene_od=None, pokracovat_za_id=None):
+        self.window_calls.append((zmenene_od, pokracovat_za_id))
         if not self._pages:
             return {"id": [], "existujeDalsieId": False}
         page = self._pages.pop(0)
@@ -559,6 +565,136 @@ class RuzTransportFailureTests(TestCase):
         self.assertIn("No more company IDs to fetch.", out.getvalue())
         self.assertEqual(
             SyncProgress.objects.get(sync_type="incremental").status, "completed"
+        )
+
+
+class RuzIncrementalWindowTests(TestCase):
+    """The two halves of the incremental sync's state, and why they move together.
+
+    `SyncProgress.zmenene_od` is the window the sync reads through and
+    `last_processed_ruz_id` is where a walk got to. The job row records neither,
+    so a run that does nothing looks exactly like a run with nothing to do --
+    which is how ten beat runs reported `completed, 0 items` over three days
+    while the register changed underneath them.
+
+    From 2026-09-11 the beat run resumed from a cursor the previous run had left
+    at the *end of its own window*, asked RUZ for changes past that point, got an
+    empty page, and read it as "reached the end". Verified against the live
+    register: `zmenene-od=2026-08-04` alone returned 1000 ids; the same request
+    with `pokracovat-za-id=2624307` returned none.
+    """
+
+    def _job(self):
+        return SyncJob.objects.create(
+            job_type="ruz_incremental",
+            status="running",
+            started_at=timezone.now(),
+            last_heartbeat=timezone.now(),
+        )
+
+    def _progress(self, **kwargs):
+        defaults = {
+            "sync_type": "incremental",
+            "status": "completed",
+            "zmenene_od": timezone.localdate() - timedelta(days=40),
+        }
+        defaults.update(kwargs)
+        return SyncProgress.objects.create(**defaults)
+
+    def _run(self, api, job, **extra):
+        out = StringIO()
+        with patch(
+            "registers.management.commands.fetch_ruz_data.RuzApi", return_value=api
+        ):
+            call_command(
+                "fetch_ruz_data",
+                sync_job_id=job.pk,
+                stdout=out,
+                stderr=StringIO(),
+                **extra,
+            )
+        return out.getvalue()
+
+    def test_a_fresh_run_does_not_resume_from_a_previous_runs_cursor(self):
+        """The defect itself. A cursor left by a *finished* run describes a list
+        that no longer exists, and asking past its end is what turned a working
+        sync into a no-op that reported success."""
+        self._progress(last_processed_ruz_id=2624307)
+        api = _FakeRuzApi([[111]])
+
+        self._run(api, self._job())
+
+        self.assertEqual(api.window_calls[0][1], None)
+
+    def test_a_completed_walk_moves_the_window_forward(self):
+        """The other half. Clearing the cursor without moving the window would
+        have every beat run re-scan everything back to 2026-08-04; leaving the
+        window alone -- as it was -- is what made the stall permanent."""
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111]])
+
+        self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertEqual(
+            progress.zmenene_od, timezone.localdate() - timedelta(days=1)
+        )
+
+    def test_the_window_carries_a_day_of_overlap(self):
+        """`zmenene_od` is a date, the coarsest cursor the register offers. A
+        company that changed in the window's final hours, after the page
+        carrying its id had been read, would otherwise fall between two windows
+        and never be seen at all."""
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111]])
+
+        self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertLess(progress.zmenene_od, timezone.localdate())
+
+    def test_the_window_never_moves_backwards(self):
+        """A run that finishes the same day it started would otherwise write the
+        window behind where it already was, and the next run would re-read days
+        it had already covered -- or, worse, skip them."""
+        today = timezone.localdate()
+        progress = self._progress(zmenene_od=today)
+        api = _FakeRuzApi([[111]])
+
+        self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertEqual(progress.zmenene_od, today)
+
+    def test_resume_still_picks_up_the_stored_cursor(self):
+        """The cursor is not wrong, it is *scoped*: it belongs to a run that was
+        interrupted and is being continued. `--resume` is the only path that
+        may use it, and this keeps the fix from taking that away."""
+        self._progress(
+            status="paused",
+            last_processed_ruz_id=4242,
+            zmenene_od=timezone.localdate() - timedelta(days=40),
+        )
+        api = _FakeRuzApi([[111]])
+
+        self._run(api, self._job(), resume=True)
+
+        self.assertEqual(api.window_calls[0][1], 4242)
+
+    def test_an_empty_registry_still_ends_the_run_as_completed(self):
+        """A window with genuinely nothing in it is a normal run -- most beat
+        runs look like this -- and must not be turned into a failure by the
+        fix. What made the stall invisible was never the empty page; it was
+        that the page was empty *and* the window never moved."""
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([])
+
+        self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertEqual(progress.status, "completed")
+        self.assertEqual(
+            progress.zmenene_od, timezone.localdate() - timedelta(days=1)
         )
 
 
