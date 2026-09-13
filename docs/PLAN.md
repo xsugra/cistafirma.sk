@@ -186,6 +186,33 @@ deterministický `unstorable` prípad z #90 (`SZZ Základná organizácia 43-1`)
 a okno sa cez neho posunulo. To je správanie, ktoré `680c1b5` neskôr zvolil
 **zámerne** — vtedy sa tak stalo len preto, že poistka ešte v procese nebola.
 
+**Ako to dopadlo (2026-09-13 13:50).** Beatový beh je job **#24**:
+`13:50:06.609` → `13:50:08.678` UTC, teda **2,07 s**, `processed_items=10`,
+`ok=10`, `fail=0`, `via=beat_schedule`. V logu workera stojí
+`Pokračujem za ID: 0` — to je `b7aa428` vidieť v praxi: čerstvý beh zdedil
+**nula** z predošlého cursoru, nie 2,5 milióna. `zmenene_od` ostal
+**2026-09-12**, a to je správne: `window_end = deň behu − 1 = 2026-09-12`
+a posúva sa len `if window_end > zmenene_od`, čo je nepravda. Okno je teda
+už na najnovšom konci a nie je kam posúvať.
+
+**Čo tento beh (ne)dokazuje.** Riadok `Okno neposunuté …` sa neobjavil, čiže
+`holds_window` bolo `False` (`unreadable = 0`) — poistka nemusela držať.
+To je meranie toho, že poistka **nezavadzala**, nie toho, že správne drží:
+vetva, v ktorej okno naozaj podrží, na živých dátach zatiaľ nameraná nebola.
+
+**10 položiek, nie ~1 160, ako som predpovedal — a predpoveď bola zlá.**
+Počítal som `45 306 ÷ 39 dní`, lenže job #23 mal to isté `window_end`
+(`2026-09-12`) a toho dňa už všetko prečítal. #24 číta ten istý deň druhýkrát,
+pretože prekrytie je zámerné, a nájde len to, čo sa zmenilo od 11:57. Desať je
+teda **zvyšok**, nie objem dňa.
+
+⚠️ **A jedna pasca v tom istom logu:** `Processed: 58533` a `Errors: 1` sú
+**kumulatívne** počítadlá z `SyncProgress`, nie tohto behu. Riadok `SyncProgress`
+id=1 to má napísané v `notes` („counters below are cumulative across runs, so
+they do not describe a run that ever finished"). Kto prečíta `Processed: 58533`
+ako prácu tohto behu, nafúkne ju **5 853-násobne**. Skutočné číslo behu je
+`SyncJob.processed_items`.
+
 ### #90 — RUZ vracia IČO, ktoré sa do našej schémy nezmestí
 
 Toto je nález, ktorý **odkryl až opravný beh #23** — a keby som ho neriešil,
@@ -594,8 +621,9 @@ zmizne — potichu. Nameraných 16 takých profilov; mechanizmus je v § 7.
 **Jedna vec, ktorá sa dá prečítať zle.** Beat riadok
 `refresh-person-history-every-4-hours` má `last_run_at=None`
 a `total_run_count=0`, takže dávku **nespustil on** — spustil ju ručný beh.
-Prvý beh beat riadku čakám 14:28:25 UTC (§ 7). To nie je druhá chyba, len iný
-spúšťač; ale kým `total_run_count` ostane 0, **nedá sa z neho čítať, či
+Prvý beh beat riadku čakám **~17:20:15 UTC** (a nie 14:28:25, ako tu stálo —
+referenčný bod sa medzitým dvakrát posunul, § 7). To nie je druhá chyba, len
+iný spúšťač; ale kým `total_run_count` ostane 0, **nedá sa z neho čítať, či
 dopĺňanie napreduje** — a to je presne tá pasca z § 7.
 
 ---
@@ -923,12 +951,22 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   10:28:23 UTC): beat ho odvtedy **nikdy nevyslal** a `entry.is_due()`
   o 13:18 vracia `is_due=False, next=14399.9` — teda „dobehol pred 0,05 s".
 
-  Hodiny sa pritom štartujú **načítaním rozvrhu**, nie vytvorením riadku:
-  v logu je `DatabaseScheduler: Schedule changed.` naposledy 10:28:25, a to
-  je referenčný bod. Prvý beh preto čakám **14:28:25 UTC**. Kým `last_run_at`
-  ostane `NULL`, posunie ho ďalej každé prepísanie rozvrhu (mení ho
-  `date_changed` na ktoromkoľvek `PeriodicTask` riadku) — hodiny sa vždy
-  resetujú na „teraz".
+  Hodiny sa pritom štartujú **načítaním rozvrhu**, nie vytvorením riadku.
+  Text tu predtým stál, že `DatabaseScheduler: Schedule changed.` je naposledy
+  10:28:25 a prvý beh preto čaká **14:28:25 UTC** — to už neplatí. Kontrola
+  2026-09-13 13:53: odvtedy boli v logu **ďalšie dve** načítania rozvrhu,
+  `13:18:35` a `13:20:15`, a samotný riadok má `date_changed = 13:20:12.935`
+  (tri riadky sa vtedy zapísali v rozmedzí 13 ms, takže je to zápis rozvrhu
+  a nie beh). Referenčný bod je preto **13:20:15** a prvý beh čakám
+  **~17:20:15 UTC**. Riadok je stále `last_run_at=None, total_run_count=0`.
+
+  **Preto sa ten odhad nedá brať ako istý** — a to je podstatnejšie než ten
+  posun. `date_changed` sa hýbe aj bežnou prevádzkou: `fetch-ruz-data-every-6-hours`
+  malo `13:50:26` pri behu, ktorý sa dispatchol o `13:50:06`, a
+  `detect-stuck-sync-jobs-every-10-min` `13:45:05`. Každé ďalšie prepísanie
+  rozvrhu pred 17:20 teda posunie tento riadok ďalej — hodiny sa vždy
+  resetujú na „teraz". Overiť sa to dá len tak, že sa o 17:21 pozrie, či
+  naozaj bežal.
 
   **Nie je to naša chyba a nie je to jedovaté samo o sebe** — po prvom behu
   si riadok `last_run_at` zapíše a je z neho obyčajná 4-hodinovka. Je to ale
