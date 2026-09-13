@@ -778,6 +778,113 @@ vyprázdnenie populácie 22 223 platí ďalej.
 **Identita drží aj po ticku:** 2 789 + 22 223 = **25 012** = presne počet
 profilov s `rpo_id`. Ani jeden profil nezmizol.
 
+#### Ako rýchlo #95 naozaj odteká — a prečo to nie je 44 hodín
+
+Druhá vec, ktorú treba po ticku o 17:20 opraviť, je **odhad dobehu** — nie
+preto, že by strop 900/h neplatil, ale preto, že platí len vtedy, keď register
+odpovedá. Merané 2026-09-13 večer:
+
+| (UTC) | prečítaných | fronta `orsr` |
+|---|---|---|
+| 17:21 | 2 789 | 2 172 |
+| 20:53 | 3 414 | 1 568 |
+| 20:59 | **3 501** | 1 488 |
+
+Za 3 h 32 min (17:21 → 20:53) to je **+625 prečítaní = 177/h**, a v posledných
+25 minútach toho okna len **74/h** — ani jedno sa nepribližuje k 900/h. Ale
+v zdravom okne 20:53 → 20:59 je to **+87 za 6,8 min = 771/h**, teda rádovo na
+strope. Je to kontrola, ktorá sa dá zopakovať kedykoľvek: keď fronta klesá
+o 5 správ za 20 s, populácia musí klesať ~900/h.
+
+**Príčina je latencia registra, nie rate limiter.** `read_person_history` volá
+RPO s `timeout=30` a `Retry(total=4, read=4, backoff_factor=1.5)`
+(`rpo_client.py:183-185`). Jedna entita, ktorá neodpovie, teda stojí
+**5 pokusov × 30 s + backoff 22,5 s = 172,5 s**. Worker `orsr` beží
+`--concurrency=2`, takže v takom okne prepustí **~42 entít/h** — dvadsaťjedenkrát
+pod stropom. Rate limit `15/m` pritom neviaže vôbec: worker nestihne ani
+*ponúknuť* 15 úloh za minútu, keď oba sloty drží tri minúty jedna otázka.
+
+Nameraný priebeh to potvrdzuje: v hodine 18:00–19:00 UTC bolo **128 prijatí
+a 0 dokončení**, s **474 riadkami `ReadTimeoutError`** na `api.statistics.sk`.
+O sedem hodín skôr (11:00) tá istá úloha spravila **890/h** — presne na strope.
+Rozdiel medzi tými dvoma hodinami nie je v našom kóde.
+
+**Fronta preto osciluje medzi dvoma režimami — a nerastie donekonečna.**
+Nameraný celý jeden cyklus: pred tickom o 17:20 mala `orsr` **172** správ, po
+ňom 2 172, a o 20:55 **1 553** — teda ešte pred ďalším tickom takmer dotiekla.
+O 20:55 sa fronta zmenšovala o **5 správ za 20 s = 15/min**, čo je *presne*
+`rate_limit='15/m'`, a worker pritom spracúval **45 úloh za 3 min** (dĺžky
+0,4–2,0 s) — výhradne `read_person_history`. Strop 900/h je teda skutočný
+a dosiahnuteľný, a platí **na worker, nie na potomka**: pri `--concurrency=2`
+je to 15/min spolu, nie 30/min. (Keby bol limit na potomka, bolo by to 30/min.)
+
+| stav registra | odtok | čistý tok pri dispatchi 500/h |
+|---|---|---|
+| zdravý (11:00, 20:55) | **~900/h** | **−400/h** → fronta sa vyprázdni |
+| degradovaný (18:00–20:00) | ~42–105/h | **+395/h** → fronta narastá |
+
+**Konvergencia teda nie je vlastnosť návrhu, ale vlastnosť počasia na strane
+registra** — a dispatcher nemá ako zistiť, ktoré z tých dvoch práve je. Pridáva
+2 000 správ bez ohľadu na to, koľko ich ešte čaká, takže **každé degradované
+okno zanechá vo fronte trvalý prírastok**, ktorý musí dohnať okno zdravé.
+Dnešný cyklus takto pridal ~1 400 správ. Kým sú zdravé okná dlhé, dobehne to;
+keď sa degradácia natiahne na dni, fronta rastie rýchlejšie, než sa stíha
+vyprázdňovať. Je to náhodná prechádzka, ktorej drift nikto nemeria — tá istá
+trieda chyby, akú tento dokument dokumentuje inde: **riadiaca slučka, ktorá
+nesúdi výsledok, len záťaž.**
+
+**Opravený odhad dobehu.** Ten pôvodný („22 223 ÷ 2 000 na tick ≈ 44 h") rátal
+s tým, že fronta je väzbou. Nie je — väzbou je odtok `osoby_historia`
+(~900/h zdravý, mínus ~45/h nových profilov z rotácie ORSR, namerané
+25 012 → 25 171 za 3 h 32 min). Keď register drží, populácia sa tenčí
+**~855/h**, takže 21 757 čakajúcich je **~25 h nepretržitého zdravia**, nie 44 h.
+Degradovaná hodina pritom vráti len ~105 čítaní namiesto 900, čiže **každá
+jedna posunie dokončenie o ~0,9 h** — zhruba jedna k jednej.
+
+**A to je presne to, čo `ops-check` nevidí.** Prah varovania pre `orsr` je
+**50 000** a jeho komentár ho odôvodňuje tým, že `orsr` „drain to zero: they sit
+at 0 in steady state" (`ops_check.sh:59`, prah na `:92`). To už neplatí: od #95
+sedí `orsr` v steady state na ~1 500–2 200, pretože dispatcher pridáva 2 000
+každé 4 h. Fronta zmenila charakter z „vyprázdni sa" na „udržiava dávku" — a prah,
+ktorý z toho vychádzal, je nastavený na hodnotu, ktorú by prekročila až po
+mnohých dňoch za sebou. Kontrola teda existuje a je ticho presne vtedy, keď má
+čo povedať. Keby `orsr` dostal prah odvodený z jeho nového tvaru — dávka 2 000,
+trojnásobná rezerva, teda ~6 000 — dnešný cyklus by ho ešte neprekročil, ale
+dvojdňová degradácia áno. **Zámerne nemenené**: prekalibrovať kontrolu, na ktorú
+sa spolieha týždenný job (pri zlyhaní zapíše `LAST_FAILURE` a pošle notifikáciu),
+si zaslúži samostatné rozhodnutie, nie tichú úpravu v rámci #95.
+
+**Štrukturálny dôvod nízkeho odtoku.** `read_person_history`
+a `sync_company_orsr_data` majú **oba** `queue='orsr'` a `rate_limit='15/m'`
+(`tasks.py:697` a `:818`) a delia sa o tie isté **dva** sloty. Za 13 h worker
+spravil 3 706 profilových rotácií proti 2 454 čítaniam histórie — #95 teda
+súperí o sloty s monitorovacou rotáciou, ktorá volá ten istý register, a obe
+si navzájom zvyšujú latenciu.
+
+**Hotové** (`fb2713b`). Dispatcher sa teraz riadi hĺbkou fronty, nie pevným
+počtom:
+
+```python
+backlog = _orsr_backlog()                      # None, keď broker neodpovie
+limit   = min(limit, max(0, BOUND - backlog))  # BOUND = 6 000
+if limit <= 0: tick preskoč a zapíš prečo
+```
+
+Je to poistný ventil, nie škrtič: dávka je 2 000 a rotácia ORSR pridáva 200,
+takže zdravá fronta nikdy neprekročí ~2 200 a `min()` sa chytí až pri naozaj
+nahromadenom backlogu — na šťastnej ceste sa nemení nič. Zaseknúť sa nedá,
+odtok je vždy > 0, takže fronta raz pod strop klesnúť musí a dispatch sa obnoví
+sám. A keď sa broker nedá prečítať, dispatch ide neorezaný: najhorší prípad
+výpadku má byť pôvodné správanie, nie zastavená populácia.
+
+**Čo sa smie reštartovať a čo nie.** Zmena patrí dispatcheri, ktorý beží na
+`celery` → `celery_worker_default`; tej fronte je **0**, takže reštart tam
+nestratí nič. Worker `celery_worker_orsr` sa **nesmie** reštartovať, kým má
+fronta 1 568 správ — § 2 už nameralo, že reštart pod záťažou ticho zhodí až
+`prefetch 4 × concurrency 2 = 10` rozbehnutých čítaní. Zvýšenie `--concurrency`
+(sloty sú pri latencii väzbou, nie rate limit) je preto **neskoršia** zmena:
+až keď je `orsr = 0`.
+
 ---
 
 ## 3. Čaká na prácu
@@ -1889,6 +1996,31 @@ nevynucuje a ručný beh z koreňa je ticho zelený. Je to tá istá trieda ako
 `grep -c` vracia 0 aj pre spadnutý príkaz: **údaj, ktorý nevie zobraziť zlyhanie,
 sa nedá použiť ako dôkaz.** `NO TESTS RAN` je jediná stopa a je ľahké ju prehliadnuť
 cez `| tail`, ktorý navyše prepíše návratový kód na 0.
+
+### `docker compose logs --timestamps` dá dva časy na riadok a `grep -o` spočíta oba
+
+Namerané 2026-09-13 večer pri meraní #95, na mojej vlastnej chybe. `docker
+compose logs --timestamps` predradí riadku čas od Dockeru, ale telo riadka je
+štruktúrovaný JSON, ktorý nesie **svoj** `"timestamp"` — takže na jednom riadku
+sú **dva**. `grep -o` vypíše každý *výskyt* vzoru, nie každý riadok, takže
+`grep -o 'T[0-9][0-9]' | sort | uniq -c` spočíta oba a číslo vyjde presne
+dvojnásobné:
+
+```
+$ … | grep "succeeded in" | grep -o 'T[0-9][0-9]' | sort | uniq -c
+ 1780 T11        # ← dvojnásobok
+$ … tá istá množina, počítaná cez distinct task_id
+  890 T11        # ← pravda, a presne na strope 900/h
+```
+
+Je to zákerné preto, že výsledok nevyzerá ako chyba, ale ako **nález**: 1 780/h
+sa dá prečítať ako „rate limit `15/m` neplatí" — teda presne opačný záver, než
+je pravda. Odhalí to len nezávislé počítadlo: `grep -oE
+'read_person_history\[[0-9a-f-]+\]' | sort -u | wc -l` dalo **2 452** na
+**2 452** riadkoch, teda žiadnu duplicitu. Tá istá trieda ako `grep -c` vyššie:
+**počítadlo, ktoré nevie, čo počíta, dá sebavedomé číslo.** Pri `docker compose
+logs` sa preto hodiny musia počítať z jedného časového poľa, nie z `grep -o`
+cez celý riadok.
 
 ---
 
