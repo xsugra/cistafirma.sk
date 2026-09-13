@@ -917,6 +917,35 @@ hodina pripočíta toľko, koľko trvala (dnešná 18:00–20:00 stála ~2 h). P
 dostupnosti zdroja. To je tá istá trieda predpokladu ako pri poisťovniach
 vyššie: dávka sa rovná odtoku na papieri a zdroj medzitým mlčí.
 
+**Tik overený 2026-09-13 21:20:14Z — predpoveď sedela na jednotku.**
+
+| | predpoveď | namerané |
+|---|---|---|
+| čas | 21:20:12 | **21:20:14,6** (+2,6 s jitter beatu) |
+| `args` | 2 000 | `"[2000]"` |
+| throttle | žiadny (backlog ~1 175 « 6 000) | **žiadny** |
+| fronta `orsr` | ~3 179 | **3 174** (+1 995) |
+
+```
+21:20:14.562  "Scheduled person-history resync for 2000 companies"
+21:20:14.568  succeeded in 1.61s: 'Scheduled person-history resync for 2000 companies'
+```
+
+Rozdiel 3 179 vs 3 174 je 5 správ, ktoré za tých 20 s odtiekli — fronta teda
+narástla presne o dávku. Riadok `Person-history resync throttled` v logu
+**nie je**, čo pri backlogue 1 175 a bounde 6 000 sedí: `headroom = 4 825`,
+`min(2 000, 4 825) = 2 000`. **Tým je uzavretá posledná otvorená verifikácia
+k #99** — a #99 na šťastnej ceste naozaj nič nemení, ako tvrdí.
+
+**Čo z toho ale vyplýva pre #95 — a je to odporúčanie, nie nález.**
+Od 21:20:14 stojí fronta na 3 174 a pri 894/h sa vyprázdni okolo **00:53**;
+ďalší tik je 01:20:12. V zdravom cykle teda 2 000 správ odtečie za 2,24 h
+a zvyšných **1,76 h zo štyroch je fronta prázdna** — dispatcher dodá 500/h,
+kým fronta udrží 894/h. Zvýšenie dávky na ~3 500 (alebo interval na 2 h by
+stihol to isté) by teda skrátilo #95 zhruba z 24 h na ~14 h. Neimplementované:
+je to zmena `args` v `PeriodicTask` riadku bežiacej úlohy, nie vec #95, a
+zdieľaná fronta s ORSR rotáciou je caveat, ktorý treba zvážiť spolu s tým.
+
 ---
 
 ## 3. Čaká na prácu
