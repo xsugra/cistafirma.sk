@@ -354,6 +354,126 @@ tretí je nová poistka: `IntegrityError` musí byť klasifikovaný spolu s
 a vo vzorke 40 IČO nula. Hustota sa nedá spočítať z registra, len z ďalších
 behov.
 
+### #89 — Jedna osoba je viac riadkov `Person` (rozhodnuté)
+
+**Rozhodnutie: `Person.fingerprint` sa nemení. Nezlúči sa ani jeden riadok,
+neprepíše sa ani jeden kľúč, nezmaže sa nič. Opravuje sa *čítanie*, nie kľúč.**
+
+Nájdené pri #87 (hľadanie osôb): to isté meno sa v hľadaní ukazovalo trikrát.
+Namerané naživo 2026-09-13 — **56 162 riadkov `Person`, 86 179 väzieb**,
+a v nich napríklad:
+
+| id | meno | adresa | `fingerprint` |
+|---|---|---|---|
+| 44903 | Matej Vácha | `Dátum narodenia: 20.08.1992` | iný |
+| 44904 | Matej Vácha | *(prázdna)* | iný |
+| 45335 | Matej Vácha | `Beniakova, 3100/12, Bratislava - mestská časť Karlova Ves, 841 05` | iný |
+
+Jeden človek, tri riadky, tri odtlačky. `Person` je pritom kľúčovaný na
+`fingerprint` (`unique=True`), takže sú to pre databázu traja ľudia.
+
+**Príčina je v extrakcii, nie v identite.** `compute_fingerprint`
+(`connections/models.py:29`) berie ako kľúč **meno + poslednú zložku adresy,
+ktorá nie je číslo**:
+
+```python
+if len(part) > 2 and not part.isdigit():
+```
+
+Holé slovenské PSČ (`81103`) **je** číslica, takže pravidlo ho preskočí a kľúč
+pristane na **meste**. V dátach je holé PSČ v **33 424** riadkoch a s medzerou
+len v **6 426** — kľúč sa teda zdegeneroval na „meno + mesto" (`bratislava`
+samotná v **3 832** riadkoch). PSČ `04001` drží **1 284** riadkov `Person`.
+
+**Druhá, väčšia príčina: jeden dokument zapíše jedného človeka dvakrát.**
+Z **4 238** skupín `(firma, meno_normalizované)` má **3 558 (84 %) všetkých
+členov vytvorených v priebehu 60 sekúnd, medián 7,7 ms**. To nie sú dva zdroje
+s dvoma formátmi adresy — to je jeden ORSR dokument, ktorý vykreslí toho istého
+funkcionára raz pod `Predstavenstvo` a raz pod `Spoločníci`, a tie dve sekcie
+**nemajú tie isté riadky**, takže vzniknú dve adresy a dva odtlačky. Riadkový
+kľúč ich nemôže spojiť — a `Spoločníci` navyše nenesie **žiadny dôkaz**
+(odtiaľ tie prázdne adresy a „Dátum narodenia" ako adresa: **14** riadkov má
+miesto adresy dátum narodenia, **3** majú adresu prázdnu).
+
+**Prečo nie zlúčenie riadkov.** Zlúčenie je jediná operácia, ktorá sa nedá
+vrátiť a nie je vidieť:
+
+1. Zlúčením sa **vyrába funkcia, ktorú register nikdy neuvádza** — keby tie dva
+   riadky boli otec a syn, výsledok tvrdí, že jedna osoba sedí v predstavenstve
+   aj medzi spoločníkmi. Neviditeľne a natrvalo.
+2. **Žiadna čítacia cesta nefiltruje „zlúčené"** — značka by nikde nebola
+   vidieť, takže chybné zlúčenie sa v produkte neprejaví ako chyba, ale ako
+   fakt.
+3. Chybná **skupina** je oproti tomu **vysvetlená aj s riadkami, z ktorých
+   vznikla** — čitateľ, ktorý vie, že sú to otec a syn, to môže opraviť.
+   Zlúčenie tú možnosť berie.
+
+Preto sa zhlukuje **pri čítaní** a každá skupina sa čitateľovi **vypíše aj
+s riadkami, z ktorých vznikla** (`PersonRecordsNote`).
+
+**Dve dôkazové pravidlá, nič viac.** Sú to jediné dva tvary, ktoré naozaj
+znamenajú „ten istý človek":
+
+| | pravidlo | kedy sa odmietne |
+|---|---|---|
+| 1 | **jedna firma + jedno meno** — teda jeden dokument | keď si dve neprázdne PSČ odporujú |
+| 2 | **jedno meno + jedno PSČ**, hocijaká firma | nikdy (PSČ je zhoda, nie odhad) |
+
+Plus tvrdá poistka: **nikdy sa nespájajú riadky s dvomi rôznymi neprázdnymi
+IČO**. Zmerané: bez tejto poistky by sa zlúčila **presne jedna** firemná
+skupina navyše — takže je to poistka proti okrajovej populácii, nie proti
+systémovej chybe, ale je lacná.
+
+**Prečo je pravidlo 2 bezpečnejšie, než sa zdalo.** Riziko bola predstava, že
+dve slovenské dediny môžu mať rovnaké PSČ a rovnaké meno. Zmerané: **20**
+zhlukov `meno + PSČ` v celej tabuľke pomenúva viac než jednu obec — a sú to
+takmer výlučne **zahraničné adresy** (`nemecka spolkova republika`,
+`talianska republika`, `ceska republika`, `nespecifikovane`), nie slovenské
+obce. Pravidlo 2 teda zostáva.
+
+**Čo to spraví s delenými osobami naprieč registrami.** **4 038** mien zdieľa
+aspoň jednu firmu. **2 745** mien nemá medzi členmi **žiadnu** spoločnú firmu —
+a z nich **1 323** má **presne jedno** rôzne PSČ, takže ich pravidlo 2 spojí
+bezpečne. Firemné pravidlo samotné zbalí 3 457 mien / 3 592 nadbytočných
+riadkov a nechá 581 / 660 nerozdelených.
+
+**Celá tabuľka sa zvládne.** 56 162 riadkov sa načíta za **0,9 s** a zhlukuje
+za **0,2 s** → 50 991 zhlukov, 5 171 nadbytočných riadkov zbalených, najväčší
+zhluk má **5 riadkov a všetky jedno PSČ**. Napriek tomu je hľadanie **ohraničené**:
+najhorší dopyt (`an`) sedí na **20 050** riadkov, takže `PersonSearchView`
+prejde `CLUSTER_SCAN_LIMIT = 300` riadkov a keď okno nestačí, vráti
+`total_people: null` — „počet, ktorý sme nespočítali, nie je počet nula",
+rovnaká úprimnosť ako `coverage: null` v #87.
+
+**Čo bolo zamietnuté.** (a) Zlúčenie riadkov — dôvody vyššie. (b) Prepočítanie
+`fingerprint` na `meno + PSČ` a spätné prekľúčovanie — kľúč by sa tým **zlepšil
+len o málo**, lebo 84 % duplicít nemá žiadne druhé PSČ na zhode, a stálo by to
+prepísanie 56 162 riadkov, na ktoré visia väzby. (c) Zúžený regulárny výraz na
+PSČ — líši sa v **76** riadkoch a voľnejší tvar zachraňuje
+`Bratislava … Nové Mesto 831 04`, kde je PSČ zapísané do zložky mesta; prijatý
+falošný poplach je `HRB 29493`, ktoré sa číta ako PSČ. (d) Zlučovanie podľa
+holého mena (bez PSČ) — to je presne trieda, ktorá spája otca so synom.
+
+**Kroky.** Krok 1 je hotový (tento commit). Kroky 2–4 menia **zápis**, a preto
+každý z nich začína **čerstvou overenou zálohou** (`make db-backup` +
+`make db-backup-verify`) a **nie je schválený**:
+
+1. ✅ **Zhlukovanie pri čítaní** — `connections/identity.py` (čistý modul, nič
+   neukladá), `views.py` (hľadanie, detail, oba grafy), `PersonRecordsNote`.
+2. ⏳ **`Person.birth_date`** (`DateField`) — aditívna migrácia; dnes je dátum
+   narodenia **uložený ako adresa** v 14 riadkoch.
+3. ⏳ **Zapisovač preberá namiesto vytvárania** — až po suchom behu, ktorý
+   ukáže, koľko riadkov by sa prestalo vytvárať.
+4. ⏳ **Dátum narodenia sa prestane ukladať ako adresa** — až keď je krok 3
+   naživo, inak by o ten údaj prišiel.
+
+**Testy.** `connections/tests_identity.py` — 34 testov (holé funkcie aj API).
+Sada `connections` je **72 OK** (38 pôvodných + 34 nových); frontend 239 OK,
+`typecheck`, `build`. Kľúčové prípady: skutočné Vácha riadky 44903/44904/45335
+v jednej firme → **1 zhluk**; riadok bez IČO nesmie premostiť dve IČO → 2
+zhluky; dve PSČ v jednej firme zostanú oddelené; riadok bez PSČ sa nepridá na
+ani jednu stranu → 3 zhluky; `total_people` je `null`, keď okno nestačí.
+
 ---
 
 ## 3. Čaká na prácu
