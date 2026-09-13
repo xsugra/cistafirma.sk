@@ -347,13 +347,35 @@ class Command(BaseCommand):
             elif judged and age_days > window_max_age_days:
                 verdict = "FAIL"
                 unmet += 1
+                # Two different states look identical from the date alone, and
+                # the sentence has to be true for the one it describes:
+                #
+                # - the walk completes over nothing (the original bug), or
+                # - the walk deliberately holds the window because items are
+                #   failing (`fetch_ruz_data` advances it only on a clean run).
+                #
+                # Both mean the source's changes go unread, so both fail. But
+                # saying "every run since has reported success" about the second
+                # would be false -- it reported errors, on purpose, and stopped.
+                if progress.total_errors:
+                    error = " ".join((progress.last_error or "").split())[:200]
+                    cause = (
+                        f"and the walks are finishing with {progress.total_errors} "
+                        f"item error(s), so the window is being held on purpose "
+                        f"rather than silently stalled"
+                        + (f". Last recorded error: {error}" if error else "")
+                    )
+                else:
+                    cause = (
+                        "and every run since has reported success without moving "
+                        "it -- so the source is being read through a window that "
+                        "no longer covers its changes. The runs themselves are "
+                        "green; this is the only row that records it"
+                    )
                 notes.append(
                     f"sync window '{progress.sync_type}': the last completed walk "
                     f"left the window starting {progress.zmenene_od} ({age_days}d "
-                    f"old), and every run since has reported success without "
-                    f"moving it -- so the source is being read through a window "
-                    f"that no longer covers its changes. The runs themselves are "
-                    f"green; this is the only row that records it."
+                    f"old) {cause}."
                 )
             elif not judged:
                 verdict = "--"

@@ -427,6 +427,28 @@ class SyncWindowTests(TestCase):
         self.assertEqual(code, 0)
         self.assertIn("no incremental sync has ever been recorded", output)
 
+    def test_a_window_held_by_item_errors_says_so_instead_of_claiming_success(self):
+        """A deliberate hold and a silent stall look identical from the date.
+
+        `fetch_ruz_data` advances the window only on a clean run, so a walk that
+        finishes with item errors holds it on purpose -- and still stores
+        `completed`, because the run did complete. The gate fails both, which is
+        right (the source's changes go unread either way), but reporting the
+        second as "every run since has reported success" would be false: it
+        reported errors, on purpose, and stopped.
+        """
+        window = self._window(days_old=40)
+        window.total_errors = 1
+        window.last_error = "value too long for type character varying(8)"
+        window.save(update_fields=["total_errors", "last_error"])
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 1)
+        self.assertIn("held on purpose", output)
+        self.assertIn("character varying(8)", output)
+        self.assertNotIn("every run since has reported success", output)
+
     def test_focus_mode_does_not_redden_the_window_it_switched_off(self):
         """Focus Mode takes the RUZ beat entry out of the schedule, so no run is
         meant to move this window while it is on.
