@@ -2626,13 +2626,33 @@ The direction reversed as well: the residue is now the *smaller* of the two
 one-sided counts, where before it was fourteen times the other. Nothing about the
 accounting changed between the two readings -- the rows did.
 
-**One gap survives, and it has a different cause.** 33 721 of the 34 508 rows
-(97.7 %) carry no `assets_financial_short`, the field `b54ce4a` introduced. The
-re-read that closed the accrual gap ran on a worker holding `d519c81` but not
-`b54ce4a` or `e3f8107`, so it stamped one fix into the corpus and left the other
-two unread -- the same mechanism, one wave later. The tell is that
-`assets_financial_accounts`, which `d519c81` does fill, is empty on only 178
-rows. Distinguishing those two vintages took a timestamp comparison, because
-nothing in the row says which parser wrote it; that is the argument for the
-reading-vintage field recorded as open work, not a re-read to be scheduled by
-hand each time.
+**One number looked like a second vintage and is not one.** 33 721 of the 34 508
+rows (97.7 %) carry no `assets_financial_short`, the field `b54ce4a` introduced,
+and the obvious reading was that the re-read above ran on a worker holding
+`d519c81` but not `b54ce4a` -- the same mechanism, one wave later. That reading
+was tested against the next batch and did not survive.
+
+The 07:50 batch on 2026-09-13 ran on a worker whose loaded source was checked for
+all three fixes before it started. Of the 901 rows it wrote,
+
+| field | filled |
+|---|---|
+| `assets_total` | 901 / 901 |
+| `assets_current` | 898 / 901 |
+| `assets_financial_accounts` | 895 / 901 |
+| `assets_accruals` | 789 / 901 |
+| **`assets_financial_short`** | **16 / 901 (1.8 %)** |
+
+Under the complete parser the field is filled at 1.8 %, against 2.3 % in the
+corpus it was supposed to explain. The two are the same number wearing different
+noise, so the sparsity is a property of the filings -- most leave `Krátkodobý
+finančný majetok` blank, and the writer stores only values that are not `None` --
+and not a reading vintage at all. Distinguishing those two possibilities took one
+batch and a field-by-field count; the temptation was to publish the first story,
+which fit the earlier pattern and needed no further work.
+
+The reading-vintage argument does not rest on this field and is unaffected: the
+accrual asymmetry above collapsed by a factor of 28 under a re-read, which is
+what a vintage gap looks like when it closes. What is still missing is any way to
+tell, from a row, which parser wrote it -- so the next such question again costs
+a timestamp comparison and a batch to answer.
