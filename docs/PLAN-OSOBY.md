@@ -215,13 +215,48 @@ povie, odkiaľ údaje sú.
    trojstavové `is_active` (plná / čiarkovaná / bodkovaná hrana + legenda
    „Ukončené" a „Neznáme"), dočítanie histórie pre 24 237 profilov.
 2. ✅ `GET /api/persons/?q=` — hľadanie bez diakritiky, s filtrom funkcie
-3. ⏳ Frontend: rozdelené výsledky v `SearchBar`, odkaz z `PersonCard`,
-   routa `/osoba/:id`
+3. ✅ Frontend: rozdelené výsledky v `SearchBar` („Osoby u nás" + register
+   ORSR ako vlastná skupina), routa `/osoba/:id`, dvojklik na uzol osoby
+   v grafe. **Odkaz z `PersonCard` zámerne nie je** — a nie je to
+   nedokončená práca, ale chýbajúci údaj: osoby v sekcii `PeopleOrgansSection`
+   prichádzajú z ORSR profilu firmy ako *mená*, bez `Person.id`, a endpoint
+   firma → osoby neexistuje. Odkaz by teda nemal kam viesť; bola by to nová
+   API plocha, nie odkaz.
 4. ✅ `GET /api/persons/orsr/?q=` — živý register (bez tlačidla „doplniť tieto
    firmy", viď 4.3)
-5. ⏳ Stance k osobným údajom (rate limit ✅, žiadny export ✅, chýba veta
-   o pôvode údajov v UI — `note` v API ju už nesie)
+5. ✅ Stance k osobným údajom: rate limit (60/h) ✅, žiadny export ✅, veta
+   o pôvode údajov v UI ✅. Register má vlastnú skupinu s odznakom „Nie sú to
+   naše dáta", vlastným zdrojovým odkazom na `orsr.sk` a `note` z API
+   o tom, čo register nezverejňuje — plus tri stavy, ktoré sa nesmú zliať:
+   *nedostupné* / *prázdne* / *neopýtané sa*. Prázdny výsledok navyše hovorí,
+   že bez diakritiky sme to už skúsili (endpoint to robí sám), takže
+   „skúste to bez diakritiky" by bola rada, ktorú už nikto nemôže použiť.
 
 **Pokrytie je jediná skutočná hranica.** 4,5 % firiem znamená, že väčšina
 hľadaní u nás nič nenájde — a to je v poriadku, pokiaľ to sekcia povie
 a ponúkne register. Čo nie je v poriadku, je tváriť sa, že 4,5 % je všetko.
+
+### Stav dočítania histórie (merané 2026-09-13 10:53)
+
+Dočítanie beží a je zdravé, ale **je pomalšie, než sa odhadovalo pri
+schválení** — a to je rozhodnutie pre zadávateľa, nie vec, ktorú by som mal
+ticho zmeniť.
+
+| | |
+|---|---|
+| ORSR profilov celkom | 24 468 |
+| s kľúčom `osoby_historia` (prečítané) | 263 |
+| vynechaných z výberu (napr. `fetch_ok=False`) | 231 |
+| zostáva (`pending_person_history()`) | 23 974 |
+| rýchlosť (meraná z logu) | 46 úloh / 3 min = **15,3/min** |
+| čistý čas fronty | 23 974 / 15,3 ≈ **26 h** |
+| reálny čas pri dávke 2 000 / 4 h | ≈ **48 h** |
+
+Rozdiel medzi 26 h a 48 h je prestoj medzi dávkami: 2 000 úloh sa pri
+15/min vyčerpá za 133 min, takže z každého 4-hodinového okna je ~107 min
+fronta prázdna. Fronta `orsr` je navyše spoločná so
+`sync-missing-orsr-profiles`, takže reálna rýchlosť môže byť nižšia.
+
+**Voľba:** zvýšiť dávku (menej prestojov, ale väčší tlak na zdieľanú frontu
+a na orsr.sk) alebo nechať 2 000/4 h a prijať ~48 h. Bezpečnostná rezerva,
+ktorú dávka drží, je dôvod, prečo som ju sám nemenil.
