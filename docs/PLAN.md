@@ -517,6 +517,49 @@ ani jednu stranu → 3 zhluky; `total_people` je `null`, keď okno nestačí.
 
 ---
 
+### #95 — História funkcií z RPO sa dopĺňa (beží)
+
+Pôvodný čítač zapisoval `is_active` natvrdo ako `True` a `zanik_funkcie` nikdy
+nedoplnil, takže graf o všetkých väzbách tvrdil, že trvajú. Nový čítač
+(`read_person_history`) to vie a **beží** — toto je stav dopĺňania, nie nová
+práca. Overené 2026-09-13 na bežiacej databáze:
+
+| | |
+|---|---|
+| RPO profily (`rpo_id`) | 24 601 |
+| z toho s prečítanou históriou (`osoby_historia`) | 2 398 |
+| **čaká** | **22 223** |
+| väzby celkom | 92 928 |
+| — `is_active=True` | 5 454 |
+| — `is_active=False` | 26 103 |
+| — `is_active IS NULL` (nevieme) | 61 371 |
+
+Jedna dávka **2 000** firiem prebehla **ručne** 10:36:14 → 12:51:16 UTC, teda
+2 h 15 min pri ~14,8 firmy za minútu — presne na strope `rate_limit='15/m'`.
+V logu workera `orsr` je za tých 12 h **2 001** prečítaní a **0** trvalých
+zlyhaní `read_person_history` (všetkých 68 `failed permanently` patrí
+`sync_company_orsr_data`, teda monitorovacej rotácii, nie tomuto čítaniu).
+
+**Dve čítania plnia tú istú populáciu a je to zámer.** `osoby_historia`
+zapisuje aj `sync_company` (`rpo_sync.py:377`), aj `read_person_history` —
+a `_drop_person_history_marker` ju **zoberie späť**, keď extrakcia zlyhá, aby
+firma ostala na čakaní a skúsila sa zas, namiesto toho aby ticho zmizla.
+Populácia sa preto zmenšuje z oboch strán.
+
+**Odhad dobehu.** 22 223 ÷ 2 000 na tick ≈ **11 tickov ≈ 44 hodín**. Jedna
+dávka trvá 2 h 15 min, takže sa do 4-hodinového intervalu vmestí s ~1 h 45 min
+rezervou — **úzkym miestom nie je fronta, ale interval**. Fronta `orsr` má 127
+správ a prah varovania je 50 000, takže 2 000-ový skok je bezpečný.
+
+**Jedna vec, ktorá sa dá prečítať zle.** Beat riadok
+`refresh-person-history-every-4-hours` má `last_run_at=None`
+a `total_run_count=0`, takže dávku **nespustil on** — spustil ju ručný beh.
+Prvý beh beat riadku čakám 14:28:25 UTC (§ 7). To nie je druhá chyba, len iný
+spúšťač; ale kým `total_run_count` ostane 0, **nedá sa z neho čítať, či
+dopĺňanie napreduje** — a to je presne tá pasca z § 7.
+
+---
+
 ## 3. Čaká na prácu
 
 ### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra
@@ -560,16 +603,23 @@ Zápis sa nemení, takže je to vratné a dá sa to vypnúť.
 (zhlukovanie spája *riadky osôb*, toto spája *obdobia funkcie*), a mení to, čo
 stránka tvrdí o histórii — to patrí do samostatného rozhodnutia.
 
-### Hľadanie osôb — „v akých firmách figuruje Miroslav Trnka"
+### Hľadanie osôb — ✅ hotové (#87, #88, #89)
 
-Samostatný návrh: `docs/PLAN-OSOBY.md`. Zhrnutie: ORSR to vie naživo
-(`search_osoba.asp`), ale **sync podľa mena netreba** — graf osôb už máme
-(44 897 osôb, 64 128 väzieb, 19 906 firiem) a endpoint
-`/api/persons/<id>/` na „v akých firmách figuruje" už existuje. Chýba len
-hľadanie podľa mena. **Blokuje to jedna chyba:** `is_active` sa zapisuje
-natvrdo ako `True` a `zanik_funkcie` sa nikdy nedopĺňa, hoci RPO `validTo`
-posiela a klient ho aj parsuje — takže naša databáza dnes o všetkých
-64 128 väzbách tvrdí, že sú aktuálne.
+Návrh: `docs/PLAN-OSOBY.md`. ORSR to vie naživo (`search_osoba.asp`), ale
+**sync podľa mena netreba** — graf osôb už máme, a tak je to aj postavené:
+`/api/persons/?q=` hľadá v našom grafe (`PersonSearchView`),
+`/api/persons/orsr/` je živý register (`OrsrPersonSearchView`) a frontend ich
+drží oddelené.
+
+**Text, ktorý tu stál, už neplatí.** Hovoril, že hľadanie blokuje jediná
+chyba — `is_active` sa zapisuje natvrdo ako `True` a `zanik_funkcie` sa nikdy
+nedopĺňa — a že graf má 44 897 osôb, 64 128 väzieb a 19 906 firiem, o ktorých
+**všetkých** tvrdí, že sú aktuálne. Ani jedno z toho dnes neplatí: čítač
+histórie existuje a beží (#95) a graf má **59 186** osôb, **92 928** väzieb
+a **21 580** firiem — z toho **26 103** väzieb hovorí „funkcia skončila"
+a **61 371** „nevieme", takže o aktuálnosti netvrdí nič tam, kde ju nevie.
+
+**Čo z toho ostáva:** už len dobehnutie histórie — #95.
 
 
 ### #85 — Minimapa so sídlom firmy (rozhodnuté)
