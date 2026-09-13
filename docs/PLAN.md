@@ -243,23 +243,112 @@ Zmerané 2026-09-13, aby to nebol dohad:
   je obhájiteľné len `.strip()`; `.zfill(8)` smie zostať na lookup ceste, kde
   je to parametr dopytu, nie zápis do schémy.
 
-Dôsledok, ktorý treba rozhodnúť **pred** migráciou: ak `ico` prestane byť
-`unique`, prestane byť jednoznačným kľúčom endpointu `/api/companies/<ico>/`
-— a ten dnes vracia jednu firmu. Možnosti sú vrátiť zoznam, alebo nechať
-`unique` a organizačné zložky ukladať pod ich `ruz_id` s `ico` NULL. To je
-produktové rozhodnutie, nie technické, preto tu stojí ako prvý bod.
+**Rozhodnuté 2026-09-13, a je to rozdelenie na dve veci, nie jedno rozhodnutie.**
+
+Sweep naprieč backendom a frontendom (**74 nástrojových volaní**) zmenil odhad
+dosahu: `unique=True` **nie je** možné zhodiť samostatne. `.get(ico=…)` je na
+**13 miestach** a všetky okrem dvoch chytajú len `DoesNotExist` — takže druhý
+riadok na to isté IČO by z každého spravil `MultipleObjectsReturned`, teda
+**HTTP 500** (`/api/companies/<ico>/`, report, documents, peers, graph,
+watchlist, `score_single_company`) alebo pád behu. Ešte horšie sú tiché miesta:
+`filter(ico=…).first()` vracia náhodného súrodenca a `notifications/services.py`
+na troch miestach rozposiela udalosť jedného súrodenca **sledujúcim všetkých**.
+
+Preto:
+
+- **90a — teraz: schéma, vstup a kľúč behu. `unique` zostáva.** Šírka
+  `ico` na 20 v troch tabuľkách (`Companies and SZCO`, `Individual Entities`,
+  `registers_orsrcompanyprofile` — všetky tri sú dnes `varchar(8)`, overené
+  proti `information_schema`), na vstupe **len `.strip()`**. Zásadnejšie:
+  **walk sa previaže z `ico` na `ruz_id`**, čo je skutočný kľúč registra a je
+  už `unique`.
+
+  Prečo to nie je kozmetika: dnešný zápis je
+  `update_or_create(ico=X, defaults={'ruz_id': Y})`. Keď register vráti pre
+  IČO `X` inú účtovnú jednotku `Y`, Django nájde riadok **podľa `ico`**
+  a prepíše mu `ruz_id` na `Y` — ak `ruz_id=Y` ešte neexistuje, **prejde to
+  bez chyby** a riadok entity `Z` teraz tvrdí, že je entita `Y`. Tichá zámena
+  identity, nie kolízia. Kľúčovanie na `ruz_id` to robí nemožným.
+- **Kolízia IČO sa tým nestráca, ale prestáva byť deštruktívna.** Ak nový
+  `ruz_id` prinesie IČO, ktoré už drží iný riadok, `unique` index vráti
+  `IntegrityError` — a ten musí byť **odchytený spolu s `DataError`** ako
+  `unstorable` (okno sa posunie, id sa zapíše do `notes`). Bez toho by spadol
+  do všeobecného `except Exception`, počítal sa ako `unreadable` a **okno by
+  držal navždy** — presne porucha, ktorú zavrela #83.
+- **90b — vlastný prírastok: verejný kľúč endpointu.** Čo má
+  `/api/companies/<ico>/` vrátiť, keď IČO držia dve entity? Nameraná hustota
+  je **nula kolízií na 449 763 riadkoch** `Company`, takže správna odpoveď nie
+  je prerobiť verejný kontrakt, ale spraviť jeho voľbu **deterministickou
+  a zdokumentovanou** (primárna entita + počet súrodencov v odpovedi), a to
+  spolu s tými 13 miestami. Zámerne odložené: meniť kontrakt pre populáciu,
+  ktorú sme v dátach ešte nevideli, by bolo rozhodnutie naslepo — a `unique`
+  medzitým drží dáta v bezpečí.
 
 **Čo zostáva — vlastný prírastok, nie tento.** Je to zmena schémy na
 neobnoviteľnej databáze plus oprava dát, takže:
 
-- [ ] **Rozhodnúť kľúč** `/api/companies/<ico>/` pri viacnásobnom IČO (vyššie)
-- [ ] Zmapovať dosah (beží: sweep naprieč backendom aj frontendom)
-- [ ] Nová overená záloha (`make db-backup` + `verify`)
-- [ ] Migrácia šírky + `.strip()` na vstupe (v jednej zmene, inak `update_or_create`
-      podľa `ico` narazí na `ruz_id` unique)
-- [ ] `frontend/pages/Monitoring.tsx:24,39` — `^\d{8}$` je jediné reálne
-      frontendové zlyhanie 12-znakového IČO (spadne do hľadania podľa mena)
-- [ ] Oprava tých 3 riadkov a spätný import preskočených zložiek podľa IČO z `notes`
+- [x] **Rozhodnúť kľúč** `/api/companies/<ico>/` pri viacnásobnom IČO — rozhodnuté
+      vyššie: verejný kontrakt sa v 90a nemení, `unique` zostáva
+- [x] Zmapovať dosah — sweep hotový (13 miest s `.get(ico=…)`, 8 tichých)
+- [x] Nová overená záloha — `cistafirma_20260913T120958Z.dump`, `verify` prešiel
+- [x] Migrácia šírky + `.strip()` na vstupe + previazanie walku na `ruz_id`
+      (v jednej zmene, inak `update_or_create` podľa `ico` narazí na `ruz_id`
+      unique)
+- [x] `frontend/pages/Monitoring.tsx` — `^\d{8}$` nahradené zdieľaným
+      predikátom `looksLikeIco` (`frontend/utils/ico.ts`), rozsah 6–20 zhodný
+      s backendovým `_ICO_RE`
+- [x] Oprava tých 3 riadkov a spätný import preskočených zložiek — **nie z
+      `notes`**, ako tu stálo pôvodne: beh, ktorý ich preskočil, `notes`
+      nezapísal, lebo v procese ešte nebol kód, ktorý ich zapisuje (viď #83).
+      Menovite teda poznáme **jednu** zložku — RUZ id `1520199` z logu workera
+      — a `notes` začne fungovať až od najbližšieho behu po reštarte o 12:00:27.
+      Koľko ďalších behov predtým zložku zahodilo, sa už nedozvieme.
+
+**Ako to dopadlo (2026-09-13).** Záloha `cistafirma_20260913T120958Z.dump`
+overená, migrácie `companies.0021` a `registers.0016` aplikované
+(`varchar(8)` → `varchar(20)` v troch tabuľkách, potvrdené proti
+`information_schema`), potom `repair_ico_shape`:
+
+- **`.strip()`**: 3 riadky, **0 konfliktov** — presne tie tri namerané
+  (`'177474  '` Sološnica, `'9155139 '` Fecenková, `'630021  '` TJ VATRA).
+- **`--ruz-id 1520199`**: `SZZ Základná organizácia 43-1` uložená ako
+  `001781521576`, teda záznam, ktorý dovtedy skončil ako `failed` a okno sa
+  cez neho posunulo.
+
+Overené na **živej API**, nie na úrovni querysetu — a to je zároveň dôkaz, že
+`.strip()` nebola kozmetika a že nezlúčila dve jednotky:
+
+| IČO | pk | entita | ruz_id |
+|---|---|---|---|
+| `177474` | 353723 | DHZ **Sološnica** | 1825863 |
+| `00177474` | 688 | DHZ **Nová Kelča** | 1832086 |
+| `9155139` | 390668 | Fecenková Miroslava | 1680728 |
+| `630021` | 396989 | TJ VATRA | 1702402 |
+| `001781521576` | 449965 | SZZ Základná organizácia 43-1 | 1520199 |
+
+Sološnica a Nová Kelča sú **stále dva rôzne riadky s rôznym `ruz_id`** — to je
+ten hazard, kvôli ktorému sa `.zfill(8)` nesmie aplikovať na zápis. Pred
+opravou `GET /api/companies/177474/` vracalo 404 (uložené bolo `'177474  '`,
+`_company_or_404` robí `get(ico=…)` bez normalizácie); teraz vracia Sološnicu.
+Všetkých päť kódov odpovedá 200.
+
+`zfill(8)` po zmene zostáva **len na odchádzajúcich** cestách do cudzích
+API (`ruz_api.py:113`, `rpo_client.py:189`, `orsr_scraper.py:603,689`), kde je
+to parameter dopytu externého systému, nie zápis do našej schémy — v celom
+backendovom kóde už nie je ani jedno `zfill` na lokálnom párovaní riadkov.
+
+Testy: `registers/tests_sync_pipeline.py` (54) + nový
+`registers/tests_ico_shape.py` (12) + celá sada **718 OK**; frontend
+`npm test` (234), `typecheck`, `build` — všetko zelené.
+
+Dva testy v `tests_sync_pipeline.py` museli dostať **novú premisu**: stavali na
+tom, že Postgres odmietne 12-znakové IČO proti `varchar(8)`. Po rozšírení je to
+platná hodnota, takže `_FakeRuzApi` má teraz tri tvary — `long_ico_ids`
+(12 znakov, teraz **uložiteľné**), `unstorable_ids` (21 znakov, stále odmietnuté)
+a `duplicate_ico_ids` (dve entity, jedno IČO → `IntegrityError`). Práve ten
+tretí je nová poistka: `IntegrityError` musí byť klasifikovaný spolu s
+`DataError` ako `unstorable`, inak by kolízia držala okno **navždy**.
+
 
 **Koľko ich je**, presne nevieme — jeden na 49 600 prečítaných v tomto okne
 a vo vzorke 40 IČO nula. Hustota sa nedá spočítať z registra, len z ďalších
