@@ -73,10 +73,11 @@ behov za tri dni. A `zmenene_od` sa nikdy neposúval, takže okno zostarlo.
    nie prah na objem. Presne to tu chýbalo: `make ops-check` bol zelený,
    pretože nič nezlyhalo.
 
-**Stav:** commitnuté v `b7aa428`, 611 testov zelených (predtým 595).
+**Stav:** prvá oprava commitnutá v `b7aa428` (611 testov zelených, predtým 595);
+oprava dier, ktoré našla revízia, v tomto commite (679 testov zelených).
 
-**Overené naživo proti bežiacej databáze** — nová kontrola hlási práve jedno
-`FAIL` a je to jediný riadok, ktorý to hovorí:
+**Overené naživo proti bežiacej databáze** — nová kontrola hlásila práve jedno
+`FAIL` a bol to jediný riadok, ktorý to hovoril:
 
 ```
   incremental   completed  2026-08-04  40d old  FAIL
@@ -88,11 +89,64 @@ behov za tri dni. A `zmenene_od` sa nikdy neposúval, takže okno zostarlo.
 Sedem po sebe idúcich `ruz_incremental` behov predtým: všetky `completed`,
 všetky s nulou spracovaných položiek.
 
+**Toto už neplatí a je dôležité, prečo.** Kým opravný beh #23 beží, riadok má
+status `running`, a `running` sa zámerne nesúdi — takže kontrola práve teraz
+nesúdi **nula** riadkov. Verdikt teda visí na tom, že sa stav raz zmení. To je
+správne správanie (beh v pokroku nie je zastavený sync), ale znamená, že
+„kontrola hlási FAIL" je tvrdenie o minulom stave, nie o tom súčasnom.
+
+**Adversariálna revízia (2026-09-13) — jadro drží, tri diery boli reálne.**
+Nezávislý recenzent prešiel šesť útočných bodov a našiel tri veci, ktoré
+oprava sama zaviedla. Opravené v tomto commite:
+
+1. **Okno sa posúvalo aj po zlyhaných položkách.** `get_company_details`
+   vracia pri transportnom zlyhaní `None` (default `raise_on_transport_error=
+   False`), beh to zapíše ako `skipped` **bez per-firmového riadku** — a okno
+   sa posunie za firmu, ktorá sa nikdy neprečítala. Pred opravou sa okno
+   neposúvalo, takže sa čítala znovu; oprava tú poistku odstránila. Teraz je
+   klient **striktný** (`RuzUnreachable` → chyba položky) a okno sa posúva len
+   keď `errors == 0`. Podložené meraním: **žiadny RUZ job v tejto databáze
+   nikdy nemal `failed_items > 0` ani `skipped_items > 0`**, takže podmienka
+   v praxi nič nestojí. „Nemáme záznam" (`skipped`) sa naďalej posúva — register
+   odpovedal, že firma neexistuje, a to je fakt o firme, nie diera.
+2. **`full*` behy si okno posúvali samy.** `full` má hardcoded `2000-01-01`,
+   ale `full_companies` / `full_individuals` čítajú štart **z toho istého
+   stĺpca** — zápis `dnes - 1` by ďalší full resync zúžil na jeden deň.
+   Posun je teraz len pre inkrementálny prechod.
+3. **Focus Mode by zhasil bránu za dokumentovanú akciu.** `fetch_ruz_data_task`
+   zámerne nie je v `FOCUS_KEEP_TASKS`, takže Focus Mode vypne beat a okno
+   zostarne — a nová podmienka by po 3 dňoch dala FAIL s vetou „every run since
+   has reported success", čo je **nepravda, lebo žiadne behy neboli**. Presne
+   tento problém už raz vyriešil `source_health` (`SOURCES_PAUSED_BY_FOCUS_MODE`);
+   `sync_health` má teraz tú istú výnimku. Dnes latentné — `SyncFocusModeState`
+   má nula riadkov.
+
+**Zaznamenané, zámerne neopravené** (mimo rozsahu tohto commitu, každé s
+dôvodom):
+
+- **`failed` riadok okna sa nesúdi navždy.** Recenzent to nazval slepou škvrtou
+  a má pravdu v tom, že kontrola nevie odlíšiť mŕtvy zvyšok od živého synca,
+  ktorého dispečer prestal. Ale `incremental_companies` (2447 dní, `failed`) je
+  naozaj mŕtvy riadok bez beat entry, takže súdiť ho = trvalý falošný FAIL.
+  Správna oprava je súdiť len to, čo beat naozaj dispečuje — to je nová
+  väzba `sync_type → PeriodicTask`, ktorá si zaslúži vlastné rozhodnutie.
+- **Prerušený beh (`running`, zabitý worker) prejde okno odznova.** Duplicita je
+  neškodná (`update_or_create` na `ico`, `detect_status_change` vráti 0), ale
+  nafúkne `succeeded_items`. Počítadlá sa nesúdia, takže žiadna kontrola sa
+  nemýli.
+- **200 s telom bez použiteľného `id`** (napr. obálka proxy) sa číta ako „došli
+  sme na koniec" a okno sa posunie. Nevieme to odlíšiť od legitímnej prázdnej
+  strany.
+- **Tvrdenie v message commitu `b7aa428`**, že `zmenene_od` je „the coarsest
+  cursor the register offers", je vecne nesprávne: register prijíma aj časovú
+  formu. Hrubý je **náš** `DateField`. História sa už prepísala (pushnuté), takže
+  opravený je komentár v kóde; message zostáva ako omyl.
+
 **Ešte spraviť:**
 
-- [ ] Spustiť prvý beh po oprave — spracuje ≥10 000 firiem, ~30–60 min
+- [x] Spustiť prvý beh po oprave — beží ako job #23 od 09:54
 - [ ] Overiť, že `zmenene_od` sa posunul a `ops-check` je zelený
-- [ ] Nezávislé overenie opravy (adversariálna revízia)
+- [x] Nezávislé overenie opravy (adversariálna revízia)
 
 ---
 
@@ -112,29 +166,82 @@ posiela a klient ho aj parsuje — takže naša databáza dnes o všetkých
 
 ### #85 — Minimapa so sídlom firmy (rozhodnuté)
 
-Podobne ako to má FinStat. Prieskum dopadol výborne:
+Podobne ako to má FinStat.
 
 - `Company` má `ulica` / `mesto` / `psc` **štruktúrovane**: `mesto` a `psc` na
   100 %, `ulica` na 99,7 % z 445 626 riadkov
-- len **2 919 rôznych miest** — geokódovanie na úrovni mesta teda nie je
-  445 tisíc dopytov, ale 2 919, raz, navždy uložených
+- len **2 919 rôznych miest** — takže join na úrovni mesta je 2 919 hodnôt,
+  nie 445 tisíc dopytov
 
-**Zvolený postup** (rozhodnuté, lebo je najpresnejší pre slovenské adresy a
-bez cudzích rate-limitov):
+**Prieskum 2026-09-13 prepísal dve veci v pôvodnom postupe.** Obe boli
+overené proti živému zdroju (hlavička stiahnutého súboru, SPARQL katalógu),
+nie prevzaté z dokumentácie:
 
-1. **Zdroj:** oficiálny **Registr adries** ŠÚ SR — presné slovenské adresy,
-   jednorazový import datasetu, žiadne API limity
-2. **Dlaždice:** OpenStreetMap s povinnou atribúciou
-3. **Knižnica:** `leaflet` + `react-leaflet`, lenivo načítané (projekt už tak
-   code-splituje `ConnectionGraph`)
+1. **Zdroj nie je ŠÚ SR, ale MV SR.** Dataset `Adresy podľa krajov (csv)`
+   (`data.gov.sk/set/b27f57f1-7e76-45e0-8968-631f9176b2e9`, priamy download
+   `data.slovensko.sk/download?id=d22c42f3-82b5-450d-b8fb-4245d50a31ec`)
+   publikuje podľa SPARQL katalógu `dct:publisher` = `legal-subject/00151866`,
+   teda **Ministerstvo vnútra SR**. ŠÚ SR pri adresách nefiguruje.
+   `dct:modified` = **2026-08-21**, `accrualPeriodicity` = **QUARTERLY**,
+   `content-length` = **162 404 526 B** — všetko overené nezávisle.
+2. **Geokódovanie netreba vôbec.** Stiahnutá hlavička je
+   `IDENTIFIKATOR;KRAJ;OKRES;OBEC;CAST_OBCE;ULICA;SUPISNE_CISLO;ORIENTACNE_CISLO_CELE;PSC;ADRBOD_X;ADRBOD_Y`
+   a `ADRBOD_X`/`ADRBOD_Y` sú zemepisná dĺžka a šírka v desatinných stupňoch
+   (desatinná **čiarka**). Že ide o WGS84, plynie z kontrolnej vzorky —
+   `Badín, PSČ 97632 → 19,121502 / 48,6661543` je skutočne Badín — a zo
+   sesterských GeoJSON datasetov MV SR, ktoré sú explicitne `CRS84`.
+   Transformácia zo S-JTSK teda netreba. Z 1 739 536 riadkov má 2,0 % prázdne
+   súradnice, ale **každá `OBEC` má aspoň jednu platnú**.
+
+**Licencia: CC0 1.0** podľa `termsOfUse` distribúcie. *Toto je jediné tvrdenie
+v tejto sekcii, ktoré som nevedel overiť sám* — stránka s podmienkami je
+JavaScriptová aplikácia, ktorá bez JS vráti len prázdny shell, a katalóg
+`dct:license` na úrovni datasetu nevedie vôbec. Pred zverejnením odvodených
+dát treba licenciu potvrdiť z prehliadača.
+
+**Nominatim je vylúčený.** Jediný korektný dopyt s vlastným `User-Agent`
+vrátil **HTTP 403** podľa vlastnej politiky používania — presne ten druh
+cudzieho limitu, ktorému sa tento projekt vyhýba, a to sme poslali *jeden*
+dopyt, nie 2 919. OpenAddresses je tá istá dáta o vrstvu ďalej: v ich
+`sources/sk/countrywide.json` je ako zdroj uvedená tá istá URL.
+
+**Dve úskalia, ktoré patria do implementácie, nie do poznámky pod čiarou:**
+
+1. **Bratislava a Košice sú v registri rozdelené na mestské časti**
+   (`Bratislava-Staré Mesto` … 17, `Košice-Sever` … 22) a **holý riadok
+   `Bratislava` ani `Košice` neexistuje**. Náš `Company.mesto` pritom takmer
+   isto obsahuje holé názvy, takže naivný join by ticho zahodil dve najväčšie
+   mestá na Slovensku — presne tá trieda tichého zlyhania, ktorú tu máme
+   pomenovanú ako hlavnú.
+2. **Nenamapované mestá sa musia vypísať**, nie zahodiť. Pokrytie je úplné
+   (2 817 `OBEC` proti 2 927 z GeoNames, chýbajú len dva vojenské obvody), takže
+   každá nenamapovaná hodnota je chyba nášho kľúča alebo cudzí zápis v `mesto`.
+
+**Zvolený postup:**
+
+1. **Zdroj:** CSV MV SR (vyššie) — jednorazový import, agregácia na `OBEC`
+   (ťažisko alebo medián `ADRBOD_X`/`ADRBOD_Y`, **nie prvý riadok**) → ~2 817
+   riadkov. K importu sa zapíše `dct:modified` zdroja ako verzia, aby bolo
+   vidno, z čoho dáta sú.
+2. **Dlaždice:** OpenStreetMap — jediná povolená URL
+   `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (subdomény `a/b/c` nie),
+   viditeľná atribúcia „© OpenStreetMap contributors", cache ≥ 7 dní, žiadny
+   prefetch. Číselný limit neexistuje, ale je to „best-effort" bez SLA — pre
+   verejný launch treba platený alebo self-hosted zdroj. Repo nemá CSP, takže
+   dlaždice nič neblokuje.
+3. **Knižnica:** `react-leaflet@5` (`peerDependencies: react ^19.0.0` — repo je
+   na 19.2.3, teda sedí) + `leaflet@1.9.4`, lenivo načítané. Verzie 4.x chcú
+   React 18 a pýtali by `--legacy-peer-deps`.
 4. **Umiestnenie:** kompaktná karta pod adresným riadkom v `CompanyHeader.tsx:199`
-5. **Čestnosť:** adresa v registri **nie je** zameraná súradnica — pin nesie
-   viditeľnú poznámku „približná poloha podľa adresy v registri"
+5. **Čestnosť — preformulované.** Adresný bod je **zameraný bod vchodu do
+   budovy**, nie odhad, takže poznámka o približnosti nepatrí zdroju. Nepresné
+   je **naše priradenie adresy firmy** (máme `mesto`, nie vchod) — a to je aj
+   poctivá formulácia pre používateľa.
 
 **Ešte spraviť:**
 
-- [ ] Naimportovať Registr adries a overiť pokrytie proti našim `mesto`/`psc`
-- [ ] Geokódovať 2 919 miest jednorazovo, uložiť do DB
+- [ ] Import command + tabuľka `City` (`mesto`, `lat`, `lon`, verzia zdroja)
+- [ ] Normalizácia `Bratislava`/`Košice` na mestské časti + report nenamapovaných
 - [ ] Backend: vrátiť súradnice v payload-e firmy
 - [ ] Frontend: karta s mapou + poznámka o približnosti
 
