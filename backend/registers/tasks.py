@@ -1,5 +1,5 @@
 from celery import shared_task, chain, chord, group
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
@@ -13,7 +13,7 @@ from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService
 from .services.ruz_financials_sync import sync_company_and_record
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
-from companies.models import Company, normalize_legal_form_code
+from companies.models import Company, Watchlist, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
 from .models import CompanySyncStatus
 from .services.sync_engine import (
@@ -241,6 +241,34 @@ def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
     without it the 25 398 companies whose timestamp is merely stale would be
     re-chosen every tick while the 414 419 never-checked ones waited behind them
     for ever.
+
+    **Watched companies are drawn first**, because the rotation is what makes
+    "sledovať firmu" mean anything. The batch absorbs 14 400 of ~414 000
+    never-checked companies per tick, so an unwatched company waits roughly a
+    week for its first check -- and a watched one waited exactly as long, which
+    made the watchlist a promise the rotation did not keep: `NotificationEvent`
+    is only ever written for a company that has been checked twice, so the
+    "Udalosti vo firme" section could not fill for any company a reader had
+    actually asked about. Measured 2026-09-13: 6 companies watched, 0 of them
+    ever checked, 0 events.
+
+    They are capped at half the batch, and that cap is load-bearing. Watched
+    companies are the *front* of the order, so without it a watchlist larger
+    than `limit` would take every slot and the 414 419 never-checked companies
+    the rotation exists to reach would stop advancing -- the same "looks alive
+    and never progresses" defect this repository keeps finding, reintroduced
+    through priority. Half is a judgement: enough that watching a company
+    visibly works within a tick or two, bounded enough that the general
+    population keeps moving. `max(1, ...)` keeps the guarantee true for a small
+    `limit`, where `limit // 2` is 0 and watched companies would otherwise be
+    excluded entirely.
+
+    The cap is a *ceiling on the watched half*, not a reservation. If there is
+    not enough other work to fill the batch, the remainder goes back to watched
+    companies rather than dispatching a short batch -- a half-empty batch wastes
+    drain capacity that `rate_limit` will not give back. That is not a corner
+    case to shrug at: a caught-up rotation is the goal, and in that state the
+    unwatched due set really can run dry.
     """
     time_threshold = timezone.now() - timedelta(hours=12)
 
@@ -248,18 +276,47 @@ def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
         Q(last_insurance_debt__lte=time_threshold) | Q(last_insurance_debt__isnull=True)
     )
 
+    # One `EXISTS` subquery rather than a join through `watchers`: a company can
+    # be on several watchlists, and a join would hand the same company to
+    # `values_list` more than once. The annotation is also what lets the
+    # unwatched half be one query instead of a `NOT IN` over every watched id.
+    is_watched = Exists(Watchlist.objects.filter(company_id=OuterRef("pk")))
+    order = (F("last_insurance_debt").asc(nulls_first=True), "id")
+
+    watched_due = (
+        due.annotate(_watched=is_watched).filter(_watched=True).order_by(*order)
+    )
+    watched_cap = max(1, limit // 2)
+    watched_ids = list(
+        watched_due.values_list("id", flat=True)[:watched_cap]
+    )
+
     # Ids only, and only `limit` of them. Iterating the queryset itself would
     # materialise every due company as a full model instance -- 439 817 of them
     # at the time this was measured.
-    company_ids = list(
-        due.order_by(F("last_insurance_debt").asc(nulls_first=True), "id")
-        .values_list("id", flat=True)[:limit]
+    unwatched_ids = list(
+        due.annotate(_watched=is_watched)
+        .filter(_watched=False)
+        .order_by(*order)
+        .values_list("id", flat=True)[: max(limit - len(watched_ids), 0)]
     )
 
+    company_ids = watched_ids + unwatched_ids
+
+    shortfall = limit - len(company_ids)
+    if shortfall > 0:
+        company_ids += list(
+            watched_due.values_list("id", flat=True)[
+                len(watched_ids) : len(watched_ids) + shortfall
+            ]
+        )
+
     logger.info(
-        "Plánujem kontrolu dlhov pre %s z %s firiem, ktoré sú na rade.",
+        "Plánujem kontrolu dlhov pre %s z %s firiem, ktoré sú na rade "
+        "(z toho %s sledovaných).",
         len(company_ids),
         due.count(),
+        len(watched_ids),
     )
 
     for company_id in company_ids:
