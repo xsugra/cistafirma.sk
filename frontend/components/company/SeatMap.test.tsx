@@ -30,8 +30,10 @@ const g = vi.hoisted(() => {
 
     const state = {
         maps: [] as FakeMap[],
-        /** What `querySourceFeatures` answers; the empty case is a test. */
-        sourceFeatures: [{}] as unknown[],
+        /** What `queryRenderedFeatures` answers; the empty case is a test. */
+        renderedFeatures: [{}] as unknown[],
+        /** Every `setWorkerUrl` argument. The module calls it once, on import. */
+        workerUrls: [] as unknown[],
     };
 
     /** Stands in for MapLibre's `GeoJSONSource`. */
@@ -106,8 +108,8 @@ const g = vi.hoisted(() => {
             this.jumps.push(options);
         }
 
-        querySourceFeatures(): unknown[] {
-            return state.sourceFeatures;
+        queryRenderedFeatures(): unknown[] {
+            return state.renderedFeatures;
         }
 
         remove(): void {
@@ -130,6 +132,9 @@ vi.mock('maplibre-gl', () => ({
     Map: g.FakeMap,
     NavigationControl: g.FakeNavigationControl,
     ScaleControl: g.FakeScaleControl,
+    setWorkerUrl: (url: unknown) => {
+        g.state.workerUrls.push(url);
+    },
 }));
 
 /** A real row: PSČ 82109 Bratislava, the median-sized area in the table. */
@@ -263,7 +268,7 @@ describe('zoomFor', () => {
 describe('SeatMap', () => {
     beforeEach(() => {
         g.state.maps.length = 0;
-        g.state.sourceFeatures = [{}];
+        g.state.renderedFeatures = [{}];
     });
 
     afterEach(() => {
@@ -469,8 +474,13 @@ describe('SeatMap', () => {
         // The source reports itself loaded, so "did anything arrive" is not the
         // question -- the question is whether the viewport holds a single
         // feature, and for a Slovak PSČ at zoom 10 or closer it always does.
+        //
+        // Which is why this is the *rendered* features that decide it. The call
+        // that reads the source instead answers 0 on a map that is visibly
+        // drawing, so a guard built on it fires on every healthy map -- the bug
+        // this fake now makes unrunnable by answering only the honest question.
         vi.useFakeTimers();
-        g.state.sourceFeatures = [];
+        g.state.renderedFeatures = [];
         draw();
         await settle();
 
@@ -511,5 +521,28 @@ describe('SeatMap', () => {
         expect(
             await screen.findByRole('region', {name: /PSČ 82109/}),
         ).toBeInTheDocument();
+    });
+});
+
+describe('the MapLibre worker', () => {
+    it('is pointed at a URL we supply, not left to MapLibre to guess', () => {
+        // This one is a post-mortem rather than a speculation. MapLibre locates
+        // its tile worker at `new URL('./maplibre-gl-worker.mjs', import.meta.url)`
+        // -- a sibling of its own module -- and a bundler moves that module
+        // without moving the worker. So the worker 404s, nothing parses a tile,
+        // `sourcedata` never reports the source loaded, and the map holds a blank
+        // canvas with an empty console: the failure that reaches the reader as
+        // "the tiles could not be downloaded", blaming their connection for our
+        // packaging. `setWorkerUrl` is the way out, and the module takes it on
+        // import, before any `Map` exists.
+        //
+        // What this can check is that we hand MapLibre a URL of our own. That the
+        // URL names a file the build actually emitted is the other half of the
+        // fix, and `vite build` is what proves that one -- see the
+        // `maplibre-gl-worker-*.js` asset in its output.
+        expect(g.state.workerUrls).toHaveLength(1);
+        expect(typeof g.state.workerUrls[0]).toBe('string');
+        expect(g.state.workerUrls[0]).not.toBe('');
+        expect(g.state.workerUrls[0]).not.toContain('.vite/deps');
     });
 });

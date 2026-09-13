@@ -51,11 +51,30 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Map as MapLibreMap, NavigationControl, ScaleControl } from 'maplibre-gl';
+import { Map as MapLibreMap, NavigationControl, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import type { GeoJSONSource } from 'maplibre-gl';
 import type { LayerSpecification } from '@maplibre/maplibre-gl-style-spec';
 import type { FeatureCollection } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
+
+// MapLibre parses every tile in a worker, and finds that worker by resolving
+// `new URL('./maplibre-gl-worker.mjs', import.meta.url)` -- a sibling of its own
+// module. A bundler breaks that assumption, and it breaks it *silently*: Vite
+// pre-bundles the library to `node_modules/.vite/deps/maplibre-gl.js` in dev and
+// emits it as `assets/SeatMap-*.js` in a build, and neither directory has ever
+// contained the worker, so the request 404s, no tile is parsed, `sourcedata`
+// never reports `isSourceLoaded`, and the map sits on a blank canvas with
+// nothing in the console. Measured on 6.9.0: 2 frames for ever and
+// `areTilesLoaded() === false`, in dev and against `dist/` alike -- while the
+// *same* library served from its own `dist/` path renders normally. `?worker&url`
+// is the fix: Vite builds the worker as an entry of its own (bundling the
+// `maplibre-gl-shared.mjs` it imports) and returns a URL that exists in both
+// environments, and `setWorkerUrl` tells MapLibre to use it instead of guessing.
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+
+// At module scope, so it is set before any `Map` is constructed -- the worker
+// pool reads this once, on the first map, and nothing later can correct it.
+setWorkerUrl(workerUrl);
 
 import type { SeatLocation } from '../../types';
 import { useTheme } from '../../context/ThemeContext';
@@ -86,7 +105,9 @@ export const SEAT_SOURCE = 'seat-location';
 // project keeps paying for -- and the second one below is specific: OpenFreeMap's
 // *unversioned* tile template answers HTTP 200 with a zero-byte body and an
 // `x-ofm-debug: empty tile` header, so a style pointed at it draws a blank canvas
-// and logs nothing at all. That is why `NO_DATA` exists as a separate sentence.
+// and logs nothing at all. That is why `NO_DATA` exists as a separate sentence --
+// and why it is judged by what reached the screen rather than by what the source
+// holds, since only the first of those is true when the map is drawing.
 const LOAD_FAILED =
     'Mapu sa nepodarilo spustiť — knižnica MapLibre sa nenačítala (chýba WebGL?).';
 const NO_TILES =
@@ -324,9 +345,18 @@ export const SeatMap: React.FC<SeatMapProps> = ({ seat }) => {
                 // always a real Slovak PSČ at zoom 10 or closer, where every tile
                 // carries roads, so an empty viewport is the empty-tile
                 // signature rather than a legitimately blank patch of map.
+                //
+                // It has to be `queryRenderedFeatures` that answers this, and the
+                // distinction is not cosmetic. `querySourceFeatures` reads the
+                // source rather than the screen, and on a map that is visibly
+                // drawing roads and water it returns **0** -- measured, twice:
+                // 0 against 240 rendered features on the same frame. So the guard
+                // as first written condemned every healthy map and blamed the tile
+                // source for it. The question here is "did anything reach the
+                // screen", and only this call asks it.
                 let features: unknown[] = [];
                 try {
-                    features = instance.querySourceFeatures(TILES_SOURCE);
+                    features = instance.queryRenderedFeatures();
                 } catch {
                     // The style went away mid-check; nothing to report.
                     return;
