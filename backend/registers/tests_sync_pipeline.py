@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from companies.models import Company
+from registers.integrations.ruz_api import RuzUnreachable
 from registers.models import CompanySyncStatus, SyncJob, SyncProgress
 from registers.scrapers.debt_result import DebtCheckResult
 from registers.services import sync_engine
@@ -286,9 +287,16 @@ class _FakeRuzApi:
     reach the network.
     """
 
-    def __init__(self, pages):
+    def __init__(self, pages, unreachable_ids=()):
         self._pages = list(pages)
         self.detail_calls = []
+        # Ids whose detail read fails the way a strict client reports an
+        # unreachable registry: by raising, not by answering `None`. The
+        # command builds its client strict, so this is the shape a transport
+        # failure actually takes here -- and the difference matters, because
+        # `None` is filed as `skipped` with no per-company row while a raise is
+        # filed as an error the window guard can see.
+        self.unreachable_ids = set(unreachable_ids)
         # Every `(zmenene_od, pokracovat_za_id)` pair the command asked with,
         # in order. The window and the resume cursor are the two halves of the
         # incremental sync's state, and neither is visible in the job row -- so
@@ -306,6 +314,8 @@ class _FakeRuzApi:
 
     def get_company_details(self, company_id):
         self.detail_calls.append(company_id)
+        if company_id in self.unreachable_ids:
+            raise RuzUnreachable(f"RUZ unreachable reading company {company_id}")
         return {
             "ico": f"9{company_id:07d}",
             "id": company_id,
@@ -641,22 +651,40 @@ class RuzIncrementalWindowTests(TestCase):
         )
 
     def test_the_window_carries_a_day_of_overlap(self):
-        """`zmenene_od` is a date, the coarsest cursor the register offers. A
-        company that changed in the window's final hours, after the page
-        carrying its id had been read, would otherwise fall between two windows
-        and never be seen at all."""
+        """`zmenene_od` is a `DateField`, so a day is the finest cursor we can
+        store. A company that changed in the window's final hours, after the
+        page carrying its id had been read, would otherwise fall between two
+        windows and never be seen at all.
+
+        Pinned to the exact day rather than to "some day in the past": the
+        loose form of this assert passed even with the advance block deleted,
+        because the row was seeded with 2026-08-04 and that is already behind
+        today.
+        """
         progress = self._progress(zmenene_od=date(2026, 8, 4))
         api = _FakeRuzApi([[111]])
 
         self._run(api, self._job())
 
         progress.refresh_from_db()
-        self.assertLess(progress.zmenene_od, timezone.localdate())
+        self.assertEqual(
+            progress.zmenene_od, timezone.localdate() - timedelta(days=1)
+        )
 
     def test_the_window_never_moves_backwards(self):
-        """A run that finishes the same day it started would otherwise write the
-        window behind where it already was, and the next run would re-read days
-        it had already covered -- or, worse, skip them."""
+        """A window already at or ahead of the advance target must not be pulled
+        back. Within one day the target is constant (`today - 1`), so a second
+        run on the same day would otherwise rewrite the same value, and a window
+        someone had already moved further forward would be dragged behind where
+        it was -- re-reading days already covered, or skipping them.
+
+        This pins the `>` in the advance, not the advance itself: `start()`
+        writes back the run's own window, so the asserted value would survive
+        deleting the advance block entirely. The block's existence is
+        `test_the_window_carries_a_day_of_overlap`'s job, which is seeded
+        behind and therefore does fail without it. Both are needed; neither
+        covers the other.
+        """
         today = timezone.localdate()
         progress = self._progress(zmenene_od=today)
         api = _FakeRuzApi([[111]])
@@ -665,6 +693,47 @@ class RuzIncrementalWindowTests(TestCase):
 
         progress.refresh_from_db()
         self.assertEqual(progress.zmenene_od, today)
+
+    def test_an_unreachable_company_holds_the_window(self):
+        """Moving the window asserts that everything inside it was read. A
+        company whose read failed gets no per-company row at all, so the window
+        is the only thing that remembers it was skipped -- and advancing would
+        drop it silently and permanently, which is the defect class this file
+        exists to close, not one to reintroduce through the fix.
+
+        The run still finishes; what it must not do is claim to have read what
+        it did not. `skipped` is deliberately not treated this way: the register
+        answering "no such record" is a fact about the company, and re-reading
+        it forever would be the stall this window advance was written to end.
+        """
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111, 222]], unreachable_ids={222})
+
+        out = self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertIn("Okno neposunuté", out)
+        self.assertEqual(progress.zmenene_od, date(2026, 8, 4))
+
+    def test_a_full_run_does_not_move_its_own_window(self):
+        """The `full*` types pick their start elsewhere: `full` hardcodes
+        2000-01-01, while `full_companies` and `full_individuals` read it back
+        out of this very column. Writing the incremental advance's `today - 1`
+        into the column a full resync reads would shrink the next one to a
+        single day -- so the advance belongs to the incremental walk alone.
+
+        Pinned on the stored start rather than on the absence of an advance,
+        because "did not advance" and "advanced to the same value" are the two
+        ways this could be wrong and only the stored value separates them.
+        """
+        progress = self._progress(sync_type="full_companies", zmenene_od=None)
+        api = _FakeRuzApi([[111]])
+
+        out = self._run(api, self._job(), full_resync=True, entity_type="companies")
+
+        progress.refresh_from_db()
+        self.assertIn("Okno neposunuté", out)
+        self.assertEqual(progress.zmenene_od, date(2020, 1, 1))
 
     def test_resume_still_picks_up_the_stored_cursor(self):
         """The cursor is not wrong, it is *scoped*: it belongs to a run that was

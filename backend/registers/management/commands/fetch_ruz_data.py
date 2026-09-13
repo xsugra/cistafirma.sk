@@ -50,7 +50,16 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        api = RuzApi()
+        # Strict on purpose. The loose default answers `None` for two different
+        # things -- a company the register says does not exist (a 404, or
+        # `stav: ZMAZANÉ`) and a registry that never answered at all -- and the
+        # walk below files both under `skipped`, writing no per-company row for
+        # either. Since a completed walk now moves the window past everything
+        # it read, the second kind would never be read again: the only place it
+        # is remembered is the window, and the window would have moved. Strict
+        # turns it into an item error instead, which holds the window where it
+        # is (see the advance at the end of the walk) and re-reads it next run.
+        api = RuzApi(raise_on_transport_error=True)
         entity_type = options.get('entity_type', 'both')
         owns_job_lifecycle = False
 
@@ -295,18 +304,46 @@ class Command(BaseCommand):
             # cursor and the window have to move together or the sync is either
             # stuck or wasteful.
             #
-            # `zmenene_od` is a *date*, the coarsest cursor the register
-            # offers, so the new start is the run's own start day minus one day
-            # of overlap. Without the overlap a company that changed in the
-            # last hours of the window -- after the page carrying its id had
-            # already been read -- would fall between the two windows and never
-            # be seen at all. With it, the tail day is simply re-read, which
-            # the upserts absorb.
+            # `zmenene_od` is a `DateField`, so the finest cursor *we can
+            # store* is a day. That is our schema rather than the register's --
+            # its API takes a timestamp -- and it is why the new start is the
+            # run's own start day minus one day of overlap. Without the overlap
+            # a company that changed in the last hours of the window -- after
+            # the page carrying its id had already been read -- would fall
+            # between the two windows and never be seen at all. With it, the
+            # tail day is simply re-read, which the upserts absorb.
+            #
+            # Two conditions gate the move, and both are about what "this
+            # window was walked" has to mean for the claim to be honest:
+            #
+            # - **No item failed.** Moving the window asserts that everything
+            #   inside it was read. A company whose read failed gets no
+            #   per-company row at all, so the window is the only thing that
+            #   remembers it was skipped -- and moving the window would drop it
+            #   silently and permanently. Holding the window re-reads it next
+            #   run. Measured before relying on this: no RUZ job in this
+            #   database has ever recorded a failed or skipped item, so the
+            #   condition costs nothing in practice.
+            # - **Only the incremental walk.** The `full*` types choose their
+            #   start elsewhere: `full` hardcodes 2000-01-01, while
+            #   `full_companies` and `full_individuals` read it back out of
+            #   this very column. Writing `today - 1` into the column a full
+            #   resync reads would shrink the next one to a single day.
             #
             # `>` and not `>=`: a run that finishes on the same day it started
             # would otherwise write the window backwards.
             window_end = run_started_on - timedelta(days=1)
-            if window_end > parse_date(zmenene_od):
+            holds_window = sync_type.startswith('full') or run["errors"] > 0
+            if holds_window:
+                reason = (
+                    f'{run["errors"]} položiek zlyhalo'
+                    if run["errors"]
+                    else f'typ {sync_type} si okno nespravuje'
+                )
+                self.stdout.write(self.style.WARNING(
+                    f'Okno neposunuté ({reason}): zostáva od {zmenene_od}.'
+                ))
+            elif window_end > parse_date(zmenene_od):
                 progress.zmenene_od = window_end
                 progress.save(update_fields=['zmenene_od'])
                 self.stdout.write(self.style.SUCCESS(
