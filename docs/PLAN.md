@@ -1153,6 +1153,63 @@ návštevníka a prezeranými súradnicami. Nie je tam kľúč, cookie ani ident
 — ale samotná požiadavka je poskytnutie údajov a v zásadách má byť pomenovaná.
 Rovnako ako minule to **nezapisujem sám**; navrhnem vetu a počkám na slovo.
 
+**Dodatok v ten istý deň — mapa sa v skutočnosti nekreslila vôbec.** To, čo je
+vyššie opísané ako overené, overené bolo: štýl sedí na slovník dlaždíc, validátor
+ho prijme, testy prechádzajú. Lenže **ani jedno z toho nie je dôkaz, že mapa
+kreslí**, a práve to bola pravda — snímka živej stránky `firma/48097781`
+v reálnom čase ukazovala kartu s vetou „Mapa sa nenačítala — dlaždice sa
+nepodarilo stiahnuť. Skontrolujte pripojenie a obnovte stránku." Mapa sa
+nekreslila **vôbec**, v dev serveri ani v postavenom `dist/`. To je tá istá
+trieda chyby, ktorú tu platíme stále: niečo vyzerá overené, len nie na tú otázku,
+na ktorú sa čitateľ pýta.
+
+Príčina je v preklade, nie v štýle. MapLibre 6 hľadá svoj dlaždicový worker cez
+`new URL('./maplibre-gl-worker.mjs', import.meta.url)` — teda **vedľa vlastného
+modulu**. Bundler ten modul presunie a workera nechá na mieste:
+
+| požiadavka | odpoveď |
+|---|---|
+| `/node_modules/.vite/deps/maplibre-gl-worker.mjs` (dev) | **404** |
+| `/node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs` | 200 |
+| `dist/assets/maplibre-gl-worker.mjs` (build) | **nikdy sa nevygeneroval** |
+
+Worker sa teda nenačíta, neparsuje sa ani jedna dlaždica, `sourcedata` nikdy
+neohlási `isSourceLoaded` a plátno ostane prázdne **s čistou konzolou**. Presne
+preto to nešlo vidieť v logoch: jediné, čo to nakoniec povedalo, bol náš vlastný
+timeout — a ten obvinil pripojenie čitateľa.
+
+Kontrolované A/B to vytriezvelo. Tá istá knižnica (6.9.0), ten istý štýl, ten
+istý pôvod, ten istý tab, **jediná premenná je cesta importu**:
+
+| import | `ready` | `tilesLoaded` | snímky |
+|---|---|---|---|
+| `/node_modules/.vite/deps/maplibre-gl.js` (to, čo sme posielali) | **false** | **false** | 2, zamrznuté |
+| `/node_modules/maplibre-gl/dist/maplibre-gl.mjs` | **true** | **true** | 5, ustálené |
+
+Predtým som porovnával verzie (4.7.1 a 5.6.0 z cdnjs išli, 6.9.0 nie) a vyzeralo
+to ako regresia v 6.x. **To porovnanie bolo neplatné** a je poučné, prečo: cdnjs
+servíruje UMD build, ktorý nesie workera v sebe, kým my sme mali ESM build
+predbundlovaný Vite-om. Nemerala sa verzia proti verzii, meral sa UMD proti ESM.
+Až keď sa zmenila jediná premenná, ukázala sa skutočná príčina.
+
+Oprava je jedna a platí pre obe prostredia: `?worker&url` nechá Vite postaviť
+workera ako vlastný vstup (aj s `maplibre-gl-shared.mjs`, ktorý si sám importuje)
+a `setWorkerUrl()` povie MapLibre, kde je — takže jeho vlastný odhad sa nikdy
+nepoužije. Build teraz generuje `dist/assets/maplibre-gl-worker-*.js` (508 kB) a
+mapa sa overene kreslí v dev serveri **aj** v `dist/` servovanom s proxy na API.
+
+Druhá chyba, nezávislá od prvej a tiež zmeraná: poistka `NO_DATA` („Dlaždice
+prišli prázdne") sa pýtala `querySourceFeatures()`, čo je **nesprávna otázka**.
+Na mape, ktorá viditeľne kreslí cesty a vodu, táto metóda vracia **0** — na tej
+istej snímke `queryRenderedFeatures()` vrátil **240**. Poistka teda odsudzovala
+každú zdravú mapu. Otázka je „dostalo sa niečo na obrazovku", a tú zodpovie len
+`queryRenderedFeatures()`; komentár v kóde to ostatne tvrdil od začiatku („the
+viewport holds nothing"), len kód robil niečo iné.
+
+**Poučenie, ktoré si sem píšem, aby sa nezopakovalo:** overiť štýl proti
+dlaždiciam a overiť, že mapa kreslí, sú dve rôzne tvrdenia. Prvé sme mali a bolo
+pravdivé; druhé sme nemali a tvárilo sa ako prvé.
+
 ---
 
 ## 4. Blokované — a prečo to nie je len tak
