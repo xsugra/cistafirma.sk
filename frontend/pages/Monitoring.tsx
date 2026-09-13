@@ -5,6 +5,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { companyPath } from '../constants';
 import { DEFAULT_SECTION_ID } from '../companySections';
 import { api } from '../api';
+import { looksLikeIco } from '../utils/ico';
 
 /**
  * The search page. It finds a firm and sends you to it.
@@ -21,7 +22,7 @@ export const Monitoring: React.FC = () => {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const initialSearch = searchParams.get('ico') || '';
-    const icoFromQuery = /^\d{8}$/.test(initialSearch) ? initialSearch : null;
+    const icoFromQuery = looksLikeIco(initialSearch) ? initialSearch.trim() : null;
 
     const [query, setQuery] = useState<string>(icoFromQuery ? '' : initialSearch);
     const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -36,7 +37,11 @@ export const Monitoring: React.FC = () => {
             return;
         }
 
-        if (/^\d{8}$/.test(trimmedQuery)) {
+        // A twelve-character IČO is a real IČO (organizational units), and a
+        // six-digit one is an old IČO the register still answers for. Both used
+        // to fall through to the name search and return nothing the reader
+        // wanted. See `utils/ico.ts` for why the range matches the backend's.
+        if (looksLikeIco(trimmedQuery)) {
             navigate(companyPath(trimmedQuery, DEFAULT_SECTION_ID));
             return;
         }
