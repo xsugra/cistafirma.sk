@@ -287,7 +287,14 @@ class _FakeRuzApi:
     reach the network.
     """
 
-    def __init__(self, pages, unreachable_ids=(), unstorable_ids=()):
+    def __init__(
+        self,
+        pages,
+        unreachable_ids=(),
+        unstorable_ids=(),
+        long_ico_ids=(),
+        duplicate_ico_ids=(),
+    ):
         self._pages = list(pages)
         self.detail_calls = []
         # Ids whose detail read fails the way a strict client reports an
@@ -297,14 +304,28 @@ class _FakeRuzApi:
         # `None` is filed as `skipped` with no per-company row while a raise is
         # filed as an error the window guard can see.
         self.unreachable_ids = set(unreachable_ids)
-        # Ids that arrive fine but carry an IČO our schema cannot hold -- the
-        # real shape of this, measured 2026-09-13 against RUZ id 1520199: an
-        # organisational unit whose IČO is the parent's plus a serial
-        # (`001781521576`), against a `varchar(8)` column. Deliberately not
-        # mocked as a raised DataError: letting Postgres refuse the real value
-        # is what makes the test prove the handler catches the error Django
-        # actually raises, and that the walk survives it.
+        # Ids that arrive fine but carry an IČO no column can hold: past the
+        # `varchar(20)` the three IČO columns were widened to, so Postgres
+        # refuses it. Deliberately not mocked as a raised DataError -- letting
+        # the database refuse the real value is what proves the handler catches
+        # the error Django actually raises and that the walk survives it.
+        #
+        # This used to be the twelve-character organisational-unit IČO
+        # (`00178152` + a serial). That value is storable now, which is the
+        # point of the widening, so the fixture moved to the shape that is
+        # still unstorable -- see `long_ico_ids` for the other half.
         self.unstorable_ids = set(unstorable_ids)
+        # Ids carrying that twelve-character IČO, the real value measured
+        # 2026-09-13 at RUZ id 1520199. It reaches the walk through the same
+        # code path that used to lose it, so this is what pins the widening:
+        # stored, counted as created, and no error.
+        self.long_ico_ids = set(long_ico_ids)
+        # Ids whose IČO is already held by company 111 in the same page, so
+        # whichever of the two is written second is refused by the unique index.
+        # A collision, not a widening problem: the register answers one IČO with
+        # more than one entity, and `update_or_create` keyed on `ico` used to
+        # re-stamp the existing row's `ruz_id` instead of noticing.
+        self.duplicate_ico_ids = set(duplicate_ico_ids)
         # Every `(zmenene_od, pokracovat_za_id)` pair the command asked with,
         # in order. The window and the resume cursor are the two halves of the
         # incremental sync's state, and neither is visible in the job row -- so
@@ -325,10 +346,28 @@ class _FakeRuzApi:
         if company_id in self.unreachable_ids:
             raise RuzUnreachable(f"RUZ unreachable reading company {company_id}")
         if company_id in self.unstorable_ids:
+            # 21 digits, one past `varchar(20)`.
             return {
-                "ico": f"00178152{company_id:04d}",
+                "ico": f"00178152{company_id:013d}",
                 "id": company_id,
                 "nazovUJ": f"SZZ Základná organizácia {company_id}",
+                "pravnaForma": "112",
+                "datumZalozenia": "2020-01-01",
+            }
+        if company_id in self.long_ico_ids:
+            return {
+                "ico": "001781521576",
+                "id": company_id,
+                "nazovUJ": f"SZZ Základná organizácia {company_id}",
+                "pravnaForma": "112",
+                "datumZalozenia": "2020-01-01",
+            }
+        if company_id in self.duplicate_ico_ids:
+            # `9{111:07d}` is what id 111 in the same page holds.
+            return {
+                "ico": "90000111",
+                "id": company_id,
+                "nazovUJ": f"Firma {company_id}",
                 "pravnaForma": "112",
                 "datumZalozenia": "2020-01-01",
             }
@@ -742,10 +781,12 @@ class RuzIncrementalWindowTests(TestCase):
         it on every run, forever, and pin the gate red. Measured live on
         2026-09-13: one such record held a 47 800-item window.
 
-        The value is real rather than mocked: `00178152` + a serial is the IČO
-        RUZ gives an organisational unit, and Postgres refuses it against the
-        `varchar(8)` column. That is what proves the handler catches what Django
-        actually raises and that the walk survives it.
+        The value is real rather than mocked: an IČO past the column's width,
+        which Postgres itself refuses. That is what proves the handler catches
+        what Django actually raises and that the walk survives it. The twelve-
+        character organisational-unit IČO that produced the live failure is no
+        longer unstorable -- see `test_a_long_organisational_unit_ico_is_stored`
+        for that half.
         """
         progress = self._progress(zmenene_od=date(2026, 8, 4))
         api = _FakeRuzApi([[111, 222]], unstorable_ids={222})
@@ -766,7 +807,7 @@ class RuzIncrementalWindowTests(TestCase):
     def test_a_record_we_cannot_store_does_not_stop_the_walk(self):
         """One bad record must not cost the rest of the page.
 
-        Live, RUZ id 1520199 failed and the walk went on to finish the window.
+        Live, a single record failed and the walk went on to finish the window.
         That depends on the failed write rolling back to a savepoint rather than
         poisoning the connection -- if `update_or_create`'s atomic block did not
         contain it, every later company in the run would fail too, and the
@@ -784,6 +825,67 @@ class RuzIncrementalWindowTests(TestCase):
             Company.objects.filter(ruz_id__in=[111, 333]).count(), 2
         )
         self.assertFalse(Company.objects.filter(ruz_id=222).exists())
+
+    def test_a_duplicate_ico_is_unstorable_rather_than_identity_swapping(self):
+        """A unique-index refusal has to be filed like an over-long value.
+
+        `update_or_create(ico=..., defaults={'ruz_id': ...})` matches the row by
+        IČO and then re-stamps its `ruz_id`. When a second RUZ entity arrives
+        under an IČO we already hold, that call does not fail -- it *succeeds*,
+        and the row that was entity A now claims to be entity B. Silent identity
+        swapping, and the reason the walk is keyed on `ruz_id` instead.
+
+        Keyed on `ruz_id`, the collision surfaces as an `IntegrityError` from the
+        unique index. Filed as `unreadable` it would hold the window forever --
+        the re-read returns the same collision, so it would never clear -- which
+        is the exact failure this window guard was written to end. So it is
+        `unstorable`: named, counted, and the window moves.
+
+        The first entity is left intact. That is the assertion that separates
+        "refused the new one" from "overwrote the old one".
+        """
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111, 222]], duplicate_ico_ids={222})
+
+        out = self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertIn("Unstorable: 1", out)
+        self.assertIn("Unstorable", out)
+        self.assertIn("222", progress.notes)
+        # Not held: this collision is deterministic, so the re-read repairs
+        # nothing.
+        self.assertNotIn("Okno neposunuté", out)
+        self.assertEqual(
+            progress.zmenene_od, timezone.localdate() - timedelta(days=1)
+        )
+        # 111 kept its row and its identity; 222 got nothing.
+        self.assertEqual(Company.objects.get(ico="90000111").ruz_id, 111)
+        self.assertFalse(Company.objects.filter(ruz_id=222).exists())
+
+    def test_a_long_organisational_unit_ico_is_stored(self):
+        """The other half of the widening: the record that used to be lost.
+
+        RUZ id 1520199 carries `001781521576` -- twelve digits, the parent's
+        `00178152` plus a serial -- and `varchar(8)` refused it. It was counted
+        as a failure and the window moved past it, which is how one unreadable
+        record became 13 missing statements.
+
+        Asserted on the stored value and not just on the absence of an error:
+        a run that stored a *truncated* IČO would also report no error, and the
+        company would then be unfindable by the IČO its owner quotes.
+        """
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111, 222]], long_ico_ids={222})
+
+        out = self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertNotIn("Unstorable", out)
+        self.assertNotIn("Okno neposunuté", out)
+        self.assertEqual(
+            Company.objects.get(ruz_id=222).ico, "001781521576"
+        )
 
     def test_a_full_run_does_not_move_its_own_window(self):
         """The `full*` types pick their start elsewhere: `full` hardcodes
