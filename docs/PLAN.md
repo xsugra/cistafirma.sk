@@ -340,7 +340,7 @@ dopyt, nie 2 919. OpenAddresses je tá istá dáta o vrstvu ďalej: v ich
 2. **Tabuľka sa volá `PostalCodeArea` (`psc` unique, `lat`, `lon`,
    `radius_m`, `point_count`, `obec`, `okres`, `kraj`, verzia zdroja).**
    `obec`/`okres`/`kraj` sú **opisné**, odvodené od najčastejšej hodnoty
-   v danej PSČ — pri 836 PSČ, ktoré ležia vo viac než jednej obci, to nie je
+   v danej PSČ — pri 834 PSČ, ktoré ležia vo viac než jednej obci, to nie je
    identita, len popis. Kľúč je `psc`.
 3. **Dlaždice:** OpenStreetMap — jediná povolená URL
    `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (subdomény `a/b/c` nie),
@@ -361,11 +361,36 @@ dopyt, nie 2 919. OpenAddresses je tá istá dáta o vrstvu ďalej: v ich
 
 **Ešte spraviť:**
 
-- [ ] Import command + tabuľka `PostalCodeArea` (kľúč `psc`, prázdne preskočiť,
+- [x] Import command + tabuľka `PostalCodeArea` (kľúč `psc`, prázdne preskočiť,
       verzia zdroja, `radius_m` z 90 % pokrytia)
-- [ ] Report nepriradených PSČ s dôvodom (`zdroj nevedie` vs `náš kľúč`)
-- [ ] Backend: vrátiť bod **aj polomer** v payload-e firmy
-- [ ] Frontend: karta s mapou — bod + kruh + veta, čo ten kruh znamená
+- [x] Report nepriradených PSČ s dôvodom (`zdroj nevedie` vs `náš kľúč`)
+- [x] Backend: vrátiť bod **aj polomer** v payload-e firmy
+- [x] Frontend: karta s mapou — bod + kruh + veta, čo ten kruh znamená
+- [x] `PostalCodeArea` v admine ako read-only zrkadlo importu (vedľa
+      `SectorBenchmark`) — dva údaje, ktoré rozhodujú o tom, či sa mapa vôbec
+      kreslí (`point_count`, `radius_m`), sa inak nedajú skontrolovať
+
+**Ako to dopadlo** (import 2026-09-13, `source_version = 2026-08-21`):
+
+| | |
+|---|---|
+| Riadkov v zdroji | 1 739 536 |
+| Preskočené bez PSČ — s bodmi / bez bodov | 224 / 177 |
+| Preskočené bez použiteľných súradníc | 35 013 |
+| PSČ pod hranicou 20 bodov | 5 (`83004`, `83005`, `83007`, `85000`, `85009`) |
+| **Uložené oblasti** | **1 410** |
+| Pokrytie našich firiem | **441 139 / 449 763 = 98,08 %** |
+| Nepriradené PSČ | 2 074 = 2 069 „zdroj nevedie" + 5 „naša hranica" |
+
+Uložený polomer: min 270 m, medián 1 996 m, p90 4 138 m, max 8 717 m. Najmenší
+uložený `point_count` je 58, teda hranica 20 je hlboko pod tým, čo v dátach
+naozaj je — žiadna uložená oblasť sa jej neblíži.
+
+Report **oddeľuje dva dôvody** a nie je to kozmetika: „register tú PSČ nevedie"
+je slepá ulička, kým „nedali sme ju pod hranicu 20 bodov" je rozhodnutie tohto
+príkazu a jediný prípad, s ktorým sa dá niečo spraviť. Prvá verzia hlásila oba
+ako „zdroj nevedie", čo bola nepravda o zdroji — a práve tá veta je jediná,
+podľa ktorej by sa niekto zachoval.
 
 ---
 
