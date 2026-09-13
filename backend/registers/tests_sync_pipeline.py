@@ -287,7 +287,7 @@ class _FakeRuzApi:
     reach the network.
     """
 
-    def __init__(self, pages, unreachable_ids=()):
+    def __init__(self, pages, unreachable_ids=(), unstorable_ids=()):
         self._pages = list(pages)
         self.detail_calls = []
         # Ids whose detail read fails the way a strict client reports an
@@ -297,6 +297,14 @@ class _FakeRuzApi:
         # `None` is filed as `skipped` with no per-company row while a raise is
         # filed as an error the window guard can see.
         self.unreachable_ids = set(unreachable_ids)
+        # Ids that arrive fine but carry an IČO our schema cannot hold -- the
+        # real shape of this, measured 2026-09-13 against RUZ id 1520199: an
+        # organisational unit whose IČO is the parent's plus a serial
+        # (`001781521576`), against a `varchar(8)` column. Deliberately not
+        # mocked as a raised DataError: letting Postgres refuse the real value
+        # is what makes the test prove the handler catches the error Django
+        # actually raises, and that the walk survives it.
+        self.unstorable_ids = set(unstorable_ids)
         # Every `(zmenene_od, pokracovat_za_id)` pair the command asked with,
         # in order. The window and the resume cursor are the two halves of the
         # incremental sync's state, and neither is visible in the job row -- so
@@ -316,6 +324,14 @@ class _FakeRuzApi:
         self.detail_calls.append(company_id)
         if company_id in self.unreachable_ids:
             raise RuzUnreachable(f"RUZ unreachable reading company {company_id}")
+        if company_id in self.unstorable_ids:
+            return {
+                "ico": f"00178152{company_id:04d}",
+                "id": company_id,
+                "nazovUJ": f"SZZ Základná organizácia {company_id}",
+                "pravnaForma": "112",
+                "datumZalozenia": "2020-01-01",
+            }
         return {
             "ico": f"9{company_id:07d}",
             "id": company_id,
@@ -714,6 +730,60 @@ class RuzIncrementalWindowTests(TestCase):
         progress.refresh_from_db()
         self.assertIn("Okno neposunuté", out)
         self.assertEqual(progress.zmenene_od, date(2026, 8, 4))
+
+    def test_a_record_we_cannot_store_does_not_hold_the_window(self):
+        """The mirror of the test above, and the reason the two failures are
+        counted apart.
+
+        A record whose read failed is a hole, and holding the window is the
+        only thing that stops it being lost. A record that arrived and cannot be
+        stored is the opposite: re-reading returns the same value, so holding
+        the window would never repair it -- it would re-read everything inside
+        it on every run, forever, and pin the gate red. Measured live on
+        2026-09-13: one such record held a 47 800-item window.
+
+        The value is real rather than mocked: `00178152` + a serial is the IČO
+        RUZ gives an organisational unit, and Postgres refuses it against the
+        `varchar(8)` column. That is what proves the handler catches what Django
+        actually raises and that the walk survives it.
+        """
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111, 222]], unstorable_ids={222})
+
+        out = self._run(api, self._job())
+
+        progress.refresh_from_db()
+        # Not held: the walk read it, and nothing about it changes on a re-read.
+        self.assertNotIn("Okno neposunuté", out)
+        self.assertEqual(
+            progress.zmenene_od, timezone.localdate() - timedelta(days=1)
+        )
+        # And not silent either -- it leaves no row anywhere, so the run has to
+        # name it or the hole is invisible.
+        self.assertIn("Unstorable", out)
+        self.assertIn("222", progress.notes)
+
+    def test_a_record_we_cannot_store_does_not_stop_the_walk(self):
+        """One bad record must not cost the rest of the page.
+
+        Live, RUZ id 1520199 failed and the walk went on to finish the window.
+        That depends on the failed write rolling back to a savepoint rather than
+        poisoning the connection -- if `update_or_create`'s atomic block did not
+        contain it, every later company in the run would fail too, and the
+        damage would look like a registry outage.
+        """
+        progress = self._progress(zmenene_od=date(2026, 8, 4))
+        api = _FakeRuzApi([[111, 222, 333]], unstorable_ids={222})
+
+        out = self._run(api, self._job())
+
+        progress.refresh_from_db()
+        self.assertIn("Unstorable: 1", out)
+        # 111 and 333 stored; only 222 was refused.
+        self.assertEqual(
+            Company.objects.filter(ruz_id__in=[111, 333]).count(), 2
+        )
+        self.assertFalse(Company.objects.filter(ruz_id=222).exists())
 
     def test_a_full_run_does_not_move_its_own_window(self):
         """The `full*` types pick their start elsewhere: `full` hardcodes

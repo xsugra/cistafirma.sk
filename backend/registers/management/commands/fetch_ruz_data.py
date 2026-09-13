@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
+from django.db import DataError
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from datetime import timedelta
@@ -222,7 +223,32 @@ class Command(BaseCommand):
         # counters accumulate -- the 12:22 run logged 6350 before it began and
         # 6367 after handling 17 records. The job row is per-run, so the counts
         # belong there.
-        run = {"processed": 0, "created": 0, "updated": 0, "skipped": 0, "errors": 0}
+        run = {
+            "processed": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": 0,
+            # Two kinds of failure that need opposite responses from the window
+            # guard below, so they are counted apart even though both raise:
+            #
+            # - `unreadable`: the call never returned a record. A hole, and the
+            #   window is the only place it could be remembered, so the window
+            #   holds and the next run reads it again.
+            # - `unstorable`: the record came back and our schema cannot hold
+            #   it. Measured on 2026-09-13: RUZ id 1520199 fails with `value too
+            #   long for type character varying(8)`, because RUZ gives
+            #   organisational units a 12-character IČO (`001781521576` --
+            #   parent `00178152` plus a serial) and `Company.ico` is
+            #   `varchar(8)`. Re-reading returns the same value, so holding the
+            #   window would never help; it would only re-read everything inside
+            #   it, forever, and pin the gate red.
+            "unreadable": 0,
+            "unstorable": 0,
+        }
+        # The records we read but could not store, kept so the hole is named
+        # rather than only counted. See the note written to `progress` below.
+        unstorable_ids: list[str] = []
 
         # The day this run started, read once. It is what the window advances
         # to if the walk completes -- see the end of the loop.
@@ -251,6 +277,10 @@ class Command(BaseCommand):
                 self.stdout.write(f"Found {len(company_ids)} company IDs to process.")
 
                 for index, company_id in enumerate(company_ids, start=1):
+                    # Bound before the call so the handler below can name the
+                    # record from whatever arrived, without risking a NameError
+                    # on the first iteration if the fetch itself is what raised.
+                    details = None
                     try:
                         details = api.get_company_details(company_id)
                         if details:
@@ -269,12 +299,28 @@ class Command(BaseCommand):
                             progress.record_progress(ruz_id=company_id, skipped=True)
                             run["processed"] += 1
                             run["skipped"] += 1
+                    except DataError as e:
+                        # The record arrived and our schema refused it. Filed
+                        # apart from the transport case on purpose: this one
+                        # will not fix itself by being read again. See `run`.
+                        self.stderr.write(
+                            f"Unstorable record ID {company_id}: {e}"
+                        )
+                        progress.record_progress(ruz_id=company_id, error=True)
+                        progress.last_error = str(e)
+                        unstorable_ids.append(
+                            f"{company_id} ({details.get('ico') if details else '?'})"
+                        )
+                        run["processed"] += 1
+                        run["errors"] += 1
+                        run["unstorable"] += 1
                     except Exception as e:
                         self.stderr.write(f"Error processing company ID {company_id}: {e}")
                         progress.record_progress(ruz_id=company_id, error=True)
                         progress.last_error = str(e)
                         run["processed"] += 1
                         run["errors"] += 1
+                        run["unreadable"] += 1
 
                     # Be a good API citizen
                     time.sleep(0.1)
@@ -333,11 +379,11 @@ class Command(BaseCommand):
             # `>` and not `>=`: a run that finishes on the same day it started
             # would otherwise write the window backwards.
             window_end = run_started_on - timedelta(days=1)
-            holds_window = sync_type.startswith('full') or run["errors"] > 0
+            holds_window = sync_type.startswith('full') or run["unreadable"] > 0
             if holds_window:
                 reason = (
-                    f'{run["errors"]} položiek zlyhalo'
-                    if run["errors"]
+                    f'{run["unreadable"]} položiek sa nepodarilo prečítať'
+                    if run["unreadable"]
                     else f'typ {sync_type} si okno nespravuje'
                 )
                 self.stdout.write(self.style.WARNING(
@@ -363,6 +409,32 @@ class Command(BaseCommand):
                 f'  Skipped: {progress.total_skipped}\n'
                 f'  Errors: {progress.total_errors}'
             ))
+
+            # A record we read and could not store leaves no row anywhere: the
+            # window moves past it and the next run never looks at it again. So
+            # it is named here, on the row that survives, and written out --
+            # otherwise the hole is invisible and a later fix would have nothing
+            # to backfill from. Deliberately not filed under
+            # `CompanySyncStatus(source='ruz')`: that lane means "we re-read
+            # this company's dates", and 9 244 rows of it currently say that
+            # succeeded. Mixing a walk failure into it would make both readings
+            # wrong at once.
+            if unstorable_ids:
+                listed = ', '.join(unstorable_ids[:50])
+                more = (
+                    f' (+{len(unstorable_ids) - 50} more)'
+                    if len(unstorable_ids) > 50
+                    else ''
+                )
+                progress.notes = (
+                    f'{len(unstorable_ids)} záznamov sa nedalo uložiť, '
+                    f'okno ich preskočilo: {listed}{more}'
+                )
+                progress.save(update_fields=['notes'])
+                self.stdout.write(self.style.WARNING(
+                    f'  Unstorable: {len(unstorable_ids)} -- read but not '
+                    f'stored, and the window moved past them: {listed}{more}'
+                ))
             
         except KeyboardInterrupt:
             # Používateľ prerušil synchronizáciu
