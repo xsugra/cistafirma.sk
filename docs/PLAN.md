@@ -147,6 +147,88 @@ dôvodom):
 - [x] Spustiť prvý beh po oprave — beží ako job #23 od 09:54
 - [ ] Overiť, že `zmenene_od` sa posunul a `ops-check` je zelený
 - [x] Nezávislé overenie opravy (adversariálna revízia)
+- [ ] Reštartovať `celery_worker_ruz` po dokončení job #23 — worker drží starý
+      kód v pamäti, takže beatový beh by inak bežal po starom
+
+### #90 — RUZ vracia IČO, ktoré sa do našej schémy nezmestí
+
+Toto je nález, ktorý **odkryl až opravný beh #23** — a keby som ho neriešil,
+oprava z #83 by sa ticho zmenila na novú poruchu.
+
+**Čo sa deje.** `Company.ico` je `varchar(8)`. Register ale pre organizačné
+zložky vracia **12-znakové IČO**: `001781521576` je IČO rodiča
+(`00178152`) plus štvormiestne poradie. Postgres zápis odmietne
+(`value too long for type character varying(8)`), záznam sa neuloží a beh ide
+ďalej.
+
+Namerané naživo 2026-09-13 — RUZ id `1520199`, `SZZ Základná organizácia 43-1`,
+Ružomberok, **13 účtovných závierok**. Nie je to odpad v registri: je to
+účtovná jednotka, ktorá riadne zverejňuje. Len sa k nám nikdy nedostane.
+
+**Prečo to bola blokujúca vec.** Oprava z #83 drží okno, keď má beh chyby —
+správne, lebo neprečítaná firma sa inak stratí navždy. Ale táto chyba je
+**deterministická**: opakované čítanie vráti tú istú dvanásťznakovú hodnotu.
+Okno by sa teda neposunulo **nikdy**, každý beh by znovu prečítal celé okno
+(47 800 položiek, ~1,5 h) a brána by navždy svietila na červeno s vetou, ktorá
+už neplatí. Presne tá trieda poruchy, ktorú má #83 zavrieť.
+
+**Preto som zlyhania rozdelil na dve**, lebo potrebujú opačnú reakciu:
+
+| | čo to je | okno |
+|---|---|---|
+| `unreadable` | register neodpovedal, záznam sme nevideli | **drží** — je to diera a okno je jediné, čo si ju pamätá |
+| `unstorable` | záznam prišiel, schéma ho neudrží | **posunie sa** — opakované čítanie vráti to isté |
+
+Neuložiteľné záznamy sa vypíšu a uložia do `SyncProgress.notes` (id + IČO), aby
+diera nebola len počtom. Zámerne **nie** do `CompanySyncStatus(source='ruz')`:
+tá dráha znamená „tejto firme sme znovu prečítali dátumy" a 9 244 riadkov tam
+dnes tvrdí, že sa to podarilo; zamiešať do toho zlyhanie walku by pokazilo obe
+čítania naraz.
+
+**Druhá vec v tom istom náleze.** Register vracia aj IČO **doplnené medzerami**
+— `'177474  '`, `'630021  '`, `'9155139 '` — pre staré 6- a 7-miestne IČO.
+V databáze sú 3 také riadky a **nikdy nesadnú** na ORSR, RPO ani Finančnú
+správu: lookup cesta robí `ico.strip().zfill(8)`, kým walk zapisuje hodnotu tak,
+ako prišla. Dve rôzne normalizácie na dvoch koncoch toho istého toku.
+
+**Tretia vec, a je to rozhodnutie, nie oprava: `Company.ico` má `unique=True`,
+čo je falošné obmedzenie.** Register drží **viac účtovných jednotiek na jedno
+IČO** — dopyt `ico='00177474'` vráti tri rôzne entity (RUZ id 1677, 1049449,
+1070716). Zamýšľaný kľúč registra je `ruz_id` (už `unique=True`), nie IČO.
+
+Zmerané 2026-09-13, aby to nebol dohad:
+
+- **Vzorka 40 IČO → presne 1 entita každé. Žiadna kolízia.** Nejde teda
+  o systémovú vlastnosť registra, ale o okrajovú populáciu — a tá je
+  **organizačné zložky**, presne tá skupina, ktorá nesie to 12-znakové IČO.
+- **`.zfill(8)` je na vstupe neobhájiteľné.** Dopyt registra `ico=` chce
+  nulami doplnený tvar (`'177474'` → nič, `'00177474'` → 3 entity), ale
+  `'177474  '` (DHZ Sološnica) a `'00177474'` (DHZ Nová Kelča) sú **dve rôzne
+  sesterské jednotky**. Doplnenie núl ich teda **zlúči do jednej**. Na vstupe
+  je obhájiteľné len `.strip()`; `.zfill(8)` smie zostať na lookup ceste, kde
+  je to parametr dopytu, nie zápis do schémy.
+
+Dôsledok, ktorý treba rozhodnúť **pred** migráciou: ak `ico` prestane byť
+`unique`, prestane byť jednoznačným kľúčom endpointu `/api/companies/<ico>/`
+— a ten dnes vracia jednu firmu. Možnosti sú vrátiť zoznam, alebo nechať
+`unique` a organizačné zložky ukladať pod ich `ruz_id` s `ico` NULL. To je
+produktové rozhodnutie, nie technické, preto tu stojí ako prvý bod.
+
+**Čo zostáva — vlastný prírastok, nie tento.** Je to zmena schémy na
+neobnoviteľnej databáze plus oprava dát, takže:
+
+- [ ] **Rozhodnúť kľúč** `/api/companies/<ico>/` pri viacnásobnom IČO (vyššie)
+- [ ] Zmapovať dosah (beží: sweep naprieč backendom aj frontendom)
+- [ ] Nová overená záloha (`make db-backup` + `verify`)
+- [ ] Migrácia šírky + `.strip()` na vstupe (v jednej zmene, inak `update_or_create`
+      podľa `ico` narazí na `ruz_id` unique)
+- [ ] `frontend/pages/Monitoring.tsx:24,39` — `^\d{8}$` je jediné reálne
+      frontendové zlyhanie 12-znakového IČO (spadne do hľadania podľa mena)
+- [ ] Oprava tých 3 riadkov a spätný import preskočených zložiek podľa IČO z `notes`
+
+**Koľko ich je**, presne nevieme — jeden na 49 600 prečítaných v tomto okne
+a vo vzorke 40 IČO nula. Hustota sa nedá spočítať z registra, len z ďalších
+behov.
 
 ---
 
@@ -170,8 +252,35 @@ Podobne ako to má FinStat.
 
 - `Company` má `ulica` / `mesto` / `psc` **štruktúrovane**: `mesto` a `psc` na
   100 %, `ulica` na 99,7 % z 445 626 riadkov
-- len **2 919 rôznych miest** — takže join na úrovni mesta je 2 919 hodnôt,
-  nie 445 tisíc dopytov
+
+**Kľúč je PSČ, nie mesto — a to je prepis pôvodného postupu.** Prieskum
+2026-09-13 nameral, prečo sa `mesto` ako kľúč použiť nedá a prečo PSČ áno.
+Zmerané proti našej databáze (449 763 riadkov) a proti stiahnutému CSV
+(1 739 536 riadkov):
+
+| kľúč | pokrýva | poznámka |
+|---|---|---|
+| `mesto` | **nedá sa použiť** | 95 názvov `OBEC` leží vo **viac než jednom okrese**; náš zápis je iný než registrový (`Bratislava - mestská časť Ružinov` vs `Bratislava-Ružinov`), takže by to bolo fuzzy párovanie |
+| `psc` | **441 165 / 449 763 = 98,09 %** | žiadne párovanie názvov; 3 riadky bez PSČ |
+| `(obec, psc)` | 3 288 párov | zbytočne zložité — my chceme *bod pre PSČ*, nie identitu obce |
+
+Čo z toho plynie:
+
+1. **Zdroj pozná 1 415 PSČ a my máme všetky.** Každá PSČ, ktorú CSV obsahuje,
+   sa u nás vyskytuje. Množina zdroja je celá podmnožinou tej našej.
+2. **Nespárovaných je 8 595 riadkov (1,91 %), a nie je to chyba kľúča.**
+   Zdroj tie PSČ **vôbec neuvádza** — `94001` (674 riadkov) tam neexistuje,
+   pre Nové Zámky ide rovno `94002`. Sú to PSČ poštových úradov, ktoré nemajú
+   vlastný adresný bod. Nedajú sa dorátať; **vypíšu sa a nič sa im nepriradí.**
+3. **Prázdne PSČ sa musí preskočiť.** Zdroj má 224 riadkov s prázdnym `PSC`,
+   ale platnými súradnicami. Naivné `GROUP BY PSC` by z nich vyrobilo oblasť
+   so „ťažiskom" rozptýleným na **161 km** a 3 naše firmy bez PSČ by dostali
+   špendlík do stredu Slovenska. Import musí prázdnu hodnotu zahodiť.
+4. **Presnosť je ~2 km, nie adresa.** Polomer, ktorý pre každú PSČ pokryje 90 %
+   jej adresných bodov: **medián 1 980 m**, p90 4 118 m, p99 6 202 m, najhoršia
+   vidiecka PSČ 8,7 km. Preto karta nesmie ukázať holý špendlík — ten tvrdí
+   presnosť, ktorú nemáme. Ukáže **bod plus kruh** s týmto polomerom, a ten
+   rozdiel je vidieť, nie schovaný v poznámke.
 
 **Prieskum 2026-09-13 prepísal dve veci v pôvodnom postupe.** Obe boli
 overené proti živému zdroju (hlavička stiahnutého súboru, SPARQL katalógu),
@@ -205,45 +314,58 @@ cudzieho limitu, ktorému sa tento projekt vyhýba, a to sme poslali *jeden*
 dopyt, nie 2 919. OpenAddresses je tá istá dáta o vrstvu ďalej: v ich
 `sources/sk/countrywide.json` je ako zdroj uvedená tá istá URL.
 
-**Dve úskalia, ktoré patria do implementácie, nie do poznámky pod čiarou:**
+**Úskalia, ktoré patria do implementácie, nie do poznámky pod čiarou:**
 
-1. **Bratislava a Košice sú v registri rozdelené na mestské časti**
-   (`Bratislava-Staré Mesto` … 17, `Košice-Sever` … 22) a **holý riadok
-   `Bratislava` ani `Košice` neexistuje**. Náš `Company.mesto` pritom takmer
-   isto obsahuje holé názvy, takže naivný join by ticho zahodil dve najväčšie
-   mestá na Slovensku — presne tá trieda tichého zlyhania, ktorú tu máme
-   pomenovanú ako hlavnú.
-2. **Nenamapované mestá sa musia vypísať**, nie zahodiť. Pokrytie je úplné
-   (2 817 `OBEC` proti 2 927 z GeoNames, chýbajú len dva vojenské obvody), takže
-   každá nenamapovaná hodnota je chyba nášho kľúča alebo cudzí zápis v `mesto`.
+1. **Bratislava a Košice: pôvodná obava bola nesprávna, ale záver zostáva.**
+   Register ich delí na mestské časti (`Bratislava-Staré Mesto` … 17,
+   `Košice-Sever` … 22) a holý riadok `Bratislava` neexistuje. Pôvodný plán
+   tvrdil, že náš `mesto` má holé názvy a join by ticho zahodil dve najväčšie
+   mestá. **To je nepravda** — náš `mesto` mestské časti už nesie
+   (`'Bratislava - mestská časť Ružinov'`, 8 304 firiem). Problém je iný:
+   **formát je iný než registrový**, takže by to bolo fuzzy párovanie názvov.
+   Riešenie nie je normalizovať názvy, ale **nepoužiť ich vôbec** — PSČ
+   `82108` je Ružinov bez toho, aby sme hádali, ako sa to píše. Tým úskalie
+   mizne, nerieši sa.
+2. **Nepriradené PSČ sa musia vypísať**, nie zahodiť — a musia sa vypísať
+   **s dôvodom**. Pri 8 595 riadkoch je dôvod „zdroj tú PSČ nevedie"; to je iná
+   veta než „náš kľúč je zlý", a keby sa pomiešali, tichý nárast prvého by
+   vyzeral ako druhý.
 
 **Zvolený postup:**
 
-1. **Zdroj:** CSV MV SR (vyššie) — jednorazový import, agregácia na `OBEC`
-   (ťažisko alebo medián `ADRBOD_X`/`ADRBOD_Y`, **nie prvý riadok**) → ~2 817
-   riadkov. K importu sa zapíše `dct:modified` zdroja ako verzia, aby bolo
-   vidno, z čoho dáta sú.
-2. **Dlaždice:** OpenStreetMap — jediná povolená URL
+1. **Zdroj:** CSV MV SR (vyššie) — jednorazový import, agregácia **na `PSC`**
+   (ťažisko `ADRBOD_X`/`ADRBOD_Y`, **nie prvý riadok**) → ~1 415 riadkov.
+   Prázdne `PSC` sa preskočí (viď vyššie). K importu sa zapíše `dct:modified`
+   zdroja ako verzia, aby bolo vidno, z čoho dáta sú.
+2. **Tabuľka sa volá `PostalCodeArea` (`psc` unique, `lat`, `lon`,
+   `radius_m`, `point_count`, `obec`, `okres`, `kraj`, verzia zdroja).**
+   `obec`/`okres`/`kraj` sú **opisné**, odvodené od najčastejšej hodnoty
+   v danej PSČ — pri 836 PSČ, ktoré ležia vo viac než jednej obci, to nie je
+   identita, len popis. Kľúč je `psc`.
+3. **Dlaždice:** OpenStreetMap — jediná povolená URL
    `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (subdomény `a/b/c` nie),
    viditeľná atribúcia „© OpenStreetMap contributors", cache ≥ 7 dní, žiadny
    prefetch. Číselný limit neexistuje, ale je to „best-effort" bez SLA — pre
    verejný launch treba platený alebo self-hosted zdroj. Repo nemá CSP, takže
    dlaždice nič neblokuje.
-3. **Knižnica:** `react-leaflet@5` (`peerDependencies: react ^19.0.0` — repo je
+4. **Knižnica:** `react-leaflet@5` (`peerDependencies: react ^19.0.0` — repo je
    na 19.2.3, teda sedí) + `leaflet@1.9.4`, lenivo načítané. Verzie 4.x chcú
    React 18 a pýtali by `--legacy-peer-deps`.
-4. **Umiestnenie:** kompaktná karta pod adresným riadkom v `CompanyHeader.tsx:199`
-5. **Čestnosť — preformulované.** Adresný bod je **zameraný bod vchodu do
-   budovy**, nie odhad, takže poznámka o približnosti nepatrí zdroju. Nepresné
-   je **naše priradenie adresy firmy** (máme `mesto`, nie vchod) — a to je aj
-   poctivá formulácia pre používateľa.
+5. **Umiestnenie:** kompaktná karta pod adresným riadkom v `CompanyHeader.tsx:199`
+6. **Čestnosť — tretia formulácia, a tá je meraná.** Adresný bod je zameraný
+   bod vchodu do budovy, takže zdroj je presný; nepresné je **naše priradenie**
+   — a to nie je „máme mesto, nie vchod", ale **„vieme PSČ, a to je medián
+   1 980 m"**. Karta preto kreslí **bod aj kruh s reálnym polomerom tej PSČ**.
+   Holý špendlík by tvrdil presnosť na budovu, ktorú nemáme; poznámka pod mapou
+   by to len ospravedlňovala. Kruh to ukáže.
 
 **Ešte spraviť:**
 
-- [ ] Import command + tabuľka `City` (`mesto`, `lat`, `lon`, verzia zdroja)
-- [ ] Normalizácia `Bratislava`/`Košice` na mestské časti + report nenamapovaných
-- [ ] Backend: vrátiť súradnice v payload-e firmy
-- [ ] Frontend: karta s mapou + poznámka o približnosti
+- [ ] Import command + tabuľka `PostalCodeArea` (kľúč `psc`, prázdne preskočiť,
+      verzia zdroja, `radius_m` z 90 % pokrytia)
+- [ ] Report nepriradených PSČ s dôvodom (`zdroj nevedie` vs `náš kľúč`)
+- [ ] Backend: vrátiť bod **aj polomer** v payload-e firmy
+- [ ] Frontend: karta s mapou — bod + kruh + veta, čo ten kruh znamená
 
 ---
 
