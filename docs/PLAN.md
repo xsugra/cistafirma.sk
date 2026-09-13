@@ -2208,25 +2208,83 @@ Prah hĺbky treba znížiť pod maximum (`> 6 000` je nedosiahnuteľné) alebo
 prepísať ako `warning`, aby aspoň zostala stopa. Presné číslo nechávam na
 rozhodnutie, lebo meniť prah operatívnej kontroly je samostatná vec.
 
-### Počítadlo v `PeriodicTask` sa pri dvoch úlohách nepíše vôbec
+### Nová periodická úloha s intervalom dlhším, než je doba medzi reštartmi beatu, nebeží nikdy
 
+Pôvodný zápis na tomto mieste tvrdil, že sa `last_run_at`/`total_run_count` pri
+dvoch úlohách „nepíše vôbec" a že počítadlo „prehlási zdravú úlohu za mŕtvu".
+**Prvá polovica je vyvrátená meraním a druhá bola nesprávna diagnóza.** Premerané
+2026-09-13 21:53Z:
+
+| riadok | `last_run_at` | `runs` |
+|---|---|---|
+| `refresh-person-history-every-4-hours` | 2026-09-13 21:20:12.950 | **2** |
+| `compute-sector-benchmarks-daily` | `None` | **0** |
+| zvyšných 8 riadkov | svoje posledné spustenie | 19 – 375 |
+
+Počítadlo sa teda píše aj úlohe, ktorá tu bola označená za „nemá nikdy":
+`refresh-person-history` si o 21:20:12 zapísalo druhý beh — presne ten tik, ktorý
+je overený vyššie. Zostáva **1 z 10**, nie 2.
+
+Príčinu som **overil, nie odhadol**. V `django_celery_beat` (v kontajneri 2.9.0):
+
+```python
+# schedulers.py — ModelEntry.__init__
+if not model.last_run_at:
+    model.last_run_at = model.date_changed or self._default_now()
+
+# schedulers.py — ModelEntry.from_entry
+obj, created = PeriodicTask._default_manager.update_or_create(
+    name=name, defaults=cls._unpack_fields(**entry))
 ```
-NEVER     runs=0    refresh-person-history-every-4-hours
-NEVER     runs=0    compute-sector-benchmarks-daily
-2026-09-13 17:13  runs=355  detect-stuck-sync-jobs-every-10-min
-2026-09-13 17:18  runs=327  send-pending-notifications-every-15-min
-… 8 z 10 riadkov počítadlo má
-```
 
-**2 z 10 riadkov `last_run_at`/`total_run_count` nemajú nikdy**, hoci
-`refresh-person-history-every-4-hours` 2026-09-13 o 17:20:12 **naozaj vystrelil**
-(„Sending due task refresh-person-history-every-…") a rozposlal prácu. Počítadlo
-je teda pri týchto dvoch úlohách nepoužiteľné ako dôkaz behu — a čokoľvek, čo by
-sa oň oprelo, prehlási zdravú úlohu za mŕtvu.
+Riadok, ktorý ešte nikdy nebežal, nemá v DB `last_run_at` — a beat mu ho **v
+pamäti** nahradí `date_changed`. `is_due()` potom počíta od neho, takže prvý beh
+je najskôr `date_changed + interval`: úloha, ktorá „nikdy nebežala", sa tvári
+ako tá, ktorá „práve bežala". A `from_entry` je `update_or_create`, ktoré
+`setup_schedule()` volá pri **každom štarte beatu** — takže `date_changed` sa pri
+každom štarte prepíše na „teraz" a prvý beh sa odsunie o celý interval.
 
-**Príčinu som neoveril** a nebudem ju hádať; rozdiel je medzi dvoma konkrétnymi
-riadkami a zvyškom, nie systematický, takže sa to dá zúžiť — ale to je
-samostatná práca. Zámerne **nemenené** a **nezapisujem domnienku**.
+Že sa riadky pri štarte naozaj zapisujú, vidno na riadku, ktorý **už bežal** a
+fiktívny `last_run_at` teda nemá — a napriek tomu nesie `date_changed` z času
+štartu:
+
+| riadok | `last_run_at` | `date_changed` | interval |
+|---|---|---|---|
+| `update-fs-data-daily` | 18:22:32.602 | **18:34:00.087** | 86 400 s |
+| `celery.backend_cleanup` | 02:00:00.000 | **18:34:00.041** | crontab 4:00 |
+| `compute-sector-benchmarks-daily` | `None` | **18:34:00.116** | 86 400 s |
+| `detect-stuck-sync-jobs-every-10-min` | 21:20:11.413 | 21:20:22.991 | 600 s |
+
+`update-fs-data-daily` naposledy bežal 18:22:32 a predsa nesie `date_changed`
+18:34:00.087 — 96 s **po** svojom behu a presne v sekunde posledného štartu beatu
+(`beat: Starting...` 18:34:00.000820). To je ten zápis pri štarte; riadky, ktoré
+odvtedy bežali, ho prepísali svojím behom.
+
+**Dôsledok.** `compute-sector-benchmarks-daily` je v `CELERY_BEAT_SCHEDULE` od
+commitu `3f9bc20` (2026-09-12 13:13Z) a v celom retenovanom logu beatu (od
+2026-09-10 07:21Z) sa nedispatchol **ani raz**: 748 riadkov „Sending due task"
+nesie všetkých 9 ostatných mien, toto ani raz. Za tých 32 h, čo je úloha
+naplánovaná, beat trikrát reštartoval a **najdlhší súvislý beh bol 16 h 42 min**
+(17:46 → 10:28) — teda menej než jej 24-hodinový interval. Nie je to chyba
+počítadla: počítadlo hovorí pravdu, úloha naozaj nebežala.
+
+Toto nie je vlastnosť jednej úlohy, ale pasce pri zakladaní nového riadku:
+**nová periodická úloha s intervalom dlhším, než je bežná doba behu beatu, sa
+k prvému behu nedostane vôbec.** Štvorhodinové nové riadky prežijú, denné nie.
+
+**Dopad na dáta je menší, než to vyzerá** — a je iný, než by človek čakal:
+`SectorBenchmark` má 15 riadkov, ale všetky s `computed_at = 2026-09-12 19:55:43Z`,
+teda z jednorazového ručného prepočtu pri vzniku tej opravy. Dáta teda existujú;
+neexistuje len ich denná aktualizácia, takže tabuľka je zamrznutá na jednom dni.
+
+**Odporúčanie** (zámerne **neurobené** — je to zápis do živej prevádzkovej
+tabuľky a prepočet viditeľných dát, nie moja vec): úlohe treba dopriať prvý beh,
+a to buď ručne (`compute_sector_benchmarks.delay()`, čím získa skutočné
+`last_run_at` a ďalej sa správa normálne), alebo pri zakladaní nového riadku
+nastaviť `start_time` do minulosti — knižnica pre `start_time` sama odčíta 30
+rokov (`model.last_run_at -= timedelta(days=365 * 30)`), takže úloha je hneď due.
+**Predpoveď na overenie:** ak sa beat dovtedy nezreštartuje, prvý beh príde
+2026-09-14 18:34:00Z.
 
 ### `make test` na SQLite vôbec nebeží — a dokumentácia tvrdí opak
 
