@@ -1191,9 +1191,34 @@ prírastku. Alternatíva je lacnejšia: nechať to a v karte pre `postal_code` p
 firiem neznesie ďalší import, a veta je presne to, čo tu celý čas chýbalo.
 
 **Dva nálezy, ktoré som zámerne neopravil** (mimo schválenej prírastky, hlásim):
-`serializers.py:152` nemá cestu, ktorá by po zmene adresy v RUZ zneplatnila
-`seat_*` — umiestnenie teda prežije zmenu adresy, kým sa matcher znova nespustí;
-a § 1 tabuľka nižšie vynecháva #85 – #92.
+
+**(a) `seat_*` nemá cestu, ktorá by ho zneplatnila — a nikto ho ani neprepočíta.**
+Overené 2026-09-13 v troch krokoch:
+
+1. `_update_company_from_ruz_data` píše `mesto`, `ulica`, `psc` cez
+   `update_or_create(defaults=…)` (`tasks.py:412-427`), ale `seat_*` v tých
+   `defaults` **nie je**. Adresa sa teda zmení a umiestnenie zostane na starom
+   mieste. `models.py:349-350` to aj priznáva — „Nepíše ich synchronizácia
+   z RUZ, takže import firmy ich neprepíše" — a podáva to ako ochranu, čo je
+   správne: bez toho by sync zmazal dobrú prácu matcherа. Chýbajúca polovica
+   je, že **nič nerozpozná, keď sa zdroj pravdy pohol**.
+2. `match_seat_addresses` **nie je naplánovaný nikde**: nie je v
+   `CELERY_BEAT_SCHEDULE`, nie je v `PeriodicTask` riadkoch (overené výpisom
+   všetkých zapnutých), a nespomína ho `Makefile` ani `scripts/`. Je to ručný
+   príkaz, takže „kým sa matcher znova nespustí" neznamená „čoskoro" — znamená
+   „až kým to niekto spraví".
+3. Na `seat_*` **nie je žiadny časový stĺpec** (overené v `models.py:350-375`),
+   takže sa z dát nedá ani zistiť, ktoré riadky sú zastarané. Nedá sa teda
+   odhadnúť ani rozsah.
+
+Dôsledok je používateľsky viditeľný: firme, ktorá sa presťahovala, kreslíme
+mapu na starú adresu — natrvalo. Je to tá istá trieda ako počítadlo, ktoré
+nevie, čo počíta: chýba údaj, ktorý by povedal, či je hodnota ešte pravdivá.
+Oprava je nová prírastka (buď `seat_*` vyčistiť pri zmene adresy a matcher
+naplánovať, alebo pridať `seat_matched_at` a zastarané riadky hlásiť) —
+neimplementované, patrí do samostatného rozhodnutia.
+
+**(b)** § 1 tabuľka nižšie vynecháva #85 – #92.
 
 ### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra
 
