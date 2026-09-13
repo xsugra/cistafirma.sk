@@ -22,8 +22,63 @@ interface SeatLocationCardProps {
     seat: SeatLocation;
 }
 
+/** What the drawing claims, said in the heading rather than left to the shape. */
+const precisionNote = (seat: SeatLocation): string => {
+    switch (seat.precision) {
+        case 'building':
+            // No radius: a building is drawn as a bare point, and printing
+            // "±0 m" next to it would read as a measurement nobody made.
+            return 'presná adresa budovy';
+        case 'street':
+            return `stred ulice · presnosť ${formatRadius(seat.radiusM)}`;
+        default:
+            return `PSČ ${seat.psc} · presnosť ${formatRadius(seat.radiusM)}`;
+    }
+};
+
 /**
- * The registered seat, drawn as the area we actually know rather than a pin.
+ * What the drawing means — one sentence per claim, because the claim differs.
+ *
+ * A sentence that fits one precision is false for the others, and this is not
+ * hypothetical: the `postal_code` wording ("the register knows only the PSČ
+ * centre, so we cannot place the seat more precisely") was left standing for
+ * every seat, so the 85,5 % of companies the register *does* place were told
+ * the opposite of what the map beside the sentence was drawing. A building has
+ * no ring at all, and a street's ring is that street's own spread rather than
+ * the PSČ's.
+ */
+const explanation = (seat: SeatLocation): React.ReactNode => {
+    switch (seat.precision) {
+        case 'building':
+            return (
+                <>
+                    Register adries umiestnil sídlo na{' '}
+                    <strong className="font-semibold text-gray-700 dark:text-gray-300">skutočný adresný bod tejto firmy</strong>
+                    , preto tu je bod a nie kruh: kruh by tvrdil neistotu, ktorá tu nie je.
+                </>
+            );
+        case 'street':
+            return (
+                <>
+                    Kruh je <strong className="font-semibold text-gray-700 dark:text-gray-300">presnosť, nie veľkosť firmy</strong>:
+                    v tomto kruhu leží 90 % adries na tejto ulici. Register adries
+                    pozná ulicu, ale nie konkrétnu budovu, takže bližšie sídlo
+                    umiestniť nevieme.
+                </>
+            );
+        default:
+            return (
+                <>
+                    Kruh je <strong className="font-semibold text-gray-700 dark:text-gray-300">presnosť, nie veľkosť firmy</strong>:
+                    v tomto kruhu leží 90 % adries s PSČ {seat.psc}. Register adries pozná
+                    len stred PSČ, takže bližšie sídlo umiestniť nevieme.
+                </>
+            );
+    }
+};
+
+/**
+ * The registered seat, drawn as precisely as the register allows.
  *
  * The sentence under the map is not decoration and is not optional. A circle on
  * a map reads as *the company's grounds* unless something says otherwise, and
@@ -31,6 +86,10 @@ interface SeatLocationCardProps {
  * inside it and nowhere more precisely. That is why the radius travels from the
  * API at all (`SeatLocation` in `types.ts`), and why this card shows the number
  * next to the heading instead of leaving it to be inferred from the drawing.
+ *
+ * Which sentence, though, depends on `precision` — the field `types.ts` declares
+ * is decided on the backend rather than guessed here from the radius. Reading it
+ * is what keeps the words and the drawing on the same card from disagreeing.
  */
 export const SeatLocationCard: React.FC<SeatLocationCardProps> = ({ seat }) => (
     <div className="mt-6 border-t border-gray-200 dark:border-slate-800 pt-6">
@@ -40,7 +99,7 @@ export const SeatLocationCard: React.FC<SeatLocationCardProps> = ({ seat }) => (
                 Sídlo na mape
             </h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-                PSČ {seat.psc} · presnosť {formatRadius(seat.radiusM)}
+                {precisionNote(seat)}
             </p>
         </div>
 
@@ -58,9 +117,7 @@ export const SeatLocationCard: React.FC<SeatLocationCardProps> = ({ seat }) => (
         </div>
 
         <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            Kruh je <strong className="font-semibold text-gray-700 dark:text-gray-300">presnosť, nie veľkosť firmy</strong>:
-            v tomto kruhu leží 90 % adries s PSČ {seat.psc}. Register adries pozná
-            len stred PSČ, takže bližšie sídlo umiestniť nevieme.
+            {explanation(seat)}
         </p>
         <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
             Zdroj: Register adries MV SR

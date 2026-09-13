@@ -30,8 +30,9 @@ const seat: SeatLocation = {
 
 describe('formatRadius', () => {
     it('keeps metres below a kilometre and switches to kilometres above it', () => {
-        // The stored radii run 270 m to 8 717 m, so both branches are ordinary
-        // values here rather than edge cases.
+        // The stored radii run 50 m (a street's floor, `MIN_STREET_RADIUS_M`)
+        // to 8 717 m (the widest PSČ), so both branches are ordinary values
+        // here rather than edge cases.
         expect(formatRadius(270)).toBe('±270 m');
         expect(formatRadius(737)).toBe('±737 m');
         expect(formatRadius(1000)).toBe('±1,0 km');
@@ -92,5 +93,33 @@ describe('SeatLocationCard', () => {
         render(<SeatLocationCard seat={seat} />);
 
         expect(screen.getByText(/Register adries MV SR/)).toBeInTheDocument();
+    });
+
+    it('does not tell a building seat about a circle the map does not draw', () => {
+        // The failure this guards against is the card and the map on it saying
+        // opposite things: `SeatMap` draws a building as a bare point, so a
+        // sentence about "this circle", and the reason it gives -- that the
+        // register knows only the PSČ centre -- are both false here. The
+        // register is precisely what placed it on the building.
+        render(<SeatLocationCard seat={{...seat, radiusM: 0, precision: 'building'}} />);
+
+        expect(screen.getByText('presná adresa budovy')).toBeInTheDocument();
+        expect(screen.getByText(/skutočný adresný bod/)).toBeInTheDocument();
+        expect(screen.queryByText(/90 % adries/)).not.toBeInTheDocument();
+        // A radius of 0 printed as a measurement would read as "we measured it".
+        expect(screen.queryByText(/±0 m/)).not.toBeInTheDocument();
+    });
+
+    it('gives a street seat the street\'s own radius, not the PSČ\'s', () => {
+        // A street ring is that street's spread. Saying "90 % of the addresses
+        // with PSČ 82109" would put the PSČ's number on the street's circle --
+        // the two are different populations and different widths.
+        render(<SeatLocationCard seat={{...seat, radiusM: 184, precision: 'street'}} />);
+
+        const precision = screen.getByText(/· presnosť/);
+        expect(precision).toHaveTextContent('stred ulice');
+        expect(precision).toHaveTextContent('±184 m');
+        expect(screen.getByText(/90 % adries na tejto ulici/)).toBeInTheDocument();
+        expect(screen.queryByText(/s PSČ 82109/)).not.toBeInTheDocument();
     });
 });

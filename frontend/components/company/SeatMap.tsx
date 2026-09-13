@@ -1,5 +1,5 @@
 /**
- * The seat on an OpenStreetMap map: a centroid, and the circle that stops it lying.
+ * The seat on an OpenStreetMap map: one glyph, shaped by how much we actually know.
  *
  * This drew Google Maps until now. Google cannot be used here without a billing
  * account and a card on file -- since March 2025 the free monthly calls still sit
@@ -21,17 +21,22 @@
  * Three decisions survive the change unaltered, because they were about the data
  * rather than about Google:
  *
- * - **A circle, centred on a dot.** The coordinate is a PSČ centroid, a median
- *   1 980 m from its own address points, so the circle is the claim and the dot
- *   only marks what it is centred on. That is also why the dot is a plain dot:
- *   a map pin's point names a doorstep, and we do not have one.
- * - **The zoom is computed from the radius**, not fixed. Our radii run 270 m to
- *   8 717 m; one zoom for all of them would either hide the circle or shrink it
- *   to a dot, and either way the reader would misread the precision.
+ * - **The circle is a claim, not a decoration.** It was drawn because the
+ *   coordinate used to be a PSČ centroid -- a median 1 980 m from its own address
+ *   points -- so the circle was the claim and the dot only marked what it was
+ *   centred on. That is still true for a PSČ, and still true for a street. It is
+ *   no longer true for the **78,6 %** of companies the MV SR register places on
+ *   their own building: those get the point alone, because there is nothing left
+ *   to be uncertain about. See `seatData`.
+ * - **The zoom is computed from the radius**, not fixed. Our radii run 50 m (a
+ *   street's floor, `MIN_STREET_RADIUS_M`) to 8 717 m (the widest PSČ); one zoom
+ *   for all of them would either hide the circle or shrink it to a dot, and
+ *   either way the reader would misread the precision.
  *   `fitBounds()` answers the same question, but it reads the container's layout,
  *   and this card can render before its box has been laid out -- so the
  *   arithmetic stays in our hands, and `zoomFor` is exported so it can be tested
- *   without a map at all.
+ *   without a map at all. A building has no radius to fit, and `zoomFor` clamps
+ *   it to the closest zoom, which is what a doorstep wants.
  * - **`scrollZoom` off.** The card sits inside a long page, and a map that
  *   captures the wheel traps the reader mid-scroll.
  *
@@ -90,6 +95,20 @@ const MAX_ZOOM = 16;
 
 const BRAND = '#2563eb';
 
+/**
+ * What the map is, said to a screen reader in the same terms the glyph is drawn in.
+ *
+ * Naming only the PSČ would describe the *address* rather than the map, and for
+ * four fifths of companies it would also be the weaker claim than the one drawn:
+ * a reader told "okolia sídla" over a building's own doorstep is being told the
+ * map is vaguer than it is, which is the same failure as the circle was.
+ */
+const SEAT_LABEL: Record<SeatLocation['precision'], string> = {
+    building: 'Mapa sídla — presná adresa budovy',
+    street: 'Mapa sídla — ulica, číslo budovy známe nie je',
+    postal_code: 'Mapa okolia sídla — známe je len PSČ',
+};
+
 /** How long the tiles get, once a style is on the map, before we say so. */
 const TILE_TIMEOUT_MS = 8000;
 
@@ -131,28 +150,52 @@ export const zoomFor = (seat: SeatLocation) => {
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(ideal)));
 };
 
-/** What a drawn map depends on: the identity of the seat, not the object. */
+/**
+ * What a drawn map depends on: the identity of the seat, not the object.
+ *
+ * `precision` is in the key because it decides the *shape*. Leaving it out would
+ * make a re-match that moved a company from a street to its own building -- same
+ * point, 0 m instead of a street's radius -- a no-op on a map already drawn.
+ */
 const keyOf = (seat: SeatLocation) =>
-    `${seat.psc}:${seat.lat}:${seat.lon}:${seat.radiusM}`;
+    `${seat.precision}:${seat.psc}:${seat.lat}:${seat.lon}:${seat.radiusM}`;
 
 /**
- * The ring and the dot, as one collection so they share a source.
+ * The one glyph, whose shape is the claim: a bare point, or a point inside a ring.
+ *
+ * `precision` decides, and it is the backend's answer rather than a threshold on
+ * `radiusM` invented here. A `building` really is one point -- the register's own
+ * address point for that house number -- so it is drawn as a point and **nothing
+ * else**; a ring around it would be the decoration this map was asked to stop
+ * drawing. `street` and `postal_code` are areas, so they keep the ring, and the
+ * radius is what separates them: a street's 90th-percentile spread is tens to
+ * hundreds of metres (floored at 50 m so one known point cannot be drawn as a
+ * pin), a PSČ's is 270 m to 8 717 m.
+ *
+ * Filtering the polygon out here rather than relying on `radiusM: 0` to draw a
+ * degenerate ring is deliberate. `circlePolygon(centre, 0)` produces a valid but
+ * zero-area polygon, which MapLibre *usually* renders as nothing -- and "usually"
+ * is not a property worth depending on for a line layer with round joins.
  *
  * Longitude first: GeoJSON positions are `[x, y]`, and getting that backwards
  * puts Slovak companies in the Indian Ocean -- a mistake that draws perfectly and
  * is therefore worth naming here.
  */
-const seatData = (seat: SeatLocation): FeatureCollection => ({
-    type: 'FeatureCollection',
-    features: [
-        circlePolygon({ lat: seat.lat, lon: seat.lon }, seat.radiusM),
-        {
-            type: 'Feature',
-            properties: {},
-            geometry: { type: 'Point', coordinates: [seat.lon, seat.lat] },
-        },
-    ],
-});
+const seatData = (seat: SeatLocation): FeatureCollection => {
+    const features: FeatureCollection['features'] = [];
+
+    if (seat.precision !== 'building') {
+        features.push(circlePolygon({ lat: seat.lat, lon: seat.lon }, seat.radiusM));
+    }
+
+    features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates: [seat.lon, seat.lat] },
+    });
+
+    return { type: 'FeatureCollection', features };
+};
 
 /**
  * Three layers, no filters: each type draws only the geometry it can draw, so the
@@ -190,6 +233,15 @@ const SEAT_LAYERS: LayerSpecification[] = [
         },
     },
 ];
+
+/**
+ * The ids of our own layers, so a question about the *tiles* can exclude them.
+ *
+ * Derived from `SEAT_LAYERS` rather than written out again: the watchdog below
+ * asks the map what reached the screen, and the answer has to be about the base
+ * style rather than about the dot we drew on top of it.
+ */
+const SEAT_LAYER_IDS = new Set(SEAT_LAYERS.map((layer) => layer.id));
 
 const message = (text: string) => (
     <div className="flex h-full items-center justify-center bg-gray-50 px-4 text-center text-xs text-gray-500 dark:bg-slate-900 dark:text-gray-400">
@@ -341,10 +393,10 @@ export const SeatMap: React.FC<SeatMapProps> = ({ seat }) => {
                     giveUp(NO_TILES);
                     return;
                 }
-                // The source loaded but the viewport holds nothing. Our seat is
+                // The source loaded but the base style drew nothing. Our seat is
                 // always a real Slovak PSČ at zoom 10 or closer, where every tile
-                // carries roads, so an empty viewport is the empty-tile
-                // signature rather than a legitimately blank patch of map.
+                // carries roads, so an empty screen is the empty-tile signature
+                // rather than a legitimately blank patch of map.
                 //
                 // It has to be `queryRenderedFeatures` that answers this, and the
                 // distinction is not cosmetic. `querySourceFeatures` reads the
@@ -354,9 +406,36 @@ export const SeatMap: React.FC<SeatMapProps> = ({ seat }) => {
                 // as first written condemned every healthy map and blamed the tile
                 // source for it. The question here is "did anything reach the
                 // screen", and only this call asks it.
+                //
+                // Scoped to the style's own layers, and that part is the fix for a
+                // subtler version of the same mistake: with no `layers` option the
+                // call queries *every* source in the viewport, including the seat
+                // overlay added a few lines above, whose dot sits at the centre.
+                // A map drawing our dot and nothing else therefore answered
+                // "1 feature" -- so the exact failure this sentence was written
+                // for (HTTP 200, zero-byte body, `x-ofm-debug: empty tile`)
+                // reached the reader as a blank canvas holding one blue dot and
+                // no message. Excluding our own layers leaves the question the
+                // right one: did the *tiles* draw?
                 let features: unknown[] = [];
                 try {
-                    features = instance.queryRenderedFeatures();
+                    const style = instance.getStyle();
+                    const baseLayers = (style?.layers ?? [])
+                        .map((layer) => layer.id)
+                        .filter((id) => !SEAT_LAYER_IDS.has(id));
+                    // Silence here, not `NO_DATA`, and the difference is which
+                    // claim the message makes. `NO_DATA` says the *tiles* came
+                    // back empty; a layer-less style says nothing about the tiles
+                    // at all, so using it would blame the source for something it
+                    // did not do -- the same mistake the paragraph above records
+                    // `querySourceFeatures` making. The realistic way to read an
+                    // empty list here is a `setStyle` in flight (the theme
+                    // toggle), where the next style re-arms this watchdog anyway
+                    // and a message would only flash over a map that is fine.
+                    if (!baseLayers.length) return;
+                    features = instance.queryRenderedFeatures(undefined, {
+                        layers: baseLayers,
+                    });
                 } catch {
                     // The style went away mid-check; nothing to report.
                     return;
@@ -407,7 +486,7 @@ export const SeatMap: React.FC<SeatMapProps> = ({ seat }) => {
             <div
                 ref={container}
                 role="region"
-                aria-label={`Mapa okolia sídla, PSČ ${seat.psc}`}
+                aria-label={`${SEAT_LABEL[seat.precision]}${seat.psc ? `, PSČ ${seat.psc}` : ''}`}
                 className="h-full w-full"
             />
             {/*

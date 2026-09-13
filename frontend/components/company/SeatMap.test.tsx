@@ -28,9 +28,12 @@ const g = vi.hoisted(() => {
     type Options = Record<string, unknown>;
     type Handler = (event: unknown) => void;
 
+    /** Stand-ins for the layers the style URL brings, which we never add ourselves. */
+    const BASE_LAYER_IDS = ['background', 'water', 'roads'];
+
     const state = {
         maps: [] as FakeMap[],
-        /** What `queryRenderedFeatures` answers; the empty case is a test. */
+        /** What the *tiles* drew, i.e. the base style's own features. */
         renderedFeatures: [{}] as unknown[],
         /** Every `setWorkerUrl` argument. The module calls it once, on import. */
         workerUrls: [] as unknown[],
@@ -55,7 +58,9 @@ const g = vi.hoisted(() => {
         readonly handlers = new Map<string, Handler[]>();
         readonly controls: Array<{control: unknown; position: string}> = [];
         readonly sources = new Map<string, FakeGeoJSONSource>();
-        readonly layers: unknown[] = [];
+        readonly layers: Array<{id: string}> = [];
+        /** Every `queryRenderedFeatures` options argument, in order. */
+        readonly queries: Array<{layers?: string[]} | undefined> = [];
         /** Every `setStyle` argument, in order. The constructor's is not one. */
         readonly styles: unknown[] = [];
         readonly jumps: unknown[] = [];
@@ -92,8 +97,20 @@ const g = vi.hoisted(() => {
             return this.sources.get(id);
         }
 
-        addLayer(layer: unknown): void {
+        addLayer(layer: {id: string}): void {
             this.layers.push(layer);
+        }
+
+        /**
+         * The style's layers: the base ones the style URL brought, then ours.
+         *
+         * The distinction is the whole reason this method exists here. A real
+         * map has both, and `queryRenderedFeatures` without a `layers` filter
+         * sees both -- which is how our own dot came to answer a question that
+         * was supposed to be about the tiles.
+         */
+        getStyle(): {layers: Array<{id: string}>} {
+            return {layers: [...BASE_LAYER_IDS.map((id) => ({id})), ...this.layers]};
         }
 
         setStyle(style: unknown): void {
@@ -108,8 +125,24 @@ const g = vi.hoisted(() => {
             this.jumps.push(options);
         }
 
-        queryRenderedFeatures(): unknown[] {
-            return state.renderedFeatures;
+        queryRenderedFeatures(
+            _geometry?: unknown,
+            options?: {layers?: string[]},
+        ): unknown[] {
+            this.queries.push(options);
+            const mine = new Set(this.layers.map((layer) => layer.id));
+            const asked = options?.layers;
+            if (asked) {
+                // Scoped: only what the named layers drew. Asking for the base
+                // layers alone is what makes this answer about the tiles.
+                const base = asked.some((id) => !mine.has(id)) ? state.renderedFeatures : [];
+                const ours = asked.some((id) => mine.has(id)) && this.sources.size ? [{}] : [];
+                return [...base, ...ours];
+            }
+            // Unscoped, as the real call is: every source in the viewport,
+            // including the seat dot we drew ourselves. This is the answer that
+            // made the first version of the guard unable to fire.
+            return [...state.renderedFeatures, ...(this.sources.size ? [{}] : [])];
         }
 
         remove(): void {
@@ -346,6 +379,67 @@ describe('SeatMap', () => {
         expect(ringHeightM(data)).toBeCloseTo(2 * 737, -2);
     });
 
+    it('draws a building as a bare point, with no ring at all', async () => {
+        // The whole point of the change. 78,6 % of companies sit on a known
+        // building, and a circle around one is the decoration this map was
+        // asked to stop drawing -- so the assertion is the *absence* of the
+        // polygon, not merely a zero radius that happens to render as nothing.
+        draw({...seat, radiusM: 0, precision: 'building'});
+        const instance = await drawnMap();
+
+        const data = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
+        expect(data.features).toHaveLength(1);
+        expect(data.features[0].geometry.type).toBe('Point');
+        expect(data.features.some((f) => f.geometry.type === 'Polygon')).toBe(false);
+    });
+
+    it('draws a street as a point inside its measured spread', async () => {
+        // A street is an area, so it keeps the ring -- and the ring is that
+        // street's own 90th percentile rather than a constant, so a wrong
+        // number here is a wrong claim about a specific road.
+        draw({...seat, radiusM: 184, precision: 'street'});
+        const instance = await drawnMap();
+
+        const data = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
+        expect(data.features).toHaveLength(2);
+        expect(ringHeightM(data)).toBeCloseTo(2 * 184, -2);
+    });
+
+    it('names the precision it drew, not the address it looked up', async () => {
+        // A screen reader told "okolia sídla" over a building's own doorstep is
+        // being told the map is vaguer than it is -- the same failure as the
+        // circle, in words.
+        draw({...seat, radiusM: 0, precision: 'building'});
+        const region = await screen.findByRole('region');
+
+        expect(region.getAttribute('aria-label')).toContain('presná adresa budovy');
+        expect(region.getAttribute('aria-label')).toContain('82109');
+    });
+
+    it('redraws when only the precision changed', async () => {
+        // Every other field is identical on purpose -- same point, same PSČ,
+        // same radius -- so the precision is the only thing the redraw can be
+        // attributed to. `street` at 0 m is not a value the backend produces;
+        // that is the point, since removing every other difference is what
+        // makes this a test of the key rather than of the radius.
+        const {rerender} = draw({...seat, radiusM: 0, precision: 'street'});
+        const instance = await drawnMap();
+
+        const before = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
+        expect(before.features).toHaveLength(2);
+
+        rerender(
+            <ThemeProvider>
+                <SeatMap seat={{...seat, radiusM: 0, precision: 'building'}} />
+            </ThemeProvider>,
+        );
+
+        await waitFor(() => {
+            const after = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
+            expect(after.features).toHaveLength(1);
+        });
+    });
+
     it('puts the credits on the map as links, visible rather than collapsed', async () => {
         // A licence obligation, not decoration: OpenStreetMap's attribution
         // guidelines ask for the credit to be readable by anyone looking at the
@@ -477,8 +571,13 @@ describe('SeatMap', () => {
         //
         // Which is why this is the *rendered* features that decide it. The call
         // that reads the source instead answers 0 on a map that is visibly
-        // drawing, so a guard built on it fires on every healthy map -- the bug
-        // this fake now makes unrunnable by answering only the honest question.
+        // drawing, so a guard built on it fires on every healthy map.
+        //
+        // And the query has to be scoped to the style's own layers, which is the
+        // second half of the same mistake: unscoped, it answers with every source
+        // in the viewport, and by the time the watchdog runs our seat dot is on
+        // the map. The fake reproduces that -- unscoped it returns the dot, so a
+        // guard that forgot the filter would read 1 and never fire here.
         vi.useFakeTimers();
         g.state.renderedFeatures = [];
         draw();
@@ -494,6 +593,11 @@ describe('SeatMap', () => {
         });
 
         expect(screen.getByText(/Dlaždice prišli prázdne/)).toBeInTheDocument();
+        // Asked by name, and never for our own layers: the dot is not evidence
+        // that the tiles arrived.
+        const query = mapAt().queries.at(-1);
+        expect(query?.layers).toBeDefined();
+        expect(query?.layers).not.toContain(`${SEAT_SOURCE}-dot`);
     });
 
     it('does not cry wolf when the tiles do arrive', async () => {

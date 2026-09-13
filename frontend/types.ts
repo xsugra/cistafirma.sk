@@ -112,10 +112,31 @@ export interface Address {
 export interface SeatLocation {
   lat: number;
   lon: number;
-  /** Metres. Between 270 m and 8 717 m across our 1 410 areas. */
+  /**
+   * Metres, and zero means "no circle at all".
+   *
+   * `postal_code` carries the `PostalCodeArea` radius (270 m to 8 717 m across
+   * our 1 410 areas). `street` carries the 90th-percentile distance from the
+   * street's own address points, so it is a measured spread rather than a
+   * constant. `building` is 0: the point is the building, and there is no
+   * uncertainty left to draw.
+   */
   radiusM: number;
   psc: string;
-  precision: 'postal_code';
+  /**
+   * What the drawn glyph is allowed to claim, decided by `seat_precision` on
+   * the backend -- not by the frontend guessing from the radius.
+   *
+   * The three differ in kind, not in degree: a building is a point on a
+   * doorstep, a street is a spread of points along a road, and a PSČ is an area
+   * that contains the company somewhere. Equal-looking glyphs at different
+   * zooms would read as the same confidence.
+   *
+   * Not to be confused with the backend's `seat_tier`, which is *which*
+   * matching tier answered (`psc_ulica_orient`, …). That is evidence for us;
+   * this is the sentence the reader gets.
+   */
+  precision: 'building' | 'street' | 'postal_code';
 }
 
 export interface Debt {
