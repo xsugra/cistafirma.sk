@@ -1012,8 +1012,8 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   `celery`, `ruz_full`, `orsr` a `financials` ostávajú na 50 000 (vyprázdňujú
   sa do nuly), `insurance` má vlastný `CISTAFIRMA_QUEUE_WARN_DEPTH_INSURANCE`
   s defaultom **144 000** — desať tickov, teda päť dní odtokovej kapacity,
-  rádovo nad zdedenou pílou a ~58× pod záplavou z 12. 9. (8,4 mil. správ za
-  deň). Precedencia zostala: explicitný `CISTAFIRMA_QUEUE_WARN_DEPTH` platí
+  zhruba dvojnásobok vrcholu zdedenej píly a ~58× pod záplavou z 12. 9.
+  (8,4 mil. správ za deň). Precedencia zostala: explicitný `CISTAFIRMA_QUEUE_WARN_DEPTH` platí
   ďalej pre **všetky** fronty vrátane `insurance` — per-frontová premenná je
   len konkrétnejšia a vyhrá pre svoju frontu. Overené tromi behmi
   s prepísanými prahmi a potom naostro: `Operational controls: 1 unmet,

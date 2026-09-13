@@ -69,12 +69,14 @@ section() { printf '\n== %s\n' "$*"; }
 # designed, and a control that is always red is one nobody reads.
 #
 # So the insurance bound sits where a backlog stops being a backlog: ten ticks,
-# i.e. five days of drain capacity. That is an order of magnitude above the
-# inherited sawtooth and ~58x below the 2026-09 flood (8.4 M messages enqueued in
-# a day, against 14 400 drained), so it fires on a flood or on a drain stalled
-# for days -- and on nothing else. It cannot tell those two apart, and it does
-# not try to: whether the drained work still *achieves* anything is Source
-# health's verdict, and depth has never been able to answer it.
+# i.e. five days of drain capacity. That is about twice the inherited sawtooth's
+# peak -- and, read the other way, what a drain outage of roughly three days
+# produces, since the dispatcher keeps adding 14 400 every tick while nothing
+# drains. It is also ~58x below the 2026-09 flood (8.4 M messages enqueued in a
+# day, against 14 400 drained). So it fires on a flood or on a drain stalled for
+# days, and on nothing else. It cannot tell those two apart, and it does not try
+# to: whether the drained work still *achieves* anything is Source health's
+# verdict, and depth has never been able to answer it.
 #
 # Precedence: an explicit per-queue override, then an explicit general override
 # (which has always meant "every queue", and still does), then the built-in

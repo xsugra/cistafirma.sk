@@ -286,8 +286,8 @@ rather than drained, and it sawtooths by one batch around whatever it inherited
 (measured 2026-09-13: ~54 000 before a dispatch, ~68 000 just after). Judged
 against the flat 50000 it warned permanently about a queue behaving as designed,
 which is how a gate teaches its reader to ignore it. 144000 is ten ticks, i.e.
-five days of drain capacity: an order of magnitude above that sawtooth and far
-below the 2026-09 flood of 8.4 M messages in a day.
+five days of drain capacity: about twice that sawtooth's peak, and far below the
+2026-09 flood of 8.4 M messages in a day.
 
 An explicit `CISTAFIRMA_QUEUE_WARN_DEPTH` still applies to every queue,
 `insurance` included; the per-queue variable is the more specific override and
