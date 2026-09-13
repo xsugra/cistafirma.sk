@@ -1,4 +1,6 @@
 import logging
+from collections import defaultdict
+from datetime import date
 
 from django.conf import settings
 from django.core.cache import cache
@@ -9,6 +11,7 @@ from rest_framework.views import APIView
 
 from companies.models import Company
 from companies.throttles import OrsrPersonThrottle
+from .identity import PersonEvidence, base_name, cluster_evidence
 from .models import Person, PersonCompanyRelation, normalize_name
 
 logger = logging.getLogger(__name__)
@@ -17,6 +20,20 @@ logger = logging.getLogger(__name__)
 #: the graph. A common surname matches thousands of people in this database.
 MAX_PERSON_RESULTS = 50
 MIN_QUERY_LENGTH = 2
+
+#: Rows read to find at most `MAX_PERSON_RESULTS` people.
+#:
+#: A person costs one row in the common case, so this is generous -- but it is
+#: not unbounded, because clustering does not belong in the path of a keystroke
+#: and a two-letter query matches 20 050 rows. When the window is short of the
+#: match count, the answer says how many *people* it found is unknown rather
+#: than reporting the count it saw (see `total_people`).
+CLUSTER_SCAN_LIMIT = 300
+
+#: Rows read to find the people one row belongs to, for the person page and the
+#: graphs. Also a bound, and also a disclosed under-merge: it can leave a
+#: sibling out, never pull a stranger in.
+CLUSTER_CANDIDATE_LIMIT = 500
 
 
 def _coverage() -> dict:
@@ -58,6 +75,141 @@ def _relation_payload(rel) -> dict:
     }
 
 
+def _companies_by_person(person_ids):
+    """Which companies each row has a relation to, in one query rather than one
+    per row. The values are what identity resolution compares."""
+    companies = defaultdict(set)
+    for person_id, company_id in (
+        PersonCompanyRelation.objects
+        .filter(person_id__in=person_ids)
+        .values_list("person_id", "company_id")
+    ):
+        companies[person_id].add(company_id)
+    return companies
+
+
+def _cluster_persons(persons):
+    """Group rows into people.
+
+    Returns the clusters and the row objects keyed by id. Takes a materialised
+    list rather than a queryset: resolving a person reads each row several
+    times, and a queryset re-evaluated per read is how a page turns into
+    hundreds of queries.
+    """
+    by_id = {person.id: person for person in persons}
+    companies = _companies_by_person(list(by_id))
+    clusters = cluster_evidence(
+        PersonEvidence(
+            id=person.id,
+            name=person.name,
+            address=person.address,
+            person_ico=person.person_ico,
+            companies=companies.get(person.id, ()),
+        )
+        for person in persons
+    )
+    return clusters, by_id
+
+
+def _cluster_for(person):
+    """The rows we believe are the same human as `person`.
+
+    Candidates are found the way search finds them -- every token of the name
+    has to appear -- and `base_name` equality then does the rest, because the
+    title is not part of a name and `name_normalized` keeps it.
+    """
+    tokens = base_name(person.name).split()
+    if not tokens:
+        return [PersonEvidence(
+            id=person.id, name=person.name, address=person.address,
+            person_ico=person.person_ico,
+        )], {person.id: person}
+
+    candidates = Person.objects.all()
+    for token in tokens:
+        candidates = candidates.filter(name_normalized__contains=token)
+    rows = list(candidates.order_by("id")[:CLUSTER_CANDIDATE_LIMIT])
+    if all(row.id != person.id for row in rows):
+        rows.append(person)
+
+    base = base_name(person.name)
+    rows = [row for row in rows if base_name(row.name) == base]
+
+    clusters, by_id = _cluster_persons(rows)
+    for members in clusters:
+        if any(m.id == person.id for m in members):
+            return members, by_id
+    return [PersonEvidence(
+        id=person.id, name=person.name, address=person.address,
+        person_ico=person.person_ico,
+    )], by_id
+
+
+def _relation_sort_key(item):
+    """Newest office first, unknown currency last.
+
+    Matches the queryset ordering these payloads come from, so a merged list
+    reads the same as an unmerged one. `date.min` stands in for a missing start
+    date, which is what `nulls_last` does in SQL.
+    """
+    return (
+        item["is_active"] is not None,
+        bool(item["is_active"]),
+        item["vznik_funkcie"] or date.min,
+    )
+
+
+def _is_richer(candidate, current) -> bool:
+    return (
+        (candidate["is_active"] is not None, len(candidate["role_display"] or ""))
+        > (current["is_active"] is not None, len(current["role_display"] or ""))
+    )
+
+
+def _relations_by_person(person_ids, role=""):
+    """Every relation of the given rows, grouped by the row it belongs to."""
+    relations = (
+        PersonCompanyRelation.objects
+        .filter(person_id__in=person_ids)
+        .select_related("company")
+        .order_by(F("is_active").desc(nulls_last=True), "-vznik_funkcie")
+    )
+    if role:
+        relations = relations.filter(role=role)
+
+    grouped = defaultdict(list)
+    for rel in relations:
+        grouped[rel.person_id].append(_relation_payload(rel))
+    return grouped
+
+
+def _merged_relations(member_ids, grouped):
+    """One person's companies, gathered from every row we believe is them.
+
+    The claim is deduplicated because the cluster's rows are held to be one
+    human: the same company in the same role from the same date, arriving twice,
+    is one fact. The richer copy wins -- an `is_active` we actually read beats
+    the `null` that means we never read that company's history, and the
+    register's own wording beats the enum's label.
+    """
+    payloads = [
+        item for person_id in member_ids for item in grouped.get(person_id, [])
+    ]
+    payloads.sort(key=_relation_sort_key, reverse=True)
+
+    best = {}
+    order = []
+    for item in payloads:
+        key = (item["ico"], item["role"], item["vznik_funkcie"])
+        current = best.get(key)
+        if current is None:
+            best[key] = item
+            order.append(key)
+        elif _is_richer(item, current):
+            best[key] = item
+    return [best[key] for key in order]
+
+
 class CompanyGraphView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -84,19 +236,30 @@ class CompanyGraphView(APIView):
             "status": "Vymazaná" if company.datum_zrusenia else "Aktívna",
         }
 
-        relations = (
+        relations = list(
             PersonCompanyRelation.objects
             .filter(company=company)
             .select_related("person")
         )
 
+        # The document this company was read from may name one person under two
+        # sections, which is two rows and one human. The graph draws people, so
+        # it draws the clusters -- one node per person, with every relation's own
+        # role still on its own edge.
+        clusters, _by_id = _cluster_persons(
+            [rel.person for rel in relations]
+        )
+        cluster_of = {row.id: members for members in clusters for row in members}
+
         for rel in relations:
-            person = rel.person
-            person_node_id = f"person_{person.id}"
+            members = cluster_of[rel.person.id]
+            primary = members[0]
+            person_node_id = f"person_{primary.id}"
 
             if person_node_id not in nodes:
                 company_count = (
-                    person.company_relations
+                    PersonCompanyRelation.objects
+                    .filter(person_id__in=[m.id for m in members])
                     .values("company")
                     .distinct()
                     .count()
@@ -104,7 +267,7 @@ class CompanyGraphView(APIView):
                 nodes[person_node_id] = {
                     "id": person_node_id,
                     "type": "person",
-                    "label": person.name,
+                    "label": primary.name,
                     "rolesCount": company_count,
                 }
 
@@ -120,7 +283,7 @@ class CompanyGraphView(APIView):
 
             other_relations = (
                 PersonCompanyRelation.objects
-                .filter(person=person)
+                .filter(person_id__in=[m.id for m in members])
                 .exclude(company=company)
                 .select_related("company")
             )
@@ -171,6 +334,13 @@ class PersonSearchView(APIView):
     in 2019 is not in it at all. Ours searches a normalised column, so `kovac`
     finds `Kováč`, and it reads the relations we hold with their dates.
 
+    One answer per person, not per row. The register renders the same officer
+    under two sections of one document, which our extractor stores as two rows --
+    so before this grouped them, searching `vacha` answered with the same man
+    three times. The rows are still all there and each result says how many it
+    gathered; see `connections.identity` for why they are grouped at read time
+    rather than merged.
+
     What it does not do is pretend to be complete. Every response carries the
     coverage counts, because 19 906 companies out of 445 626 means most names
     return nothing -- and a search that returns an empty list without saying
@@ -189,6 +359,7 @@ class PersonSearchView(APIView):
                 "query": query,
                 "results": [],
                 "total_matches": 0,
+                "total_people": None,
                 "truncated": False,
                 "detail": (
                     f"Zadajte aspoň {MIN_QUERY_LENGTH} znaky."
@@ -215,25 +386,27 @@ class PersonSearchView(APIView):
         persons = persons.distinct()
 
         total = persons.count()
-        persons = persons.order_by("name", "id")[:MAX_PERSON_RESULTS]
+        window = list(persons.order_by("name", "id")[:CLUSTER_SCAN_LIMIT])
+        clusters, by_id = _cluster_persons(window)
+        shown = clusters[:MAX_PERSON_RESULTS]
+
+        grouped = _relations_by_person(
+            [m.id for members in shown for m in members], role
+        )
 
         results = []
-        for person in persons:
-            person_relations = (
-                PersonCompanyRelation.objects
-                .filter(person=person)
-                .select_related("company")
-                .order_by(F("is_active").desc(nulls_last=True), "-vznik_funkcie")
-            )
-            if role:
-                person_relations = person_relations.filter(role=role)
-
+        for members in shown:
+            primary = by_id[members[0].id]
             results.append({
-                "id": person.id,
-                "name": person.name,
-                "title": person.title,
-                "person_ico": person.person_ico,
-                "companies": [_relation_payload(rel) for rel in person_relations],
+                "id": primary.id,
+                "name": primary.name,
+                "title": primary.title,
+                "person_ico": primary.person_ico,
+                # How many stored rows this one answer gathered. One for the
+                # common case; more is the register having written the same
+                # person twice, and saying so is what keeps the grouping honest.
+                "records": len(members),
+                "companies": _merged_relations([m.id for m in members], grouped),
             })
 
         return Response({
@@ -241,7 +414,12 @@ class PersonSearchView(APIView):
             "role": role,
             "results": results,
             "total_matches": total,
-            "truncated": total > len(results),
+            # `null` when the window stopped short of the match count: how many
+            # distinct people are in the part we did not read is not something
+            # this can know, and reporting the count it saw would be a smaller
+            # number dressed as an answer. Same distinction as `coverage`.
+            "total_people": len(clusters) if len(window) == total else None,
+            "truncated": len(window) < total or len(clusters) > MAX_PERSON_RESULTS,
             "coverage": _coverage(),
         })
 
@@ -258,22 +436,29 @@ class PersonDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        relations = (
-            PersonCompanyRelation.objects
-            .filter(person=person)
-            .select_related("company")
-            # Unknown (`null`) sorts last rather than first: in Postgres a
-            # descending sort puts nulls first, which would open the list with
-            # the rows we know least about.
-            .order_by(F("is_active").desc(nulls_last=True), "-vznik_funkcie")
-        )
+        members, by_id = _cluster_for(person)
+        member_ids = [m.id for m in members]
 
         return Response({
             "id": person.id,
             "name": person.name,
             "title": person.title,
             "person_ico": person.person_ico,
-            "companies": [_relation_payload(rel) for rel in relations],
+            "records": len(members),
+            # The rows this page merged, with the address each one carries. Not
+            # decoration: the grouping is a judgement about identity, and one
+            # that is wrong has to be visible to the reader it is wrong about.
+            "members": [
+                {
+                    "id": member.id,
+                    "name": by_id[member.id].name,
+                    "address": by_id[member.id].address,
+                }
+                for member in members
+            ],
+            "companies": _merged_relations(
+                member_ids, _relations_by_person(member_ids)
+            ),
             "coverage": _coverage(),
         })
 
@@ -356,12 +541,16 @@ class PersonGraphView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        members, _by_id = _cluster_for(person)
+        member_ids = [m.id for m in members]
+
         nodes = {}
         edges = []
 
         person_node_id = f"person_{person.id}"
         company_count = (
-            person.company_relations
+            PersonCompanyRelation.objects
+            .filter(person_id__in=member_ids)
             .values("company")
             .distinct()
             .count()
@@ -375,7 +564,7 @@ class PersonGraphView(APIView):
 
         relations = (
             PersonCompanyRelation.objects
-            .filter(person=person)
+            .filter(person_id__in=member_ids)
             .select_related("company")
         )
 
