@@ -476,12 +476,37 @@ každý z nich začína **čerstvou overenou zálohou** (`make db-backup` +
 
 1. ✅ **Zhlukovanie pri čítaní** — `connections/identity.py` (čistý modul, nič
    neukladá), `views.py` (hľadanie, detail, oba grafy), `PersonRecordsNote`.
-2. ⏳ **`Person.birth_date`** (`DateField`) — aditívna migrácia; dnes je dátum
-   narodenia **uložený ako adresa** v 14 riadkoch.
-3. ⏳ **Zapisovač preberá namiesto vytvárania** — až po suchom behu, ktorý
-   ukáže, koľko riadkov by sa prestalo vytvárať.
-4. ⏳ **Dátum narodenia sa prestane ukladať ako adresa** — až keď je krok 3
-   naživo, inak by o ten údaj prišiel.
+2. ⏳ **`Person.birth_date`** (`DateField`) — aditívna migrácia.
+3. ❌ **Zapisovač preberá namiesto vytvárania — vypúšťam.** Takto napísaný krok
+   je to isté zlúčenie, len o poschodie nižšie: keby zapisovač pri zhode prebral
+   existujúci riadok, zmizne práve to, čo robí zhlukovanie bezpečným —
+   **vypísanie riadkov, z ktorých skupina vznikla**, aj možnosť ju vrátiť.
+   A keďže obe zložky jedného dokumentu nesú **rôzne adresy** (Vácha: jedna má
+   dátum narodenia, druhá ulicu), jedna z nich by sa ticho zahodila — práve tá
+   informácia, ktorá ich od seba odlišuje. Rozhodnutie z tohto cyklu znie
+   „nezlučovať"; krok 3 by ho obišiel.
+4. ⏳ **Dátum narodenia sa prestane ukladať ako adresa** — ale **závisí od
+   kroku 2, nie od kroku 3**. Ten údaj drží nový stĺpec; preberanie riadkov
+   s ním nemá nič spoločné. Pôvodná väzba bola nesprávna.
+
+**Prečo je dátum narodenia v adrese vôbec.** Nie je to zvláštny prípad, ale
+**záchytná vetva**: `orsr_scraper.py:468` ukladá do `address_lines` **všetko,
+čo nespozná** — spoznáva `Vznik funkcie`, `Iné identifikačné číslo`, `IČO`
+a zopár fráz (`osoba je…`), zvyšok ide do adresy. Riadok `Dátum narodenia: …`
+nespoznáva, tak sa z neho stane adresa.
+
+Zmerané 2026-09-13: dvojbodku v adrese má **27** riadkov a z toho **14** je
+dátum narodenia — a **vo všetkých 14 je dátum celá adresa**, teda dokument
+adresu nemal vôbec. Zvyšných 13 sú skutočné zahraničné adresy
+(`No: 1C`, `D: 3`, `Box: 453193`). Z toho dvoch vecí:
+
+- Oprava „riadok s dvojbodkou nie je adresa" je **odmietnutá** — zhodila by
+  13 platných adries.
+- `birth_date` dnes **nie je silnejší dôkaz totožnosti**, než sa zdalo:
+  register nám dátum ukáže len tam, kde adresu nemá. Krok 2 má teda cenu
+  „prestať sa vlámať do `address`", nie „lepšie spájať osoby". Či register dáva
+  dátum aj k adrese, z našich dát **nezistíme** — to by chcelo čítanie
+  z registra, nie dopyt do databázy.
 
 **Testy.** `connections/tests_identity.py` — 34 testov (holé funkcie aj API).
 Sada `connections` je **72 OK** (38 pôvodných + 34 nových); frontend 239 OK,
