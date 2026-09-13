@@ -81,7 +81,39 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 | `orsr` | 4 h | ORSR sync pre chýbajúce profily |
 | `financials` | 12 h | RUZ finančné výsledky per-company |
 | `insurance` | 12 h | Kontrola dlhov v poisťovniach (VŠZP, Soc. poisťovňa) |
+| `celery` (default) | 4 h | Plánovač dočítania histórie osôb — jednorazová oprava; prácu posiela na `orsr` |
 | `celery` (default) | 24 h | Aktualizácia FS dát, sektorové mediány, orchestračné a ad-hoc úlohy |
+
+> `refresh-person-history-every-4-hours` je **jednorazová, samovyprázdňujúca sa
+> oprava**: vyberá firmy, ktorých profil nemá v `structured` kľúč
+> `osoby_historia` (24 237 z 24 237 RPO profilov k 2026-09-13), a keďže ten istý
+> kľúč zapisuje aj nový čítač, po prečítaní posledného profilu už nenaplánuje
+> nič. **Riadok `PeriodicTask` sa vypína (nie maže) vtedy, keď
+> `refresh_person_history --dry-run` hlási 0.** Dávka 2 000 firiem každé 4 h
+> vychádza z toho, že queue `orsr` odtečie 15 requestov/min (~133 min na dávku),
+> takže sa stíhne vyprazdniť pred ďalším plánovaním aj s 500 firmami z
+> `sync-missing-orsr-profiles-every-4-hours`. Dispatcher beží na queue `celery`:
+> plánovač na queue, ktorú sám zaplavuje, čaká za vlastným backlogom.
+>
+> Prácu vykonáva `read_person_history`, **nie** `sync_company_orsr_data`, a to
+> je zámer. Tá druhá úloha je vstupný bod ORSR *monitoringu* a
+> `is_orsr_eligible_company` tam patrí: ORSR vedie len aktuálne záznamy, takže
+> sledovať zrušenú firmu znamená míňať cudzí server na odpoveď, ktorá sa už
+> nezmení. Či RPO vedie históriu osôb je **iná otázka** a RPO ju vedie celú —
+> kým na obe odpovedala tá istá podmienka, 92 z 24 227 čakajúcich profilov
+> (90 zrušených, 2 s právnou formou, ktorú ORSR nevedie) nemohlo kľúč získať
+> nikdy, populácia teda nemohla klesnúť na nulu a riadok by sa nedal vypnúť
+> s čistým svedomím. Overené naživo 2026-09-13: `31408834` (v likvidácii)
+> 16 záznamov / 15 ukončených väzieb, `31681271` 62 záznamov, dve cirkevné
+> organizácie s `pravna_forma = NULL` po 2 záznamoch — ani jedna nevrátila
+> „RPO o firme nevie".
+>
+> Kľúč `osoby_historia` je zároveň značka „prečítané", takže sa zapisuje **až
+> po** úspešnom zápise väzieb; ak extrakcia zlyhá, čítač ho z profilu zase
+> odoberie a firma sa vráti do populácie. Bez toho by profil s kľúčom a bez
+> väzieb vyzeral ako hotový — presne to sa stalo, keď chýbal stĺpec
+> `connections_person.name_normalized`: firma na svojej stránke ticho stratila
+> osoby a každý log riadok hovoril, že sync prebehol úspešne.
 
 > `compute-sector-benchmarks-daily` prepočítava mediány (`SectorBenchmark`),
 > proti ktorým sa na stránke firmy porovnávajú jej vlastné ukazovatele. Úloha

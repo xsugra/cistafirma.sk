@@ -89,8 +89,18 @@ REST_FRAMEWORK = {
         # the section withholds the list until a year is clicked, so ordinary
         # reading costs one call per year looked at.
         "documents": os.getenv('DOCUMENTS_THROTTLE_RATE', '120/hour'),
+        # One request to orsr.sk per uncached query, against an endpoint that
+        # answers a free-text name. Cached for `ORSR_PERSON_CACHE_SECONDS`, so
+        # this bounds traffic rather than reading; a person looking up names
+        # will not approach it.
+        "orsr_person": os.getenv('ORSR_PERSON_THROTTLE_RATE', '60/hour'),
     },
 }
+
+# How long a register person-search answer is reused. The register's own
+# search covers current records only and changes on the scale of days, so a
+# short window removes almost all repeat traffic at no cost to freshness.
+ORSR_PERSON_CACHE_SECONDS = int(os.getenv('ORSR_PERSON_CACHE_SECONDS', '900'))
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
@@ -386,10 +396,12 @@ CELERY_TASK_ROUTES = {
     'registers.tasks.resume_gap_repair': {'queue': 'ruz_full'},
     'registers.tasks.sync_company_orsr_data': {'queue': 'orsr'},
     'registers.tasks.schedule_missing_orsr_sync': {'queue': 'orsr'},
+    'registers.tasks.read_person_history': {'queue': 'orsr'},
     'registers.tasks.sync_company_financials_from_ruz': {'queue': 'financials'},
     'registers.tasks.schedule_ruz_financials_sync': {'queue': 'financials'},
     'registers.tasks.update_insurance_debt': {'queue': 'insurance'},
     'registers.tasks.schedule_insurance_debt_checks': {'queue': 'celery'},
+    'registers.tasks.schedule_person_history_resync': {'queue': 'celery'},
     'registers.tasks.force_check_all_companies_debts': {'queue': 'insurance'},
     'registers.tasks.update_fs_data_task': {'queue': 'celery'},
     'registers.tasks.sync_single_company_from_ruz': {'queue': 'celery'},
@@ -428,6 +440,38 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 14400.0,
         'args': [500],
         'options': {'expires': 14000.0, 'queue': 'orsr'},
+    },
+    # One-time repair, self-emptying: it selects companies whose profile has no
+    # `osoby_historia` (24 237 of them when this was written) and stops
+    # selecting anything once the last one has been read. Delete this entry and
+    # its `PeriodicTask` row when `refresh_person_history --dry-run` reports 0.
+    #
+    # 2 000 every 4 h, and both numbers are load-bearing:
+    #
+    # * The `orsr` queue drains at 15 requests a minute -- orsr.sk has no API and
+    #   this is somebody else's server. 2 000 tasks take 133 minutes to drain,
+    #   which leaves the queue empty well inside the 4 h interval even with the
+    #   500 companies the entry above adds to the same queue. Raising the batch
+    #   past ~3 000 would push the next dispatch of `schedule_missing_orsr_sync`
+    #   behind its own backlog -- the failure the insurance entry's comment
+    #   describes.
+    # * The pass is therefore ~48 h of wall clock, not the 27 h the requests
+    #   alone would take, because it shares the queue with that lane.
+    #
+    # `queue: celery`, not `orsr`: a dispatcher that waits behind the 2 000
+    # tasks it just queued would run hours late.
+    #
+    # The `expires` here is inert on this instance, and the arithmetic above does
+    # not depend on it: all nine `PeriodicTask` rows carry `expires=None` while
+    # their `args` and `queue` do match this dict (checked 2026-09-13), so
+    # `options` does not reach the row. It is set for a fresh install, where the
+    # row would be created from here. What bounds this lane in practice is the
+    # batch size against the drain rate, not an expiry.
+    'refresh-person-history-every-4-hours': {
+        'task': 'registers.tasks.schedule_person_history_resync',
+        'schedule': 14400.0,
+        'args': [2000],
+        'options': {'expires': 14000.0, 'queue': 'celery'},
     },
     # 2 000 companies every 12 h, not 500. The rotation walks the eligible
     # population (251 598 legal persons: forms 112/121/321/721/801/205, not

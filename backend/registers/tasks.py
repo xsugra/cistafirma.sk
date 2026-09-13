@@ -10,12 +10,12 @@ from .scrapers.vszp_debt import check_vszp_debt_get
 from .scrapers.soc_poist_debt import check_socpoist_debt
 from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi, apply_ruz_dates
-from .services.rpo_sync import RpoSyncService
+from .services.rpo_sync import RpoSyncService, pending_person_history
 from .services.ruz_financials_sync import PARSER_REVISION, sync_company_and_record
 from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
 from companies.models import Company, Watchlist, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
-from .models import CompanySyncStatus
+from .models import CompanySyncStatus, OrsrCompanyProfile
 from .services.sync_engine import (
     _classify_error,
     claim_ruz_job,
@@ -787,6 +787,84 @@ def orsr_sync_batch(limit: int) -> list[int]:
         candidates=_orsr_candidates().filter(orsr_profile__isnull=True),
         limit=limit,
     )
+
+
+def person_history_batch(limit: int) -> list[int]:
+    """Companies whose person history has never been read from the register.
+
+    The selection itself lives in `pending_person_history`, next to the key it
+    selects on, because two callers need it -- this rotation and
+    `refresh_person_history --dry-run` -- and a `--dry-run` that counts a
+    different population than the run dispatches is worse than no dry run.
+    """
+    return list(
+        pending_person_history().values_list("company_id", flat=True)[:limit]
+    )
+
+
+@shared_task(base=BaseSyncTask, queue='orsr', rate_limit='15/m')
+def read_person_history(company_id: int) -> str:
+    """Read one company's person history from the register and write it down.
+
+    A separate task from `sync_company_orsr_data` rather than a flag on it,
+    because the two ask different questions and the eligibility rule answers
+    only one of them. That task is the ORSR **monitoring** entry point, and
+    `is_orsr_eligible_company` belongs there: ORSR keeps current records, so
+    monitoring a dissolved company spends somebody else's server on an answer
+    that cannot change. Whether RPO holds a person history is a different
+    question with a different answer -- it holds all of it, ended functions
+    included -- and applying the monitoring rule to it was stranding 92 of the
+    24 227 profiles waiting for a first read (measured 2026-09-13; three
+    sampled, 16/62/30 person entries each). The population could never reach
+    zero, so the one-off repair could never be retired.
+
+    `queue='orsr'` and the same 15/min, though this calls RPO's API and not
+    ORSR's: it is the same rotation over the same companies, and a second rate
+    on one rotation would only make the drain arithmetic harder to state.
+    """
+    company = Company.objects.get(id=company_id)
+    profile = OrsrCompanyProfile.objects.filter(company=company).first()
+    if profile is None:
+        # Not reachable through `person_history_batch`, which selects profile
+        # ids -- but reachable by hand, and answering it beats an AttributeError.
+        return f"No ORSR profile for {company.ico}"
+
+    result = RpoSyncService().refresh_person_history(profile)
+    logger.info("Person history for %s: %s", company.ico, result)
+    return f"{company.ico}: {result}"
+
+
+@shared_task(queue='celery')
+def schedule_person_history_resync(limit: int = 2000):
+    """Re-read the person history for companies the old reader left blank.
+
+    Why this exists rather than a one-off command: the graph held 64 128
+    relations all asserting they were current, and the register's own record
+    says otherwise for at least the dissolved companies. Re-reading one company
+    at 15 requests a minute is 27 hours of background work, and work that long
+    has to survive a restart and finish without anyone watching it.
+
+    It stops on its own. The key it selects on is the key the new reader
+    writes, so when the last profile has been read this dispatches nothing and
+    the beat entry becomes a no-op -- there is no "completed" state to forget to
+    set. What it dispatches is `read_person_history`, not the ORSR monitoring
+    task, so that every company this selects can actually be marked: a profile
+    the worker refuses outright would be re-selected for ever and the
+    population would never empty.
+
+    `queue='celery'`, not `orsr`: this task queues the work rather than doing
+    it, and a dispatcher on the queue it floods waits behind its own 2 000 tasks
+    -- the failure the insurance entry's comment describes. The beat row says
+    `celery` too, but a row is DB state that a direct `.delay()` bypasses, so
+    the queue is declared here as well and routed in `CELERY_TASK_ROUTES`. All
+    three layers say the same thing on purpose.
+    """
+    company_ids = person_history_batch(limit)
+    for company_id in company_ids:
+        read_person_history.delay(company_id)
+
+    logger.info("Scheduled person-history resync for %s companies", len(company_ids))
+    return f"Scheduled person-history resync for {len(company_ids)} companies"
 
 
 @shared_task(queue='orsr')
