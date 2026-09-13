@@ -9,6 +9,14 @@ import { PersonCoverageNote } from '../components/person/PersonCoverageNote';
 import { PersonRecordsNote } from '../components/person/PersonRecordsNote';
 import { PersonRelationRow } from '../components/person/PersonRelationRow';
 import { OrsrRegisterGroup } from '../components/person/OrsrRegisterGroup';
+import {
+    ROLE_STATE_LINE,
+    ROLE_STATE_SENTENCE,
+    ROLE_STATE_WORD,
+} from '../components/person/roleState';
+
+/** The three states, from the answer we have to the one we do not. */
+const ROLE_STATES = ['current', 'ended', 'unknown'] as const;
 
 /**
  * One person, and every company we hold a relation for.
@@ -189,20 +197,27 @@ export const Person: React.FC = () => {
 
                     {/* The three answers the state column gives, spelled out. A
                         reader who meets „nevieme" once should not have to infer
-                        what it means from the row it sits in. */}
-                    <ul className="flex flex-wrap gap-x-5 gap-y-2 pt-1 text-xs text-gray-500 dark:text-gray-400">
-                        <li className="flex items-center gap-2">
-                            <span className="h-0.5 w-3.5 border-t-2 border-solid border-blue-500 dark:border-blue-400"></span>
-                            áno — register uvádza funkciu ako aktuálnu
-                        </li>
-                        <li className="flex items-center gap-2">
-                            <span className="h-0.5 w-3.5 border-t border-dashed border-gray-400 dark:border-gray-500"></span>
-                            nie — funkcia v registri skončila
-                        </li>
-                        <li className="flex items-center gap-2">
-                            <span className="h-0.5 w-3.5 border-t border-dotted border-gray-400 dark:border-gray-500"></span>
-                            nevieme — túto firmu sme ešte nečítali
-                        </li>
+                        what it means from the row it sits in.
+
+                        Both halves come from `roleState`, the one place they are
+                        written. This legend used to carry its own third copy of
+                        the `unknown` meaning -- „túto firmu sme ešte nečítali"
+                        -- and a relation is on this page only because we read
+                        that company, so the sentence was false about every row
+                        it labelled, including the one printed directly above it.
+                        What we have not read is the function's end: ORSR gives
+                        current records, and the ended ones arrive with the RPO
+                        history. */}
+                    <ul className="flex flex-col gap-1.5 pt-1 text-xs text-gray-500 sm:flex-row sm:flex-wrap sm:gap-x-5 sm:gap-y-2 dark:text-gray-400">
+                        {ROLE_STATES.map((state) => (
+                            <li key={state} className="flex items-center gap-2">
+                                <span
+                                    className={`h-0.5 w-3.5 shrink-0 ${ROLE_STATE_LINE[state]}`}
+                                    aria-hidden="true"
+                                ></span>
+                                {`${ROLE_STATE_WORD[state]} — ${ROLE_STATE_SENTENCE[state]}`}
+                            </li>
+                        ))}
                     </ul>
                 </div>
             </section>

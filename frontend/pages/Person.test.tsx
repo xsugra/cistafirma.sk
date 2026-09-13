@@ -4,6 +4,7 @@ import {Route, Routes} from 'react-router-dom';
 import {Person} from './Person';
 import {ApiError} from '../lib/apiClient';
 import {renderWithProviders} from '../test/testUtils';
+import {ROLE_STATE_SENTENCE, ROLE_STATE_WORD} from '../components/person/roleState';
 import type {PersonDetail} from '../types';
 
 const mocks = vi.hoisted(() => ({
@@ -189,6 +190,39 @@ describe('Person page', () => {
 
         await screen.findByText(/Osoby máme pre/);
         expect(screen.queryByText(/Zobrazujeme ich spolu/)).not.toBeInTheDocument();
+    });
+
+    it('describes the unknown state the way the row above it does', async () => {
+        // The legend under the list used to carry its own wording for this
+        // state -- „túto firmu sme ešte nečítali" -- while the row itself said
+        // the company had been read but not the function's end. A relation is on
+        // this page only because we read that company, so the legend was false
+        // about every row it labelled. One fact, one sentence: both now come
+        // from `roleState`, and this pins them together.
+        //
+        // (The register-search section does say „ak sme tie firmy ešte
+        // nečítali", and truly: that is about which companies our graph holds,
+        // not about a relation we are showing.)
+        mocks.api.getPerson.mockResolvedValue(person());
+
+        renderPerson();
+
+        await screen.findByText(/Osoby máme pre/);
+
+        // The legend's own line for this state -- the one `li` that opens with
+        // the word the badge prints.
+        const legendLine = screen.getByText(
+            (_, element) =>
+                element?.tagName === 'LI' &&
+                Boolean(element.textContent?.startsWith(`${ROLE_STATE_WORD.unknown} — `)),
+        );
+        expect(legendLine).toHaveTextContent(ROLE_STATE_SENTENCE.unknown);
+
+        // Once in the row that carries the state, once in the legend: two
+        // places, never two sentences.
+        expect(
+            screen.getAllByText(new RegExp(ROLE_STATE_SENTENCE.unknown)),
+        ).toHaveLength(2);
     });
 
     it('does not call the live register just by opening the page', async () => {
