@@ -6,6 +6,7 @@ import { api } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { ROUTES } from '../../constants';
 import { DetailItem } from './DetailItem';
+import { SeatLocationCard } from './SeatLocationCard';
 import { formatDate } from './helpers';
 import { exportCompanyPDF } from '../../utils/pdfExport';
 import type { LegalFormProfile } from '../../utils/legalFormProfile';
@@ -205,6 +206,13 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                     value={formatDate(orsrProfile?.orsr_aktualizacia_dat) || new Date(company.lastUpdatedFromSource).toLocaleString('sk-SK')}
                     icon="fa-sync-alt" />
             </div>
+            {/* Absent, not empty, when we cannot place the seat: 1,92 % of our
+                rows carry a PSČ the address register does not list, and a card
+                saying "poloha neznáma" would be a worse answer than the address
+                line above it already being the whole truth. Same shape as the
+                DIČ line, which also disappears rather than printing a label with
+                nothing after it. */}
+            {company.seatLocation && <SeatLocationCard seat={company.seatLocation} />}
         </div>
     );
 };

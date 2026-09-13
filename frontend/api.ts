@@ -426,6 +426,11 @@ export function mapCompanyResponse(data: any): Company {
       zipCode: data.psc || '',
       country: 'Slovenská republika',
     },
+    // Absent on search results, which is why this is `?? null` and not a
+    // required field of the response. The backend sends `null` rather than a
+    // fallback coordinate, and the two must stay distinguishable: a missing
+    // field would silently become "no map" for a company we could place.
+    seatLocation: data.seatLocation ?? null,
     lastUpdatedFromSource: data.datum_poslednej_upravy || new Date().toISOString(),
     // When we last read each debt source, or `null` for never. Read once here
     // and given to both consumers rather than letting the strip and the debts

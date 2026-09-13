@@ -32,6 +32,13 @@ export interface Company {
   status: 'Aktívna' | 'V likvidácii' | 'V konkurze' | 'Vymazaná';
   registrationDate: string;
   address: Address;
+  /**
+   * Where the seat is, as far as the address register can say. `null` for the
+   * 1,92 % of companies whose PSČ the register does not list, and for the three
+   * with no PSČ at all -- there the card is omitted rather than drawn as a
+   * guess. Search results carry no seat location, so they are `null` too.
+   */
+  seatLocation: SeatLocation | null;
   lastUpdatedFromSource: string;
   /**
    * Whether we have ever asked each source about this company, and when.
@@ -86,6 +93,29 @@ export interface Address {
   city: string;
   zipCode: string;
   country: string;
+}
+
+/**
+ * The registered seat as an area, not a point.
+ *
+ * We join our `psc` against the MV SR address register, which gives a centroid
+ * per PSČ. That centroid sits a median **1 980 m** from its own address points
+ * (p90 4 118 m, worst legitimate 8 709 m), so `radiusM` is the honest half of
+ * this contract: the circle that covers 90 % of that PSČ's address points. A
+ * consumer given only `lat`/`lon` would draw a marker claiming the accuracy of
+ * a building entrance.
+ *
+ * `null` on `Company` means "we cannot place this seat" -- no PSČ, or a PSČ the
+ * register does not list (1,92 % of our rows are post-office PSČ with no
+ * address point at all). It does **not** mean the company has no seat.
+ */
+export interface SeatLocation {
+  lat: number;
+  lon: number;
+  /** Metres. Between 270 m and 8 717 m across our 1 410 areas. */
+  radiusM: number;
+  psc: string;
+  precision: 'postal_code';
 }
 
 export interface Debt {

@@ -74,6 +74,10 @@ export const DEFAULT_COMPANY: Company = {
     status: 'Aktívna',
     registrationDate: '2010-01-01',
     address: {street: 'Hlavná 1', city: 'Bratislava', zipCode: '811 01', country: 'SK'},
+    // `null`, so the default fixture is the unplaced company. Most tests are
+    // about something else and should not have to mount a map -- one that wants
+    // the map opts in through `makeCompany({seatLocation: ...})`.
+    seatLocation: null,
     lastUpdatedFromSource: '2026-01-01T00:00:00Z',
     // Both sources read, so this fixture's empty `debts` is a finding and not a
     // gap. A fixture that left these null would make every unrelated test

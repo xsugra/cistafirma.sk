@@ -14,6 +14,17 @@ export const mockCompanyData: Company = {
     zipCode: '821 09',
     country: 'Slovenská republika',
   },
+  // The real imported area for PSČ 821 09, read out of `PostalCodeArea` rather
+  // than invented -- a mock with made-up coordinates would place the demo pin
+  // somewhere the register does not, which is the one thing this card must not
+  // do. 1 047 address points, 737 m, Bratislava-Ružinov.
+  seatLocation: {
+    lat: 48.14748,
+    lon: 17.14051,
+    radiusM: 737,
+    psc: '82109',
+    precision: 'postal_code',
+  },
   lastUpdatedFromSource: new Date().toISOString(),
   insuranceCheckedOn: '2026-09-10T00:00:00Z',
   taxCheckedOn: '2026-09-12T00:00:00Z',

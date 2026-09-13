@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../api', () => ({api: mocks.api}));
 vi.mock('../../utils/pdfExport', () => ({exportCompanyPDF: vi.fn()}));
+// The real map needs a laid-out container jsdom does not have; what this file
+// checks is whether the card is there at all.
+vi.mock('./SeatMap', () => ({SeatMap: () => null}));
 
 const ico = '48097781';
 
@@ -98,6 +101,37 @@ describe('CompanyHeader — Sledovať', () => {
         await user.click(screen.getByRole('button', {name: /Sledovať/}));
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Server je nedostupný.');
+    });
+});
+
+describe('CompanyHeader — sídlo na mape', () => {
+    const seat = {
+        lat: 48.14748,
+        lon: 17.14051,
+        radiusM: 737,
+        psc: '82109',
+        precision: 'postal_code' as const,
+    };
+
+    it('leaves the card out entirely when the seat cannot be placed', () => {
+        // 1,92 % of our rows carry a PSČ the address register does not list --
+        // post-office PSČ with no address point. The address line above is the
+        // whole truth for those, and a card reading "poloha neznáma" would be a
+        // worse answer than no card at all.
+        renderWithProviders(
+            <CompanyHeader company={makeCompany({ico, seatLocation: null})} profile={profile}/>,
+        );
+
+        expect(screen.queryByText('Sídlo na mape')).not.toBeInTheDocument();
+    });
+
+    it('shows the map card for a seat the register can place', () => {
+        renderWithProviders(
+            <CompanyHeader company={makeCompany({ico, seatLocation: seat})} profile={profile}/>,
+        );
+
+        expect(screen.getByText('Sídlo na mape')).toBeInTheDocument();
+        expect(screen.getByText(/· presnosť/)).toHaveTextContent('±737 m');
     });
 });
 
