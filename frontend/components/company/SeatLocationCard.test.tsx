@@ -5,7 +5,7 @@ import type {SeatLocation} from '../../types';
 
 /**
  * The map is mocked, and the boundary is deliberate: what this card owes the
- * reader is the radius and the sentence that explains it, not Leaflet. A test
+ * reader is the radius and the sentence that explains it, not Google Maps. A test
  * that mounted the real map would need a laid-out container jsdom does not
  * have, and would say nothing about the two things that can actually be wrong
  * here -- a radius that never reaches the drawing, and a sentence that does not

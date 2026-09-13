@@ -10,8 +10,17 @@
       "DOM.Iterable"
     ],
     "skipLibCheck": true,
+    // tsconfig has no `include`, so source files are picked up by default -- but
+    // `types` *replaces* the automatic @types inclusion, so every ambient
+    // package the app relies on has to be named here or its globals vanish.
+    // `google.maps` carries the `google` namespace that SeatMap.tsx annotates
+    // its map, circle and marker refs with. `vite/client`, which types
+    // `import.meta.env`, is pulled in by the triple-slash reference at the top of
+    // vite-env.d.ts instead -- it belongs next to the variable declarations it
+    // types, not here.
     "types": [
-      "node"
+      "node",
+      "google.maps"
     ],
     "moduleResolution": "bundler",
     "isolatedModules": true,
