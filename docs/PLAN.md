@@ -885,6 +885,38 @@ fronta 1 568 správ — § 2 už nameralo, že reštart pod záťažou ticho zho
 (sloty sú pri latencii väzbou, nie rate limit) je preto **neskoršia** zmena:
 až keď je `orsr = 0`.
 
+**Premerané 2026-09-13 21:16Z — a rýchlosť je na strope, len nie stále.**
+
+| | ~12:51 | 21:16 |
+|---|---|---|
+| RPO profily (`rpo_id`) | 24 712 | 25 171 |
+| prečítané (`osoby_historia`) | 2 489 | **3 748** |
+| čaká | 22 223 | **21 423** |
+| hotovo | 10,1 % | **14,9 %** |
+
+Za 8,4 h pribudlo 1 259 prečítaní, čo je 150/h — ale populácia za ten čas
+stúpla o 459, takže **čistý pokrok je 800 firiem za 8,4 h = 95/h**. To je tá
+istá pasca ako vyššie: prírastok a úbytok sa takmer rušia.
+
+Rozpad po minútach z logu workera (nie z fronty) ukazuje prečo:
+
+| okno | čítaní | /h |
+|---|---|---|
+| 18:00–20:00 (degradované) | 6 | ~3 |
+| 20:50–21:18 (28 min spojito) | 417 | **~894** |
+
+Od 20:50 ide worker **spojito 15/min** — presne na `rate_limit='15/m'`.
+Predtým len sporadické dávky oddelené dierami. 900/h je teda strop, nie
+priemer, a rozdiel medzi tými dvoma číslami je celý rozdiel medzi „hotovo
+o deň" a „hotovo o týždeň".
+
+**ETA.** 21 423 ÷ 894 = **24,0 h**, ak register vydrží. Dve korekcie: populácia
+rastie (+55/h), takže čistý odtok je ~840/h → **25,5 h**; a každá degradovaná
+hodina pripočíta toľko, koľko trvala (dnešná 18:00–20:00 stála ~2 h). Plánové
+„~25 h" v § 2 teda sedí — ale je to číslo postavené na **kapacite**, nie na
+dostupnosti zdroja. To je tá istá trieda predpokladu ako pri poisťovniach
+vyššie: dávka sa rovná odtoku na papieri a zdroj medzitým mlčí.
+
 ---
 
 ## 3. Čaká na prácu
