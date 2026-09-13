@@ -144,11 +144,46 @@ dôvodom):
 
 **Ešte spraviť:**
 
-- [x] Spustiť prvý beh po oprave — beží ako job #23 od 09:54
-- [ ] Overiť, že `zmenene_od` sa posunul a `ops-check` je zelený
+- [x] Spustiť prvý beh po oprave — bežal ako job #23 od 09:54
+- [x] Overiť, že `zmenene_od` sa posunul a `ops-check` je zelený
 - [x] Nezávislé overenie opravy (adversariálna revízia)
-- [ ] Reštartovať `celery_worker_ruz` po dokončení job #23 — worker drží starý
+- [x] Reštartovať `celery_worker_ruz` po dokončení job #23 — worker držal starý
       kód v pamäti, takže beatový beh by inak bežal po starom
+
+**Ako to dopadlo (2026-09-13).** Job #23: `09:54:43` → `11:57:35` UTC, teda
+**2 h 03 min**, `processed_items=45306`, `succeeded=37118`, `failed=1`,
+`skipped=1`. Behy #18–#22 mali predtým každý `processed_items=0` — to je celá
+porucha v jednom čísle. `zmenene_od` sa posunul **2026-08-04 → 2026-09-12**
+a `make ops-check` hlási `Sync jobs: 0 unmet`, okno `1d old OK`. Jediný unmet
+kontrola ostáva tá známa — nenamontovaný `/Volumes/CistaFirmaBackups`.
+
+**Ale tento beh nedokazuje to, čo by sa na prvý pohľad zdalo — a to je
+podstatné.** Okno posunul kód, ktorý **predchádza** novej poistke:
+
+- Worker proces sa reštartoval o `09:54:35` UTC, osem sekúnd predtým, než beat
+  dispatchol job #23 (`triggered_via=beat_schedule`). V tej chvíli bol na disku
+  `b7aa428` (09:53:47) — ale **nie** `d96c368` (11:27:34) ani `680c1b5`
+  (11:40:30). Oba vznikli **počas** behu a Python drží modul management commandu
+  v `sys.modules` od prvého importu, takže sa do bežiaceho behu nemohli dostať.
+- Dôkaz z logu, nie z úvahy: chybový riadok znie
+  `Error processing company ID 1520199: value too long for type character varying(8)`
+  — to je formulácia **pôvodného** `except Exception`, kým `680c1b5` píše
+  `Unstorable record ID …`. A `SyncProgress.notes` je prázdny, hoci `680c1b5`
+  by doň zapísal id neuložiteľných záznamov.
+- Kód, ktorý vtedy bežal, posúval okno **bezpodmienečne** — `window_end =
+  run_started_on - timedelta(days=1)` a `if window_end > parse_date(zmenene_od)`,
+  žiadne `holds_window`. (`git show d96c368^:…/fetch_ruz_data.py`, riadky 308–313.)
+
+Čo to teda dokazuje: **`b7aa428` je skutočná príčina aj oprava zastavenia** —
+cursor, ktorý prežil svoj beh, je to, čo desať behov zmenilo na nulu položiek.
+Čo to **nedokazuje**: že nová poistka drží okno. Tá sa prvýkrát dostala do
+workera až reštartom o `12:00:27` UTC a prejde až najbližší beatový beh
+(`13:50`). Až ten je meraním poistky; tento beh je meraním opravy cursoru.
+
+Jedna vec na tom sedí náhodou, nie zámerom: jediné zlyhanie je práve ten
+deterministický `unstorable` prípad z #90 (`SZZ Základná organizácia 43-1`)
+a okno sa cez neho posunulo. To je správanie, ktoré `680c1b5` neskôr zvolil
+**zámerne** — vtedy sa tak stalo len preto, že poistka ešte v procese nebola.
 
 ### #90 — RUZ vracia IČO, ktoré sa do našej schémy nezmestí
 
@@ -463,12 +498,38 @@ rovnicu neposudzuje — nesľubuje teda viac, než vie.
   12-hodinový `schedule_ruz_financials_sync`. **Funkciu to neblokuje** —
   `ruz_documents` si id odvodí naživo a uloží, takže chýbajúci záznam
   znamená jeden request navyše pri kliknutí na rok.
-- ⚠️ **Cudzia rozpracovaná zmena v pracovnom strome** —
-  `frontend/components/company/sections/PeopleOrgansSection.tsx` je
-  upravený a **nie je môj**. Diff zhadzuje fallback `Typ: <typ orgánu>`
-  a necháva `structured` nepoužité. Žiadna iná session nebeží, takže je to
-  pozostatok. Zámerne necommitnuté — commitovať cudziu prácu by znamenalo
-  tvrdiť, že jej rozumiem.
+- ⚠️ **Hostiteľský venv a kontajner sa rozchádzajú vo verzii
+  `django-celery-beat` — a hostiteľské `migrate` preto prepíše históriu
+  migrácií v zdieľanej databáze.** `venv` má **2.8.1**, `requirements.txt`
+  pinuje **2.9.0** (kontajner ju má). V hostiteľskom `site-packages` je
+  odbočka migrácií, ktorú tam 31. 1. 2026 vygeneroval `makemigrations`
+  pod Djangom 5.2.10: `0015_alter_clockedschedule_id_...` →
+  `0020_merge_20260131_1724` → `0021_alter_...`, a `0021` prepisuje `id`
+  polia **späť na `AutoField`** — preto stĺpce ostali `integer` a čistý
+  efekt je no-op, ktorý sedí s aktuálnou schémou.
+
+  Nebolo to neškodné: `migrate` z hostiteľského venv naplánoval a použil
+  štyri `django_celery_beat` migrácie, ktoré som neplánoval — pretože som
+  si predtým „overil" neaplikované migrácie cez
+  `showmigrations | grep -c '^\[ \]'`, a to je **zlé počítadlo**: chybová
+  hláška sa počíta ako nula. Po aplikovaní overené: beat zdravý (0
+  error riadkov, dispatch prebehol v okamihu zápisu), 6 beat tabuliek
+  na mieste, `PeriodicTask` 10 riadkov, `migrate --check` v oboch
+  prostrediach exit 0.
+
+  **Zámerne neopravené** — je to porucha prostredia, nie kódu, a je mimo
+  schváleného rozsahu. Správna oprava je preinštalovať hostiteľský venv
+  z `requirements.txt`, alebo migrations púšťať len v kontajneri. Do tej
+  doby platí: `make migrate` (venv) a `make docker-migrate` (kontajner)
+  **nie sú** to isté a história migrácií sa v nich líši.
+- ℹ️ **Cudzia rozpracovaná zmena v pracovnom strome už nie je.**
+  `frontend/components/company/sections/PeopleOrgansSection.tsx` bol
+  13. 9. upravený a nebol môj (diff zhadzoval fallback
+  `Typ: <typ orgánu>` a nechával `structured` nepoužité). Dnes je súbor
+  **čistý a zhodný s HEAD** (`8d7695b`) — fallback aj `structured` sú
+  späť. Nič z tej zmeny nebolo commitnuté a nie je čo riešiť; záznam
+  ostáva len preto, aby bolo vidno, že sa to stratilo zámerne a nie
+  omylom.
 
 ---
 
