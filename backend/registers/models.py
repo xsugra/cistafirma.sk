@@ -373,7 +373,10 @@ class OrsrCompanyProfile(models.Model):
         related_name="orsr_profile",
         verbose_name="Firma",
     )
-    ico = models.CharField(max_length=8, db_index=True, verbose_name="IČO")
+    # The profile's IČO is written from the ORSR/RPO payload, falling back to
+    # `company.ico`; widthed to match. Not unique -- this row is keyed by its
+    # `company` OneToOne, so the column is a search aid, not an identity.
+    ico = models.CharField(max_length=20, db_index=True, verbose_name="IČO")
 
     oddiel = models.CharField(max_length=50, blank=True, default="", verbose_name="Oddiel")
     oddiel_type = models.CharField(max_length=10, blank=True, default="", verbose_name="Typ ORSR (Sr/Dr/...)")
@@ -759,8 +762,12 @@ class IndividualEntity(models.Model):
         help_text="Identifikátor účtovnej jednotky z RUZ API",
         db_column="RUZ ID",
     )
+    # Widened with `Company.ico` and for the same reason -- see the note there.
+    # An SZCO cannot currently carry a 12-character IČO, but the two tables are
+    # written by one code path and a width that differs between them is the kind
+    # of asymmetry that only shows up as a `DataError` on the rarer of the two.
     ico = models.CharField(
-        max_length=8,
+        max_length=20,
         unique=True,
         help_text="IČO fyzickej osoby",
         db_column="ICO",

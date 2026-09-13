@@ -260,8 +260,22 @@ class Company(
         help_text="Identifikátor účtovnej jednotky z RUZ API",
         db_column="RUZ ID",
     )
+    # 20, not 8. RUZ gives organisational units a **12-character** IČO --
+    # `001781521576` is the parent's `00178152` plus a four-digit serial -- and
+    # at 8 the row could not be stored at all: Postgres refused it with `value
+    # too long for type character varying(8)`, the walk counted the record as a
+    # failure, and the company never arrived. Measured 2026-09-13 on RUZ id
+    # 1520199 (`SZZ Základná organizácia 43-1`, Ružomberok), which publishes 13
+    # statements we could not see.
+    #
+    # `unique` stays. Measured: 449 763 rows, **zero** IČO shared by two of
+    # them; a duplicate is an edge population, not a property of the register,
+    # and 13 read sites do `.get(ico=...)` where a second row would mean HTTP
+    # 500. What the walk writes is keyed on `ruz_id` (the register's own key,
+    # already unique) so a duplicate IČO can never silently swap two entities'
+    # identities. See docs/PLAN.md #90 for the deferred API decision.
     ico = models.CharField(
-        max_length=8,
+        max_length=20,
         unique=True,
         help_text="IČO účtovnej jednotky",
         db_column="ICO",
