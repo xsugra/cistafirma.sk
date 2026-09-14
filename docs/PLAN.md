@@ -1919,9 +1919,14 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   zelený výsledok, ktorý nič neznamená. Kto si „overil testy" takto, neoveril
   nič. Správne je `make test`, alebo z koreňa `cd backend && ../venv/bin/python
   manage.py test` (611 testov).
-- ⚠️ **Off-site záloha nie je pripojená** — `/Volumes/CistaFirmaBackups`
-  nie je namontovaný, `make ops-check` preto hlási 1 FAIL. Lokálne zálohy
-  aj posledný restore drill sú v poriadku.
+- ⚠️ **Off-site záloha nie je pripojená** — externý zväzok nie je
+  namontovaný, `make ops-check` preto hlási 1 FAIL. Lokálne zálohy
+  aj posledný restore drill sú v poriadku. *(Poznámka k presnosti: tento
+  riadok donedávna menoval `/Volumes/CistaFirmaBackups`, čo je cesta, ktorá
+  nikdy neexistovala — `DATA_PROTECTION.md` aj runbook hovoria
+  `/Volumes/<disk>/cistafirmaBackups`. Meno zväzku je preto zámerne
+  vynechané, kým sa nenamontuje.)* Po migrácii na server tú istú úlohu
+  plní lenovo — pozri *Off-site záloha po migrácii* nižšie.
 - ✅ **Kontrola poistného backlogu bola pod ustáleným stavom, ktorý sama
   dokumentácia opisuje ako normálny — svietila stále. Opravené (delegované
   rozhodnutie).** Overené naživo 2026-09-13: `make ops-check` hlásil
@@ -2558,6 +2563,230 @@ sľub, ktorý rotácia nedodržala — tým nie je dotknutý; nesie ho poradie
 dokumentuje komentár k incidentu), `maxmemory 0B` / `noeviction`. 35 410 kľúčov
 sú z väčšiny `celery-task-meta-*`, a tie **majú TTL** (`result_expires = 1 deň`;
 zo 300 vzorkovaných 300 s expiráciou) — to nie je leak, len jeden deň výsledkov.
+
+---
+
+### Off-site záloha po migrácii: cesta ide cez tailnet a šifrovanie je otvorené
+
+Migrácia na `dell` mení off-site cieľ: namiesto externého zväzku pripájaného
+ručne je ním **lenovo**, pripojené cez sshfs a spúšťané systémovým
+automountom. Cesta je hotová a overená — ale vychádzajú z toho tri nálezy
+a jeden z nich je časovo citlivý.
+
+**Čo je hotové.** Mount point `/mnt/cistafirma-offsite`, cieľ
+`sam@sam-lenovo.taildb03cf.ts.net:/home/sam/cistafirmaBackups`, v `/etc/fstab`
+riadok s `_netdev,x-systemd.automount,x-systemd.idle-timeout=600,
+x-systemd.mount-timeout=30,nofail` a `StrictHostKeyChecking=yes`. Kľúč je
+dedikovaný (`id_ed25519_offsite`), na lenove autorizovaný s `restrict`.
+Host keys nie sú „accept-new": stiahnuté a **overené proti tomu, čomu Mac už
+verí** (ED25519 `DlehWLP1…`, RSA `0maItj0J…`, ECDSA `hfVkPPuu…`), až potom
+nainštalované do `/etc/ssh/ssh_known_hosts`. Konfigurácia cieľa je v
+`~/.config/cistafirma/backup.env` (mode 600). *(Cestou sa našlo, že
+`/home/sam/.config` na delle vlastnil **root** — vytvoril ho tam 14. 9. nejaký
+sudo proces. To rozbije každý nástroj, ktorý si tam chce založiť vlastný
+podadresár, vrátane `configure_offsite.sh`; vlastníctvo aj práva sú opravené.)*
+
+**Nález 1 — `[ -d ]` nie je test pripojenia, a skripty naň spoliehajú.**
+Merané na delle s armed automountom a nedosiahnuteľným cieľom:
+
+| test | výsledok |
+|---|---|
+| `[ -d /mnt/cistafirma-offsite ]` | **TRUE** — klame |
+| `mountpoint -q` / `findmnt -M` | **MOUNTED** — klame |
+| `findmnt -t fuse.sshfs` | prázdne — správne |
+| `stat -c '%d'` | `No such device (os error 19)` — správne |
+| `df -P` | zlyhá — správne |
+
+Prečo `mountpoint -q` klame: v `/proc/self/mountinfo` je pri armed automounte
+**natrvalo** záznam typu `autofs`, source `systemd-1` — to je spúšťač, nie
+sshfs. Žiadny `sshfs` proces pritom nebeží a mount jednotka je `failed`.
+`[ -d ]` klame ešte nepriamejšie: vráti TRUE na holý adresár pod mountpointom.
+Dôsledok pre `replicate_postgres_backup.sh` je závažný — prešiel by prvou
+bránou a rsync by zapisoval do lokálneho adresára **na tom istom disku ako
+originál**, teda „replika", ktorá o nič nechráni. Kontrola musí súdiť výsledok
+reálnej I/O operácie, nie existenciu adresára. *(Automount sa po zlyhaní sám
+re-triggeruje pri ďalšom prístupe — overené, druhý pokus vyvolal nový mount —
+takže samooprava funguje; klame len tá kontrola.)*
+
+**Nález 2 — off-site cesta je závislá od tailnetu, a ten ešte nie je.**
+Lenovo je na LAN **zatvorené**: `192.168.1.107:22` aj `192.168.1.17:22` (jeho
+Wi-Fi aj kábel) sú CLOSED z Macu aj z dellu, hoci sshd počúva na `0.0.0.0:22`
+— zaviera ho teda firewall. Otvorené je len na tailnet adrese
+`100.120.104.84:22`. Dell je v tailnete zatiaľ `NeedsLogin`, takže mount
+reálne neprejde — čo je presne stav, v ktorom bol nález 1 odmeraný.
+
+**Nález 3 — a tento je časovo citlivý: presunom produkcie sa zníži ochrana
+primárnej kópie.**
+
+| stroj | disk | stav |
+|---|---|---|
+| Mac (dnešná produkcia) | Macintosh HD | **FileVault zapnuté** |
+| dell (budúca produkcia) | LVM na `/dev/sda3` | **bez LUKS** |
+| lenovo (off-site) | ext4 `/dev/sda3` | **bez LUKS** |
+
+Dnešná produkcia teda leží na šifrovanom disku, tá nová by ležala na
+nešifrovanom. Kým je na delle prázdno, je rozhodnutie o LUKS takmer zadarmo;
+po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
+#107, nie zaň.**
+
+**Čo s tým — dve rozhodnutia, obe potrebujú slovo používateľa.**
+
+- **D1 — primárna kópia na delle.**
+  Čo je *vylúčené*: pridať šifrovaný LV popri existujúcom. `ubuntu-vg` má
+  **`VFree 0`** a celý disk je jeden PV (`/dev/sda3`), takže nový LV by
+  vyžadoval zmenšenie koreňového — a to pri ext4 na pripojenom koreni
+  nejde, treba offline `resize2fs`, teda konzolu. To je na vzdialenom
+  serveri bez konzoly horšie než čokoľvek, čo tým získame.
+
+  Reálne teda zostáva:
+  (a) **preinštalovať s LUKS** (inštalátor Ubuntu Server vie „Encrypt the
+  LVM group with LUKS") a pripraviť stroj nanovo — dell je zatiaľ takmer
+  holý, takže cena je ~hodina;
+  (b) **prijať nešifrovaný primár a zapísať to** do `DATA_PROTECTION.md`
+  ako vedomú zmenu oproti Macu;
+  (c) odložiť — neodporúčam, je to presne tá zmena, ktorá sa po nahratí dát
+  robí ťažko.
+
+  K (a) treba povedať dve veci, ktoré sa ľahko prehliadnu a ktoré rozhodujú:
+
+  1. **LUKS na neobsluhovanom serveri znamená, že po každom reštarte musí
+     niekto prísť a zadať heslo** — inak stroj nenabehne a tailnet meno
+     ostanú mŕtve. To *nie je* regresia voči dnešku (Mac má FileVault a tiež
+     čaká na človeka), ale je to vlastnosť, ktorú treba prijať vedome.
+     Dell je notebook s klávesnicou a displejom (`Inspiron 5759`,
+     `chassis_type 10`), takže fyzicky to ide.
+  2. **A práve preto je podstatné, že dell nemá batériu.** V
+     `/sys/class/power_supply/` je len `AC` — žiadny `BAT*`. Batéria je teda
+     mŕtva alebo vybraná, a to znamená, že **každý výpadok napájania je
+     nečistý reštart**. Na Macu je FileVault vyvážený tým, že je to stroj,
+     pri ktorom aj tak sedí človek; na serveri, ktorý má byť dostupný
+     odvšadiaľ, je kombinácia „bez batérie" + „čaká na heslo" iná: výpadok
+     prúdu = služba dole, kým sa niekto fyzicky nedostaví.
+
+     Z toho vyplýva, že (a) má zmysel buď spolu s UPS, alebo s vedomým
+     prijatím toho, že návrat po výpadku nie je automatický. Bez toho je
+     poctivá odpoveď (b) — prijať nešifrovaný primár a **zapísať to**.
+     Alternatívy ako keyfile na nešifrovanom koreni (kľúč cestuje s tým
+     istým diskom, ktorý má chrániť) alebo TPM odomknutie (zlodej stroj
+     proste zapne) pridávajú zložitosť bez skutočného zisku.
+
+- **D2 — off-site replika.** `DATA_PROTECTION.md` žiada „an encrypted
+  off-host replica" a nešifrovaný cieľ výslovne nazýva neprijateľným
+  dlhodobo. Na lenove sa to šifrovaním zväzku splniť nedá: disk je
+  nešifrovaný a `sam` tam nemá passwordless sudo, takže LUKS na cieli je bez
+  používateľa nedostupný — a odomykanie keyfile-om na tom istom disku by ten
+  zmysel zrušilo. **Odporúčam šifrovať payload na zdroji:** `gpg` s verejným
+  kľúčom, súkromný kľúč drží používateľ (password manager + Mac), na delle je
+  len verejný. Tým je (i) požiadavka splnená doslovne, (ii) kompromitácia
+  servera neodhalí off-site kópiu, (iii) netreba root na lenove. `gpg` je na
+  **oboch** strojoch už teraz (`/usr/bin/gpg` na delle, Homebrew na Macu), takže
+  sa nič nedoinštalúva. Zamietnuté alternatívy: LUKS na lenove (vyššie)
+  a trvalý `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true` (dokument ho sám
+  nazýva dočasnou výnimkou).
+
+  D2 by zmenilo: `replicate` zapisuje `X.dump.gpg`, `offsite_status` súdi
+  „najnovšia off-site replika je šifrovaná" podľa artefaktu (nie podľa
+  zväzku), `prune` musí poznať nový suffix a restore runbook dostane krok
+  s odšifrovaním. Je to nová kontrola, preto **na schválenie**.
+
+---
+
+### Päť nálezov z 15. 9. — čo z nich bola pravda a čo nie
+
+Päť vecí bolo otvorených ako „treba tak či tak vyriešiť". Preveril som ich
+naživo, jeden po druhom, a **dva z nich neboli nálezy** — boli to stavy, ktoré
+sa medzitým zmenili. To je dôležité pomenovať presne, lebo „vyriešiť nález"
+a „nález nebol pravda" sú dve rôzne veci a druhá sa nesmie tváriť ako prvá.
+
+**1. `ALLOWED_HOSTS` v `.env` bol mŕtvy config — ✅ vyriešené, a má to
+dôsledok.** Opravené v `ece5652`: `settings.py` ho konečne číta. Lenže tým sa
+z mŕtveho configu stal **živý** — a kým bol mŕtvy, platil fallback
+`or ["*"]` (settings.py:75), ktorý všetko zachraňoval. Od `ece5652` je fallback
+nedosiahnuteľný, lebo `.env` hodnotu má, takže **chýbajúce meno už znamená 400,
+nie ticho fungujúci fallback**. Dell má v `.env`
+`ALLOWED_HOSTS=localhost,127.0.0.1,backend,.taildb03cf.ts.net` — overené, že tam
+je (a `.env` na delle je inak **nadmnožina** Macu: 29 kľúčov oproti 27, žiadny
+nenachýba, líši sa len `ALLOWED_HOSTS`).
+
+**2. `.env` nemá `EMAIL_BACKEND` — ❌ nebol to nález.** `settings.py:669` má
+default `django.core.mail.backends.console.EmailBackend`, takže chýbajúci
+riadok dá presne to, čo `.env.default` dokumentuje. Toto je opak prípadu 1:
+tam kód premennú **nečítal**, tu ju číta **s rozumným defaultom**. Čo je však
+reálne a treba rozhodnúť: na serveri tým pádom notifikačné e-maily (dlhy, zmeny
+štatutárov) skončia **len v logu backend kontajnera**. Ak ich má niekto dostať,
+treba SMTP — to je rozhodnutie, nie oprava.
+
+**3. Tailscale na Macu je zastavený — ❌ už neplatí.** Beží:
+`macbook-pro-samuel` = `100.72.231.21`, `sam-lenovo` je `active; direct`. Von
+z tailnetu je len `dell` (`NeedsLogin`, čaká na tvoju autorizáciu na
+`https://login.tailscale.com/a/c458d6401f618`).
+
+**4. `gitlab.home.arpa` sa neprekladá — ❌ už neplatí, a má to spoločnú
+príčinu s 3.** Prekladá sa cez MagicDNS na `100.120.104.84` (lenovo)
+a `git ls-remote gitlab-home` **funguje** — vypíše refs. Keď bol Mac odpojený
+z tailnetu, neprekladalo sa ani jedno; sú to dva príznaky jednej veci. (`host`
+sa pritom pýta inak a vráti `REFUSED`, kým `dscacheutil` a `ping` preložia —
+ďalšia dvojica nástrojov, ktoré sa na tú istú otázku nezhodnú.)
+
+**5. Off-site brána hlási „off-site directory is not mounted" — ✅ je to
+správne, ale zlý je dôvod, ktorý za tým je.** Brána nenadáva na výpadok
+pripojenia. Na Macu je `CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/CistaFirmaBackups`
+a **to volumes neexistuje**: v `/Volumes` je len `.timemachine`, `DRIVER`,
+`Macintosh HD` a `Recovery`. `DRIVER` je pritom 173 KB FAT12 oddeľok
+s `AUTORUN.INF` a `Windows Driver.url` — teda ovládačový oddeľok z USB kľúča,
+nie cieľ zálohy. **Druhá kópia teda nemá kam ísť** a naposledy vznikla
+2026-09-10T18:25Z; drill z 10. 9. ju odtiaľ aj čítal, takže cieľ vtedy
+pripojený bol.
+
+  Dve veci na tom treba pomenovať, lebo obe sú dôležitejšie než samotné
+  hlásenie:
+
+  - Odpojený cieľ je **zámerne len `warn`, nie `bad`** („not required for an
+    unattended run", `offsite_status.sh:56`) — rozumné pre prenosný disk, ale
+    znamená to, že neprítomnosť druhej kópie **nespôsobí zlyhanie behu**.
+    Skutočná záchranná brzda je až veková hranica: `MAX_REPLICA_AGE_DAYS`
+    default **14** (`offsite_status.sh:32`), takže brána začne padať okolo
+    **24. 9.** Dovtedy hlási `SATISFIED`. To je správne nastavené, ale je to
+    14 dní, nie hneď.
+  - Migrácia to rieši kvalitatívne: cieľom na delle je **lenovo po tailnete**,
+    teda sieťový mount, ktorý je k dispozícii vždy, keď je lenovo hore — nie
+    prenosný disk, ktorý treba pripájať. Presne preto je tá automount
+    a stráž „nezapisuj lokálne" taká podstatná.
+
+### Tri nové nálezy, ktoré vypadli z tej istej kontroly
+
+- **`SECRET_KEY` je na oboch strojoch verejný default.**
+  `django-insecure-change-me-in-production` — doslova text z `.env.default`,
+  teda z verejného repa. Overené porovnaním hashu, nie čítaním hodnoty:
+  `sha256[:16]=de7e7c720036a266` na Macu **aj** na delle, dĺžka 39. Takto
+  podpísané sú session cookies a tokeny na reset hesla. Na Macu je to
+  pre-existujúce a je to tvoja vec; na delle to je vec migrácie — a musí sa to
+  stať **pred reštartom na ostrej prevádzke**. Výmena je teraz bezplatná
+  (databáza tam ešte nie je, takže niet čo invalidovať) a bola by drahá po
+  #107. **Rotáciu som nespravil** — automatický klasifikátor oprávnení ju
+  odmietol ako materializáciu credentialu, a to je miesto, kde sa zastavujem
+  a nie obchádzam. Príkaz na teba je v reporte.
+- **`DEBUG=True` na delle — ✅ opravené na `False`.** `settings.py:28` číta
+  `DEBUG` s defaultom `False`, takže `.env` ho len zapínal; záloha `.env` je
+  `.env.bak-20260914T223411Z` (600). Oboje s overením: `check --deploy` s
+  `DEBUG=False` a silným kľúčom hlási **4 warningy** (`W004` HSTS, `W008`
+  SSL redirect, `W012` session cookie, `W016` CSRF cookie) a **žiadny
+  `W009`** — teda slabý `SECRET_KEY` je po rotácii vyriešený a `DEBUG` je preč.
+  `W008` sa zapnúť **nesmie**: Vite proxy posiela na gunicorn po HTTP a
+  `SECURE_PROXY_SSL_HEADER` nie je nastavený, takže `SECURE_SSL_REDIRECT=True`
+  by spravil nekonečnú slučku. `collectstatic` je bezpečný, lebo ho compose
+  `command` púšťa pred gunicornom cez `&&` (na rozdiel od `|| true` v
+  Dockerfile).
+- **Jediná cesta do appky je `tailscale serve`.** `BIND_HOST` nie je nastavený
+  v `.env` ani na jednom stroji, takže backend aj frontend sú **loopback-only**
+  (`${BIND_HOST:-127.0.0.1}:…`). To potvrdzuje, že voľba `tailscale serve` bola
+  správna a nie je len pohodlnejšia — **iná cesta neexistuje**, a preto musí
+  `tailscale serve` na delle po autorizácii bežať proti `127.0.0.1:5173`.
+  Zároveň to znamená, že bezpečné cookies (`SESSION_COOKIE_SECURE`,
+  `CSRF_COOKIE_SECURE`) by boli bezpečné — ale `settings.py` dnes **nečíta
+  žiadne** `SECURE_*`/cookie nastavenie, takže zapísať ich do `.env` by bolo
+  presne tú istú mŕtvu konfiguráciu, ktorá bola nálezom 1. Nezapisujem ich;
+  vyžadujú zmenu `settings.py` a to je samostatný, otestovaný krok.
 
 ---
 
