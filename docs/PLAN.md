@@ -1960,6 +1960,21 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   `'expires': 43000.0`. Potvrdené naživo, nie odvodené — je to tá istá trieda
   ako `options`/`queue`, kde je rozhodujúci riadok a nie dict.
 
+  Mechanizmus je od 2026-09-14 známy a je to **preklep v kľúči**:
+  `_unpack_options` (`schedulers.py:216–227`) číta `expire_seconds`, nie
+  `expires`; všetko ostatné spadne do jeho `**kwargs` a **ticho sa zahodí**.
+  Všetkých deväť záznamov v `CELERY_BEAT_SCHEDULE` preto nesie `'expires'`,
+  ktorý nikto neprečíta — a `'queue'` v tom istom `options` funguje, takže
+  sa to číta ako „nastavené".
+
+  ⚠️ **A premenovať ten kľúč na `expire_seconds` nie je zdarma.** Tá hodnota
+  sa dostane na **správu** v brokerovi, nie na riadok, takže úloha, ktorá
+  čaká vo fronte dlhšie než `expires`, sa zahodí bez chyby. Na lane
+  `insurance`, ktorá beží za vlastným backlogom a jeden priechod jej trvá
+  ~15 dní, by to znamenalo tichú stratu pokrytia. Než sa ten kľúč opraví,
+  treba pre každú lane zvlášť povedať, aké oneskorenie je ešte legitímne —
+  dnes je ten mŕtvy kľúč práve to, čo nič nezahadzuje.
+
 - ⚠️ **Reštart workera ticho zahodí rozpracované správy — a nikde to nie je
   vidieť.** Namerané 2026-09-13 pri #95: dispatcher poslal o 10:30:08 desať
   úloh `read_person_history` do fronty `orsr`, o 10:35:59 som worker reštartoval
@@ -2276,18 +2291,46 @@ mala byť read-only). Beat ho potom zapísal znovu pri svojom štarte o
 ktorého neexistuje, pochádza z ručnej kontroly — a keby tá kontrola nebola
 (pre)siahla tam, kde siahla, úloha by nemala riadok vôbec.
 
-**Neoverené a nebudem hádať:** prečo riadok neexistoval už skôr.
+**Neoverené — a teraz užšie, nie vyriešené:** prečo riadok neexistoval už skôr.
 `CELERY_BEAT_SCHEDULE` nesie tento záznam od 2026-09-12 13:13Z a beat odvtedy
 štartoval dvakrát (09-12 17:46:28, 09-13 10:28:15), pričom `setup_schedule()`
 volá `update_from_dict(self.app.conf.beat_schedule)` — teda `update_or_create`
 pre každý záznam — takže riadok mal vzniknúť. Nevznikol, a `Cannot add entry`
 (prekážka, ktorú tá cesta loguje) sa v logu v tých časoch nenachádza: všetkých
 14 výskytov je z 2026-09-12 01:20–03:50 a je to ten istý DNS výpadok „db".
-Dvoch kandidátov — settings v tej chvíli neboli na disku, alebo sa štart k
-rekonciliácii nedostal — som **nerozlíšil**. Rozlíšilo by to porovnanie počtu
-riadkov a `date_changed` pred a po riadenom reštarte beatu; to som **zámerne
+
+Obidvoch kandidátov, ktorých som tu pôvodne nechal otvorených, **vylučuje
+čítanie zdroja** (2026-09-14, `venv/lib/python3.13/site-packages/django_celery_beat/schedulers.py`):
+
+* *„kód settings do riadkov neprepisuje"* — neplatí. `setup_schedule()` na
+  riadkoch 259–261 volá `install_default_entries(self.schedule)` a hneď po ňom
+  `update_from_dict(self.app.conf.beat_schedule)`; `from_entry` je
+  `update_or_create` (:193–197). Je to tá istá cesta, ktorá 09-13 o 18:34
+  riadky prepísala.
+* *„settings v tej chvíli neboli na disku"* — neplatí. `celery_beat` dedí
+  z kotvy `x-celery-worker` (`docker-compose.yml:33–34`) `volumes: ./backend:/app`,
+  takže kontajner číta ten istý súbor ako host. `CELERY_BEAT_SCHEDULE` je tam
+  literál na `settings.py:412` bez akejkoľvek podmienky a `__all__`
+  v `backend/backend/settings.py` nie je, takže ho shim `backend/settings.py`
+  (star-importom) vyexportuje. Záznam bol navyše commitnutý
+  2026-09-12 15:13:15+02:00, teda **pred** štartom o 17:46:28.
+
+Čo v logu naopak vidieť je: `beat: Starting...` 17:46:28.447 a o 106 ms
+`DatabaseScheduler: Schedule changed.` (:553) — a to je podpis zápisu do
+`PeriodicTask` počas štartu, lebo `update_changed()` sa volá pri každom save
+a `schedule_changed()` ho hneď vidí. Rovnaký podpis má štart o 18:34:00
+(.000820 → .142997), o ktorom vieme, že riadky prepísal.
+
+Zostávajú teda dve možnosti a **rozlíši ich až porovnanie `date_changed` pred
+a po riadenom reštarte beatu**: buď bol v tom procese `app.conf.beat_schedule`
+prázdny (potom by tých sedem zápisov bolo len z `install_default_entries`,
+a `Schedule changed.` vyzerá rovnako), alebo bolo moje čítanie z 09-13
+13:20:11 („riadok neexistuje") nesprávne. To porovnanie som **zámerne
 neurobil**, lebo reštart by posunul ten jediný nikdy nespustený riadok o celý
 ďalší interval — čiže by som odložil presne to, čo nižšie odporúčam spustiť.
+**Po prvom behu je už reštart pre tento riadok bez následkov** (`last_run_at`
+je nastavené, takže `date_changed` sa ako hodiny už nepoužíva) — vtedy sa ten
+experiment dá spraviť zadarmo.
 
 Toto nie je vlastnosť jednej úlohy, ale pasce pri zakladaní nového riadku:
 **nová periodická úloha s intervalom dlhším, než je bežná doba behu beatu, sa
@@ -2317,8 +2360,28 @@ a to buď ručne (`compute_sector_benchmarks.delay()`, čím získa skutočné
 `last_run_at` a ďalej sa správa normálne), alebo pri zakladaní nového riadku
 nastaviť `start_time` do minulosti — knižnica pre `start_time` sama odčíta 30
 rokov (`model.last_run_at -= timedelta(days=365 * 30)`), takže úloha je hneď due.
+To odčítanie je ale **jednorazové, nie trvalé**: je vnútri `if not
+model.last_run_at:` (:95–103), takže akonáhle úloha raz bežala, `start_time`
+už nič neurýchľuje — a `is_due()` naopak do `start_time` beh **blokuje**
+(:118–130). Nastaviť `start_time` do minulosti je preto bezpečné aj v tom, že
+z toho nemôže vzniknúť opakovaná záplava.
+
 **Predpoveď na overenie:** ak sa beat dovtedy nezreštartuje, prvý beh príde
 2026-09-14 18:34:00Z.
+
+**Stav k 2026-09-14 09:55Z — overené *pred* predpoveďou, nie po nej:** beat
+beží 15 h 21 min bez reštartu (`docker compose ps`: `Up 15 hours`) a obe
+nikdy neobnovené `date_changed` to potvrdzujú — `compute-sector-benchmarks-daily`
+má stále presne `2026-09-13 18:34:00.115991`, pričom každý štart beatu by ho
+prepísal na „teraz", a `update-fs-data-daily` tiež `18:34:00.086699`, hoci
+naposledy bežal o 18:22:32. Predpoveď teda **nebola ani vyvrátená, ani
+naplnená** — je vzdialená 8 h 39 min. Všetkých 10 riadkov má `enabled=True`,
+takže ju nezablokoval ani Focus Mode; ten by ju inak zablokovať mohol, lebo
+`registers.tasks.compute_sector_benchmarks` **nie je** v `FOCUS_KEEP_TASKS`
+(tie sú štyri, `focus_mode.py:18–23`) a `_set_periodic_tasks_enabled` vypína
+každý riadok mimo nich. Že to vypnutie prežije reštart beatu, je tiež overené
+v zdroji: `enabled` nie je medzi `defaults`, ktoré `_unpack_fields` (:200–214)
+skladá, takže `update_or_create` sa tej kolónky nikdy nedotkne.
 
 ### `make test` na SQLite vôbec nebeží — a dokumentácia tvrdí opak
 
