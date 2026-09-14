@@ -2,7 +2,10 @@
 set -Eeuo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-DEFAULT_BACKUP_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/backups"
+# shellcheck source=lib/backup_os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_os.sh"
+
+DEFAULT_BACKUP_DIR="$(state_dir)/backups"
 BACKUP_DIR="${CISTAFIRMA_BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 
 mkdir -p "$BACKUP_DIR"
@@ -43,7 +46,7 @@ mv "$temporary_file" "$backup_file"
 trap - EXIT
 chmod 600 "$backup_file"
 
-checksum=$(shasum -a 256 "$backup_file" | awk '{print $1}')
+checksum=$(sha256_of "$backup_file")
 metadata_file="${backup_file}.json"
 
 python3 - "$backup_file" "$checksum" "$metadata_file" <<'PY'

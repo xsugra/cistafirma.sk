@@ -11,6 +11,8 @@ set -Eeuo pipefail
 # is read a few lines down, well before ROOT_DIR is computed).
 # shellcheck source=lib/backup_env.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+# shellcheck source=lib/backup_os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_os.sh"
 
 usage() {
     cat <<'USAGE'
@@ -61,7 +63,7 @@ if [ "$keep" -lt 1 ]; then
 fi
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-DEFAULT_BACKUP_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/backups"
+DEFAULT_BACKUP_DIR="$(state_dir)/backups"
 BACKUP_DIR="${CISTAFIRMA_BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 
 prune_dir() {
@@ -123,6 +125,18 @@ fi
 if [ "$offsite" = true ]; then
     if [ -z "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ]; then
         echo "ERROR: --offsite requires CISTAFIRMA_OFFSITE_BACKUP_DIR to be set" >&2
+        exit 1
+    fi
+    # A directory that exists but is not attached must not be pruned. This is
+    # the only destructive caller of the off-site path, and the failure it
+    # guards against is not a failed deletion but a successful one in the wrong
+    # place: on Linux an armed systemd automount keeps the directory present
+    # while its target is unreachable, and a bare local directory here would be
+    # pruned as if it were the off-site copy. A destination that is simply
+    # absent is left to prune_dir's own SKIP below.
+    if [ -d "$CISTAFIRMA_OFFSITE_BACKUP_DIR" ] &&
+        ! cistafirma_offsite_mount_check "$CISTAFIRMA_OFFSITE_BACKUP_DIR" "$BACKUP_DIR"; then
+        echo "ERROR: refusing to prune the off-site directory: ${CISTAFIRMA_OFFSITE_MOUNT_REASON}" >&2
         exit 1
     fi
     if ! prune_dir "$CISTAFIRMA_OFFSITE_BACKUP_DIR" "off-site"; then

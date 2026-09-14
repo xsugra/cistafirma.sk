@@ -9,15 +9,20 @@ set -Eeuo pipefail
 # Machine-local off-site configuration; an already exported variable wins, so
 # `make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=...` still overrides.
 # Must precede the CISTAFIRMA_* defaults read just below.
+LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib
 # shellcheck source=lib/backup_env.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+. "$LIB_DIR/backup_env.sh"
 # shellcheck source=lib/backup_time.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_time.sh"
+. "$LIB_DIR/backup_time.sh"
 # shellcheck source=lib/backup_log.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_log.sh"
+. "$LIB_DIR/backup_log.sh"
+# shellcheck source=lib/backup_os.sh
+. "$LIB_DIR/backup_os.sh"
+# shellcheck source=lib/offsite_crypto.sh
+. "$LIB_DIR/offsite_crypto.sh"
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-STATE_DIR="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma"
+STATE_DIR=$(state_dir)
 DEFAULT_BACKUP_DIR="$STATE_DIR/backups"
 BACKUP_DIR="${CISTAFIRMA_BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 MAX_AGE_DAYS="${CISTAFIRMA_BACKUP_MAX_AGE_DAYS:-7}"
@@ -63,7 +68,7 @@ PY
 }
 
 plain_checksum() {
-    shasum -a 256 "$1" | awk '{print $1}'
+    sha256_of "$1"
 }
 
 printf 'CistaFirma off-site backup status\n'
@@ -102,27 +107,65 @@ fi
 printf '\n'
 offsite="${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}"
 
+# The reference for "is this a different filesystem": the directory the local
+# dumps are written to, with $HOME standing in when there is no local backup
+# directory yet -- both are on the disk the off-site copy must not share, and a
+# reference that does not exist would refuse a perfectly good destination.
+offsite_reference="$BACKUP_DIR"
+[ -d "$offsite_reference" ] || offsite_reference="$HOME"
+
 if [ -z "$offsite" ]; then
     unmounted "CISTAFIRMA_OFFSITE_BACKUP_DIR is not set — no off-site replica is possible"
-elif [ ! -d "$offsite" ]; then
-    unmounted "off-site directory is not mounted: $offsite"
+elif ! cistafirma_offsite_mount_check "$offsite" "$offsite_reference"; then
+    # The verdict, not the path, decides. A configured destination that is not
+    # attached is reported as exactly that, never silently skipped past into
+    # "no replica of the newest dump" -- which reads like a stale copy rather
+    # than an unreachable destination, and sends the operator after the wrong
+    # problem. See cistafirma_offsite_mount_check for what is measured.
+    if [ "$CISTAFIRMA_OFFSITE_MOUNT_VERDICT" = "same-filesystem" ]; then
+        # Not a mounting problem: the path is real, it is simply on this
+        # machine's own disk, and the fix is the configuration.
+        bad "off-site directory is on the same filesystem as the local backup: $offsite"
+    elif [ "$CISTAFIRMA_OS" = "macos" ]; then
+        # Kept word for word: the line production has always printed.
+        unmounted "off-site directory is not mounted: $offsite"
+    else
+        unmounted "off-site directory is configured but not mounted: $offsite (${CISTAFIRMA_OFFSITE_MOUNT_REASON})"
+    fi
 else
     offsite=$(cd "$offsite" && pwd -P)
     ok "off-site directory is mounted: $offsite"
 
-    if [ -n "$newest" ] && [ "$(stat -f '%d' "$(dirname "$newest")")" = "$(stat -f '%d' "$offsite")" ]; then
+    if [ -n "$newest" ] && [ "$(device_id_of "$(dirname "$newest")")" = "$(device_id_of "$offsite")" ]; then
         bad "off-site directory is on the same filesystem as the local backup"
     else
         ok "off-site directory is on a different filesystem"
     fi
 
-    mount_point=$(df -P "$offsite" | awk 'NR == 2 { print $NF }')
-    if [ -n "$mount_point" ] && diskutil info "$mount_point" 2>/dev/null | grep -Eq 'FileVault:.*Yes|Encrypted:.*Yes'; then
+    # Whether the destination counts as encrypted is per-platform and lives in
+    # lib/offsite_crypto.sh, so that this report and the script that actually
+    # copies a dump there can never disagree about it.
+    mount_point=$(mount_point_of "$offsite")
+    cistafirma_offsite_crypto_check "$offsite" "$mount_point"
+
+    if [ "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" = "encrypted" ]; then
         ok "off-site volume reports encryption"
-    elif [ "${CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP:-false}" = "true" ]; then
-        warn "off-site volume is NOT encrypted (explicit temporary override active)"
-    else
+    elif cistafirma_offsite_crypto_override_active; then
+        if [ "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" = "unknown" ]; then
+            warn "off-site volume encryption could NOT be verified (${CISTAFIRMA_OFFSITE_CRYPTO_REASON}) -- explicit temporary override active"
+        else
+            warn "off-site volume is NOT encrypted (explicit temporary override active)"
+        fi
+    elif [ "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" = "unknown" ]; then
+        # Not the same failure as an unencrypted volume, and not a milder one:
+        # nothing established that the destination is safe. Reported as its own
+        # verdict so it cannot be read as "checked, and it was fine".
+        bad "off-site volume encryption could not be verified: ${CISTAFIRMA_OFFSITE_CRYPTO_REASON}"
+    elif [ "$CISTAFIRMA_OS" = "macos" ]; then
+        # Kept word for word: the line production has always printed.
         bad "off-site volume is not encrypted"
+    else
+        bad "off-site volume is not encrypted (${CISTAFIRMA_OFFSITE_CRYPTO_REASON})"
     fi
 
     if [ -n "$newest" ]; then
@@ -167,7 +210,12 @@ EOF
 
         # The doc asks for the monthly drill to come from the external copy once
         # one exists -- restoring the local dump does not prove the off-site one.
-        if [ "$drill_source" != "off-site" ] && [ -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ]; then
+        # "Once one exists" means once the destination is really attached: a
+        # directory that is present but unreachable has no off-site copy to
+        # drill, and telling the operator to drill it would send them after a
+        # volume that is not there.
+        if [ "$drill_source" != "off-site" ] &&
+            cistafirma_offsite_mount_check "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" "$offsite_reference"; then
             warn "last drill used the local backup; drill the off-site copy when one is present"
         fi
     fi

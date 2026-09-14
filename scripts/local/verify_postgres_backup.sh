@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Only the platform primitives, not lib/backup_env.sh: this script reads no
+# CISTAFIRMA_* setting, and reading the machine-local config here would give it
+# a dependency on a file it has never needed.
+# shellcheck source=lib/backup_os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_os.sh"
+
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 /absolute/path/to/cistafirma_*.dump" >&2
     exit 64
@@ -28,7 +34,7 @@ metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 print(metadata["sha256"])
 PY
 )
-actual_checksum=$(shasum -a 256 "$BACKUP_FILE" | awk '{print $1}')
+actual_checksum=$(sha256_of "$BACKUP_FILE")
 
 if [ "$expected_checksum" != "$actual_checksum" ]; then
     echo "ERROR: checksum verification failed." >&2

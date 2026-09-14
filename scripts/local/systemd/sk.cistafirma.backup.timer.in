@@ -1,0 +1,18 @@
+[Unit]
+Description=CistaFirma weekly PostgreSQL backup and off-site replica
+
+[Timer]
+# Weekly, Sunday 03:17 local time -- the same wall-clock slot as the macOS
+# LaunchAgent, so "when does the backup run?" has one answer across both
+# platforms and nobody has to remember which host runs on which schedule.
+OnCalendar=Sun *-*-* 03:17:00
+# Catch up a run missed because the machine was off or suspended. Without it a
+# weekly timer silently skips its week instead of running late -- and a skipped
+# week is indistinguishable from a week that went fine, which is the exact class
+# of failure this schedule exists to catch. This is systemd's counterpart of
+# launchd re-running a missed job shortly after the Mac wakes.
+Persistent=true
+Unit=sk.cistafirma.backup.service
+
+[Install]
+WantedBy=timers.target

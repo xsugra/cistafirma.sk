@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Unattended backup entry point for the launchd schedule (and for manual runs).
+# Unattended backup entry point for the schedule (and for manual runs).
 #
-# backup -> verify -> replica (only when the off-site volume is mounted)
+# backup -> verify -> replica (only when the off-site destination is mounted)
 #        -> operational gate.
 #
 # Read-only with respect to the database; never destructive.
@@ -9,8 +9,8 @@
 # Its failure has to be *audible*. A job whose only failure signal is a line in
 # a log file nobody opens is indistinguishable from a job that works -- which is
 # how the missing replica survived several weeks unnoticed. Any failure below
-# writes a marker, posts a notification, and exits non-zero so launchd records
-# it too.
+# writes a marker, posts a notification where the platform can show one, and
+# exits non-zero so the scheduler records it too.
 set -Eeuo pipefail
 
 # Machine-local off-site configuration (the volume path cannot live in the
@@ -18,11 +18,13 @@ set -Eeuo pipefail
 # exported variable wins. See lib/backup_env.sh.
 # shellcheck source=lib/backup_env.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+# shellcheck source=lib/backup_os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_os.sh"
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 cd "$ROOT_DIR"
 
-LOG_DIR="$HOME/Library/Logs/CistaFirma"
+LOG_DIR=$(log_dir)
 OUT_LOG="$LOG_DIR/backup.out.log"
 FAILURE_MARKER="$LOG_DIR/LAST_FAILURE"
 
@@ -38,9 +40,17 @@ say() { printf '[%s] %s\n' "$(stamp)" "$*"; }
 
 notify() {
     # Best effort: a notification that cannot be displayed must never turn a
-    # successful backup into a failed one, so every step is guarded.
-    command -v osascript >/dev/null 2>&1 || return 0
-    osascript -e "display notification \"$1\" with title \"CistaFirma backup\"" >/dev/null 2>&1 || true
+    # successful backup into a failed one, so every step is guarded -- including
+    # the platform branch itself. A Linux server often has no desktop session at
+    # all, in which case there is nothing to notify and the failure marker below
+    # is the record, exactly as it is when a Mac's notification fails.
+    if [ "$CISTAFIRMA_OS" = "macos" ]; then
+        command -v osascript >/dev/null 2>&1 || return 0
+        osascript -e "display notification \"$1\" with title \"CistaFirma backup\"" >/dev/null 2>&1 || true
+    else
+        command -v notify-send >/dev/null 2>&1 || return 0
+        notify-send --urgency=critical "CistaFirma backup" "$1" >/dev/null 2>&1 || true
+    fi
 }
 
 # One exit path for every kind of failure -- an explicit `exit 1`, a `set -e`
@@ -79,7 +89,7 @@ on_exit() {
     if [ -n "$first_fail" ]; then
         notify "${first_fail#FAIL  } (exit $rc)"
     else
-        notify "scheduled backup failed (exit $rc); see LAST_FAILURE in ~/Library/Logs/CistaFirma"
+        notify "scheduled backup failed (exit $rc); see LAST_FAILURE in $LOG_DIR"
     fi
 
     say "FAILED (exit $rc) -- details in $FAILURE_MARKER" >&2
@@ -104,15 +114,27 @@ fi
 # "volume not mounted" line is what hid a real defect: the scheduled job had no
 # way to learn the volume path, so it printed the same message a genuinely
 # unplugged drive would produce, every week, indefinitely.
+#
+# "Mounted" is the verdict of cistafirma_offsite_mount_check, not the existence
+# of the directory. On Linux the destination is normally an armed systemd
+# automount: the directory stays present, and a mount-table entry stays present
+# with it, while the target is unreachable -- so `[ -d ]` would report the
+# volume as detected and the replica would be written onto the local disk.
 if [ -z "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ]; then
     say "WARNING: no off-site directory is configured, so NO off-site replica was made."
     echo "           Record it once with:"
-    echo "             make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/<volume>/cistafirmaBackups"
+    echo "             make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=$(example_offsite_dir)"
     echo "           Then re-run the replica for today's dump:"
     echo "             make db-backup-replicate BACKUP_FILE='$backup_file'"
-elif [ ! -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR}" ]; then
+elif ! cistafirma_offsite_mount_check "${CISTAFIRMA_OFFSITE_BACKUP_DIR}" "$(dirname "$backup_file")"; then
     say "WARNING: off-site directory is configured but not mounted, so NO replica was made:"
     echo "             ${CISTAFIRMA_OFFSITE_BACKUP_DIR}"
+    # For the Linux host, where this line is the difference between a tailnet
+    # that is down and a path that was never right. macOS prints exactly the
+    # lines it always has.
+    if [ "$CISTAFIRMA_OS" != "macos" ]; then
+        echo "           (${CISTAFIRMA_OFFSITE_MOUNT_REASON})"
+    fi
     echo "           Attach the volume and run: make db-backup-replicate BACKUP_FILE='$backup_file'"
 else
     say "off-site volume detected; replicating"

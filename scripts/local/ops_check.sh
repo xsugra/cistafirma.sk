@@ -21,6 +21,8 @@ set -Eeuo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
 # shellcheck source=lib/backup_time.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_time.sh"
+# shellcheck source=lib/backup_os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_os.sh"
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 
@@ -36,8 +38,7 @@ SOURCE_MIN_ATTEMPTS="${CISTAFIRMA_SOURCE_MIN_ATTEMPTS:-200}"
 SOURCE_MIN_SUCCESSES="${CISTAFIRMA_SOURCE_MIN_SUCCESSES:-20}"
 
 LABEL="sk.cistafirma.backup"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-OUT_LOG="$HOME/Library/Logs/CistaFirma/backup.out.log"
+OUT_LOG="$(log_dir)/backup.out.log"
 
 failures=0
 warnings=0
@@ -286,16 +287,27 @@ fi
 
 # --- weekly job ----------------------------------------------------------
 # A control that never runs looks exactly like a control that always passes.
-# launchd's own `runs` counter is the only trustworthy evidence that it has
-# *ever* spawned the job: the log cannot distinguish an unattended run from a
+# The *scheduler's* own trigger evidence is the only trustworthy proof that it
+# has ever fired the job: the log cannot distinguish an unattended run from a
 # manual one, and a single manual run would otherwise read as "ran recently"
-# while the schedule was in fact dead. So the log's last start is consulted
-# only once launchd confirms it has launched the job at least once.
+# while the schedule was in fact dead. So the log's last start is consulted only
+# once the scheduler confirms it has fired the job at least once.
+#
+# On macOS that evidence is launchd's `runs` counter. On Linux it is the
+# *timer's* last-trigger stamp, not its service's start time, for the same
+# reason: a manual `systemctl --user start` of the service must not be able to
+# read as proof that the schedule is alive.
 section "Weekly backup job"
 
-if [ ! -f "$PLIST" ]; then
-    bad "the launchd job is not installed (run: make db-backup-schedule-install)"
-else
+weekly_job_launchd() {
+    local plist="$HOME/Library/LaunchAgents/$LABEL.plist"
+    local launchctl_out launchctl_rc runs installed_days last_start days
+
+    if [ ! -f "$plist" ]; then
+        bad "the launchd job is not installed (run: make db-backup-schedule-install)"
+        return 0
+    fi
+
     ok "launchd plist is installed"
 
     # Captured in one call rather than `launchctl print | sed | head`: a `head`
@@ -324,7 +336,7 @@ else
         printf '  launchd runs     : %s\n' "$runs"
 
         if [ "$runs" -eq 0 ]; then
-            installed_days=$(age_days "$PLIST")
+            installed_days=$(age_days "$plist")
             if [ "$installed_days" -lt 0 ]; then
                 bad "launchd has never run the job and its install time is unreadable"
             elif [ "$installed_days" -gt "$RUN_GAP_MAX_DAYS" ]; then
@@ -353,7 +365,131 @@ else
             fi
         fi
     fi
-fi
+}
+
+weekly_job_systemd() {
+    local unit_dir timer_unit service_unit
+    local systemd_out systemd_rc
+    local load unitfile active mono last triggered
+    local installed_days last_start days
+
+    unit_dir=$(scheduler_unit_dir)
+    timer_unit="$unit_dir/$LABEL.timer"
+    service_unit="$unit_dir/$LABEL.service"
+
+    if [ ! -f "$timer_unit" ]; then
+        bad "the systemd timer is not installed (run: make db-backup-schedule-install)"
+        return 0
+    fi
+
+    ok "systemd timer unit is installed"
+
+    if [ ! -f "$service_unit" ]; then
+        bad "the timer is installed but its service unit is missing: $service_unit"
+        return 0
+    fi
+
+    # Captured in one call for the same reason the launchd branch captures
+    # rather than pipes: a filter that exits early can SIGPIPE the producer and
+    # abort the gate mid-report under `pipefail`.
+    set +e
+    systemd_out=$(systemctl --user show \
+        -p LoadState -p UnitFileState -p ActiveState \
+        -p LastTriggerUSecMonotonic -p LastTriggerUSec \
+        "$LABEL.timer" 2>&1)
+    systemd_rc=$?
+    set -e
+
+    if [ "$systemd_rc" -ne 0 ]; then
+        # Fail closed. Not being able to ask is not evidence that it is fine --
+        # and an unreachable user manager is exactly what a job installed from a
+        # session that no longer exists looks like.
+        bad "the timer is installed but 'systemctl --user' cannot report on it (is a user manager running?)"
+        return 0
+    fi
+
+    load=$(printf '%s\n' "$systemd_out" | sed -n 's/^LoadState=//p' | tail -n 1)
+    unitfile=$(printf '%s\n' "$systemd_out" | sed -n 's/^UnitFileState=//p' | tail -n 1)
+    active=$(printf '%s\n' "$systemd_out" | sed -n 's/^ActiveState=//p' | tail -n 1)
+    mono=$(printf '%s\n' "$systemd_out" | sed -n 's/^LastTriggerUSecMonotonic=//p' | tail -n 1)
+    last=$(printf '%s\n' "$systemd_out" | sed -n 's/^LastTriggerUSec=//p' | tail -n 1)
+
+    if [ "$load" != "loaded" ]; then
+        bad "the timer unit is not loaded (re-run: make db-backup-schedule-install)"
+        return 0
+    fi
+    if [ "$unitfile" != "enabled" ] && [ "$unitfile" != "enabled-runtime" ]; then
+        bad "the timer is installed but not enabled (re-run: make db-backup-schedule-install)"
+        return 0
+    fi
+    if [ "$active" != "active" ]; then
+        bad "the timer is enabled but not active (re-run: make db-backup-schedule-install)"
+        return 0
+    fi
+    ok "the timer is enabled and active"
+
+    # Two readings of one fact, because the property names have moved across
+    # systemd versions. An empty value means "this systemd does not report that
+    # property", which is NOT the same as "it never fired" -- so the other is
+    # consulted, and if neither answered the gate fails closed rather than
+    # assuming the friendlier of the two readings.
+    if [ -n "$mono" ]; then
+        if [ "$mono" = "0" ]; then triggered="no"; else triggered="yes"; fi
+    elif [ -n "$last" ]; then
+        case "$last" in
+            n/a) triggered="no" ;;
+            *) triggered="yes" ;;
+        esac
+    else
+        triggered=""
+    fi
+
+    if [ -z "$triggered" ]; then
+        bad "could not read systemd's timer trigger stamp for the job"
+        return 0
+    fi
+
+    if [ "$triggered" = "no" ]; then
+        installed_days=$(age_days "$timer_unit")
+        if [ "$installed_days" -lt 0 ]; then
+            bad "the timer has never fired and its install time is unreadable"
+        elif [ "$installed_days" -gt "$RUN_GAP_MAX_DAYS" ]; then
+            bad "the timer has never fired although it was installed ${installed_days} day(s) ago"
+        else
+            warn "the timer has not fired yet (installed ${installed_days} day(s) ago) -- its first unattended run is still pending"
+        fi
+        return 0
+    fi
+
+    printf '  timer            : has fired at least once\n'
+
+    last_start=$(grep -h 'scheduled backup started' "$OUT_LOG" 2>/dev/null \
+        | tail -n 1 | sed -n 's/^\[\([^]]*\)\].*/\1/p' || true)
+
+    if [ -z "$last_start" ]; then
+        bad "the timer has fired but $OUT_LOG records no start"
+        return 0
+    fi
+
+    days=$(iso_age_days "$last_start")
+    if [ "$days" -lt 0 ]; then
+        bad "the job's last start time is unreadable: $last_start"
+        return 0
+    fi
+
+    printf '  last start       : %s (%s day(s) ago)\n' "$last_start" "$days"
+    if [ "$days" -gt "$RUN_GAP_MAX_DAYS" ]; then
+        bad "the weekly job last started ${days} day(s) ago (limit ${RUN_GAP_MAX_DAYS}) -- it may have stopped firing"
+    else
+        ok "the weekly job started recently (${days} day(s) ago)"
+    fi
+}
+
+case "$CISTAFIRMA_OS" in
+    macos) weekly_job_launchd ;;
+    linux) weekly_job_systemd ;;
+    *) bad "no weekly-job check exists for platform '$CISTAFIRMA_OS'" ;;
+esac
 
 # --- verdict -------------------------------------------------------------
 printf '\n'

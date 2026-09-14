@@ -6,6 +6,8 @@ set -Eeuo pipefail
 # CISTAFIRMA_DRILL_LOG. See lib/backup_env.sh.
 # shellcheck source=lib/backup_env.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_env.sh"
+# shellcheck source=lib/backup_os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/backup_os.sh"
 
 if [ "$#" -ne 1 ]; then
     echo "Usage: $0 /absolute/path/to/cistafirma_*.dump" >&2
@@ -66,11 +68,19 @@ fi
 # verified -- only assumed. One JSON object per line; `make db-offsite-status`
 # reads the last entry back. A *failed* drill writes nothing: the absence of a
 # recent record is itself the signal, so an old record cannot mask a failure.
-DEFAULT_DRILL_LOG="${XDG_STATE_HOME:-$HOME/Library/Application Support}/CistaFirma/restore_drills.log"
+DEFAULT_DRILL_LOG="$(state_dir)/restore_drills.log"
 DRILL_LOG="${CISTAFIRMA_DRILL_LOG:-$DEFAULT_DRILL_LOG}"
 
 drill_source="local"
-if [ -n "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ] && [ -d "${CISTAFIRMA_OFFSITE_BACKUP_DIR}" ]; then
+# The question is whether the dump came from the external copy, and it needs the
+# destination to be really attached first: on Linux an armed systemd automount
+# keeps the directory present while its target is unreachable, and a `cd` into
+# it fails with ENODEV. The reference for "different filesystem" is $HOME rather
+# than the dump's own directory, because when the drill runs from the off-site
+# copy that directory *is* the off-site one -- comparing it with itself would
+# call a correctly attached volume part of this machine.
+if [ -n "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" ] &&
+    cistafirma_offsite_mount_check "$CISTAFIRMA_OFFSITE_BACKUP_DIR" "$HOME"; then
     if [ "$(cd "$(dirname "$BACKUP_FILE")" && pwd -P)" = "$(cd "$CISTAFIRMA_OFFSITE_BACKUP_DIR" && pwd -P)" ]; then
         drill_source="off-site"
     fi
