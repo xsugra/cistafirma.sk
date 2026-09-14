@@ -27,6 +27,24 @@ export default defineConfig(({mode}) => {
     // Frontend configuration from root .env
     const FRONTEND_PORT = env.FRONTEND_PORT || '5173';
 
+    // Extra names this dev server answers to, beyond the loopback ones.
+    //
+    // Vite refuses any request whose `Host` it does not recognise, answering
+    // "Blocked request. This host is not allowed." It knows `localhost` and bare
+    // IP addresses, and a name that resolves here from somewhere else -- a
+    // Tailscale name, a LAN name -- is neither. So the refusal lands before the
+    // proxy below is ever reached, and it reads as the app being down rather
+    // than as a gap in this file.
+    //
+    // A leading dot matches the host and every subdomain of it, which is the
+    // form to use for a name that may change. Loopback is re-added at the point
+    // of use, because assigning `allowedHosts` replaces Vite's defaults instead
+    // of extending them.
+    const EXTRA_ALLOWED_HOSTS = (env.FRONTEND_ALLOWED_HOSTS || '')
+        .split(',')
+        .map((host) => host.trim())
+        .filter(Boolean);
+
     return {
         plugins: [react(), tailwindcss()],
         resolve: {
@@ -67,6 +85,11 @@ export default defineConfig(({mode}) => {
         server: {
             // Dev server port from root .env
             port: parseInt(FRONTEND_PORT),
+            // Left unset when nothing extra is configured, so Vite's own
+            // defaults keep charge of a plain local browser.
+            ...(EXTRA_ALLOWED_HOSTS.length
+                ? {allowedHosts: ['localhost', '127.0.0.1', ...EXTRA_ALLOWED_HOSTS]}
+                : {}),
             // Proxy API requests to backend (configured from root .env)
             // This allows frontend to make requests to /api which get proxied to backend
             proxy: {

@@ -304,9 +304,24 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # 1. Pridaj adresu frontendu medzi dôveryhodné pre CSRF (Django 4.0+)
 # Toto je presne to, čo vyrieši chybu "CSRF verification failed"
+#
+# Those two cover a browser on this machine. Anywhere else, the origin Django has
+# to trust is the one the *browser* used -- which this process cannot derive, so
+# it arrives as configuration instead: `CSRF_TRUSTED_ORIGINS_EXTRA`,
+# comma-separated and scheme included, e.g. `https://box.example.ts.net`.
+#
+# It is needed even though the browser sees the frontend and this API as one
+# origin. The Vite dev server reaches gunicorn over plain HTTP, so on an HTTPS
+# page `request.is_secure()` is False and the origin Django derives for itself is
+# `http://<host>` -- which can never equal the `https://<host>` the browser sent.
+# Naming the origin explicitly is what closes that gap.
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+] + [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS_EXTRA", "").split(",")
+    if origin.strip()
 ]
 
 # 2. Nastav CORS (ak používaš django-cors-headers)
