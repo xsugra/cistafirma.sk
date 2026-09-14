@@ -2788,6 +2788,41 @@ pripojený bol.
   presne tú istú mŕtvu konfiguráciu, ktorá bola nálezom 1. Nezapisujem ich;
   vyžadujú zmenu `settings.py` a to je samostatný, otestovaný krok.
 
+### Čo presne spraviť po autorizácii Tailscale — v tomto poradí
+
+Toto je zoznam krokov, ktoré sa **nedajú spraviť predtým**, aby sa po
+autorizácii nemuselo zisťovať, čo vlastne ešte chýba.
+
+1. `sudo tailscale up` na delle a autorizovať. V tailnete už uzol `dell`
+   existuje (`offline, last seen 11h ago`), takže nový sa môže zaregistrovať
+   ako `dell-1`. `.env` má wildcard `.taildb03cf.ts.net`, takže pokrýva obe —
+   to je celý dôvod, prečo je tam bodka na začiatku.
+2. `getent hosts gitlab.home.arpa` **na delle** musí začať prekladať. Dnes
+   neprekladá (overené) a je to presne ten istý príznak, ktorý sa na Macu
+   javil ako chyba DNS — bez tailnetu niet MagicDNS.
+3. Pridať remote a **dokázať, že sa repo vie aktualizovať**:
+   `git remote add gitlab-home ssh://git@gitlab.home.arpa:2222/web/cistafirma.sk.git`
+   a `git ls-remote gitlab-home`. Toto nie je voliteľné: dell má dnes **jediný**
+   remote `origin` = `https://github.com/xsugra/cistafirma.sk.git`, čo je
+   privátny repozitár a na delle k nemu **nie sú žiadne credentials**
+   (overené: žiadne `~/.git-credentials`, žiadne `credential.*`). Kód sa tam
+   teda dostal klonovaním zvonku a **dell sa dnes nevie aktualizovať vôbec**.
+   Na tomto remote závisí aj verejný kľúč dela na GitLabe (`~/.ssh/id_ed25519.pub`)
+   — ak tam ešte nie je, treba ho zaregistrovať.
+4. `tailscale serve` proti `http://127.0.0.1:5173` — jediná cesta do appky,
+   viď nález vyššie (`BIND_HOST` nie je nastavený).
+5. Off-site: automount je nastavený a naarmed, takže `make db-offsite-status`
+   musí prestať hlásiť „not mounted". Potom treba overiť **jednu vec, ktorá
+   sa nedala overiť vopred**: `offsite_crypto.sh` pri FUSE mounte
+   (`fuse.sshfs`) nekončí na `unknown` — SSH-ne sa na `host` z
+   `findmnt -no SOURCE` a **tam** sa pýta na blokové zariadenie. Pre
+   dell→lenovo teda o šifrovaní rozhodne disk na lenove, nie na delle. To
+   SSH musí prejsť neinteraktívne; ak nepôjde s `id_ed25519`, treba na delle
+   pridať `~/.ssh/config` záznam s `IdentityFile ~/.ssh/id_ed25519_offsite`
+   pre `sam-lenovo.taildb03cf.ts.net`. Lenovo je nešifrované, takže verdikt
+   bude `unencrypted` (alebo `unknown`, ak SSH neprejde) a **replikácia sa
+   odmietne** — čo je správne a čo je presne dôvod, prečo existuje D2.
+
 ---
 
 ## 8. Nemenné pravidlá
