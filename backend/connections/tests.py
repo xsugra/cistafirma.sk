@@ -1,4 +1,8 @@
+from datetime import date
+
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APITestCase
 
 from companies.models import Company
@@ -164,6 +168,79 @@ class CompanyGraphAPITests(APITestCase):
         data = response.json()
         self.assertEqual(len(data["nodes"]), 3)
         self.assertEqual(len(data["edges"]), 2)
+
+    def test_graph_collapses_one_office_into_one_edge(self):
+        """#100: twelve rows of one office used to be twelve identical edges.
+
+        The graph carries no time axis, so the copies said nothing the first one
+        did not. The last of them is `is_active=True` on purpose: a dedup that
+        kept an arbitrary copy -- the first row, the newest start date, a `set`
+        -- would answer that a current officer is a former one, which is the
+        defect #86 removed, mirrored.
+        """
+        for start in range(11):
+            PersonCompanyRelation.objects.create(
+                person=self.person,
+                company=self.company,
+                role="ine",
+                is_active=False,
+                vznik_funkcie=date(2000 + start, 1, 1),
+            )
+        PersonCompanyRelation.objects.create(
+            person=self.person,
+            company=self.company,
+            role="ine",
+            is_active=True,
+            vznik_funkcie=date(2020, 1, 1),
+        )
+
+        data = self.client.get(f"/api/companies/{self.company.ico}/graph/").json()
+        ine = [edge for edge in data["edges"] if edge["role"] == "Iné"]
+        self.assertEqual(len(ine), 1)
+        self.assertIs(ine[0]["isActive"], True)
+
+    def test_graph_keeps_two_roles_on_one_pair_as_two_edges(self):
+        """Identity is the triple, not the pair: two roles are two facts."""
+        PersonCompanyRelation.objects.create(
+            person=self.person,
+            company=self.company,
+            role="spolocnik",
+            is_active=True,
+        )
+        data = self.client.get(f"/api/companies/{self.company.ico}/graph/").json()
+        self.assertEqual(
+            sorted(edge["role"] for edge in data["edges"]),
+            ["Konateľ", "Spoločník"],
+        )
+
+    def test_graph_does_not_read_more_queries_for_more_rows(self):
+        """Duplicated rows must cost rows, not queries.
+
+        The old loop ran `other_relations` once per relation of the company, so
+        twelve periods of one office meant twelve reads of that person's other
+        companies. Measured on FREYSSINET CS: 21 edges, 9 distinct.
+        """
+        company2 = Company.objects.create(
+            ruz_id=9, ico="87654321", nazov_UJ="Tretia Firma s.r.o."
+        )
+        PersonCompanyRelation.objects.create(
+            person=self.person, company=company2, role="konatel", is_active=True
+        )
+        with CaptureQueriesContext(connection) as few:
+            self.client.get(f"/api/companies/{self.company.ico}/graph/")
+
+        for start in range(10):
+            PersonCompanyRelation.objects.create(
+                person=self.person,
+                company=self.company,
+                role="ine",
+                is_active=False,
+                vznik_funkcie=date(2000 + start, 1, 1),
+            )
+        with CaptureQueriesContext(connection) as many:
+            self.client.get(f"/api/companies/{self.company.ico}/graph/")
+
+        self.assertEqual(len(few), len(many))
 
 
 class PersonDetailAPITests(APITestCase):

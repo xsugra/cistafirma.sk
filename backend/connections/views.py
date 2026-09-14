@@ -231,6 +231,47 @@ def _merged_relations(member_ids, grouped):
     ]
 
 
+def _active_rank(is_active):
+    """Which of several readings of one edge's currency wins.
+
+    `True` (the office is current) beats `False` (it ended) beats `None` (this
+    company's history was never read -- the row's own help text). Only the first
+    is a claim about today, and collapsing the rows by any other rule -- a `set`,
+    the first row, the newest start date -- shows a current officer as a former
+    one. That is the defect #86 removed, mirrored; measured on FREYSSINET CS
+    (31798446), the same edge arrives eleven times as `False` and once as `True`.
+    """
+    if is_active is None:
+        return 0
+    return 2 if is_active else 1
+
+
+def _edges_by_identity(candidates):
+    """One edge per `(source, target, role)`, in the order they were found.
+
+    The graph has no time axis, so twelve copies of one office say nothing the
+    first one did not; the copies differ only in `vznik_funkcie`, which the edge
+    does not carry. A different role on the same pair is a different fact and
+    stays a separate edge.
+    """
+    merged = {}
+    rank = {}
+    for source, target, role, is_active in candidates:
+        key = (source, target, role)
+        if key not in merged:
+            merged[key] = {
+                "source": source,
+                "target": target,
+                "role": role,
+                "isActive": is_active,
+            }
+            rank[key] = _active_rank(is_active)
+        elif _active_rank(is_active) > rank[key]:
+            merged[key]["isActive"] = is_active
+            rank[key] = _active_rank(is_active)
+    return list(merged.values())
+
+
 class CompanyGraphView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -246,7 +287,7 @@ class CompanyGraphView(APIView):
             )
 
         nodes = {}
-        edges = []
+        candidates = []
 
         company_node_id = f"company_{company.ico}"
         nodes[company_node_id] = {
@@ -272,39 +313,49 @@ class CompanyGraphView(APIView):
         )
         cluster_of = {row.id: members for members in clusters for row in members}
 
+        # One iteration per person, not per relation. An office arrives as many
+        # rows (#93), so the old shape drew the same edge once per period -- and
+        # read that person's other companies once per period too. Measured on
+        # FREYSSINET CS: 21 edges of which 9 distinct, one pair twelve times.
+        by_person = {}
         for rel in relations:
             members = cluster_of[rel.person.id]
             primary = members[0]
+            by_person.setdefault(primary.id, (members, []))[1].append(rel)
+
+        for members, rows in by_person.values():
+            primary = members[0]
             person_node_id = f"person_{primary.id}"
+            member_ids = [m.id for m in members]
 
-            if person_node_id not in nodes:
-                company_count = (
-                    PersonCompanyRelation.objects
-                    .filter(person_id__in=[m.id for m in members])
-                    .values("company")
-                    .distinct()
-                    .count()
-                )
-                nodes[person_node_id] = {
-                    "id": person_node_id,
-                    "type": "person",
-                    "label": primary.name,
-                    "rolesCount": company_count,
-                }
+            company_count = (
+                PersonCompanyRelation.objects
+                .filter(person_id__in=member_ids)
+                .values("company")
+                .distinct()
+                .count()
+            )
+            nodes[person_node_id] = {
+                "id": person_node_id,
+                "type": "person",
+                "label": primary.name,
+                "rolesCount": company_count,
+            }
 
-            edges.append({
-                "source": person_node_id,
-                "target": company_node_id,
-                "role": rel.get_role_display(),
-                "isActive": rel.is_active,
-            })
+            for rel in rows:
+                candidates.append((
+                    person_node_id,
+                    company_node_id,
+                    rel.get_role_display(),
+                    rel.is_active,
+                ))
 
             if len(nodes) >= self.MAX_NODES:
                 break
 
             other_relations = (
                 PersonCompanyRelation.objects
-                .filter(person_id__in=[m.id for m in members])
+                .filter(person_id__in=member_ids)
                 .exclude(company=company)
                 .select_related("company")
             )
@@ -322,12 +373,12 @@ class CompanyGraphView(APIView):
                         "status": "Vymazaná" if other_company.datum_zrusenia else "Aktívna",
                     }
 
-                edges.append({
-                    "source": person_node_id,
-                    "target": other_node_id,
-                    "role": other_rel.get_role_display(),
-                    "isActive": other_rel.is_active,
-                })
+                candidates.append((
+                    person_node_id,
+                    other_node_id,
+                    other_rel.get_role_display(),
+                    other_rel.is_active,
+                ))
 
                 if len(nodes) >= self.MAX_NODES:
                     break
@@ -337,7 +388,7 @@ class CompanyGraphView(APIView):
 
         return Response({
             "nodes": list(nodes.values()),
-            "edges": edges,
+            "edges": _edges_by_identity(candidates),
             "meta": {
                 "center_node": company_node_id,
                 "depth": 1,
