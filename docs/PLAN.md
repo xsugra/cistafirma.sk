@@ -2887,6 +2887,32 @@ pripojený bol.
 Toto je zoznam krokov, ktoré sa **nedajú spraviť predtým**, aby sa po
 autorizácii nemuselo zisťovať, čo vlastne ešte chýba.
 
+**Predletová kontrola je hotová** (15. 9., aby sa po autorizácii nehľadalo,
+čo ešte chýba):
+
+| čo | stav |
+|---|---|
+| časové pásmo | `Europe/Bratislava` (CEST +0200) ✓ |
+| ufw | active, `Anywhere on tailscale0 ALLOW` už nastavené ✓ |
+| sshd | `PasswordAuthentication no`, `PermitRootLogin prohibit-password`, 0 pokusov o heslo za 7 dní ✓ |
+| sudo | passwordless (`/etc/sudoers.d/90-sam-nopasswd`) ✓ |
+| docker | `docker info` pre `sam` funguje (29.8.0, overlay2), `sam` je v grupe `docker` ✓ |
+| disk | 466 G, použité 9,4 G (3 %) ✓ |
+| pamäť / CPU | 7,1 Gi (6,3 Gi free) / 4 jadrá ✓ |
+| **linger** | **bol `no` — opravené na `yes`**, viď nižšie |
+| off-site kľúč | `id_ed25519_offsite` **je** v `authorized_keys` na lenove (odtlačok `SHA256:rwlPrJ4J…`) ✓ |
+| kód na delle | `scripts/local/` je **bajt na bajt** zhodné s commitom portu (20/20 hashov) ✓ |
+| git HEAD na delle | `ece5652` — 5 commitov za Macom, a **nemá ako sa aktualizovať** |
+
+`Linger=no` bol jediný nájdený konfiguračný problém a je to presne trieda
+tichého zlyhania, ktorú tento projekt rieši všade inde: systemd **user** timer
+týždenného zálohovania sa na headless serveri zastaví spolu s poslednou
+session, takže by sa nespustil takmer nikdy a nič by to nehlásilo. Opravené
+`sudo -n loginctl enable-linger sam`; overené `Linger=yes` a
+`systemctl --user is-system-running` → `running`. Je to reverzibilné
+(`disable-linger`) a je to presne ten krok, ktorý inštalátor zámeme nevykonáva
+sám, len naň upozorňuje.
+
 1. `sudo tailscale up` na delle a autorizovať. V tailnete už uzol `dell`
    existuje (`offline, last seen 11h ago`), takže nový sa môže zaregistrovať
    ako `dell-1`. `.env` má wildcard `.taildb03cf.ts.net`, takže pokrýva obe —
@@ -2903,19 +2929,34 @@ autorizácii nemuselo zisťovať, čo vlastne ešte chýba.
    teda dostal klonovaním zvonku a **dell sa dnes nevie aktualizovať vôbec**.
    Na tomto remote závisí aj verejný kľúč dela na GitLabe (`~/.ssh/id_ed25519.pub`)
    — ak tam ešte nie je, treba ho zaregistrovať.
+
+   Pozor na pracovný strom: `scripts/local/` je na delle zmenené voči `ece5652`
+   presne o obsah portu, takže `merge --ff-only` môže odmietnuť prepísať
+   lokálne zmeny. Postup, ktorý je bezpečný, lebo obsah je už zhodný:
+   `git fetch gitlab-home`, `git diff --stat HEAD..gitlab-home/feat/ai-ready-baseline -- scripts/local`
+   (musí ukázať presne port a nič iné), záloha `tar czf ~/scripts-local.tgz scripts/local`,
+   a až potom `git checkout -- scripts/local && git merge --ff-only`.
+   `checkout` tu nie je strata — vracia súbory na `ece5652`, odkiaľ ich merge
+   vzápätí vráti späť na obsah, ktorý tam je teraz. Záloha je pre prípad, že
+   by diff ukázal niečo iné, než sa čaká.
 4. `tailscale serve` proti `http://127.0.0.1:5173` — jediná cesta do appky,
    viď nález vyššie (`BIND_HOST` nie je nastavený).
 5. Off-site: automount je nastavený a naarmed, takže `make db-offsite-status`
-   musí prestať hlásiť „not mounted". Potom treba overiť **jednu vec, ktorá
-   sa nedala overiť vopred**: `offsite_crypto.sh` pri FUSE mounte
-   (`fuse.sshfs`) nekončí na `unknown` — SSH-ne sa na `host` z
-   `findmnt -no SOURCE` a **tam** sa pýta na blokové zariadenie. Pre
-   dell→lenovo teda o šifrovaní rozhodne disk na lenove, nie na delle. To
-   SSH musí prejsť neinteraktívne; ak nepôjde s `id_ed25519`, treba na delle
-   pridať `~/.ssh/config` záznam s `IdentityFile ~/.ssh/id_ed25519_offsite`
-   pre `sam-lenovo.taildb03cf.ts.net`. Lenovo je nešifrované, takže verdikt
-   bude `unencrypted` (alebo `unknown`, ak SSH neprejde) a **replikácia sa
-   odmietne** — čo je správne a čo je presne dôvod, prečo existuje D2.
+   musí prestať hlásiť „not mounted".
+
+   **Verdikt šifrovania je teraz predoverený, nie odhadnutý.** SSH z dela na
+   lenovo prejde neinteraktívne — kľúč `id_ed25519_offsite` je v
+   `authorized_keys` na lenove a fstab ho použúva explicitne cez
+   `IdentityFile=`, takže `~/.ssh/config` záznam netreba. A na lenove je cieľ
+   `/home/sam/cistafirmaBackups` na `/dev/sda3`, `ext4`, bez LUKS vrstvy
+   (`lsblk -s -no NAME,TYPE,FSTYPE` → `sda3 part ext4` pod `sda disk`), takže
+   vzdialená kontrola **odpovie** — verdikt bude `unencrypted`, nie `unknown`.
+
+   `replicate` sa teda odmietne. **To je správne** a je to presne dôvod, prečo
+   existuje D2: buď sa cieľ zašifruje, alebo sa replikuje s tokenom
+   `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true` a s vedomím, že off-site
+   kópia je nešifrovaná. Token na delle v `backup.env` **nie je** (overené),
+   takže dnes by replikácia neprešla ani omylom.
 
 ---
 
