@@ -2604,16 +2604,110 @@ sshfs. Žiadny `sshfs` proces pritom nebeží a mount jednotka je `failed`.
 Dôsledok pre `replicate_postgres_backup.sh` je závažný — prešiel by prvou
 bránou a rsync by zapisoval do lokálneho adresára **na tom istom disku ako
 originál**, teda „replika", ktorá o nič nechráni. Kontrola musí súdiť výsledok
-reálnej I/O operácie, nie existenciu adresára. *(Automount sa po zlyhaní sám
-re-triggeruje pri ďalšom prístupe — overené, druhý pokus vyvolal nový mount —
-takže samooprava funguje; klame len tá kontrola.)*
+reálnej I/O operácie, nie existenciu adresára.
+
+**Oprava pôvodného tvrdenia (15. 9.):** pôvodne som sem napísal, že
+„automount sa po zlyhaní sám re-triggeruje, takže samooprava funguje". To
+platí **len do chvíle, než systemd vyčerpá limit pokusov** — a to je zásadný
+rozdiel, nie detail. Odmerané na delle o 00:40 po ~13 minútach sondovania
+s nedosiahnuteľným cieľom:
+
+```
+Active: failed (Result: mount-start-limit-hit)
+grep -c cistafirma-offsite /proc/self/mountinfo  →  0
+stat -c '%d' /mnt/cistafirma-offsite             →  64512   (úspech!)
+findmnt -no FSTYPE,SOURCE --target …             →  ext4 /dev/mapper/ubuntu--vg-ubuntu--lv
+```
+
+Teda po `mount-start-limit-hit` systemd automount **zastaví**, autofs záznam
+z `mountinfo` **zmizne** a cesta sa natrvalo zvrhne na obyčajný lokálny
+adresár na koreňovom disku — v tomto stave prestane klamať aj `[ -d ]`
+aj `stat`, lebo adresár je naozaj tam a naozaj je to ext4. To je horší stav
+než ten, ktorý popisuje tabuľka vyššie. **Riešenie je drop-in**
+`/etc/systemd/system/mnt-cistafirma\x2doffsite.automount.d/override.conf`
+s `StartLimitIntervalSec=0` (nainštalovaný, `systemctl show -p
+StartLimitIntervalUSec` → `0`), takže trigger ostáva naarmed a každý prístup
+ďalej končí na `ENODEV`; po ňom treba `reset-failed` + `start`, inak sa
+automount sám nevráti (čo sa stalo aj mne — po `systemctl reset-failed` +
+`start` je späť `active` a v `mountinfo` je 1 autofs záznam).
+
+Obe stráže pritom v **oboch** stavoch zadržali zápis, overené naostro na
+delle (nie emuláciou `stat` na macOS), s falošným dumpom v `/tmp`, v tomto
+poradí:
+
+| stav | verdict | `replicate` | obsah `/mnt/cistafirma-offsite` |
+|---|---|---|---|
+| armed, cieľ nedosiahnuteľný | `not-attached` | `ERROR: … is not mounted or does not exist` + dôvod, exit 1 | 0 → **0** |
+| automount vzdal, holý adresár | `same-filesystem` | `ERROR: … must be on a different filesystem` / `… encrypted volume`, exit 1 | 0 → **0** |
+
+To je zároveň dôvod, prečo mount check porovnáva **zariadenie** s referenciou
+a nie len to, či sa cesta dá prečítať: druhá stráž existuje práve pre stav,
+v ktorom prvá už nemá čo merať.
+
+*Zmerané, ale neopravené:* referencia pre porovnanie zariadení je
+`dirname "$BACKUP_FILE"`, takže keď sa `replicate` zavolá s dumpom **mimo**
+záložného adresára (napr. v `/tmp`, ktorý je na Ubuntu tmpfs), porovnanie
+vyjde „rôzne zariadenia" a mount check prejde aj nad holým lokálnym
+adresárom. V produkcii je referencia skutočný záložný adresár, takže sa to
+nestane; v teste to zachytila až šifrovacia brána. Je to pre-existujúca
+vlastnosť tvaru volania, nie regresia portu.
+
+**Stav na delle je presne tento stav, naživo** (15. 9. 00:41):
+
+```
+mnt-cistafirma\x2doffsite.mount      failed (Result: exit-code)
+  mount[67175]: read: Connection reset by peer
+mnt-cistafirma\x2doffsite.automount  active
+mountinfo:  1 riadok — autofs systemd-1 ... timeout=600,direct
+ls /mnt/cistafirma-offsite  →  Os { code: 19, "No such device" }
+```
+
+Teda armed automount, ktorého mount zlyhal, `mountinfo` má **jeden** záznam
+(trigger, nie súborový systém) a `ls` skončí na ENODEV. Guard to hlási ako
+`not-attached` s dôvodom — presne to, pre čo existuje.
+
+**Príčina je jedna a tá istá pre všetko ostatné: Tailscale na delle je
+odhlásené.**
+
+```
+$ tailscale status
+Logged out.
+Log in at: https://login.tailscale.com/a/c458d6401f618
+```
+
+`sam-lenovo.taildb03cf.ts.net` sa preto na delle nepreloží
+(`Could not resolve hostname`), takže sshfs nemá kam sa pripojiť, a rovnako
+nefunguje `gitlab-home` remote ani `tailscale serve`. Kým táto autorizácia
+neprebehne, nedá sa zmerať ani jedna z troch vecí, ktoré na sebe navzájom
+závisia — a nedá sa ani stiahnuť kód na server, lebo dell nemá iný remote než
+privátny GitHub bez prihlásenia.
+
+**Otázka `x-systemd.idle-timeout=600` nie je bezpečnostná otázka.** Či po
+10 minútach nečinnosti trigger prežije alebo zmizne, rozhoduje len o tom, či
+sa mount po idle okne znova nadvihne sám. Obe možné odpovede sú ošetrené a obe
+sú hlučné:
+
+| čo idle timeout spraví | stav cesty | verdict guardu | dôsledok |
+|---|---|---|---|
+| trigger prežije | armed, mount zlyhá | `not-attached` (ENODEV) | `replicate` odmietne, job zlyhá nahlas |
+| trigger zmizne | holý lokálny adresár | `same-filesystem` | `replicate` odmietne, job zlyhá nahlas |
+
+Ani jeden z nich nie je tichý a ani jeden nezapíše repliku na nesprávne
+miesto. Ak sa ukáže, že trigger po idle okne neprežije, `x-systemd.idle-timeout`
+treba z fstab riadku **odstrániť** — nie preto, že by bol nebezpečný, ale
+preto, že zbytočne mení funkčný mount na odmietnutý zápis raz za 10 minút.
+Odmeranie je spustené a čaká na to, aby mount vôbec niekedy uspel, teda na
+Tailscale. Poznámka k metodike: prvé meranie bolo bezcenné, lebo som tesne
+pred ním na cestu siahol (`ls`) a tým idle okno reštartoval.
 
 **Nález 2 — off-site cesta je závislá od tailnetu, a ten ešte nie je.**
 Lenovo je na LAN **zatvorené**: `192.168.1.107:22` aj `192.168.1.17:22` (jeho
 Wi-Fi aj kábel) sú CLOSED z Macu aj z dellu, hoci sshd počúva na `0.0.0.0:22`
 — zaviera ho teda firewall. Otvorené je len na tailnet adrese
-`100.120.104.84:22`. Dell je v tailnete zatiaľ `NeedsLogin`, takže mount
-reálne neprejde — čo je presne stav, v ktorom bol nález 1 odmeraný.
+`100.120.104.84:22`. Dell je v tailnete odhlásené (`tailscale status` →
+`Logged out`, nie `NeedsLogin` — je to teda re-autorizácia, nie čakanie na
+schválenie), takže mount reálne neprejde — čo je presne stav, v ktorom bol
+nález 1 odmeraný.
 
 **Nález 3 — a tento je časovo citlivý: presunom produkcie sa zníži ochrana
 primárnej kópie.**
