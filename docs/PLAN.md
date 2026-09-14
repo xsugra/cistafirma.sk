@@ -1343,7 +1343,32 @@ už zlúčil — a to je presne tá kniha, ktorú read-time nepotrebuje.
 stránka tvrdí o histórii — to patrí do samostatného rozhodnutia. Podklad preň
 je premeranie vyššie; rozhodnutie je Samuelovo.
 
-### #100 — Graf kreslí tú istú hranu 12× (a #95 to zhoršuje)
+### #100 — Graf kreslí tú istú hranu 12× (a #95 to zhoršuje) — ✅ hotové
+
+**Vyriešené 2026-09-14.** `CompanyGraphView` teraz iteruje **po osobách**, nie po
+väzbách, a hrany skladá `_edges_by_identity` na identitu `(source, target, role)`
+— rola je súčasť identity, takže dve funkcie na tej istej dvojici zostávajú dve
+hrany. `isActive` sa zlieva s precedenciou, ktorú už používa `_merged_relations`
+(`True` > `False` > `None`), čiže pasca v odstavci nižšie je pokrytá.
+
+Namerané na živej databáze (read-only, cez `APIRequestFactory`, bez reštartu):
+
+* FREYSSINET CS (31798446): **21 hrán → 9**, uzly bez zmeny (10), a zlúčená
+  hrana má `isActive=True` — teda tá jedna `True` medzi jedenástimi `False`
+  vyhrala, ako má.
+* Osem firiem s najviac väzbami (dnešný výber podľa počtu väzieb, nie ten istý
+  výber, z ktorého je tabuľka nižšie): **1 119 hrán, 1 119 rôznych, 0
+  redundantných**.
+* Celá tabuľka: z 126 669 riadkov je **15 100 trojíc** `(osoba, firma, rola)`
+  s viac než jedným riadkom, spolu **26 459 nadbytočných riadkov (20,9 %)** —
+  a to je **dolná hranica**, lebo view zlieva po zhlukoch osôb, nie po riadkoch.
+
+Testy: tri nové prípady (zbalenie + pasca `isActive`, dve roly = dve hrany,
+počet dotazov nerastie s duplicitnými riadkami). Celá sada: 811 testov, OK.
+
+**Frontend netreba meniť** — redundancia bola v odpovedi, nie v renderi.
+„Nemerané" nižšie (či to bolo vidieť na plátne) tým ostáva nemerané, ale už
+nie je dôvod to riešiť v `useGraphData.ts`.
 
 **Nález pri overovaní #93, ale iná vec než #93.** Overené na živej odpovedi
 `GET /api/companies/<ico>/graph/` dňa 2026-09-13:
