@@ -2693,12 +2693,32 @@ sú hlučné:
 | trigger zmizne | holý lokálny adresár | `same-filesystem` | `replicate` odmietne, job zlyhá nahlas |
 
 Ani jeden z nich nie je tichý a ani jeden nezapíše repliku na nesprávne
-miesto. Ak sa ukáže, že trigger po idle okne neprežije, `x-systemd.idle-timeout`
-treba z fstab riadku **odstrániť** — nie preto, že by bol nebezpečný, ale
-preto, že zbytočne mení funkčný mount na odmietnutý zápis raz za 10 minút.
-Odmeranie je spustené a čaká na to, aby mount vôbec niekedy uspel, teda na
-Tailscale. Poznámka k metodike: prvé meranie bolo bezcenné, lebo som tesne
-pred ním na cestu siahol (`ls`) a tým idle okno reštartoval.
+miesto.
+
+**Odmerané 15. 9. — trigger prežije, a `x-systemd.idle-timeout=600` teda
+ostáva.** Meranie: baseline `00:44:37`, potom 780 s bez toho, aby sa na cestu
+čokoľvek dotklo, čítanie `00:57:38` (13 minút po poslednom prístupe, teda
+o 3 minúty za 10-minútovým oknom):
+
+| čo | hodnota |
+|---|---|
+| `systemctl is-active …automount` | `active` |
+| riadky v `/proc/self/mountinfo` | `1` |
+| `findmnt -t autofs` | `1` |
+| `.mount` unit | `failed` — očakávané, mount nikdy neuspel |
+
+Trigger teda po idle okne **nezmizol** a cesta sa nezmenila na holý lokálny
+adresár. Prvý riadok tabuľky je správny a `x-systemd.idle-timeout` sa
+neodstraňuje. Poznámka k metodike: prvé meranie bolo bezcenné, lebo som tesne
+pred ním na cestu siahol (`ls`) a tým idle okno reštartoval; toto meranie je
+čisté.
+
+  Čo tým **nie je** odmerané a netreba to predstierať: čo spraví idle timeout
+  po *úspešnom* mounte (unmount a následné znovu-nadvihnutie pri ďalšom
+  prístupe). To sa zmerať nedá, kým je lenovo nedostupné, a je to bežné
+  správanie systemd. Rozdiel je však malý: tento stav nastane raz za týždeň
+  pri behu jobu, kým odmeraný stav (cieľ dole) nastane vždy, keď lenovo spí —
+  a práve ten je ošetrený dvoma vrstvami a hlučne.
 
 **Nález 2 — off-site cesta je závislá od tailnetu, a ten ešte nie je.**
 Lenovo je na LAN **zatvorené**: `192.168.1.107:22` aj `192.168.1.17:22` (jeho
