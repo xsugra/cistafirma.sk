@@ -2349,6 +2349,20 @@ všetko úlohy, ktoré **bežali**. Úloha, ktorá sa nespustí, po sebe `SyncJo
 nezanechá, takže neexistuje riadok, o ktorý by sa kontrola oprela. Kontroly
 súdia behy; nikto nesúdi neexistenciu behu.
 
+**Návrh brány (nezavedené, čaká na rozhodnutie):** dve tvrdenia na
+`PeriodicTask`, obe čítané z riadku a intervalov, ktoré už sú v
+`CELERY_BEAT_SCHEDULE`:
+
+* `last_run_at IS NULL` a `now - date_changed > interval + rezerva` → **fail**.
+  Toto je to jediné, čo vidí riadok, ktorý nikdy nebežal, a nepotrebuje na to
+  žiadnu históriu — práve preto je to prvé pravidlo, ak nie jediné.
+* `last_run_at` je staršie než `2 × interval` → **fail**. Druhé je poistka
+  proti riadku, ktorý bežal raz a odvtedy mlčí.
+
+Rezervu treba kalibrovať na 10-minútovom riadku (`detect-stuck`), ktorý je
+najcitlivejší na oneskorenie tiku; bez nej by brána kričala pri každom
+pomalšom tiknutí.
+
 **Dopad na dáta je menší, než to vyzerá** — a je iný, než by človek čakal:
 `SectorBenchmark` má 15 riadkov, ale všetky s `computed_at = 2026-09-12 19:55:43Z`,
 teda z jednorazového ručného prepočtu pri vzniku tej opravy. Dáta teda existujú;
