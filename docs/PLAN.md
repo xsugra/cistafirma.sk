@@ -2729,8 +2729,10 @@ po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
   Čo je *vylúčené*: pridať šifrovaný LV popri existujúcom. `ubuntu-vg` má
   **`VFree 0`** a celý disk je jeden PV (`/dev/sda3`), takže nový LV by
   vyžadoval zmenšenie koreňového — a to pri ext4 na pripojenom koreni
-  nejde, treba offline `resize2fs`, teda konzolu. To je na vzdialenom
-  serveri bez konzoly horšie než čokoľvek, čo tým získame.
+  nejde, treba offline `resize2fs`. (Konzola je pritom fyzicky k dispozícii,
+  dell je notebook s klávesnicou a displejom — viď nižšie — takže to nie je
+  nemožné, len zbytočne riskantnejšie než preinštalovanie na takmer holom
+  stroji.)
 
   Reálne teda zostáva:
   (a) **preinštalovať s LUKS** (inštalátor Ubuntu Server vie „Encrypt the
@@ -2758,11 +2760,43 @@ po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
      prúdu = služba dole, kým sa niekto fyzicky nedostaví.
 
      Z toho vyplýva, že (a) má zmysel buď spolu s UPS, alebo s vedomým
-     prijatím toho, že návrat po výpadku nie je automatický. Bez toho je
-     poctivá odpoveď (b) — prijať nešifrovaný primár a **zapísať to**.
-     Alternatívy ako keyfile na nešifrovanom koreni (kľúč cestuje s tým
-     istým diskom, ktorý má chrániť) alebo TPM odomknutie (zlodej stroj
-     proste zapne) pridávajú zložitosť bez skutočného zisku.
+     prijatím toho, že návrat po výpadku nie je automatický.
+
+  **Oprava môjho vlastného skoršieho záveru: TPM to nemení na „zložitosť bez
+  zisku".** Tvrdil som, že keyfile na nešifrovanom koreni aj TPM odomknutie
+  „pridávajú zložitosť bez skutočného zisku, lebo zlodej stroj proste zapne".
+  Prvá polovica je správna (keyfile cestuje s diskom, ktorý má chrániť), druhá
+  je nepresná a rozhoduje o voľbe. Odmerané na delle 15. 9.:
+
+  | čo | stav |
+  |---|---|
+  | TPM | **je** — `/sys/class/tpm/tpm0`, verzia `2`, „TPM 2.0 Device" |
+  | nástroje | `systemd-cryptenroll`, `cryptsetup` sú nainštalované |
+  | Secure Boot | **enabled** (`mokutil --sb-state`) |
+
+  To je presne kombinácia, pri ktorej `systemd-cryptenroll --tpm2-device=auto`
+  (default PCR 7) odomkne disk **bez človeka** — a vďaka zapnutému Secure Bootu
+  to prežije aj aktualizácie jadra a bootloaderu. Tým **padá hlavný argument
+  pre (b)**: „po každom reštarte musí niekto prísť" už neplatí, a to je práve
+  tá vlastnosť, ktorú mŕtva batéria robí kritickou. Zároveň sa zachováva
+  passphrase slot, takže keď sa TPM meranie zmení, stroj sa spýta — a to je
+  poistka, nie porucha.
+
+  Čo TPM **naozaj nerieši**, a musí byť povedané rovnako jasne: kto odnesie
+  **celý stroj**, ten ho proste zapne a TPM mu kľúč vydá. Chráni teda proti
+  tomu, že disk opustí dom (predaj, RMA, vyradenie, vybratie), nie proti
+  vlámaniu. (Zvyšok proti tomu sa dá prilepiť — BIOS heslo a vypnuté
+  bootovanie z USB — ale to je tvrdenie o odolnom stroji, nie o šifrovaní.)
+
+  **D1 je teda otázka hrozby, nie otázka šifry**, a dá sa rozhodnúť jednou
+  vetou:
+  - Ak je hrozba „disk odíde z domu" → **(a) preinštalovať s LUKS + TPM2**.
+    Získava sa reálna ochrana a zostáva to bez obsluhy.
+  - Ak je hrozba „zlodej odnesie notebook" → TPM2 sám nepomôže, na to treba
+    passphrase pri boote, a to pri mŕtvej batérii znamená fyzickú účasť po
+    každom nečistom vypnutí. Potom je poctivá odpoveď **(b)** — prijať
+    nešifrovaný primár, **zapísať to** a investovať dôvernosť do D2, ktorá
+    chráni presne tú kópiu, ktorá naozaj opúšťa domov.
 
   **Poradie je dôležitejšie než voľba: D1 patrí pred autorizáciu Tailscale.**
   Ak vyjde (a), preinštalácia zmaže všetko, čo je na delle pripravené —
@@ -2941,6 +2975,21 @@ z 10. 9. ju odtiaľ aj čítal, takže cieľ vtedy pripojený bol.
 Toto je zoznam krokov, ktoré sa **nedajú spraviť predtým**, aby sa po
 autorizácii nemuselo zisťovať, čo vlastne ešte chýba.
 
+**Predtým než sa skúsi LAN skratka: neexistuje.** Ponúka sa myšlienka, že keď
+sú dell (`192.168.1.210/24`) a lenovo (`192.168.1.17`) na tej istej podsieť,
+kód sa dá stiahnuť z gitlabu na lenove po LAN a na Tailscale sa vykašlať.
+Odmerané 15. 9. a **nejde to**: lenovo na `ping` odpovedá (0,3 ms, teda naozaj
+beží a je to tá istá podsieť), ale `192.168.1.17:8088` aj `:2222` **timeoutujú**
+(rc=28 pri `curl`, `Connection timed out` pri `ssh`). Lenovo má firewall, ktorý
+LAN zahadzuje; `timeout`, `nc`, `curl` aj `ping` sú na delle prítomné, takže
+výsledok nie je artefakt chýbajúceho nástroja. Smerom von je dell tiež
+uzavretý: `ufw` povoľuje len `22/tcp`, `tailscale0` a `41641/udp`.
+
+  Z toho vyplýva to podstatné: **autorizácia Tailscale je jediná akcia, ktorá
+  odblokuje tri veci naraz** — klon repa z gitlabu, off-site mount na lenovo
+  a `tailscale serve`. Nie je to pohodlnejšia cesta k dvom existujúcim; je to
+  jediná cesta k trom neexistujúcim.
+
 **Predletová kontrola je hotová** (15. 9., aby sa po autorizácii nehľadalo,
 čo ešte chýba):
 
@@ -3057,8 +3106,26 @@ Rotáciu vykonáva **používateľ** — hodnoty tajomstiev nevytváram ani neza
    `checkout` tu nie je strata — vracia súbory na `ece5652`, odkiaľ ich merge
    vzápätí vráti späť na obsah, ktorý tam je teraz. Záloha je pre prípad, že
    by diff ukázal niečo iné, než sa čaká.
-4. `tailscale serve` proti `http://127.0.0.1:5173` — jediná cesta do appky,
-   viď nález vyššie (`BIND_HOST` nie je nastavený).
+4. `tailscale serve` proti frontendu — jediná cesta do appky, viď nález vyššie
+   (`BIND_HOST` nie je nastavený, takže backend aj frontend sú loopback-only).
+   Verzia na delle je **1.102.4**, takže syntax je `tailscale serve --bg 5173`
+   (cieľ sa dá zadať ako port; `--bg` ho nechá bežať, bez toho beží v popredí).
+   Keďže frontend je publikovaný na `${BIND_HOST:-127.0.0.1}:5173`, služba
+   na `127.0.0.1:5173` je presne to, na čo sa to má napojiť.
+
+   **Pozor na jednu vec, ktorá to zastaví a nie je to zjavné:** `serve` štandardne
+   vystavuje na **HTTPS (443)** a to vyžaduje, aby mal tailnet zapnuté
+   **HTTPS certifikáty** v admin konzole (`login.tailscale.com` → DNS → HTTPS
+   Certificates). Bez toho `serve` odmietne s tým, že HTTPS nie je zapnuté —
+   a na delle to dnes overiť nevieme, lebo bez autorizácie sa `serve` ani
+   nerozbehne. Je to nastavenie tailnetu, nie stroja, takže sa to zapína raz
+   a je zadarmo (nie je to Funnel, teda nie je to vystavenie do internetu).
+   Alternatíva, ak sa certifikáty zapnúť nechcú, je `tailscale serve --http=80 5173`,
+   ale to dá obyčajné HTTP a `SESSION_COOKIE_SECURE`/`CSRF_COOKIE_SECURE`
+   by potom nemali zmysel.
+
+   `serve` na Linuxe treba spúšťať cez `sudo` (alebo si najprv nastaviť
+   `sudo tailscale set --operator=sam`, aby netrebalo `sudo` pri každej zmene).
 5. Off-site: automount je nastavený a naarmed, takže `make db-offsite-status`
    musí prestať hlásiť „not mounted".
 
