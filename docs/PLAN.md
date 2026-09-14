@@ -2913,6 +2913,70 @@ session, takže by sa nespustil takmer nikdy a nič by to nehlásilo. Opravené
 (`disable-linger`) a je to presne ten krok, ktorý inštalátor zámeme nevykonáva
 sám, len naň upozorňuje.
 
+**Druhý nález z tej istej kontroly, a tento má lehotu: všetky tri tajomstvá sú
+na oboch strojoch stále verejné defaulty.**
+
+| kľúč v `.env` | Mac | dell | dosah |
+|---|---|---|---|
+| `SECRET_KEY` | default | default | podpis JWT/session — falšovateľný prihlásený používateľ |
+| `POSTGRES_PASSWORD` | default | default | databáza je loopback-only, takže len lokálny proces |
+| `REDIS_PASSWORD` | default | default | to isté |
+| `METRICS_TOKEN` | prázdny | prázdny | zámerne — `/metrics` je viazaný na privátne adresy |
+
+Porovnávané len na zhodu s verejným defaultom; hodnoty sa nikde nevypisujú.
+
+To nie je nová chyba portu — Mac to tak mal odjakživa. Nové je **vystavenie**:
+appka sa presúva z loopback-only na Macu na dosiahnuteľnú v tailnete, takže
+`SECRET_KEY` prestáva byť teoretický problém. A je tu **lehotu, ktorá sa
+zatvára prvým `docker compose up`**: na delle **neexistuje žiadny docker
+volume** (`docker volume ls` je prázdny), takže postgres si rolu inicializuje
+z `POSTGRES_PASSWORD` pri prvom štarte. Teraz je teda zmena hesla zadarmo;
+potom je to `ALTER USER` nad živými dátami. **Rotácia preto patrí pred #108
+(prvý štart stacku), nielen pred #107** — inak sa z jednoduchého zápisu do
+`.env` stane prevádzková akcia.
+
+Postup pre `POSTGRES_PASSWORD` a `REDIS_PASSWORD` — obe sú čisto konfiguračné,
+nič v databáze na nich nezávisí, kým volume neexistuje. `REDIS_PASSWORD` je
+v `.env` na štyroch miestach (`REDIS_PASSWORD`, `REDIS_URL`,
+`CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`) a musia ostať v súlade; `token_urlsafe`
+je URL-safe, takže connection stringy sa nerozbijú:
+
+```bash
+cd ~/cistafirma
+cp .env ".env.bak-secrets-$(date -u +%Y%m%dT%H%M%SZ)"
+NEW_PG=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
+NEW_REDIS=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
+NEW_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')
+NEW_PG="$NEW_PG" NEW_REDIS="$NEW_REDIS" NEW_KEY="$NEW_KEY" python3 - <<'PY'
+import os, re, pathlib
+p = pathlib.Path('.env'); s = p.read_text()
+s = re.sub(r'^POSTGRES_PASSWORD=.*$', 'POSTGRES_PASSWORD=' + os.environ['NEW_PG'], s, count=1, flags=re.M)
+s = re.sub(r'^SECRET_KEY=.*$',        'SECRET_KEY=' + os.environ['NEW_KEY'],       s, count=1, flags=re.M)
+# Every occurrence of the old redis password, in the two .env forms it appears in.
+s = s.replace('cistafirma_redis_secret', os.environ['NEW_REDIS'])
+s = re.sub(r'^REDIS_PASSWORD=.*$', 'REDIS_PASSWORD=' + os.environ['NEW_REDIS'], s, count=1, flags=re.M)
+p.write_text(s)
+PY
+grep -c 'cistafirma_redis_secret' .env   # must print 0
+```
+
+Posledný `grep` je kontrola, že po starom redis hesle neostal ani jeden výskyt
+— práve rozídené `REDIS_PASSWORD` a `REDIS_URL` je chyba, ktorá sa prejaví až
+tým, že Celery nikam nepripojí. Postup je **odskúšaný na kópii `.env`**
+(v `$CLAUDE_JOB_DIR/tmp`, nie na živom súbore): z 9 výskytov starého hesla
+(7 v `.env.default`) neostal ani jeden, `POSTGRES_PASSWORD` aj `SECRET_KEY`
+prestali byť defaulty a všetky tri Redis URL odkazujú na nové heslo, ktoré je
+URL-safe.
+
+Pre `SECRET_KEY` je dôsledok iný a treba ho pomenovať: rotácia zneplatní
+všetky existujúce JWT, takže sa používatelia prihlásia znova. Nič sa tým
+nestratí — v `requirements.txt` nie je žiadna šifrovacia knižnica, takže na
+`SECRET_KEY` nezávisí žiadny uložený obsah, len podpisy tokenov. A keďže sa
+databáza na dell prenáša z Macu (#106), je jedno, že Mac má kľúč iný; tokeny
+sa aj tak vydávajú nanovo.
+
+Rotáciu vykonáva **používateľ** — hodnoty tajomstiev nevytváram ani nezapisujem.
+
 1. `sudo tailscale up` na delle a autorizovať. V tailnete už uzol `dell`
    existuje (`offline, last seen 11h ago`), takže nový sa môže zaregistrovať
    ako `dell-1`. `.env` má wildcard `.taildb03cf.ts.net`, takže pokrýva obe —
