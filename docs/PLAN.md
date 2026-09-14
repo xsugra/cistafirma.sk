@@ -2764,6 +2764,15 @@ po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
      istým diskom, ktorý má chrániť) alebo TPM odomknutie (zlodej stroj
      proste zapne) pridávajú zložitosť bez skutočného zisku.
 
+  **Poradie je dôležitejšie než voľba: D1 patrí pred autorizáciu Tailscale.**
+  Ak vyjde (a), preinštalácia zmaže všetko, čo je na delle pripravené —
+  fstab riadok pre off-site, automount drop-in s `StartLimitIntervalSec=0`,
+  `Linger=yes`, `.env`, rsyncnutý kód — a stroj dostane **inú identitu v
+  tailnete**, takže sa autorizuje znova. Dnes je na delle takmer nič, takže
+  je to hodina; po autorizácii a po off-site overeniach je to tá istá hodina
+  plus znovu celá predletová kontrola. Preto sa naň nechce pýtať až po tom,
+  čo používateľ otvorí autorizačnú URL.
+
 - **D2 — off-site replika.** `DATA_PROTECTION.md` žiada „an encrypted
   off-host replica" a nešifrovaný cieľ výslovne nazýva neprijateľným
   dlhodobo. Na lenove sa to šifrovaním zväzku splniť nedá: disk je
@@ -2792,23 +2801,52 @@ naživo, jeden po druhom, a **dva z nich neboli nálezy** — boli to stavy, kto
 sa medzitým zmenili. To je dôležité pomenovať presne, lebo „vyriešiť nález"
 a „nález nebol pravda" sú dve rôzne veci a druhá sa nesmie tváriť ako prvá.
 
-**1. `ALLOWED_HOSTS` v `.env` bol mŕtvy config — ✅ vyriešené, a má to
-dôsledok.** Opravené v `ece5652`: `settings.py` ho konečne číta. Lenže tým sa
-z mŕtveho configu stal **živý** — a kým bol mŕtvy, platil fallback
-`or ["*"]` (settings.py:75), ktorý všetko zachraňoval. Od `ece5652` je fallback
-nedosiahnuteľný, lebo `.env` hodnotu má, takže **chýbajúce meno už znamená 400,
-nie ticho fungujúci fallback**. Dell má v `.env`
-`ALLOWED_HOSTS=localhost,127.0.0.1,backend,.taildb03cf.ts.net` — overené, že tam
-je (a `.env` na delle je inak **nadmnožina** Macu: 29 kľúčov oproti 27, žiadny
-nenachýba, líši sa len `ALLOWED_HOSTS`).
+**1. `ALLOWED_HOSTS` v `.env` bol mŕtvy config — ✅ vyriešené, a bolo to
+horšie, než sa zdalo: oprava bola commitnutá, ale nebežala.** Opravené
+v `ece5652` (15. 9. 00:20): `settings.py` ho konečne číta. Lenže kontajner
+`cistafirma_backend` sa štartoval **14. 9. 21:46**, teda o dve a pol hodiny
+skôr, a `ALLOWED_HOSTS` sa číta raz pri importe `settings.py`. V ostrej
+prevádzke teda bola premenná **stále mŕtva** a platil fallback `or ["*"]`
+(settings.py:75) — repo tvrdilo validáciu, ktorú proces nevykonával. Odmerané
+naživo pred zásahom: `Host: evil.example.com` → **404**, teda prijaté.
 
-**2. `.env` nemá `EMAIL_BACKEND` — ❌ nebol to nález.** `settings.py:669` má
-default `django.core.mail.backends.console.EmailBackend`, takže chýbajúci
-riadok dá presne to, čo `.env.default` dokumentuje. Toto je opak prípadu 1:
-tam kód premennú **nečítal**, tu ju číta **s rozumným defaultom**. Čo je však
-reálne a treba rozhodnúť: na serveri tým pádom notifikačné e-maily (dlhy, zmeny
-štatutárov) skončia **len v logu backend kontajnera**. Ak ich má niekto dostať,
-treba SMTP — to je rozhodnutie, nie oprava.
+  Zároveň platilo, že akonáhle oprava nabehne, Mac je **prísnejší než predtým**:
+  jeho `.env` mal `ALLOWED_HOSTS=localhost,127.0.0.1,backend` bez tailnet mena,
+  čím sa `or ["*"]` stal nedosiahnuteľným. Restart bez zmeny `.env` by teda
+  z tailnetu spravil 400.
+
+  Spravené a overené: `.env` na Macu má teraz **rovnaké tri tailnet hodnoty ako
+  dell**, `backend` bol znovu vytvorený (`up -d --force-recreate backend`, bez
+  `-v`, volume nedotknutý, `healthy` za 4 s) a matica je:
+
+  | `Host:` | pred | po |
+  |---|---|---|
+  | `evil.example.com` | 404 (prijaté) | **400** |
+  | `attacker.test` | 404 (prijaté) | **400** |
+  | `127.0.0.1:8080`, `localhost:8080`, `backend` | 404 | 404 |
+  | `dell…` / `dell-1…` / `macbook-pro-samuel…`.taildb03cf.ts.net | 404 | 404 |
+
+  Aplikácia cez Vite funguje ďalej (`5173/` → 200, `5173/api/` → 404, teda nie
+  400), lebo proxy posiela `Host: backend` a to v zozname je.
+  `FRONTEND_ALLOWED_HOSTS` je v `.env` tiež, ale `vite.config.ts` ho číta pri
+  štarte, takže na Macu nabehne až s najbližším reštartom frontendu; na delle
+  bude platiť od prvého štartu.
+
+**2. `.env` nemá `EMAIL_BACKEND` — ❌ nebol to nález, ale je to presne jedna
+chýbajúca položka.** `EMAIL_BACKEND` bol **jediný kľúč**, ktorý `.env` nemal
+oproti `.env.default`, a chýbal **na oboch strojoch** — moja skoršia veta, že
+dell je „nadmnožina Macu a líši sa len `ALLOWED_HOSTS`", bola nepresná: dell
+mal o `FRONTEND_ALLOWED_HOSTS` a `CSRF_TRUSTED_ORIGINS_EXTRA` viac a
+`EMAIL_BACKEND` mu chýbal rovnako. `settings.py:669` má pritom default
+`django.core.mail.backends.console.EmailBackend`, takže chýbajúci riadok dá
+presne to, čo `.env.default` dokumentuje. Toto je opak prípadu 1: tam kód
+premennú **nečítal**, tu ju číta **s rozumným defaultom**.
+
+  Dopísaný je teraz explicitne na oboch strojoch (30 kľúčov, voči
+  `.env.default` nechýba nič), aby stav nezávisel od implicitného defaultu.
+  Čo je však reálne a treba rozhodnúť: notifikačné e-maily (dlhy, zmeny
+  štatutárov) skončia **len v logu backend kontajnera**. Ak ich má niekto
+  dostať, treba SMTP — to je rozhodnutie, nie oprava.
 
 **3. Tailscale na Macu je zastavený — ❌ už neplatí.** Beží:
 `macbook-pro-samuel` = `100.72.231.21`, `sam-lenovo` je `active; direct`. Von
@@ -2822,15 +2860,24 @@ z tailnetu, neprekladalo sa ani jedno; sú to dva príznaky jednej veci. (`host`
 sa pritom pýta inak a vráti `REFUSED`, kým `dscacheutil` a `ping` preložia —
 ďalšia dvojica nástrojov, ktoré sa na tú istú otázku nezhodnú.)
 
+  Návod, ktorý sa tu ponúka — pripísať `gitlab.home.arpa` do `/etc/hosts` — by
+  **nepomohol**, a je dôležité povedať prečo: meno by sa síce preložilo aj bez
+  Tailscale, ale trasa na `100.120.104.84` je tailnetová, takže bez Tailscale
+  by spojenie spadlo tak či tak, len o krok neskôr a s horšou chybovou
+  správou. Závislosť na tailnete tu nie je chyba na obídenie, je to vlastnosť:
+  `gitlab.home.arpa` je tailnetové meno a nič iné.
+
 **5. Off-site brána hlási „off-site directory is not mounted" — ✅ je to
 správne, ale zlý je dôvod, ktorý za tým je.** Brána nenadáva na výpadok
 pripojenia. Na Macu je `CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/CistaFirmaBackups`
 a **to volumes neexistuje**: v `/Volumes` je len `.timemachine`, `DRIVER`,
 `Macintosh HD` a `Recovery`. `DRIVER` je pritom 173 KB FAT12 oddeľok
 s `AUTORUN.INF` a `Windows Driver.url` — teda ovládačový oddeľok z USB kľúča,
-nie cieľ zálohy. **Druhá kópia teda nemá kam ísť** a naposledy vznikla
-2026-09-10T18:25Z; drill z 10. 9. ju odtiaľ aj čítal, takže cieľ vtedy
-pripojený bol.
+nie cieľ zálohy. `diskutil list external` to potvrdzuje zhora: pripojený je
+**jediný** externý disk a je to práve ten `DRIVER` (197,1 KB). Nevisí teda
+žiadny externý dátový disk — nie je to výpadok pripojenia, ale to, že cieľ
+**nie je kam pripojiť**. Druhá kópia naposledy vznikla 2026-09-10T18:25Z; drill
+z 10. 9. ju odtiaľ aj čítal, takže cieľ vtedy pripojený bol.
 
   Dve veci na tom treba pomenovať, lebo obe sú dôležitejšie než samotné
   hlásenie:
@@ -2847,7 +2894,7 @@ pripojený bol.
     prenosný disk, ktorý treba pripájať. Presne preto je tá automount
     a stráž „nezapisuj lokálne" taká podstatná.
 
-### Tri nové nálezy, ktoré vypadli z tej istej kontroly
+### Štyri nové nálezy, ktoré vypadli z tej istej kontroly
 
 - **`SECRET_KEY` je na oboch strojoch verejný default.**
   `django-insecure-change-me-in-production` — doslova text z `.env.default`,
@@ -2881,6 +2928,13 @@ pripojený bol.
   žiadne** `SECURE_*`/cookie nastavenie, takže zapísať ich do `.env` by bolo
   presne tú istú mŕtvu konfiguráciu, ktorá bola nálezom 1. Nezapisujem ich;
   vyžadujú zmenu `settings.py` a to je samostatný, otestovaný krok.
+- **`.env` na Macu bol `-rw-r--r--` (644) — ✅ opravené na 600.** Súbor, ktorý
+  drží `SECRET_KEY`, `POSTGRES_PASSWORD` aj `REDIS_PASSWORD`, bol čitateľný pre
+  každý lokálny účet. Na delle bol 600 už predtým, takže to bola len Macova
+  vec — ale je to ten druh nálezu, ktorý sa dá vyriešiť dvoma znakmi a inak sa
+  nemusí nikdy objaviť. `chmod` je bezpečný: `.env` číta Docker Compose CLI
+  (beží pod tým istým účtom), nie proces v kontajneri, ktorý by mal iného
+  vlastníka.
 
 ### Čo presne spraviť po autorizácii Tailscale — v tomto poradí
 
