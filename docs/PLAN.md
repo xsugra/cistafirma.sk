@@ -2990,6 +2990,84 @@ z 10. 9. ju odtiaľ aj čítal, takže cieľ vtedy pripojený bol.
   (beží pod tým istým účtom), nie proces v kontajneri, ktorý by mal iného
   vlastníka.
 
+### Týždenná úloha sa hlási ako „ešte nebežala" — a pritom bežala v nedeľu
+
+`make ops-check` dnes na Macu hlási `WARN launchd has not run the job yet
+(installed 4 day(s) ago)`. To WARN je **nepravdivé**: úloha bežala **v nedeľu
+13. 9. o 03:17** a jej vlastný vnorený beh brány to vtedy aj zapísal. Dôkaz nie
+je odvodený — je v logu, ktorý si úloha píše sama:
+
+| dôkaz | hodnota |
+|---|---|
+| `~/Library/Logs/CistaFirma/backup.out.log`, mtime | 2026-09-13 03:17:28 |
+| ten istý log, štart | `[2026-09-13T01:17:05Z] scheduled backup started` |
+| ten istý log, vlastný výstup brány | `launchd runs : 1`, `last start : 2026-09-13T01:17:05Z`, `OK the weekly job started recently` |
+| ten istý log, výsledok | `Backup verified` … `scheduled backup finished (cistafirma_20260913T011706Z.dump)` |
+| plán v pliste | `StartCalendarInterval {Hour 3, Minute 17, Weekday 0}` (nedeľa) |
+
+`01:17:05Z` je `03:17:05` SELČ, teda **presne na minútu plánu** — a to je
+zároveň to, čo tento beh odlišuje od staršieho záznamu v tom istom logu
+(`2026-09-10T06:58:40Z`, teda štvrtok 08:58 SELČ, mimo plánovaného slotu, takže
+ručný alebo inštalačný beh; plist má navyše mtime až 09:09:57 toho dňa).
+
+Prečo to brána nevidí: kontroluje **`launchd` počítadlo `runs`** a do logu sa
+pýta až potom, čo `runs >= 1` (`ops_check.sh:338-366`). Lenže `runs`
+**neprežije reload úlohy** — Mac sa reštartoval v pondelok 14. 9. 21:42:47
+(uptime 3:18) a počítadlo sa vrátilo na nulu:
+
+```
+state = not running
+runs = 0
+last exit code = (never exited)
+job state = uninitialized
+```
+
+Úloha teda bežala, stroj sa reštartoval, a počítadlo o tom nevie. Na počítači,
+ktorý sa reštartuje, je to **väčšinu času nula** — tento týždenný job sa
+naposledy chystal bežať v nedeľu a odvtedy sa stroj raz reštartoval — takže:
+
+- **Falošný poplach.** Brána sa nikdy nedostane na vetvu, ktorá číta log, hoci
+  log dôkaz má. Text pritom tvrdí niečo konkrétne a nepravdivé: „its first
+  unattended run is still pending".
+- **A za štyri dni z toho bude FAIL.** `RUN_GAP_MAX_DAYS` je **8**
+  (`ops_check.sh:29`) a `age_days` delí celočíselne nadol; plist má mtime
+  **2026-09-10 09:09:57**, takže deväť dní po inštalácii je **2026-09-19
+  09:09:57** — odvtedy `installed_days` = 9 > 8 a brána prepne na
+  `bad "launchd has never run the job although it was installed 9 day(s) ago"`.
+  Najbližšia naplánovaná nedeľa je **20. 9.**, takže pokiaľ Mac do 20. 9.
+  nepretržite beží, je medzi 19. 9. 09:09 a 20. 9. 03:17 **~18 hodín tvrdého
+  FAILu na úplne zdravom systéme**. Ak sa Mac medzitým reštartuje, `runs` sa
+  vynuluje znovu, `installed_days` len rastie — a FAIL sa už nevyčistí vôbec.
+- **A v druhom smere to zlyhá presne na to, pred čím má chrániť.** Keď úloha
+  naozaj prestane chodiť, `runs` je tiež `0`. Takže „úloha je mŕtva" a
+  „počítadlo vynuloval reštart" čítajú **identicky** — najprv `warn`, potom
+  `bad`. Kontrola, ktorej celý zmysel je tieto dva stavy rozlíšiť, ich spája.
+  To je tá istá trieda ako všetko ostatné v tomto dokumente: nie kontrola, ktorá
+  zle počíta, ale kontrola, ktorej dôkaz **nemôže ukázať to, čo tvrdí**.
+
+Nie je to chyba vetvenia — zámer je správny a v komentári aj zdôvodnený
+(`ops_check.sh:289-294`: ručný beh nesmie vyzerať ako dôkaz, že schéma žije).
+Chyba je vo **voľbe dôkazu**: `runs` nie je vlastnosť, ktorá prežije to, čo má
+merať. Oprava musí dať tú istú záruku trvalým spôsobom, teda tak, aby ručný beh
+naďalej neplatil:
+
+- **buď** si úloha sama zapíše, že ju spustil plánovač — pod launchdom je to
+  rozlíšiteľné bez hádania, rodičovský proces plánovanej úlohy je `launchd`
+  (`ps -o ppid= -p $$` → `1`), kým ručný beh má za rodičom shell — a brána hľadá
+  **tento** záznam v logu;
+- **alebo** sa `runs == 0` prestane čítať ako „nikdy nebežala", keď log štart
+  má, a správa povie obe pravdy aj s časom posledného bootu.
+
+**Toto je vec Macu a je to zároveň jeho posledná vec** — #109 ho vypína ako
+produkciu. Druhá vetva tej istej kontroly je `systemd` a číta `LastTriggerUSec`
+**časovača**, nie čas štartu služby. Na delle by ten záznam mal byť
+v `~/.local/state/systemd/timers/`, teda na **trvalej** ceste v `/home`, nie
+v `/run` — takže to vyzerá, že na Linuxe ten istý defekt nie je. **Overené to
+však nie je**: na delle zatiaľ žiadny user timer nebehol (adresár neexistuje)
+a `systemd` je tam 259. Overí sa to jedným príkazom po prvom behu timera
+(`ls -la ~/.local/state/systemd/timers/` a porovnanie mtime s časom posledného
+bootu). Kým to nevyjde, netreba tvrdiť, že to migrácia vyrieši sama.
+
 ### Čo presne spraviť po autorizácii Tailscale — v tomto poradí
 
 Toto je zoznam krokov, ktoré sa **nedajú spraviť predtým**, aby sa po
@@ -3023,18 +3101,47 @@ uzavretý: `ufw` povoľuje len `22/tcp`, `tailscale0` a `41641/udp`.
 | disk | 466 G, použité 9,4 G (3 %) ✓ |
 | pamäť / CPU | 7,1 Gi (6,3 Gi free) / 4 jadrá ✓ |
 | **linger** | **bol `no` — opravené na `yes`**, viď nižšie |
+| **týždenný timer** | **nie je nainštalovaný** — `~/.config/systemd/user/` na delle neexistuje, viď nižšie |
 | off-site kľúč | `id_ed25519_offsite` **je** v `authorized_keys` na lenove (odtlačok `SHA256:rwlPrJ4J…`) ✓ |
 | kód na delle | `scripts/local/` je **bajt na bajt** zhodné s commitom portu (20/20 hashov) ✓ |
 | git HEAD na delle | `ece5652` — 5 commitov za Macom, a **nemá ako sa aktualizovať** |
 
-`Linger=no` bol jediný nájdený konfiguračný problém a je to presne trieda
-tichého zlyhania, ktorú tento projekt rieši všade inde: systemd **user** timer
-týždenného zálohovania sa na headless serveri zastaví spolu s poslednou
+`Linger=no` bol jediný nález na **existujúcej** konfigurácii a je to presne
+trieda tichého zlyhania, ktorú tento projekt rieši všade inde: systemd **user**
+timer týždenného zálohovania sa na headless serveri zastaví spolu s poslednou
 session, takže by sa nespustil takmer nikdy a nič by to nehlásilo. Opravené
 `sudo -n loginctl enable-linger sam`; overené `Linger=yes` a
 `systemctl --user is-system-running` → `running`. Je to reverzibilné
 (`disable-linger`) a je to presne ten krok, ktorý inštalátor zámeme nevykonáva
 sám, len naň upozorňuje.
+
+**Ale linger sám o sebe ten timer nespustí — a ten timer na delle nie je.**
+`Linger=yes` je len podmienka, ktorá mu umožní bežať bez prihlásenej session;
+samotné unit súbory tam nikdy nevznikli:
+
+```
+ls ~/.config/systemd/user/                             -> No such file or directory
+systemctl --user list-unit-files | grep cistafirma      -> (nič)
+systemctl --user is-enabled sk.cistafirma.backup.timer  -> not-found
+```
+
+Inštalátor pritom na Linuxe píše presne do `~/.config/systemd/user`
+(`backup_os.sh:160-166`) a repo aj `install_backup_schedule.sh` na delle sú
+(`/home/sam/cistafirma/scripts/local/`). `make db-backup-schedule-install` tam
+teda **nikdy nebežal** — takže veta „jediný nájdený konfiguračný problém bol
+linger" vyššie bola nepresná a je opravená.
+
+Zámerne to **teraz neinštalujem**, a nie je to opomenutie:
+
+- Ak D1 vyjde ako (a) preinštalovanie, zmizne to tak či tak — a to je presne
+  dôvod, prečo má D1 prednosť pred akoukoľvek ďalšou prácou na delle.
+- #107 hovorí, že beat nesmie nabehnúť pred obnovou databázy. Na delle zatiaľ
+  **žiadny docker volume neexistuje**, takže by timer zálohoval databázu, ktorá
+  tam ešte nie je, a vytvoril by **klamlivý dôkaz „záloha existuje"** — presne
+  ten druh signálu, ktorý tento projekt inde odmieta.
+
+Patrí to teda do zoznamu **po D1**, spolu s `.env`, fstab riadkom pre off-site
+a automount drop-inom. V preflight tabuľke je to otvorená položka, nie ✓.
 
 **Druhý nález z tej istej kontroly, a tento má lehotu: všetky tri tajomstvá sú
 na oboch strojoch stále verejné defaulty.**
