@@ -57,7 +57,22 @@ SECRET_KEY = os.getenv('SECRET_KEY', default=_default_secret if DEBUG else '')
 if not SECRET_KEY:
     raise ImproperlyConfigured('SECRET_KEY must be set in production (DEBUG=False).')
 
-ALLOWED_HOSTS = ["*"]
+# Hostnames Django answers to, comma-separated. The value ships in `.env.default`
+# as `localhost,127.0.0.1,backend` and until now did nothing at all: this line was
+# the literal `["*"]` and the variable was never read, so the setting looked
+# configured while every Host header was accepted regardless of it.
+#
+# The fallback stays `["*"]` so an environment that predates this change keeps
+# behaving exactly as it did -- the app answers on loopback, and on the server
+# only over the tailnet, so the Host header is not attacker-controlled from
+# anywhere else. Tightening a deployment is now a one-line `.env` edit rather
+# than a code change. A leading dot matches subdomains, the way it does in
+# `FRONTEND_ALLOWED_HOSTS`: `.example.ts.net` covers a host that may be renamed.
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', '').split(',')
+    if host.strip()
+] or ["*"]
 
 # How many proxies sit between the client and gunicorn, for DRF's throttling.
 # It decides which entry of `X-Forwarded-For` is treated as the caller: DRF
