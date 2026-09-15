@@ -3414,7 +3414,7 @@ Rotáciu vykonáva **používateľ** — hodnoty tajomstiev nevytváram ani neza
    a to je v poriadku. Token `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP` teda
    netreba a na delle v `backup.env` ani nie je (overené).
 
-### Migrácia na `dell` je hotová. Posledný krok zastavilo jedno slovo v `/etc/fstab`
+### Migrácia na `dell` je hotová — a off-site záloha naozaj beží (2026-09-15)
 
 Stav overený naživo 2026-09-15: **10 kontajnerov beží** (`restart:
 unless-stopped`; `db`, `redis` aj `backend` healthy), `/healthz/` vracia
@@ -3490,14 +3490,58 @@ Mac. Je to `WARN`, nie `FAIL`, takže brána ostáva poctivá — a zároveň je
 jediná kontrola v celom reťaze, ktorá overuje, že private kľúč ešte existuje
 a funguje; každá iná by jeho stratu prehliadla.
 
-**Zostáva jediný krok a je to jedno slovo** — `allow_other` v riadku pre
-`cistafirma-offsite` v `/etc/fstab`, potom `systemctl daemon-reload` a reštart
-automount jednotky. Zapíše ho používateľ: je to systémový súbor s dopadom na
-štart a permission vrstva to agentovi zamieta. Po ňom nasleduje
-`make db-offsite-configure` (s recipientom `3043D31A…`) → `make
-db-backup-replicate BACKUP_FILE=<najnovší dump>` → `make ops-check` s **0
-unmet**. Na lenove je pritom prázdno (0 súborov), takže žiadne pred-D2
-plaintext repliky netreba upratovať.
+**Posledný krok bol jedno slovo a je zapísané.** `allow_other` pribudlo do
+riadku pre `cistafirma-offsite` v `/etc/fstab` (mount je od tej chvíle pre
+`sam` priechodný — `drwx------ 1 sam sam`), do `~/.config/cistafirma/backup.env`
+sa doplnil recipient `3043D31A…`, a `make db-backup-replicate` vytvoril **prvú
+šifrovanú repliku**: `cistafirma_20260915T093932Z.dump.gpg` (131 458 875 B) s
+manifestom, na lenove v `~/cistafirmaBackups`, so záznamom v `replicas.log`.
+`make ops-check` na delle potom hlási **`Operational controls: SATISFIED (2
+warning(s))`, 0 unmet** — oba warningy sú štrukturálne a správne (drill z
+off-site kópie patrí na Mac; timer ešte neodpálil).
+
+Overené nezávisle od brány, priamo na lenove: na off-site zväzku **nie je
+žiadny plaintext dump** a artefakt začína `84 5e` — OpenPGP packet tag 1
+(Public-Key Encrypted Session Key), čiže je to naozaj šifrované verejným
+kľúčom, nie súbor premenovaný na `.gpg`. To je celý zmysel D2 a je to jediná
+vec, ktorú z artefaktu samého nevidno.
+
+**Nález (opravený): `configure_offsite.sh` mazal zaznamenaného recipienta.**
+Skript sľubuje, že vynechaný alebo prázdny argument nechá príslušný kľúč tak,
+ako bol. Neplatilo to — `awk` testoval `ekey != ""` / `rkey != ""`, teda
+*názov* kľúča, ktorý je vždy neprázdny, namiesto jeho hodnoty. Reprodukované
+proti skutočnému skriptu: `make db-offsite-configure
+CISTAFIRMA_OFFSITE_BACKUP_DIR=<dir>` **bez** recipienta prepísalo zapísaný
+odtlačok na prázdny reťazec a pridalo fiktívny
+`CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=`. Prázdny recipient pritom
+znamená, že replikácia odmietne bežať (zámerne — bez recipienta by kópia
+vznikla v čistom texte), takže jedna nevinná zmena adresára by ticho zastavila
+off-site zálohu. Guarda sa teraz viaže na hodnotu; overené v štyroch smeroch
+(len adresár / doplnenie recipienta / vyslovné `false` / čerstvý súbor).
+Commit `a60aa56`.
+
+**Nález: brána prečíta off-site artefakt štyrikrát, a preto vyzerá ako
+zaseknutá.** `offsite_status.sh` na šifrovanej vetve volá
+`artifact_is_encrypted` → `artifact_keyids` (1. čítanie), potom
+`artifact_keyids` zvlášť (2.), potom `artifact_matches_recipient` → zase
+`artifact_keyids` (3.), a k tomu raz `sha256sum` na kontrolný súčet (4.). Každé
+čítanie je `--list-packets` alebo hash nad celým 131 MB súborom, a na delle ide
+**cez sshfs**, takže `make ops-check` beží minúty a jeho `gpg` proces sedí v
+stave `DL` (`folio_wait_bit_common`). Nie je to chyba správnosti — kontroly sú
+nastavené dobre a nič sa nepreskočí — ale je to vlastnosť, ktorá sa zopakuje
+pri každom behu brány aj týždenného jobu, a operátor to číta ako zaseknutie.
+Stojí to za zlacnenie (keyidy vytiahnuť raz a odovzdať), nie za zmenu kontrol.
+
+**Nález: private kľúč je chránený heslom a na Macu nie je `pinentry-mac`.**
+Overené `gpg --batch --decrypt` → `Inappropriate ioctl for device`, teda kľúč
+sa bez pinentry neodomkne; v agentovej cache (`KEYINFO --list`) tiež nie je a
+v systéme je len `pinentry-curses`. Dôsledok je konštrukčný, nie poruchový:
+drill šifrovanej repliky **musí spustiť človek v termináli**, ktorý to heslo
+pozná. Agent ho spustiť nevie a ani sa o to nemá pokúšať — zálohovací kľúč bez
+hesla by bol slabší než dáta, ktoré chráni.
+
+Na lenove bolo pred replikáciou prázdno (0 súborov), takže žiadne pred-D2
+plaintext repliky nebolo treba upratovať.
 
 ---
 
