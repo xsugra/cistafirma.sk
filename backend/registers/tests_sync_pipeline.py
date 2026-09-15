@@ -153,7 +153,18 @@ class SyncPipelineTests(TestCase):
         # never printed.
         self.assertTrue(self.company.social_listed_without_amount)
         self.assertIsNone(self.company.debt_soc_poist)
-        self.assertIsNone(self.company.debt_vszp)
+
+        # The VSZP column beside it holds a zero, and that is not a
+        # contradiction -- it is the whole reason the two need separate
+        # columns. That source answered `not_found`, which states outright
+        # that the company is not among its debtors; a stated absence of debt
+        # *is* a figure it printed, namely zero, and this column has stored it
+        # that way since long before `LISTED_NO_AMOUNT` existed.
+        #
+        # This assertion once read `assertIsNone`, copying the line above it.
+        # It was wrong about VSZP, and it survived review because the only
+        # suite that runs this module needs Postgres, so it first ran on dell.
+        self.assertEqual(self.company.debt_vszp, 0)
 
         # The point of the whole fix. An authoritative answer advances the check
         # date, which is what takes the company out of the `nulls_first` group
