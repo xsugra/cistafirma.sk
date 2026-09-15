@@ -249,6 +249,7 @@ class PersonExtractionService:
                 "role": (entry.get("role") or "").strip(),
                 "vznik_funkcie": _parse_date(entry.get("vznik_funkcie")),
                 "zanik_funkcie": _parse_date(entry.get("zanik_funkcie")),
+                "birth_date": _parse_date(entry.get("birth_date")),
             }
         elif isinstance(entry, str):
             name = entry.strip()
@@ -262,6 +263,7 @@ class PersonExtractionService:
                 "role": "",
                 "vznik_funkcie": None,
                 "zanik_funkcie": None,
+                "birth_date": None,
             }
         return None
 
@@ -279,11 +281,26 @@ class PersonExtractionService:
                 "title": data.get("title", ""),
                 "address": data.get("address", ""),
                 "person_ico": data.get("person_ico", ""),
+                "birth_date": data.get("birth_date"),
             },
         )
 
-        if not created and data.get("address") and not person.address:
+        # `birth_date` is not an input to `compute_fingerprint`, so filling it
+        # in on a row that already exists cannot move that row -- and a row
+        # whose date is already known keeps it. A blank here is "the section of
+        # the document this row came from did not state one", which the section
+        # that does state one is allowed to fill, in either direction of the
+        # read. Only the first non-empty date wins; two dates for one row would
+        # mean two people, which is a question for identity resolution rather
+        # than something to overwrite silently.
+        updates = []
+        if data.get("address") and not person.address:
             person.address = data["address"]
-            person.save(update_fields=["address", "updated_at"])
+            updates.append("address")
+        if data.get("birth_date") and not person.birth_date:
+            person.birth_date = data["birth_date"]
+            updates.append("birth_date")
+        if updates:
+            person.save(update_fields=updates + ["updated_at"])
 
         return person, created

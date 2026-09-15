@@ -118,6 +118,134 @@ class PersonExtractionServiceTests(TestCase):
         self.assertEqual(relations_created, 1)
 
 
+class BirthDateTests(TestCase):
+    """The register's `Dátum narodenia:` line gets its own column, not the address.
+
+    The reader used to append that line to the address like any other
+    unrecognised line of a person's block, and because `compute_fingerprint`
+    keys a row by the last non-numeric part of its address, the date became the
+    row's *identity* -- so the same officer written once with the line and once
+    without produced two `Person` rows. Measured 2026-09-15: 14 rows of 121 257
+    carried it, and in every one of them it was the whole address.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=1, ico="52366332", nazov_UJ="MaVa Company s.r.o."
+        )
+        self.service = PersonExtractionService()
+        self.profile = OrsrCompanyProfile.objects.create(
+            company=self.company,
+            ico="52366332",
+            raw_payload={"structured": {}},
+        )
+
+    def _extract(self, structured: dict):
+        self.profile.raw_payload = {"structured": structured}
+        self.profile.save(update_fields=["raw_payload"])
+        self.service.extract_from_profile(self.profile)
+
+    def test_the_date_lands_in_the_column_and_not_in_the_address(self):
+        self._extract(
+            {
+                "statutarny_organ": [
+                    {
+                        "name": "Matej Vácha",
+                        "role": "Konateľ",
+                        "address": "",
+                        "birth_date": "20.08.1992",
+                    }
+                ]
+            }
+        )
+
+        person = Person.objects.get(name="Matej Vácha")
+        self.assertEqual(person.birth_date, date(1992, 8, 20))
+        self.assertEqual(person.address, "")
+
+    def test_one_person_whether_or_not_the_section_states_the_date(self):
+        """The split this change exists to stop, in one document.
+
+        `spoločníci` states the date and `štatutárny orgán` does not -- which is
+        what the live document does, and what used to write two rows for one
+        officer 2.8 ms apart.
+        """
+        self._extract(
+            {
+                "statutarny_organ": [
+                    {"name": "Matej Vácha", "role": "Konateľ", "address": ""}
+                ],
+                "spolocnici": [
+                    {
+                        "name": "Matej Vácha",
+                        "role": "Spoločník",
+                        "address": "",
+                        "birth_date": "20.08.1992",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(Person.objects.count(), 1)
+        self.assertEqual(Person.objects.get().birth_date, date(1992, 8, 20))
+        self.assertEqual(PersonCompanyRelation.objects.count(), 2)
+
+    def test_a_later_section_that_states_the_date_fills_a_blank_column(self):
+        self._extract(
+            {"statutarny_organ": [{"name": "Matej Vácha", "role": "Konateľ", "address": ""}]}
+        )
+        self.assertIsNone(Person.objects.get().birth_date)
+
+        self._extract(
+            {
+                "spolocnici": [
+                    {
+                        "name": "Matej Vácha",
+                        "role": "Spoločník",
+                        "address": "",
+                        "birth_date": "20.08.1992",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(Person.objects.count(), 1)
+        self.assertEqual(Person.objects.get().birth_date, date(1992, 8, 20))
+
+    def test_a_date_we_already_hold_is_not_overwritten(self):
+        self._extract(
+            {
+                "statutarny_organ": [
+                    {
+                        "name": "Matej Vácha",
+                        "role": "Konateľ",
+                        "address": "",
+                        "birth_date": "20.08.1992",
+                    }
+                ]
+            }
+        )
+
+        # A section that states a *different* date for the same name is two
+        # people at least as plausibly as it is a correction, and nothing here
+        # can tell which. Writing it would be silent damage; the row keeps what
+        # it has and the disagreement stays visible as two entries.
+        self._extract(
+            {
+                "spolocnici": [
+                    {
+                        "name": "Matej Vácha",
+                        "role": "Spoločník",
+                        "address": "",
+                        "birth_date": "01.01.1980",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(Person.objects.get(name="Matej Vácha").birth_date, date(1992, 8, 20))
+
+
 class CompanyGraphAPITests(APITestCase):
     def setUp(self):
         self.company = Company.objects.create(
@@ -267,6 +395,34 @@ class PersonDetailAPITests(APITestCase):
     def test_person_not_found(self):
         response = self.client.get("/api/persons/99999/")
         self.assertEqual(response.status_code, 404)
+
+    def test_a_member_row_carries_its_own_birth_date(self):
+        """Not merged into one answer at the top, because it is the evidence.
+
+        A grouped person is a judgement about identity, and two rows that state
+        two different dates are the one case the page must not present as one
+        human. `None` for a row whose section of the register stated none is
+        part of that: it is what the reader compares against.
+        """
+        self.person.address = ""
+        self.person.birth_date = date(1992, 8, 20)
+        self.person.save(update_fields=["address", "birth_date"])
+        second = Person.objects.create(
+            fingerprint="name:jan novak|addr:",
+            name="Ján Novák",
+            person_ico="",
+        )
+        PersonCompanyRelation.objects.create(
+            person=second, company=self.company, role="konatel", is_active=True
+        )
+
+        data = self.client.get(f"/api/persons/{self.person.pk}/").json()
+
+        self.assertEqual(data["records"], 2)
+        self.assertEqual(
+            [(m["id"], m["address"], m["birth_date"]) for m in data["members"]],
+            [(self.person.id, "", "1992-08-20"), (second.id, "", None)],
+        )
 
 
 class JoinedPeriodsTests(APITestCase):

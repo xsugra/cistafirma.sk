@@ -458,6 +458,7 @@ class OrsrHtmlParser:
         vznik_funkcie = ""
         ine_id = ""
         ico_person = ""
+        birth_date = ""
         address_lines: List[str] = []
         note_lines: List[str] = []
 
@@ -494,6 +495,16 @@ class OrsrHtmlParser:
                 if m:
                     vznik_funkcie = m.group(1)
                 continue
+            if lower.startswith("dátum narodenia"):
+                # Register píše dátum narodenia do toho istého bloku ako adresu
+                # („Dátum narodenia: 20.08.1992"), ale adresa to nie je. Keď sa
+                # uložil ako adresa, stal sa z neho kľúč identity --
+                # `compute_fingerprint` berie poslednú nečíselnú časť adresy --
+                # takže tá istá osoba raz s ním a raz bez neho mala dva riadky.
+                m = re.search(r"(\d{2}\.\d{2}\.\d{4})", stripped)
+                if m:
+                    birth_date = m.group(1)
+                continue
             if stripped.startswith("Iné identifikačné číslo"):
                 ine_id = stripped.split(":", 1)[-1].strip()
                 continue
@@ -518,6 +529,7 @@ class OrsrHtmlParser:
             "vznik_funkcie": vznik_funkcie,
             "ine_id": ine_id,
             "person_ico": ico_person,
+            "birth_date": birth_date,
             "od": entry.od,
             "notes": note_lines,
         }

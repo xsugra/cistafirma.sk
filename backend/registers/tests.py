@@ -174,6 +174,52 @@ class OrsrHtmlParserTests(SimpleTestCase):
 			"Stotožnenie s registrom should be preserved in notes.",
 		)
 
+	def test_parse_takes_the_birth_date_line_out_of_the_address(self):
+		"""`Dátum narodenia:` is written on an address line and is not an address.
+
+		Left in, it was the whole address of 14 live rows -- and because
+		`compute_fingerprint` keys a row by the last non-numeric part of its
+		address, it was also their identity.
+		"""
+		person = _person_html(
+			name_tokens=["Matej", "Vácha"],
+			address_lines=["Dátum narodenia: 20.08.1992"],
+			vznik="18.05.2019",
+		)
+		html = _build_orsr_html(
+			oddiel="Sro",
+			vlozka="12345/T",
+			sections={"Štatutárny orgán": _entry(person, od="28.09.2022")},
+		)
+
+		parsed = self.parser.parse(html, "52366332")
+
+		people = parsed["structured"]["statutarny_organ"]
+		self.assertEqual(len(people), 1)
+		self.assertEqual(people[0]["birth_date"], "20.08.1992")
+		self.assertEqual(people[0]["address"], "")
+		self.assertEqual(people[0]["address_lines"], [])
+		# The other two labelled lines of the block still behave as before.
+		self.assertEqual(people[0]["vznik_funkcie"], "18.05.2019")
+		self.assertEqual(people[0]["od"], "28.09.2022")
+
+	def test_parse_keeps_a_real_address_beside_the_birth_date_line(self):
+		person = _person_html(
+			name_tokens=["Elena", "Ligásová"],
+			address_lines=["Dátum narodenia: 28.07.1956", "Kollárova 12", "Bratislava 811 06"],
+		)
+		html = _build_orsr_html(
+			oddiel="Sro",
+			vlozka="12345/T",
+			sections={"Štatutárny orgán": _entry(person)},
+		)
+
+		parsed = self.parser.parse(html, "50400118")
+
+		person_entry = parsed["structured"]["statutarny_organ"][0]
+		self.assertEqual(person_entry["birth_date"], "28.07.1956")
+		self.assertEqual(person_entry["address"], "Kollárova 12, Bratislava 811 06")
+
 	def test_parse_separates_prokura_person_from_authorization_sentence(self):
 		person = _person_html(
 			name_tokens=["Lukáš", "Jurica"],

@@ -111,6 +111,7 @@ def _cluster_persons(persons):
             address=person.address,
             person_ico=person.person_ico,
             companies=companies.get(person.id, ()),
+            birth_date=person.birth_date,
         )
         for person in persons
     )
@@ -128,7 +129,7 @@ def _cluster_for(person):
     if not tokens:
         return [PersonEvidence(
             id=person.id, name=person.name, address=person.address,
-            person_ico=person.person_ico,
+            person_ico=person.person_ico, birth_date=person.birth_date,
         )], {person.id: person}
 
     candidates = Person.objects.all()
@@ -147,7 +148,7 @@ def _cluster_for(person):
             return members, by_id
     return [PersonEvidence(
         id=person.id, name=person.name, address=person.address,
-        person_ico=person.person_ico,
+        person_ico=person.person_ico, birth_date=person.birth_date,
     )], by_id
 
 
@@ -624,14 +625,18 @@ class PersonDetailView(APIView):
             "title": person.title,
             "person_ico": person.person_ico,
             "records": len(members),
-            # The rows this page merged, with the address each one carries. Not
+            # The rows this page merged, with the evidence each one carries. Not
             # decoration: the grouping is a judgement about identity, and one
             # that is wrong has to be visible to the reader it is wrong about.
+            # `birth_date` is per row rather than merged into one answer at the
+            # top, because rows that state two different dates are the one case
+            # this page must not present as one person.
             "members": [
                 {
                     "id": member.id,
                     "name": by_id[member.id].name,
                     "address": by_id[member.id].address,
+                    "birth_date": by_id[member.id].birth_date,
                 }
                 for member in members
             ],

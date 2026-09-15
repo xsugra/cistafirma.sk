@@ -18,7 +18,14 @@ and therefore not the same fingerprint:
     id=44904  Matej Vácha  ''                                     -> addr:
     id=45335  Matej Vácha  'Beniakova, 3100/12, ..., 841 05'      -> addr:841 05
 
-No key computed over a single row can join those three, because the
+`id=44903` is history rather than a row: that date line was the whole address,
+and a date is not an address -- but because the key reads the address it had
+also become the row's identity, so migration `connections/0004` moved its
+`konatel` relation to `id=44904` and deleted it. That does not touch the split
+the example is about: `44904` and `45335` are still one human under two keys,
+and the `Spoločníci` entry that wrote `44904` carries no evidence at all.
+
+No key computed over a single row can join those rows, because the
 `Spoločníci` entry carries no evidence at all. So this module does not try. It
 resolves them at **read** time and writes nothing.
 
@@ -28,8 +35,10 @@ deliberately refuses:
 * a merge is paid for on a heuristic that already fuses places. A Slovak
   postcode is not unique to a municipality (Hrnčiarska Ves and Hrnčiarske
   Zalužany are both 980 13), and PSČ 040 01 alone holds 1 284 `Person` rows;
-* the one signal that could refute a wrong merge -- a birth date -- exists on 14
-  of 56 162 rows, and no name group holds two;
+* the one signal that could refute a wrong merge -- a birth date -- reached this
+  module on 14 rows of 121 257, and no name group held two. It is now read from
+  `Person.birth_date` (migration `connections/0004`) and used to *refuse* joins,
+  which is all it is good for at that prevalence;
 * no read path filters a merged marker, so a wrong merge is invisible in the
   product: it shows a role the register never states, permanently.
 
@@ -126,11 +135,17 @@ class PersonEvidence:
 
     `base` and `psc` are computed once on construction because resolution reads
     each of them several times.
+
+    `birth_date` is the only piece of evidence here that can *refute* a join
+    rather than merely fail to support one, so it is carried on every row even
+    though almost none has it.
     """
 
-    __slots__ = ("id", "name", "address", "person_ico", "companies", "base", "psc")
+    __slots__ = (
+        "id", "name", "address", "person_ico", "companies", "base", "psc", "birth_date",
+    )
 
-    def __init__(self, id, name, address="", person_ico="", companies=()):
+    def __init__(self, id, name, address="", person_ico="", companies=(), birth_date=None):
         self.id = id
         self.name = name
         self.address = address or ""
@@ -138,6 +153,7 @@ class PersonEvidence:
         self.companies = frozenset(companies)
         self.base = base_name(name)
         self.psc = extract_psc(self.address)
+        self.birth_date = birth_date
 
 
 def cluster_evidence(rows):
@@ -160,6 +176,16 @@ def cluster_evidence(rows):
     else agrees: an IČO names an organisation, not a person. Measured, exactly
     one company group in the live data would otherwise be joined this way.
 
+    Two rows that both state a birth date and disagree are never joined either,
+    and that guard is a different kind of thing from the rest of this function.
+    Every other rule here offers *support* for a join and can be wrong in the
+    direction of joining two people; this one can only ever refuse, so a wrong
+    answer from it is a visible split rather than an invisible fusion. It was
+    written when the register's date line was being stored as an address and so
+    was unreadable as evidence (14 rows of 121 257, no name group holding two);
+    it is here because the column now holds it and because this is the one
+    signal that can contradict a merge instead of merely failing to confirm it.
+
     Returns a list of clusters, each a list of `PersonEvidence` sorted by row
     id; the clusters themselves are ordered by their lowest row id, so a
     caller's ordering is stable across calls.
@@ -169,6 +195,8 @@ def cluster_evidence(rows):
     #: The distinct non-empty IČOs each cluster holds. Kept per root so the
     #: guard can refuse a join that would put two organisations in one cluster.
     icos = {row.id: ({row.person_ico} if row.person_ico else set()) for row in rows}
+    #: The distinct known birth dates each cluster holds, for the same reason.
+    dates = {row.id: ({row.birth_date} if row.birth_date else set()) for row in rows}
 
     def find(row_id):
         root = row_id
@@ -185,8 +213,12 @@ def cluster_evidence(rows):
         merged = icos[root_a] | icos[root_b]
         if len(merged) > 1:
             return
+        merged_dates = dates[root_a] | dates[root_b]
+        if len(merged_dates) > 1:
+            return
         parent[root_b] = root_a
         icos[root_a] = merged
+        dates[root_a] = merged_dates
 
     def join(members):
         """Join rows offered as the same human, never across two IČOs.

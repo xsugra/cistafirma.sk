@@ -29,10 +29,15 @@ from .identity import (
 from .models import Person, PersonCompanyRelation
 
 
-def ev(id, name, address="", person_ico="", companies=()):
+def ev(id, name, address="", person_ico="", companies=(), birth_date=None):
     """One row, reduced the way the resolver reduces it."""
     return PersonEvidence(
-        id=id, name=name, address=address, person_ico=person_ico, companies=companies
+        id=id,
+        name=name,
+        address=address,
+        person_ico=person_ico,
+        companies=companies,
+        birth_date=birth_date,
     )
 
 
@@ -124,14 +129,59 @@ class ClusterEvidenceTests(TestCase):
         read has his street. Three rows, one man, three fingerprints -- so no
         key computed over a single row can join them, which is the whole reason
         this resolves at read time instead.
+
+        Migration `connections/0004` took the date out of the address and into
+        its own column, and folded the row that held nothing else into the one
+        that held nothing either. What is left is the split the example is
+        about: a dated row and an undated one, one man, two keys.
         """
         clusters = cluster_evidence([
-            ev(44903, "Matej Vácha", "Dátum narodenia: 20.08.1992", companies=[7]),
-            ev(44904, "Matej Vácha", "", companies=[7]),
+            ev(44904, "Matej Vácha", "", companies=[7], birth_date=date(1992, 8, 20)),
             ev(45335, "Matej Vácha", "Beniakova, 3100/12, ..., 841 05", companies=[7]),
         ])
         self.assertEqual(len(clusters), 1)
-        self.assertEqual([m.id for m in clusters[0]], [44903, 44904, 45335])
+        self.assertEqual([m.id for m in clusters[0]], [44904, 45335])
+
+    def test_a_row_without_a_date_joins_the_one_that_has_it(self):
+        """The date is evidence the register stated once, in one section of one
+        document. A section that states none is not contradicting it."""
+        clusters = cluster_evidence([
+            ev(1, "Matej Vácha", "", companies=[7], birth_date=date(1992, 8, 20)),
+            ev(2, "Matej Vácha", "", companies=[7]),
+        ])
+        self.assertEqual(len(clusters), 1)
+
+    def test_two_birth_dates_are_never_one_person(self):
+        """The one signal here that can only refuse a join.
+
+        Every other rule in `cluster_evidence` argues *for* a join and can be
+        wrong in the direction of fusing two people, which is invisible in the
+        product. This one cannot: a wrong answer from it is a visible split,
+        and this row pair -- father and son, same name, same company, and the
+        register stating both dates -- is exactly what it is for.
+        """
+        clusters = cluster_evidence([
+            ev(1, "Matej Vácha", "Beniakova, 3100/12, Bratislava, 841 05",
+               companies=[7], birth_date=date(1992, 8, 20)),
+            ev(2, "Matej Vácha", "Beniakova, 3100/12, Bratislava, 841 05",
+               companies=[7], birth_date=date(1968, 3, 4)),
+        ])
+        self.assertEqual(len(clusters), 2)
+
+    def test_a_disagreement_refuses_through_a_row_that_has_neither(self):
+        """The guard has to survive being reached second-hand.
+
+        Two dated rows that must stay apart are offered to an undated row in
+        the same company. The undated row may join either, and the second join
+        is what the date guard has to refuse -- otherwise the plain row becomes
+        the bridge that fuses the two.
+        """
+        clusters = cluster_evidence([
+            ev(1, "Matej Vácha", "", companies=[7], birth_date=date(1992, 8, 20)),
+            ev(2, "Matej Vácha", "", companies=[7]),
+            ev(3, "Matej Vácha", "", companies=[7], birth_date=date(1968, 3, 4)),
+        ])
+        self.assertEqual(len(clusters), 2)
 
     def test_a_title_does_not_make_a_second_person(self):
         clusters = cluster_evidence([

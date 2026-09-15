@@ -59,6 +59,30 @@ class Person(models.Model):
     )
     title = models.CharField(max_length=100, blank=True, default="", verbose_name="Titul")
     address = models.TextField(blank=True, default="", verbose_name="Adresa")
+
+    # The register writes a person's birth date on the same line as the address,
+    # as `Dátum narodenia: 20.08.1992`, and the reader used to append that line
+    # to the address like any other. It is not an address, and storing it as one
+    # cost more than a wrong label: `compute_fingerprint` reads an address by its
+    # last non-numeric component, so the date *became the row's identity* --
+    # `name:matej vacha|addr:datum narodenia: 20.08.1992` -- and the same officer
+    # written once with the line and once without got two `Person` rows, which is
+    # the split `connections.identity` documents and refuses to merge away.
+    #
+    # Measured 2026-09-15: 14 `Person` rows carry the prefix in `address`, out of
+    # 115 096. Those keep their fingerprints -- every stored value still has to
+    # reproduce from the row's own fields, and rewriting one to drop the date
+    # would collide with the row that already holds the bare spelling (both
+    # fingerprints are unique). The column is filled for them from the sentence
+    # they already carry; only new reads write it from the parser.
+    #
+    # `NULL` is "the register did not state it", which is every row but those 14
+    # -- an empty date and an unknown date are the same claim here, and only one
+    # of them is expressible.
+    birth_date = models.DateField(
+        null=True, blank=True, verbose_name="Dátum narodenia"
+    )
+
     person_ico = models.CharField(
         max_length=20, blank=True, default="", db_index=True, verbose_name="IČO osoby"
     )
