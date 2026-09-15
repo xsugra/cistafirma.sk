@@ -93,6 +93,11 @@ frontend/.env.*
 deploy/k8s/local-secret.yaml
 deploy/k8s/*-secret-local.yaml
 
+# Helm rendery z `helm_render_validate` — CI ich píše do klonu a odovzdáva
+# `helm_runtime_validate` ako artefakt. Necommitovať: sú to odvodené súbory
+# (a lokálne sa renderuje do /tmp, viď docs/DEVOPS_CICD.md).
+deploy/helm/cistafirma/.rendered/
+
 # Generated FS data (local fetch artifacts)
 backend/data/fs_data/**/*.xml
 backend/data/fs_data/**/*.xsd
