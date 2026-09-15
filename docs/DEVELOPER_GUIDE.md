@@ -79,15 +79,28 @@ Pipeline (`.gitlab-ci.yml`) obsahuje:
 | `backend_validate` | Kontrola kompilácie |
 | `frontend_validate` | Frontend build |
 | `docs_audit` | Validácia Markdown odkazov |
-| `helm_render_validate` | Helm lint + render |
-| `helm_k8s_validate` | kubectl dry-run validácie |
+| `helm_render_validate` | Helm lint + render dev/prod manifestov |
+| `helm_runtime_validate` | Kontrola, že render má beat a všetkých päť workerov |
+| `frontend_tests` | Vitest + typecheck |
 | `backend_tests` | Django testy |
 
-## 6. Deploy workflow (K8s)
+Pipeline beží na serveri **lenovo** (projektový runner `sam-lenovo`), nie na
+vývojovom stroji. Ak joby ostávajú `pending`, je to takmer vždy preto, že
+runner nemá `run_untagged = true` — pozri [`DEVOPS_CICD.md`](DEVOPS_CICD.md).
 
-- Pre dev/prod deploy sa používajú `scripts/k8s/*.sh`.
-- Migrácia DB sa vykonáva pred rolloutom deploymentov.
-- Detailný postup, rollback a triage je v [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md).
+## 6. Deploy workflow
+
+Nasadenie je **manuálne**, na produkčnom serveri `dell`:
+
+```bash
+cd <repo>
+git pull gitlab-home <vetva>   # vždy menuj remote; over exit kód
+docker compose up -d --build   # nikdy s -v
+docker compose exec backend python manage.py migrate
+```
+
+`scripts/k8s/*.sh` a [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) patria
+k **nenasadennej** K8s ceste — nepoužívaj ich, kým neexistuje klaster.
 
 ```mermaid
 flowchart LR

@@ -3737,6 +3737,103 @@ Fetchovaná replika (`~/cistafirma-drill/`, 131 MB) sa po drille zmazala —
 sha256 sa predtým overil proti zdroju na lenovo (`71b3d387…5bd010`, zhoda na
 bit), takže na Macu ostal len overený duplikát, a Mac má byť dev.
 
+### Mac prestal byť CI strojom — a CI ožilo na lenovo (2026-09-15)
+
+Otázka znela, prečo bol na Macu vysoký výkon. Odpoveď: bežal tam **GitLab
+runner** ako Homebrew služba (`sh.brew.gitlab-runner`, PID 5859). Mac sa tým
+stal tretím CI strojom v domácnosti, hoci má byť len na vývoj.
+
+**Hlbší nález bol ale iný: CI bolo mŕtve už štyri dni a nikto to nevedel.**
+Posledný job sa vykonal 11. 9. 2026. Príčina nie je pád — je to zhoda dvoch
+nastavení, z ktorých každé samo vyzerá neškodne:
+
+- oba vtedajšie runnery mali `run_untagged = false`,
+- `.gitlab-ci.yml` nemá **v žiadnom commite v celej histórii repa** ani jedno
+  `tags:`.
+
+Takže **žiadny job nemal kto prevziať**. Pipeline sa spúšťala normálne, joby
+ostávali `pending`, GitLab bol zelený v tom zmysle, že nič nehlásil ako chybu.
+Toto je tá istá trieda chyby, ktorú projekt rieši inde: **stav, ktorý vyzerá
+zdravo, pretože ho nič nemeria.**
+
+**Druhá vec, ktorá sa pri tom ukázala:** `run_untagged` v `config.toml` je pre
+**už registrovaný** runner inertný — runner ho posiela len pri registrácii.
+Overené empiricky: po prepísaní configu na `true` a reštarte ostal v GitLabe
+stav `false` a `ci_runners.updated_at` sa nepohol. Skutočné nastavenie je
+server-side, v tabuľke `ci_runners`. Do `setup-config.sh` preto namiesto
+funkčne vyzerajúceho riadku, ktorý nic nerobí, pribudol komentár s miestom, kde
+to naozaj žije — a v README runnera je to isté.
+
+**Čo je hotové:**
+
+| Vec | Stav |
+|---|---|
+| Mac: služba zastavená a vypnutá (`brew services list` → `gitlab-runner none`) | ✅ |
+| Mac: odregistrovaný z `gitlab.home.arpa:8088` (`ci_runner_machines` riadok zmazaný) | ✅ |
+| lenovo: runner id 1 má `run_untagged = true` server-side | ✅ |
+| CI naozaj beží — pipeline 102 prevzala joby, ktoré čakali ~54 minút | ✅ |
+| `.gitlab-ci.yml` prepísaný: stages `validate` → `test` | ✅ |
+
+**Čo z CI zmizlo a prečo** (celé aj s obsahom): stage `build` a `deploy`,
+`.build_template`, `build_backend_image`, `build_frontend_image`,
+`.deploy_template`, `deploy_dev`, `deploy_main_to_dev`, `deploy_prod`
+a `helm_k8s_validate`. Neboli to stratené schopnosti — boli to joby, ktoré
+**nemohli prejsť**:
+
+- `build` pushoval obrazy do registra, ktorý nič nečíta. Produkcia na delle
+  stavia z `build:` kontextu; `image:` je v celom compose len pri cudzích
+  obrazoch a dell v `.env` nemá ani jednu zmienku o registri. Jediný
+  teoretický konzument bol Helm chart s values na `registry.example.com` —
+  placeholder. Navyše build chce `docker:dind`, teda privileged, čo runner na
+  lenovo zámerne nevie.
+- `deploy` nepodmienene robil `base64 -d` z `KUBE_CONFIG`, ktorá **nie je
+  definovaná nikde**. Klaster nemáme.
+- `helm_k8s_validate` padal dvakrát: `--dry-run=client` aj tak robí discovery
+  voči API serveru, a obraz `bitnami/kubectl:1.30` na Docker Hube neexistuje
+  (Bitnami presunul free obrazy do `bitnamilegacy`).
+
+Zelená pipeline má cenu len vtedy, keď červená niečo znamená. Job, ktorý nemá
+ako prejsť, učí ľudí ignorovať červenú — a to je presne to, čo 11. 9. nechalo
+CI štyri dni mŕtve.
+
+**Dva opravené joby, ktoré stoja za reč.** `helm_render_validate` padal na
+`exit 127`, lebo končil `python3 scripts/k8s/validate_helm_runtime.py` — a
+`alpine/helm:3.17.2` **python3 nemá** (overené sondou: `NO_PYTHON3`, `NO_KUBECTL`).
+Kontrola samotná je pritom vecná a užitočná, takže sa nezahodila: render
+a kontrola sú teraz **dva joby v dvoch obrazoch**. Overené pred commitom
+v presnom CI obraze — `helm lint` aj oba rendery prejdú a validátor vráti
+„Helm runtime contract valid: backend, frontend, one Celery Beat, and workers
+for celery, financials, insurance, orsr, ruz_full." pre dev aj prod. Rendery
+majú v CI obraze presne tie isté veľkosti ako lokálne (34187 B / 35373 B).
+
+**Rozhodnutie, ktoré nebolo o kóde: dell nedostane runner.** Je to produkcia
+s neopraviteľným volume `cistafirma_postgres_data`, beží tam rate-limitované
+Celery a runner s docker socketom by rozšíril útočnú plochu na stroji, na
+ktorom záleží najviac. CI patrí na lenovo.
+
+**Ostáva na Samuela:**
+
+1. **Zrotovať runner token.** Pri skúmaní rozbitého generovaného configu som
+   token vypísal v čitateľnej podobe do tejto session
+   (`glrt-GiaLhx…`). Token je v `/home/sam/gitlab-runner-setup/runner-token.txt`
+   na lenovo a v `config/config.toml`; rotácia znamená vygenerovať nový
+   v GitLabe a spustiť `setup-config.sh` znova.
+2. **GitLab runner id 2 je sirota.** `gitlab-runner unregister` v GitLabe 16+
+   maže **stroj** (`ci_runner_machines`), nie riadok `ci_runners` — takže
+   v tabuľke ostal neaktívny záznam po Macu. Zámerne som ho nechal: zmazanie
+   by vynulovalo `ci_builds.runner_id` na historických buildoch a vyžadovalo by
+   nepodporovaný priamy zápis do produkčnej DB GitLabu.
+3. **Cudzia registrácia v configu Macu.** Lokálny config runnera na Macu drží
+   ešte `mac-runner` → `https://nsoric.mtf.stuba.sk` (id 10). Do tohto projektu
+   nepatrí a je to zvyšok z inej práce — nezmažem ho sám, len hlásim.
+
+**Návrh, nie implementácia: kontrola živosti CI.** CI zomrelo 11. 9. a štyri dni
+to nikto nezachytil, pretože **nič nemeria, či pipeline vôbec niečo spustila**.
+Chýbajúca zelená pipeline je pritom horšia než červená — červenú vidno.
+Kandidát na samostatný prírastok: periodická kontrola, ktorá sa opýta GitLabu,
+kedy naposledy nejaký job naozaj skončil, a zakričí, keď je to dávno — alebo
+keď novšie commity nemajú ani jeden beh.
+
 ---
 
 ## 8. Nemenné pravidlá

@@ -312,9 +312,18 @@ Local: copy `.env.default` to `.env` and fill in secrets. Docker Compose reads
 
 ### CI/CD (GitLab)
 
-Pipeline stages: **validate** → **test** → **build** → **deploy**. Dev branch
-auto-deploys; production deploys on `v*.*.*` tags (manual trigger). See
-`docs/DEVOPS_CICD.md` and `docs/DEPLOYMENT_CONTRACT.md`.
+Pipeline stages: **validate** → **test**, and that is all. CI runs on the
+**lenovo** server (project runner `sam-lenovo`), never on a development machine
+— the Mac has no runner by design. Deploy is a **manual** step on `dell`
+(`git pull gitlab-home <branch>` + `docker compose up -d --build` then
+`migrate`), not a pipeline stage. There is no `build` stage: production builds
+from source on `dell` and nothing consumes registry images.
+
+`.gitlab-ci.yml` has no `tags:`, so the runner only claims work because
+`run_untagged = true` is set **server-side**. If jobs sit `pending` forever, that
+flag is the first thing to check. See `docs/DEVOPS_CICD.md`;
+`docs/DEPLOYMENT_CONTRACT.md` and `docs/DEPLOYMENT_RUNBOOK.md` describe the
+not-yet-deployed K8s path and must not be followed until a cluster exists.
 
 ## Working conventions
 

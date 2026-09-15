@@ -130,9 +130,12 @@ scripts/k8s/restore_postgres.sh
 
 ## 7. Release matrix
 
-Viac v [DEVOPS_CICD.md](DEVOPS_CICD.md#správanie-release).
+> **Toto je cieľový stav pre K8s cestu, ktorá nie je nasadená.** Dnešná
+> pipeline žiadny `build` ani `deploy` stage nemá a nasadenie na `dell` je
+> manuálne — viď
+> [DEVOPS_CICD.md](DEVOPS_CICD.md#ako-sa-dnes-nasadzuje).
 
-| Vetva / Tag | Správanie |
+| Vetva / Tag | Správanie (až po nasadení K8s) |
 |---|---|
 | `dev` branch | Automatický deploy do dev prostredia. |
 | `main` branch | Build + príprava artefaktov; manuálny gate na dev deploy. |
