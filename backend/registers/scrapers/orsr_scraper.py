@@ -2,6 +2,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from html import unescape
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -801,14 +802,18 @@ class OrsrScraper:
     def _says_no_record(self, html: str) -> bool:
         """True when the register is saying it holds no such IČO.
 
-        Whitespace is collapsed and the case folded before the comparison, so a
-        change to the markup around the sentence does not break the match. A
-        change to the *sentence* does break it, deliberately -- see
+        The comparison is made against the sentence as the register *renders* it
+        -- tags stripped, entities resolved, whitespace collapsed, case folded --
+        rather than against its markup. Markup is presentation, and a `<b>` put
+        around one word of the sentence is not the register changing its answer;
+        had it been read as one, every absence would have gone quietly back to
+        being retried daily, which is the whole defect this undoes. A change to
+        the *sentence* does break the match, deliberately -- see
         `NO_RECORD_MARKER`.
 
         Only ever consulted when no detail link was found, which is what keeps
         a results page that carries the phrase somewhere in its furniture from
         being read as an absence.
         """
-        probe = re.sub(r"\s+", " ", html).casefold()
-        return NO_RECORD_MARKER in probe
+        text = unescape(re.sub(r"<[^>]+>", " ", html))
+        return NO_RECORD_MARKER in re.sub(r"\s+", " ", text).casefold()

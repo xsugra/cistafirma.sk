@@ -368,10 +368,18 @@ class OrsrNoRecordTests(SimpleTestCase):
         with self.assertRaises(OrsrNoRecordError):
             _scraper(_ScriptedResponse(page)).fetch_by_ico("31987087")
 
-    def test_the_sentence_is_matched_through_markup_and_whitespace(self):
+    def test_the_sentence_is_read_as_text_and_not_as_markup(self):
+        """The sentence is compared as the register renders it.
+
+        A `<b>` around one word, a `&nbsp;` between two, a newline in the middle
+        -- none of those are the register changing its answer, and reading them
+        as a change would put every absence quietly back on the daily retry.
+        This is the test that caught exactly that: the first version of the
+        predicate compared raw HTML and failed here.
+        """
         page = (
             '<p class="wrn">Kritériám vyhľadávania\n'
-            "        <b>nezodpovedá</b>\tžiadny záznam!</p>"
+            "        <b>nezodpovedá</b>&nbsp;žiadny záznam!</p>"
         )
         with self.assertRaises(OrsrNoRecordError):
             _scraper(_ScriptedResponse(page)).fetch_by_ico("31987087")
