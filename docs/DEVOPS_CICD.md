@@ -56,7 +56,10 @@ Definované v [`.gitlab-ci.yml`](../.gitlab-ci.yml). Sú dve, a to je celé:
      `alpine/helm` python3 nemá.
 2. **`test`**
    - `frontend_tests` – `npm test` (Vitest) + `npm run typecheck`.
-   - `backend_tests` – Django test suite.
+   - `backend_tests` – Django test suite (899 testov) proti **service
+     kontajnerom** `postgres:16-alpine` a `redis:7-alpine` — tým istým verziám,
+     aké prevádzkuje produkcia. Pred testami púšťa `collectstatic`, rovnako
+     ako to robí produkčný kontajner pred `gunicorn`.
 
 ```mermaid
 flowchart LR
@@ -178,7 +181,44 @@ Pipeline dnes **nepotrebuje žiadnu povinnú CI premennú.** Registračné údaj
 nepoužívajú — obsluhovali odstránené joby.
 
 Premenné, ktoré pipeline používa, sú v `.gitlab-ci.yml`: `GIT_STRATEGY: clone`
-(čistý klon pre každý job) a `DEBUG: "true"` pre `backend_tests`.
+(čistý klon pre každý job) a pre `backend_tests` dvojica `DATABASE_URL` /
+`REDIS_URL` mieriaca na jeho service kontajnery, spolu s `POSTGRES_*` údajmi
+pre ne. Sú to jednorazové prihlasovacie údaje efemérneho kontajnera, nie
+secrets — preto sú v `.gitlab-ci.yml` na rozdiel od `.env` na delle.
+
+### Prečo `backend_tests` predtým nebežal vôbec
+
+Job nemal `DATABASE_URL`, takže sa `settings.py` ticho prepol na SQLite.
+Migrácia `companies/0014_add_pattern_ops_structured_indexes.py` ale vytvára
+index s `text_pattern_ops` — Postgres-only trieda operátorov — takže
+`create_test_db` spadol skôr, než sa stihol spustiť jediný test:
+
+```
+django.db.utils.OperationalError: near "text_pattern_ops": syntax error
+```
+
+Červený bol teda vždy, nech bol kód akýkoľvek, a nikto z neho nič nevyčítal.
+To je presne tá trieda chyby, ktorú tento dokument opísal pri `helm_k8s_validate`:
+job, ktorý nemôže prejsť, učí ľudí ignorovať červenú.
+
+Tri veci boli treba, aby job naozaj testoval:
+
+1. **Postgres** — bez neho sa schéma ani nedá postaviť.
+2. **Redis** — bez neho padalo 11 testov na `ConnectionError` a healthz test
+   čakal 200, ale dostal 503. V CI nie je `.env`, takže `REDIS_URL` ostal na
+   predvolenom `localhost`.
+3. **`collectstatic`** — Django si počas testov sám prepne `DEBUG` na `False`
+   (`DiscoverRunner(debug_mode=False)`), čím sa
+   `CompressedManifestStaticFilesStorage` prepne do striktného režimu. Bez
+   manifestu padne šesť testov admin dashboardov na
+   `Missing staticfiles manifest entry for 'unfold/fonts/inter/styles.css'`.
+   Vypnúť tú striktnosť by bolo nesprávne — je to tá istá vec, ktorá
+   v produkcii odhalí chýbajúci statický súbor.
+
+Oba obrazy (`postgres:16-alpine`, `redis:7-alpine`) museli pribudnúť do
+`allowed_images` runnera na lenovo; zavádza sa to cez
+`/home/sam/gitlab-runner/setup-config.sh` (jediný zdroj pravdy pre `config.toml`)
+a prejaví sa po reštarte runnera.
 
 ## Helm validačné príkazy (lokálne)
 

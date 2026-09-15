@@ -82,7 +82,7 @@ Pipeline (`.gitlab-ci.yml`) obsahuje:
 | `helm_render_validate` | Helm lint + render dev/prod manifestov |
 | `helm_runtime_validate` | Kontrola, že render má beat a všetkých päť workerov |
 | `frontend_tests` | Vitest + typecheck |
-| `backend_tests` | Django testy |
+| `backend_tests` | Django testy proti service kontajnerom `postgres:16-alpine` + `redis:7-alpine` |
 
 Pipeline beží na serveri **lenovo** (projektový runner `sam-lenovo`), nie na
 vývojovom stroji. Ak joby ostávajú `pending`, je to takmer vždy preto, že

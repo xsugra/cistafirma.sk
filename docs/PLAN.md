@@ -1,6 +1,6 @@
 # Plán prác — CistaFirma
 
-**Aktualizované:** 2026-09-13
+**Aktualizované:** 2026-09-15
 **Vetva:** `feat/ai-ready-baseline` (celá lokálna, bez upstreamu)
 **Autor:** Samuel Šugra + Claude Code
 
@@ -3833,6 +3833,66 @@ Chýbajúca zelená pipeline je pritom horšia než červená — červenú vidn
 Kandidát na samostatný prírastok: periodická kontrola, ktorá sa opýta GitLabu,
 kedy naposledy nejaký job naozaj skončil, a zakričí, keď je to dávno — alebo
 keď novšie commity nemajú ani jeden beh.
+
+---
+
+### `backend_tests` bežal na SQLite — teda nekontroloval ani jeden test (2026-09-15)
+
+Prvá pipeline po oživení CI mala šesť zelených jobov a jeden červený:
+`backend_tests`. Trace jobu končil takto:
+
+```
+django.db.utils.OperationalError: near "text_pattern_ops": syntax error
+```
+
+Príčina nebola v kóde. Job nemal `DATABASE_URL`, takže sa `settings.py` podľa
+svojho dokumentovaného správania ticho prepol na SQLite (`backend/db.sqlite3`).
+Migrácia `companies/0014_add_pattern_ops_structured_indexes.py` ale vytvára
+index s `text_pattern_ops` — Postgres-only trieda operátorov — takže
+`create_test_db` spadol **skôr, než sa stihol spustiť jediný test**.
+
+Job bol teda červený vždy, nech bol kód akýkoľvek. Nebol to slabý test; bol to
+test s nulovým výpovedným obsahom — a to je presne tá trieda chyby, ktorú tento
+dokument opísal pri `helm_k8s_validate`: job, ktorý nemôže prejsť, učí ľudí
+ignorovať červenú.
+
+**Prečo sa to neopravilo „znesením migrácie na SQLite".** Index nie je
+ozdobný — `companies/services/peers.py` sa oň opiera pri prefixovom hľadaní.
+Urobiť migráciu prenosnou by znamenalo zničiť produkčný index kvôli CI.
+
+**Tri veci boli treba a každá odstránila presne svoju triedu chýb.** Overené
+lokálne, po jednej, v tom istom obraze `python:3.12-slim`:
+
+| Podmienka | Čo bez nej padalo |
+|---|---|
+| Postgres | `create_test_db` — `text_pattern_ops`, teda 0 vykonaných testov |
+| Redis | 11 testov na `ConnectionError` + healthz test čakal 200, dostal 503 |
+| `collectstatic` | 6 testov admin dashboardov na `Missing staticfiles manifest entry` |
+
+Posledná položka vyzerá nečakane, ale je to dôsledok: `DiscoverRunner` má
+`debug_mode=False`, takže si Django `settings.DEBUG` počas testov prepne na
+`False` sám — a `HashedFilesMixin.url` skracuje na obyčajné meno len keď je
+`DEBUG` True. `CompressedManifestStaticFilesStorage` je preto v testoch
+striktná. Vypnúť tú striktnosť (`WHITENOISE_MANIFEST_STRICT = False`) by bolo
+nesprávne: je to tá istá vec, ktorá v produkcii odhalí chýbajúci statický
+súbor. Produkcia pred štartom púšťa `collectstatic && gunicorn` — testy teraz
+robia to isté.
+
+Po všetkých troch: **899 testov, `OK`, exit 0.**
+
+**Zmena v CI.** `backend_tests` má service kontajnery `postgres:16-alpine`
+a `redis:7-alpine` — tie isté verzie, aké prevádzkuje produkcia
+(`docker-compose.yml`) — a `DATABASE_URL` / `REDIS_URL` na ne. Sú to
+jednorazové prihlasovacie údaje efemérneho kontajnera, nie secrets.
+
+**Zmena na runneri.** Oba obrazy museli pribudnúť do `allowed_images`
+v `/home/sam/gitlab-runner/setup-config.sh` (jediný zdroj pravdy pre
+`config.toml`) a runner sa musel reštartovať — dovnútra kontajnera je
+namontovaný `/home/sam/gitlab-runner/config`, takže vygenerovaný config je
+ten, ktorý runner naozaj číta. Zároveň z bielej listiny zmizli
+`bitnami/kubectl` a `bitnamilegacy/kubectl`: držali miesto pre obrazy jobu
+`helm_k8s_validate`, ktorý 15. 9. zmizol. Biela listina, ktorá drží obraz pre
+neexistujúci job, len predstiera, že niečo chráni.
 
 ---
 
