@@ -293,10 +293,13 @@ fi
 # while the schedule was in fact dead. So the log's last start is consulted only
 # once the scheduler confirms it has fired the job at least once.
 #
-# On macOS that evidence is launchd's `runs` counter. On Linux it is the
-# *timer's* last-trigger stamp, not its service's start time, for the same
-# reason: a manual `systemctl --user start` of the service must not be able to
-# read as proof that the schedule is alive.
+# On macOS that evidence is launchd's `runs` counter, which counts starts since
+# the job was *loaded* -- not since it was installed. A reboot reloads every
+# LaunchAgent and takes the counter back to 0, so 0 means "has not fired since
+# this machine last booted", which is not the same claim as "never fired". On
+# Linux it is the *timer's* last-trigger stamp, not its service's start time,
+# for the same reason: a manual `systemctl --user start` of the service must not
+# be able to read as proof that the schedule is alive.
 section "Weekly backup job"
 
 weekly_job_launchd() {
@@ -336,11 +339,48 @@ weekly_job_launchd() {
         printf '  launchd runs     : %s\n' "$runs"
 
         if [ "$runs" -eq 0 ]; then
+            # A zero counter cannot distinguish a fresh install from a healthy
+            # job that simply has not fired since the last reboot, and reading
+            # it as "never" failed the gate on a Mac that was working perfectly
+            # -- the plist's age says nothing about whether launchd ever fired
+            # it. The log is the only other evidence there is. It cannot prove
+            # the *scheduler* fired, because a manual run writes it too, so a
+            # recent entry buys a warning rather than an OK: it rules out "this
+            # has never worked", it does not establish "the schedule is alive".
+            # The unattended run judges itself on the way out, and by then the
+            # counter is at least 1, so it still gets the strict verdict below.
+            local prior_start prior_days boot_secs boot_note
+            prior_start=$(grep -h 'scheduled backup started' "$OUT_LOG" 2>/dev/null \
+                | tail -n 1 | sed -n 's/^\[\([^]]*\)\].*/\1/p' || true)
+            prior_days=""
+            if [ -n "$prior_start" ]; then
+                prior_days=$(iso_age_days "$prior_start")
+            fi
+
+            # When the boot time is what separates "reset by a reboot" from
+            # "this schedule is dead", print it and let the operator make the
+            # call. Deciding it here would need the plist's calendar rule: a
+            # start recorded after the boot proves launchd did *not* make it,
+            # but not that a fire has come due since, so a verdict would be a
+            # guess. The strict judgement is not lost -- the weekly run reaches
+            # the branch below with a non-zero counter and is judged there.
+            boot_note=""
+            # `[{,] *sec` and not `.*sec`, which would match the `usec` field
+            # that follows it and report a boot in 1970.
+            boot_secs=$(sysctl -n kern.boottime 2>/dev/null \
+                | sed -n 's/.*[{,] *sec = \([0-9][0-9]*\).*/\1/p' || true)
+            if [ -n "$boot_secs" ]; then
+                boot_note=" (machine last booted $(date -r "$boot_secs" -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf 'at an unreadable time'))"
+            fi
+
             installed_days=$(age_days "$plist")
-            if [ "$installed_days" -lt 0 ]; then
+            if [ -n "$prior_days" ] && [ "$prior_days" -ge 0 ] \
+                && [ "$prior_days" -le "$RUN_GAP_MAX_DAYS" ]; then
+                warn "launchd has not fired the job since this machine last booted, but $OUT_LOG records a start ${prior_days} day(s) ago${boot_note} -- a manual run or one from before the reboot, so the schedule itself is still unproven"
+            elif [ "$installed_days" -lt 0 ]; then
                 bad "launchd has never run the job and its install time is unreadable"
             elif [ "$installed_days" -gt "$RUN_GAP_MAX_DAYS" ]; then
-                bad "launchd has never run the job although it was installed ${installed_days} day(s) ago"
+                bad "launchd has not run the job since this machine last booted, and it was installed ${installed_days} day(s) ago"
             else
                 warn "launchd has not run the job yet (installed ${installed_days} day(s) ago) -- its first unattended run is still pending"
             fi
