@@ -275,6 +275,11 @@ function mapPersonMember(data: any): PersonMember {
     id: Number(data?.id),
     name: data?.name ?? '',
     address: data?.address ?? '',
+    // `null`, not `''`: a row whose section of the register stated no date is
+    // not a row that stated an empty one, and the note prints nothing rather
+    // than a placeholder -- there is no honest placeholder for "not stated"
+    // next to a real date it has to be compared against.
+    birth_date: data?.birth_date ?? null,
   };
 }
 

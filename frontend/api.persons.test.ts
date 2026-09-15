@@ -186,6 +186,43 @@ describe('mapPersonDetail', () => {
         expect(detail.companies.map((c) => c.is_active)).toEqual([null, false]);
         expect(detail.coverage).toEqual({companies_with_persons: 1, companies_total: 2});
     });
+
+    it('keeps each member row’s own birth date, and its absence', () => {
+        // The note on the person page can only contradict a grouping if the
+        // date survives the mapper per row. `null` has to stay `null` rather
+        // than becoming `''`: a row that stated no date is exactly what the
+        // reader compares a dated row against.
+        const detail = mapPersonDetail({
+            id: 44904,
+            name: 'Matej Vácha',
+            title: '',
+            person_ico: '',
+            records: 2,
+            members: [
+                {id: 44904, name: 'Matej Vácha', address: '', birth_date: '1992-08-20'},
+                {id: 45335, name: 'Matej Vácha', address: 'Beniakova, 3100/12', birth_date: null},
+            ],
+            companies: [],
+            coverage: {companies_with_persons: 1, companies_total: 2},
+        });
+
+        expect(detail.members.map((m) => m.birth_date)).toEqual(['1992-08-20', null]);
+    });
+
+    it('reads a member row from a response that predates the field', () => {
+        // The API and the bundle are deployed together, but a browser holding a
+        // cached bundle is not the only older reader -- an empty list must not
+        // become a row with an undefined date rendered next to a real one.
+        const detail = mapPersonDetail({
+            id: 1,
+            name: 'Ján Novák',
+            members: [{id: 1, name: 'Ján Novák', address: 'Hlavná 5'}],
+        });
+
+        expect(detail.members).toEqual([
+            {id: 1, name: 'Ján Novák', address: 'Hlavná 5', birth_date: null},
+        ]);
+    });
 });
 
 describe('mapOrsrPersonSearchResponse', () => {
