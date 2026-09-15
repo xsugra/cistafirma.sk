@@ -33,13 +33,61 @@ const EMPTY_BUNDLE: SuggestionBundle = {
   personDetail: null,
 };
 
+/**
+ * Two sizes of one box, with one behaviour.
+ *
+ * `hero` is the pill on the home and search pages, where finding a firm is what
+ * the page is for. `compact` is the same box standing above a firm or a person,
+ * where the page already has a subject and the box is only how the reader
+ * changes it -- so it is sized as a tool rather than as a headline. The
+ * difference is padding, a shorter placeholder and a shorter button word;
+ * everything else -- the debounce, the two-character floor, the two endpoints,
+ * the suggestion rows -- is shared deliberately.
+ */
+export type SearchBarVariant = 'hero' | 'compact';
+
 interface SearchBarProps {
   onSearch: (query: string) => void;
   isLoading: boolean;
   initialIco: string;
+  variant?: SearchBarVariant;
 }
 
-export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initialIco }) => {
+const VARIANT_STYLES = {
+  hero: {
+    wrapper: 'relative w-full px-4 sm:px-0',
+    frame: 'border-2 border-gray-200 dark:border-slate-800 rounded-full shadow-lg',
+    icon: 'pl-4 sm:pl-6 pr-2 sm:pr-3 text-lg sm:text-xl',
+    input: 'text-base sm:text-lg py-3 sm:py-4 pr-24 sm:pr-36',
+    button: 'right-1.5 sm:right-2 py-2 sm:py-3 px-4 sm:px-8 text-sm sm:text-base',
+    dropdown: 'mt-2 mx-4 sm:mx-0',
+    placeholder: 'Zadajte IČO, názov firmy alebo meno osoby...',
+    label: 'Overiť',
+  },
+  compact: {
+    // No side padding here on purpose: this one is placed inside a page that
+    // already has its own gutter, and a second one would inset the box from the
+    // content it stands above. The hero's `px-4` is compensated for in its own
+    // dropdown and button offsets, which is why the two wrappers cannot simply
+    // share a class list.
+    wrapper: 'relative w-full',
+    frame: 'border border-gray-300 dark:border-slate-700 rounded-full shadow-sm',
+    icon: 'pl-4 pr-2 text-base',
+    input: 'text-sm py-2.5 pr-24',
+    button: 'right-1 py-2 px-4 text-sm',
+    dropdown: 'mt-2',
+    placeholder: 'Hľadať inú firmu alebo osobu…',
+    label: 'Hľadať',
+  },
+} as const;
+
+export const SearchBar: React.FC<SearchBarProps> = ({
+  onSearch,
+  isLoading,
+  initialIco,
+  variant = 'hero',
+}) => {
+  const styles = VARIANT_STYLES[variant];
   const [query, setQuery] = useState(initialIco);
   const [suggestions, setSuggestions] = useState<SuggestionBundle>(EMPTY_BUNDLE);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -168,33 +216,34 @@ export const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading, initi
   const showPersons = persons.length > 0 || companies.length > 0;
 
   return (
-    <div className="relative w-full px-4 sm:px-0" ref={dropdownRef}>
+    <div className={styles.wrapper} ref={dropdownRef}>
       <form onSubmit={handleSubmit}>
-        <div className="flex items-center bg-white dark:bg-slate-900 border-2 border-gray-200 dark:border-slate-800 rounded-full shadow-lg overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300">
-          <i className="fas fa-search text-gray-400 pl-4 sm:pl-6 pr-2 sm:pr-3 text-lg sm:text-xl"></i>
+        <div className={`flex items-center bg-white dark:bg-slate-900 overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300 ${styles.frame}`}>
+          <i className={`fas fa-search text-gray-400 ${styles.icon}`}></i>
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onFocus={() => { isFocused.current = true; if (query.length >= 2 && hasResults) setShowSuggestions(true); }}
             onBlur={() => { isFocused.current = false; }}
-            placeholder="Zadajte IČO, názov firmy alebo meno osoby..."
-            className="w-full bg-transparent text-base sm:text-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 py-3 sm:py-4 pr-24 sm:pr-36 outline-none"
+            placeholder={styles.placeholder}
+            aria-label="Hľadať firmu alebo osobu"
+            className={`w-full bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none ${styles.input}`}
             disabled={isLoading}
           />
           <button
             type="submit"
-            className="absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-2 sm:py-3 px-4 sm:px-8 rounded-full transition-transform hover:scale-105 active:scale-95 shadow-md text-sm sm:text-base"
+            className={`absolute top-1/2 -translate-y-1/2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold rounded-full transition-transform hover:scale-105 active:scale-95 shadow-md ${styles.button}`}
             disabled={isLoading}
           >
-            {isLoading || isSearching ? <i className="fas fa-circle-notch animate-spin"></i> : 'Overiť'}
+            {isLoading || isSearching ? <i className="fas fa-circle-notch animate-spin"></i> : styles.label}
           </button>
         </div>
       </form>
 
       {/* Suggestions Dropdown */}
       {showSuggestions && hasResults && (
-        <div className="absolute left-0 right-0 mt-2 mx-4 sm:mx-0 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-[100] animate-fade-in">
+        <div className={`absolute left-0 right-0 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-[100] animate-fade-in ${styles.dropdown}`}>
           <div className="max-h-[420px] overflow-y-auto">
             {companies.length > 0 && (
               <>

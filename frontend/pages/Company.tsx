@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import type { Company as CompanyType } from '../types';
 import { ROUTES, companyPath } from '../constants';
 import { DEFAULT_SECTION_ID, getSection, type ReadySectionId } from '../companySections';
+import { searchTarget } from '../utils/searchTarget';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { SearchBar } from '../components/SearchBar';
 import { CompanyHeader } from '../components/company/CompanyHeader';
 import { CompanySummaryStrip } from '../components/company/CompanySummaryStrip';
 import { CompanyNav } from '../components/company/CompanyNav';
@@ -25,9 +27,21 @@ import { BODIES } from '../components/company/sectionBodies';
  */
 export const Company: React.FC = () => {
     const { ico = '', sekcia } = useParams<{ ico: string; sekcia?: string }>();
+    const navigate = useNavigate();
+    const location = useLocation();
     const [company, setCompany] = useState<CompanyType | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+
+    // The box above this firm searches for the *next* one. Until it existed the
+    // only way from one firm to another was Back, because the search box lived
+    // on the page you had just left.
+    const handleSearch = (query: string) => {
+        const target = searchTarget(query);
+        // A query that only resolves to the page already open would push a
+        // history entry that Back cannot visibly undo.
+        if (target && target !== `${location.pathname}${location.search}`) navigate(target);
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -59,6 +73,18 @@ export const Company: React.FC = () => {
 
     return (
         <div className="mx-auto w-full max-w-7xl animate-fade-in py-8">
+            {/* Above every state, not just the loaded one: a firm that failed to
+                load is exactly when the reader wants to try another one, and the
+                box is the shortest way there. */}
+            <div className="mb-6 max-w-2xl">
+                <SearchBar
+                    onSearch={handleSearch}
+                    isLoading={false}
+                    initialIco=""
+                    variant="compact"
+                />
+            </div>
+
             {isLoading && <LoadingSpinner />}
 
             {error && !isLoading && (

@@ -1,6 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {screen, waitFor} from '@testing-library/react';
-import {Route, Routes} from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
+import {Route, Routes, useLocation} from 'react-router-dom';
 import {Person} from './Person';
 import {ApiError} from '../lib/apiClient';
 import {renderWithProviders} from '../test/testUtils';
@@ -11,6 +12,9 @@ const mocks = vi.hoisted(() => ({
     api: {
         getPerson: vi.fn(),
         searchOrsrPersons: vi.fn(),
+        // The page's own search box asks these two, the same as the home page's.
+        searchCompanies: vi.fn(),
+        searchPersons: vi.fn(),
     },
 }));
 
@@ -53,11 +57,20 @@ const person = (overrides: Partial<PersonDetail> = {}): PersonDetail => ({
     ...overrides,
 });
 
+/** The URL the router is on -- the search box's destination is the assertion. */
+const LocationProbe: React.FC = () => {
+    const location = useLocation();
+    return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
+};
+
 const renderPerson = (id = '12345') =>
     renderWithProviders(
-        <Routes>
-            <Route path="/osoba/:id" element={<Person/>}/>
-        </Routes>,
+        <>
+            <LocationProbe/>
+            <Routes>
+                <Route path="/osoba/:id" element={<Person/>}/>
+            </Routes>
+        </>,
         {route: `/osoba/${id}`},
     );
 
@@ -65,6 +78,10 @@ describe('Person page', () => {
     beforeEach(() => {
         mocks.api.getPerson.mockReset();
         mocks.api.searchOrsrPersons.mockReset();
+        mocks.api.searchCompanies.mockReset();
+        mocks.api.searchPersons.mockReset();
+        mocks.api.searchCompanies.mockResolvedValue({results: []});
+        mocks.api.searchPersons.mockResolvedValue(null);
     });
 
     it('renders the person’s own coverage sentence, from the response', async () => {
@@ -244,5 +261,28 @@ describe('Person page', () => {
         renderPerson('777');
 
         await waitFor(() => expect(mocks.api.getPerson).toHaveBeenCalledWith('777'));
+    });
+
+    it('lets the reader search on from a person, not only back', async () => {
+        // Arriving from a suggestion used to be one-way: the box that found the
+        // person was on the page you had left. The same rule as on a firm page
+        // sends an IČO at the firm and everything else at the search page.
+        mocks.api.getPerson.mockResolvedValue(person());
+
+        renderPerson();
+        await screen.findByText(/Osoby máme pre/);
+
+        const user = userEvent.setup();
+        await user.type(
+            screen.getByRole('textbox', {name: 'Hľadať firmu alebo osobu'}),
+            '35757442',
+        );
+        await user.click(screen.getByRole('button', {name: 'Hľadať'}));
+
+        await waitFor(() =>
+            expect(screen.getByTestId('location')).toHaveTextContent(
+                /^\/firma\/35757442\/prehlad$/,
+            ),
+        );
     });
 });

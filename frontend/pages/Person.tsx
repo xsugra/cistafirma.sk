@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { ApiError } from '../lib/apiClient';
 import type { PersonDetail } from '../types';
 import { ROUTES } from '../constants';
+import { searchTarget } from '../utils/searchTarget';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { SearchBar } from '../components/SearchBar';
 import { PersonCoverageNote } from '../components/person/PersonCoverageNote';
 import { PersonRecordsNote } from '../components/person/PersonRecordsNote';
 import { PersonRelationRow } from '../components/person/PersonRelationRow';
@@ -35,10 +37,21 @@ const ROLE_STATES = ['current', 'ended', 'unknown'] as const;
  */
 export const Person: React.FC = () => {
     const { id = '' } = useParams<{ id: string }>();
+    const navigate = useNavigate();
+    const location = useLocation();
     const [person, setPerson] = useState<PersonDetail | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [notFound, setNotFound] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // Same box, same reason as on a firm: arriving here from a suggestion used
+    // to be a one-way trip, because the search that got you here was on the page
+    // you left. `searchTarget` decides where the query goes, so this page and
+    // the firm page cannot disagree about it.
+    const handleSearch = (query: string) => {
+        const target = searchTarget(query);
+        if (target && target !== `${location.pathname}${location.search}`) navigate(target);
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -130,6 +143,15 @@ export const Person: React.FC = () => {
 
     return (
         <div className="mx-auto w-full max-w-5xl animate-fade-in space-y-6 py-8">
+            <div className="max-w-2xl">
+                <SearchBar
+                    onSearch={handleSearch}
+                    isLoading={false}
+                    initialIco=""
+                    variant="compact"
+                />
+            </div>
+
             <header className="rounded-xl border border-gray-200 bg-white p-6 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:shadow-none">
                 <div className="flex items-start gap-4">
                     <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-slate-600 dark:bg-slate-500">

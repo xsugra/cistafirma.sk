@@ -1,6 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-import {screen} from '@testing-library/react';
-import {Route, Routes, useParams} from 'react-router-dom';
+import {screen, waitFor} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {Route, Routes, useLocation, useParams} from 'react-router-dom';
 import {Company} from './Company';
 import {Monitoring} from './Monitoring';
 import {COMPANY_SECTIONS} from '../companySections';
@@ -12,6 +13,9 @@ const mocks = vi.hoisted(() => ({
         getCompany: vi.fn(),
         getWatchlist: vi.fn(),
         searchCompanies: vi.fn(),
+        // The page's own search box asks the same two endpoints the home page's
+        // does, so both have to exist here now that the box is on this page.
+        searchPersons: vi.fn(),
     },
 }));
 
@@ -53,10 +57,43 @@ const SectionProbe: React.FC = () => {
     return <div data-testid="probe">{`${ico}/${sekcia}`}</div>;
 };
 
+/**
+ * The URL the router is on, printed beside whatever route matched.
+ *
+ * The search box navigates to two different shapes of URL, and one of them
+ * (`/firma/:ico/:sekcia`) is the route the page itself is mounted on -- so a
+ * probe *route* would have to be registered twice, and the second registration
+ * would shadow the page under test. A sibling that only reads `useLocation` has
+ * no such problem.
+ */
+const LocationProbe: React.FC = () => {
+    const location = useLocation();
+    return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
+};
+
+const renderCompany = (route: string) =>
+    renderWithProviders(
+        <>
+            <LocationProbe/>
+            <Routes>
+                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+            </Routes>
+        </>,
+        {route},
+    );
+
+const typeInPageSearch = async (text: string) => {
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', {name: 'Hľadať firmu alebo osobu'}), text);
+    await user.click(screen.getByRole('button', {name: 'Hľadať'}));
+};
+
 describe('Company page', () => {
     beforeEach(() => {
         mocks.api.getCompany.mockResolvedValue(company);
         mocks.api.getWatchlist.mockResolvedValue([]);
+        mocks.api.searchCompanies.mockResolvedValue({results: []});
+        mocks.api.searchPersons.mockResolvedValue(null);
     });
 
     it('routes an old /monitoring?ico= link to the firm page', async () => {
@@ -200,5 +237,36 @@ describe('Company page', () => {
         // finds two elements.
         expect(await screen.findByText('Testovacia, s.r.o.')).toBeInTheDocument();
         expect(screen.queryByText(/DIČ/)).not.toBeInTheDocument();
+    });
+
+    it('finds the next firm from the firm page itself, without going back', async () => {
+        // The search box used to live only on the pages you arrived *from*, so
+        // reading one firm and then another meant Back, retype, forward. An IČO
+        // typed here goes straight at the firm it names.
+        renderCompany('/firma/12345678/prehlad');
+        await screen.findByText('Testovacia, s.r.o.');
+
+        await typeInPageSearch('87654321');
+
+        await waitFor(() =>
+            expect(screen.getByTestId('location')).toHaveTextContent(
+                /^\/firma\/87654321\/prehlad$/,
+            ),
+        );
+    });
+
+    it('hands a name to the search page, which is what can answer a name', async () => {
+        // The other half of the same rule: a name is not an IČO, and the page
+        // that can turn one into a firm is the search page.
+        renderCompany('/firma/12345678/zaverky');
+        await screen.findByText('Testovacia, s.r.o.');
+
+        await typeInPageSearch('Iná Firma');
+
+        await waitFor(() =>
+            expect(screen.getByTestId('location')).toHaveTextContent(
+                '/monitoring?ico=In%C3%A1%20Firma',
+            ),
+        );
     });
 });
