@@ -2844,7 +2844,95 @@ po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
   D2 by zmenilo: `replicate` zapisuje `X.dump.gpg`, `offsite_status` súdi
   „najnovšia off-site replika je šifrovaná" podľa artefaktu (nie podľa
   zväzku), `prune` musí poznať nový suffix a restore runbook dostane krok
-  s odšifrovaním. Je to nová kontrola, preto **na schválenie**.
+  s odšifrovaním.
+
+**Rozhodnuté 15. 9.** — D1 používateľ delegoval na mňa („vyber to, čo by si
+odporúčal, ale tak, aby to bolo suitable pre ten dell"), D2 schválil.
+
+- **D1 = (a): dell sa preinštaluje s LUKS a odomkýnaním cez TPM2.** Dôvody
+  v poradí podľa váhy:
+
+  1. **Teraz je to takmer zadarmo a nikdy viac nebude.** Stroj je holý,
+     databáza naň ešte nešla a Tailscale na delle **ešte nie je
+     autorizované** — takže sa nemení žiadna identita, o ktorú by sa prišlo.
+     Po #107 je to tá istá hodina navyše k riziku nad živými dátami.
+  2. **Dnešná produkcia je šifrovaná** (FileVault na Macu). Presun na
+     nešifrovaný primár by bol **regresia** v ochrane, ktorú dokument
+     vyžaduje — a presne tá zmena, ktorá sa po nahratí dát obhajuje ťažko.
+  3. **A nie je to voľba „človek pri každom boote".** To bola možnosť 3, ktorú
+     používateľ odmietol — a odmietol ju správne: pri mŕtvej batérii v delle
+     by znamenala fyzickú účasť po **každom** nečistom výpadku prúdu. TPM2
+     s PCR 7 (Secure Boot je zapnutý) odomkne disk **bez človeka** a prežije
+     aktualizácie jadra. Fyzická účasť je tu teda **raz** (inštalácia), nie
+     pri každom štarte. To je celý rozdiel medzi (a) a (3).
+
+  Čo to **nerieši**, a musí byť napísané rovnako jasne: kto odnesie celý
+  stroj, ten ho proste zapne a TPM mu kľúč vydá. Chráni to proti tomu, že
+  **disk** opustí dom (predaj, RMA, vyradenie, vybratie) — nie proti
+  vlámaniu. Presne tú kópiu, ktorá naozaj opúšťa domov, chráni D2.
+
+  Zvyškové riziko, ktoré patrí k rozhodnutiu: ak sa zmení meranie (firmvér,
+  BIOS), TPM kľúč nevydá a stroj sa spýta na passphrase — teda fyzická
+  účasť. Preto passphrase slot **ostáva**; je to poistka, nie porucha.
+
+- **D2 = šifrovať na zdroji (`gpg`), schválené.** Implementácia je nová
+  kontrola v `scripts/local/`, preto má vlastný plán nižšie.
+
+### D2 — ako sa to implementuje (gpg na zdroji)
+
+Podstata: nešifrované dáta **nikdy neopustia dell**, takže otázka „je cieľový
+zväzok šifrovaný?" prestáva byť otázkou o cieli a stáva sa otázkou
+o **artefakte**. To je zmena významu, nie pridanie podmienky — a musí sa
+prejaviť na všetkých štyroch miestach, inak by vznikla presne tá nezhoda,
+ktorej sa `offsite_crypto.sh` vyhýba tým, že ju má implementovanú raz:
+
+| miesto | teraz | po D2 |
+|---|---|---|
+| `replicate` | overí zväzok, zapíše `X.dump` | zašifruje na `X.dump.gpg`, zapíše `.gpg`; zväzková otázka sa **preskočí s uvedeným dôvodom**, nie ticho |
+| `offsite_status` | `FAIL`/`OK` podľa zväzku | súdi **artefakt**: existuje `X.dump.gpg`, sedí `.json` manifest a checksum |
+| `prune` | drží `X.dump` + `.json` | musí poznať `.gpg` aj `.gpg.json`, inak by retention mazala naslepo |
+| drill / restore | `pg_restore` dumpu | `gpg --decrypt` → `pg_restore`; **drill musí skúšať šifrovaný artefakt**, lebo to je to, čo naozaj existuje |
+
+Kľúč: verejný na delle, súkromný u používateľa (password manager + Mac).
+Chýbajúci alebo nedostupný kľúč **nesmie** skončiť tichým zápisom
+nešifrovaného dumpu — to je jediná skutočná pasca tejto zmeny: zašifrovanie,
+ktoré pri poruche kľúča spadne späť na plaintext, je horšie než žiadne,
+lebo vyzerá ako hotové. Preto sa `replicate` pri chybe gpg **zastaví**, a to
+istým spôsobom ako dnes pri neoverenom zväzku.
+
+**Postup migrácie, v poradí (D1 a D2 sú rozhodnuté, takto sa to spraví):**
+
+1. **Preinštalovať dell s LUKS** (inštalátor: „Encrypt the LVM group with
+   LUKS"), potom `systemd-cryptenroll --tpm2-device=auto` (PCR 7) a zopakovať
+   predletovú kontrolu. *Fyzický krok, len používateľ.*
+2. **Autorizovať Tailscale na delle** → `tailscale status` je up, `gitlab-home`
+   funguje, sshfs na lenovo sa pripojí.
+3. **Kód a `.env` na dell** — dnes to ide aj po LAN z Macu; po autorizácii
+   čistejšie `git clone` z gitlabu.
+4. **Rotácia `SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` (#112)** —
+   **pred** krokom 6, kým na delle neexistuje volume.
+5. **Databáza (#106/#107)** — utíšiť Mac (beat a workery), čerstvý overený
+   dump, prenos, obnova, overiť počty.
+6. **Prvý štart (#108)** — workery, **beat až po obnove databázy**, potom
+   `tailscale serve --bg 5173`.
+7. **Dokončiť kontroly** — prvý drill a prvá replika na lenovo, inštalovať
+   týždenný timer (#115).
+8. **Cutover (#109)** — vypnúť Mac, overiť z iného zariadenia.
+
+Tri veci, ktoré pri tom treba mať vopred na pamäti:
+
+- **Nikdy nesmú bežať dva beatu naraz.** Databázy sú oddelené, takže sa
+  nepokazia dáta — ale oba by šliapali na tie isté registre (RUZ, ORSR,
+  VSZP), čo je cesta k rate-limitu. Mac-ov beat dole **pred** štartom dellu.
+- **Redis sa neprenáša.** V Mac-ovom Redise visí ~80 000 správ pre poisťovne;
+  tie sa stratia. Nie je to strata dát — beat ich znova vyberie podľa „čo je
+  due" — je to oneskorenie. Nech to nie je prekvapenie.
+- **Na delle bude `ops-check` spočiatku hlásiť FAIL, a bude to správne.**
+  Záznam o drilli aj o replike je lokálny (`restore_drills.log`) a dell
+  nezačína so žiadnym, takže brána napíše `no restore drill has been
+  recorded` (`offsite_status.sh:192-193`). Preto krok 7: po obnove spustiť na
+  delle `make db-restore-drill` (do izolovaného cieľa, nikdy nad živou
+  databázou), inak vyzerá migrácia pokazená, hoci je v poriadku.
 
 ---
 
