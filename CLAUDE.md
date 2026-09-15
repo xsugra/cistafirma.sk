@@ -89,6 +89,19 @@ through the other. `BIND_HOST=0.0.0.0` in `.env` re-exposes them deliberately;
 do not set it on a network you do not control. `db` and `redis` ignore
 `BIND_HOST` and are always loopback-bound.
 
+A host that runs the stack as **production** adds one line to its own `.env`:
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+```
+
+That replaces the `frontend` service — and only that service — with the built
+bundle from `frontend/Dockerfile.prod`, served by nginx instead of Vite: no bind
+mount, no `npm install` at start-up, no dev server reachable from the published
+URL. Every other service keeps its single definition, and `make docker-up` needs
+no change because compose reads the variable itself. A developer machine leaves
+it unset and keeps the dev server. See `.env.default`.
+
 Note: **each compose service with a `build:` block gets its own image tag**
 (`cistafirma-backend`, `cistafirma-celery_worker_ruz`, …). `docker compose build
 backend` rebuilds only the backend image, so the workers keep the old one while
