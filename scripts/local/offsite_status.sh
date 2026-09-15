@@ -250,9 +250,23 @@ EOF
         # directory that is present but unreachable has no off-site copy to
         # drill, and telling the operator to drill it would send them after a
         # volume that is not there.
+        #
+        # The second precondition is the host itself. The replica is encrypted
+        # to the public key, so a host holding only that half can write and
+        # verify replicas for ever and never read one -- which is the point of
+        # encrypting at source, and also means the off-site drill is not this
+        # host's to run. Warning anyway asks for something the machine cannot
+        # do, and an unanswerable warning is how a report teaches its reader to
+        # skip warnings. The drill belongs to the keyholder, so this says that
+        # instead of counting it against the host.
         if [ "$drill_source" != "off-site" ] &&
             cistafirma_offsite_mount_check "${CISTAFIRMA_OFFSITE_BACKUP_DIR:-}" "$offsite_reference"; then
-            warn "last drill used the local backup; drill the off-site copy when one is present"
+            if cistafirma_gpg_has_secret_key "$(cistafirma_gpg_configured_recipient)"; then
+                warn "last drill used the local backup; drill the off-site copy when one is present"
+            else
+                printf '  off-site drill   : not runnable on this host — it holds only the public key, so it can write and verify replicas but never read one\n'
+                printf '  %s\n' "(an encrypted replica has to be drilled where the private key is — see docs/DATA_PROTECTION.md)"
+            fi
         fi
     fi
 fi

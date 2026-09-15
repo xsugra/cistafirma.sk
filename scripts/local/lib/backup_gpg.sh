@@ -53,6 +53,30 @@ cistafirma_gpg_can_encrypt_to() {
         awk -F: '/^(pub|sub):/ && $12 ~ /e/ { found = 1 } END { exit !found }'
 }
 
+# Can this keyring *read* a replica addressed to that recipient? The counterpart
+# of the check above, and the question the off-site drill control turns on.
+#
+# A host holding only the public half can write and verify replicas for ever and
+# never decrypt one -- that is the point of encrypting at source, and it is why
+# the replicating host is expected to report `private key: absent`. The
+# consequence for reporting is easy to get wrong: "you have not drilled the
+# off-site copy" is, on such a host, an instruction it cannot carry out. A
+# control that asks for the impossible is worse than no control, because it
+# trains its reader to skip warnings. Callers ask this first and change what
+# they say, rather than counting an unanswerable demand against the machine.
+cistafirma_gpg_has_secret_key() {
+    local recipient="$1"
+
+    cistafirma_gpg_available || return 1
+    [ -n "$recipient" ] || return 1
+
+    # gpg's own exit code is not the answer here -- `--list-secret-keys` exits 0
+    # with an empty listing -- so this one is decided by the parsed output and
+    # keeps only awk's status, which is what the caller branches on.
+    "$CISTAFIRMA_GPG_BIN" --batch --with-colons --list-secret-keys -- "$recipient" 2>/dev/null |
+        awk -F: '/^sec:/ { found = 1 } END { exit !found }'
+}
+
 # Every long key id that can be the encryption target of a message addressed to
 # this recipient. The encryption subkey is the usual answer -- an ed25519
 # sign-only primary key cannot encrypt at all -- so both are printed and the
