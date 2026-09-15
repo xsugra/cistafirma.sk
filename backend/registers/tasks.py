@@ -1,5 +1,5 @@
 from celery import shared_task, chain, chord, group
-from django.db.models import Exists, F, OuterRef, Q
+from django.db.models import Count, Exists, F, OuterRef, Q
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
@@ -131,8 +131,37 @@ def fetch_ruz_data_szco_only(self, sync_job_id: int | None = None):
 def update_insurance_debt(company_id: int):
     company = Company.objects.get(id=company_id)
 
-    vszp_result = check_vszp_debt_get(company.ico)
-    social_result = check_socpoist_debt(company.ico)
+    # A source somebody blocked is not asked, and the answer already stored for
+    # it stays as it was. Per source, not per company: blocking `vszp` says
+    # nothing about `debt_soc_poist`, which is a different question with a
+    # different answer, and freezing both would make the block a bigger hammer
+    # than the one the admin picked up.
+    #
+    # Read before the requests, because this decides whether to make them.
+    blocked = set(
+        CompanySyncStatus.objects.filter(
+            company_id=company_id, source__in=INSURANCE_SOURCES, is_blocked=True
+        ).values_list("source", flat=True)
+    )
+    if blocked == set(INSURANCE_SOURCES):
+        logger.info(
+            "Kontrola dlhov pre %s (ICO: %s) preskočená -- oba zdroje sú "
+            "manuálne zablokované.",
+            company.nazov_UJ,
+            company.ico,
+        )
+        return
+
+    vszp_result = (
+        None
+        if CompanySyncStatus.SOURCE_VSZP in blocked
+        else check_vszp_debt_get(company.ico)
+    )
+    social_result = (
+        None
+        if CompanySyncStatus.SOURCE_SOCIAL in blocked
+        else check_socpoist_debt(company.ico)
+    )
 
     with transaction.atomic():
         company = Company.objects.select_for_update().get(id=company_id)
@@ -145,6 +174,10 @@ def update_insurance_debt(company_id: int):
         }
         update_fields = []
         for source, (field_name, result) in results.items():
+            if result is None:
+                # Blocked: not attempted, so there is nothing to record about
+                # this attempt and nothing to write over the stored answer.
+                continue
             update_company_status(
                 company_id=company.id,
                 source=source,
@@ -171,13 +204,24 @@ def update_insurance_debt(company_id: int):
         # page cannot tell them apart -- and it currently shows the second as
         # the first. Guarded on `is_authoritative` so that a network error
         # cannot clear a flag a previous attempt set from a page it did read.
-        if social_result.is_authoritative:
+        if social_result is not None and social_result.is_authoritative:
             listed = social_result.state is DebtCheckState.LISTED_NO_AMOUNT
             if company.social_listed_without_amount != listed:
                 company.social_listed_without_amount = listed
                 update_fields.append("social_listed_without_amount")
 
-        if vszp_result.is_authoritative and social_result.is_authoritative:
+        # Advanced only when both sources were asked *and* both answered. A
+        # blocked source was never asked, so it did not answer -- and this
+        # timestamp is shown to readers as the date the debts were checked, so
+        # it may not claim a check that did not happen. The cost is that a
+        # company with one blocked source stays in the due set; the scheduler
+        # above is what keeps it from being picked for ever.
+        answered = [
+            result for result in (vszp_result, social_result) if result is not None
+        ]
+        if len(answered) == len(INSURANCE_SOURCES) and all(
+            result.is_authoritative for result in answered
+        ):
             company.last_insurance_debt = timezone.now()
             update_fields.append("last_insurance_debt")
 
@@ -215,8 +259,8 @@ def update_insurance_debt(company_id: int):
         "Insurance debt check finished for %s (ICO: %s, VSZP=%s, social=%s)",
         company.nazov_UJ,
         company.ico,
-        vszp_result.state,
-        social_result.state,
+        vszp_result.state if vszp_result is not None else "blocked",
+        social_result.state if social_result is not None else "blocked",
     )
 
 # `update_insurance_debt` drains at `rate_limit='20/m'`, so one 12-hour tick can
@@ -248,15 +292,26 @@ INSURANCE_RATE_PER_MINUTE = 20
 INSURANCE_TICK_HOURS = 12
 INSURANCE_BATCH_PER_TICK = INSURANCE_RATE_PER_MINUTE * 60 * INSURANCE_TICK_HOURS
 
+# The two sources one insurance-debt check answers for, and the only two whose
+# `CompanySyncStatus` rows this module reads or writes. Named here because
+# three places need the same pair -- the selector, the block check and the
+# "did both answer?" test -- and a tuple that drifts between them would be a
+# silent hole rather than a mistake anyone notices.
+INSURANCE_SOURCES = (
+    CompanySyncStatus.SOURCE_VSZP,
+    CompanySyncStatus.SOURCE_SOCIAL,
+)
+
 
 @shared_task(queue='celery')
 def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
     """Queue a bounded batch of insurance-debt checks for the companies that are due.
 
-    The selection is unchanged -- `last_insurance_debt` older than 12 hours, or
-    never checked -- and so is the rotation it implies: an attempt that both
-    sources answer advances the timestamp, so the head of the queue moves on and
-    a later tick cannot hand out the same companies again.
+    Due means `last_insurance_debt` older than 12 hours, or never checked, *and*
+    at least one of the two sources still open to us -- see the block below.
+    The rotation that implies is unchanged: an attempt that both sources answer
+    advances the timestamp, so the head of the queue moves on and a later tick
+    cannot hand out the same companies again.
 
     What is new is `limit`. The batch is capped at what `update_insurance_debt`
     can drain before the next tick, so the queue stays bounded instead of
@@ -297,12 +352,82 @@ def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
     drain capacity that `rate_limit` will not give back. That is not a corner
     case to shrug at: a caught-up rotation is the goal, and in that state the
     unwatched due set really can run dry.
+
+    **`next_retry_at` is deliberately not read here**, although
+    `update_company_status` writes it for these two sources. The backoff cannot
+    fire on this path: `compute_next_retry` caps it at `MAX_BACKOFF_SECONDS`
+    (24 h) while the rotation revisits a company about every 15 days -- 400 831
+    never-checked companies at 14 400 per 12 h tick -- so by the time a row is
+    looked at again its backoff has always expired. Measured on the live
+    database 2026-09-15: of 54 486 `social` and 54 486 `vszp` rows, **0** had
+    `next_retry_at` in the future, while `orsr` (8 055) and `financials`
+    (10 340) did -- those rotations do come back within the day. Adding the
+    filter would therefore exclude nothing, ever: the "control that looks
+    configured and decides nothing" this repository keeps finding, built
+    deliberately. What bounds this path is `rate_limit='20/m'` for the load it
+    puts on the registers and the rotation for how often a company is asked.
+
+    **`is_blocked` is read**, and it is the one thing here that was genuinely
+    missing. Every other source is asked for work through
+    `companies_due_for_sync`, which filters `is_blocked=False`; this batch
+    selected on `Company.last_insurance_debt` alone, so a company an admin had
+    blocked was still checked -- and because a blocked source is never
+    attempted, its timestamp never advanced and it kept its slot, tick after
+    tick, for ever. The rule is "an unblocked source, or no row at all": a
+    company with no insurance row has simply never been checked and is due; a
+    company whose every insurance row is blocked is not.
     """
     time_threshold = timezone.now() - timedelta(hours=12)
 
-    due = Company.objects.filter(
-        Q(last_insurance_debt__lte=time_threshold) | Q(last_insurance_debt__isnull=True)
+    # Which companies have *every* insurance source blocked, read as an indexed
+    # query of its own rather than as a correlated `EXISTS` beside the scan.
+    #
+    # The two answer identically and do not cost identically. Measured on the
+    # live database 2026-09-15, warm, with the real ordering and limit:
+    #
+    #     two correlated `EXISTS`   select 582-695 ms   due.count() 408-419 ms
+    #     this list, then exclude   select 187-207 ms   due.count()  100-105 ms
+    #     nothing at all            select 190-215 ms   due.count()  100-109 ms
+    #
+    # The filter is *free* this way -- the plan is the same `Parallel Seq Scan`
+    # it is with no filter, because excluding an empty list costs nothing --
+    # while the correlated form makes the planner estimate 4 001 250 where it
+    # estimated 41 250 and drop parallel query altogether, on the one statement
+    # the whole rotation runs. It is the estimate rather than the milliseconds
+    # that decides it: 600 ms twice a day is nothing, but a 100x misestimate on
+    # a table that only grows is a timeout waiting for enough companies.
+    #
+    # The rule is "every source is blocked", not "no source is unblocked". They
+    # differ for a company that a `block_company` call gave a blocked `vszp` row
+    # without ever giving it a `social` one -- the admin API writes a row per
+    # source on demand, so that state is reachable, and the test suite pins it.
+    # Under the second phrasing the missing `social` row would read as "nothing
+    # to do there" and the company would never be asked about its
+    # social-insurance debt at all; under this one it stays due, which is what
+    # "never checked" means everywhere else in this module.
+    #
+    # `is_blocked` is indexed and only an admin API call blocks anything -- one
+    # company, one source, per request (`adminapi/views/sync.py`) -- so this
+    # returns a handful of ids, and 0 today. `exclude(pk__in=[])` is therefore
+    # the ordinary case, not a corner: Django drops the clause and keeps every
+    # row, which a test states outright, because an empty batch is the failure
+    # that would matter. `order_by()` clears any ordering a future `Meta` might
+    # add, so the `GROUP BY` stays `company_id` alone.
+    fully_blocked_ids = list(
+        CompanySyncStatus.objects.filter(
+            source__in=INSURANCE_SOURCES, is_blocked=True
+        )
+        .values("company_id")
+        .annotate(_sources=Count("source", distinct=True))
+        .filter(_sources=len(INSURANCE_SOURCES))
+        .order_by()
+        .values_list("company_id", flat=True)
     )
+
+    due = Company.objects.filter(
+        Q(last_insurance_debt__lte=time_threshold)
+        | Q(last_insurance_debt__isnull=True)
+    ).exclude(pk__in=fully_blocked_ids)
 
     # One `EXISTS` subquery rather than a join through `watchers`: a company can
     # be on several watchlists, and a join would hand the same company to

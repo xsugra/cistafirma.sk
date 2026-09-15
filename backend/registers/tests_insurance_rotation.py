@@ -25,6 +25,8 @@ from django.test import TestCase
 from django.utils import timezone
 
 from companies.models import Company, Watchlist
+from registers.models import CompanySyncStatus
+from registers.scrapers.debt_result import DebtCheckResult
 from registers.tasks import (
     INSURANCE_BATCH_PER_TICK,
     INSURANCE_TICK_HOURS,
@@ -261,7 +263,6 @@ class InsuranceWatchPriorityTests(TestCase):
 
 class InsuranceBatchSelectionTests(TestCase):
     """What is due -- unchanged by the cap, and worth pinning anyway."""
-
     def test_a_company_checked_recently_is_left_alone(self):
         companies = _companies(3)
         Company.objects.filter(pk=companies[0].pk).update(
@@ -283,6 +284,158 @@ class InsuranceBatchSelectionTests(TestCase):
             schedule_insurance_debt_checks(limit=10)
 
         self.assertEqual(delay.call_count, 0)
+
+
+class InsuranceBlockedSourceTests(TestCase):
+    """A blocked source is not asked, and stops holding a slot.
+
+    `is_blocked` ("Manuálne zablokované") is per (company, source). Every other
+    source is asked for work through `companies_due_for_sync`, which filters it
+    out; this rotation selected on `Company.last_insurance_debt` alone, so
+    blocking an insurance row changed nothing -- and the company could not age
+    out of the batch either, because a source that is never attempted never
+    advances the timestamp that would retire it.
+
+    Measured on the live database 2026-09-15: 0 of 449 776 companies have a
+    blocked insurance row, so nothing was being wasted yet. The state is
+    reachable all the same -- `block_company` takes any source, the admin API
+    exposes block and unblock on the status-row resource, and `blocked_reason`
+    is a first-class field -- which is exactly why it survived: nobody had
+    reached it, so a silent no-op looked like a no-op that never happened.
+    """
+
+    def _block(self, company, source):
+        return CompanySyncStatus.objects.create(
+            company=company, source=source, is_blocked=True, blocked_reason="test"
+        )
+
+    def _selected(self, *, limit=10):
+        with mock.patch("registers.tasks.update_insurance_debt.delay") as delay:
+            schedule_insurance_debt_checks(limit=limit)
+        return [call.args[0] for call in delay.call_args_list]
+
+    def test_nothing_blocked_leaves_the_batch_exactly_as_it_was(self):
+        """The filter has to be a no-op when nothing is blocked.
+
+        It is written as `exclude(pk__in=<ids>)`, whose ordinary case is an
+        *empty* list -- measured 2026-09-15, not one company in production has
+        a blocked insurance row. Django drops an `__in=[]` clause and keeps
+        every row, and that is what makes the ordinary case ordinary; read the
+        other way it would empty the batch and stop the rotation dead, on the
+        tick after a deploy, with nothing logged. A test says so rather than a
+        comment assuming it.
+        """
+        companies = _companies(3)
+
+        self.assertEqual(self._selected(limit=3), [c.id for c in companies])
+
+    def test_a_company_whose_every_insurance_source_is_blocked_is_dropped(self):
+        company = _companies(1)[0]
+        self._block(company, CompanySyncStatus.SOURCE_VSZP)
+        self._block(company, CompanySyncStatus.SOURCE_SOCIAL)
+
+        self.assertEqual(self._selected(), [])
+
+    def test_one_blocked_source_does_not_take_the_other_with_it(self):
+        """Blocking `vszp` says nothing about `debt_soc_poist`."""
+        company = _companies(1)[0]
+        self._block(company, CompanySyncStatus.SOURCE_VSZP)
+
+        self.assertEqual(self._selected(), [company.id])
+
+    def test_a_blocked_row_alone_does_not_stand_in_for_the_source_it_is_not(self):
+        """The reachable state that a looser rule would quietly lose.
+
+        `block_company` writes one row on demand, so blocking `vszp` for a
+        company that has never been checked leaves a blocked `vszp` row and no
+        `social` row at all. A rule phrased as "has no unblocked source" would
+        read that missing row as "nothing to do there" and the company would
+        never be asked about its social-insurance debt -- the one source still
+        open to it, lost to a phrasing.
+        """
+        company = _companies(1)[0]
+        self._block(company, CompanySyncStatus.SOURCE_VSZP)
+
+        self.assertEqual(self._selected(), [company.id])
+
+    def test_a_blocked_row_does_not_disturb_the_order_of_the_batch(self):
+        """The block is a filter, not a reordering."""
+        blocked = _companies(1, start=1)[0]
+        self._block(blocked, CompanySyncStatus.SOURCE_VSZP)
+        self._block(blocked, CompanySyncStatus.SOURCE_SOCIAL)
+        others = _companies(3, start=101)
+
+        self.assertEqual(self._selected(limit=3), [c.id for c in others])
+
+    @mock.patch(
+        "registers.tasks.check_socpoist_debt",
+        return_value=DebtCheckResult.found(50.0),
+    )
+    @mock.patch(
+        "registers.tasks.check_vszp_debt_get",
+        return_value=DebtCheckResult.found(125.0),
+    )
+    def test_a_blocked_source_is_not_requested_at_all(self, mock_vszp, mock_soc):
+        """Not requested, and not a failed request either.
+
+        The distinction matters downstream: a request that was made and failed
+        writes `last_error` and a backoff. This is neither, so the stored answer
+        has to survive untouched.
+        """
+        company = _companies(1)[0]
+        self._block(company, CompanySyncStatus.SOURCE_VSZP)
+
+        update_insurance_debt(company.id)
+        company.refresh_from_db()
+
+        mock_vszp.assert_not_called()
+        mock_soc.assert_called_once()
+        self.assertEqual(company.debt_soc_poist, 50.0)
+        # The blocked source's own column keeps whatever it held before.
+        self.assertIsNone(company.debt_vszp)
+        status = company.sync_statuses.get(source=CompanySyncStatus.SOURCE_VSZP)
+        self.assertIsNone(status.last_attempted_at)
+
+    @mock.patch("registers.tasks.check_socpoist_debt")
+    @mock.patch("registers.tasks.check_vszp_debt_get")
+    def test_two_blocked_sources_mean_no_request_is_made(self, mock_vszp, mock_soc):
+        company = _companies(1)[0]
+        self._block(company, CompanySyncStatus.SOURCE_VSZP)
+        self._block(company, CompanySyncStatus.SOURCE_SOCIAL)
+
+        update_insurance_debt(company.id)
+        company.refresh_from_db()
+
+        mock_vszp.assert_not_called()
+        mock_soc.assert_not_called()
+        # Nothing was checked, so the date readers see must not move.
+        self.assertIsNone(company.last_insurance_debt)
+
+    @mock.patch(
+        "registers.tasks.check_socpoist_debt",
+        return_value=DebtCheckResult.found(50.0),
+    )
+    @mock.patch(
+        "registers.tasks.check_vszp_debt_get",
+        return_value=DebtCheckResult.found(125.0),
+    )
+    def test_a_half_blocked_company_does_not_claim_a_full_check(self, mock_vszp, mock_soc):
+        """`last_insurance_debt` is user-visible, so it may not be a guess.
+
+        It reads "Dátum a čas kontroly VSZP/SP" on the company page. One source
+        was never asked, so the pair was not checked, and advancing the date
+        would report a check that did not happen. The cost is that the company
+        stays in the due set; the scheduler's `is_blocked` filter is what keeps
+        a fully blocked one from being re-picked every tick.
+        """
+        company = _companies(1)[0]
+        self._block(company, CompanySyncStatus.SOURCE_SOCIAL)
+
+        update_insurance_debt(company.id)
+        company.refresh_from_db()
+
+        self.assertEqual(company.debt_vszp, 125.0)
+        self.assertIsNone(company.last_insurance_debt)
 
 
 class InsuranceSchedulerRoutingTests(TestCase):
