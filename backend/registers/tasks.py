@@ -12,7 +12,11 @@ from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService, pending_person_history
 from .services.ruz_financials_sync import PARSER_REVISION, sync_company_and_record
-from .eligibility import ORSR_ELIGIBLE_LEGAL_FORMS, is_orsr_eligible_company
+from .eligibility import (
+    ORSR_ELIGIBLE_LEGAL_FORMS,
+    is_orsr_eligible_company,
+    orsr_ineligibility_reason,
+)
 from companies.models import Company, Watchlist, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
 from .models import CompanySyncStatus, OrsrCompanyProfile
@@ -24,6 +28,7 @@ from .services.sync_engine import (
     enqueue_ruz_job,
     fail_job,
     record_orsr_failure,
+    record_orsr_not_monitored,
     record_orsr_outcome,
     record_ruz_date_outcome,
     rotating_batch,
@@ -699,7 +704,18 @@ def resume_gap_repair(workers=5):
 def sync_company_orsr_data(company_id: int):
     company = Company.objects.get(id=company_id)
     if not is_orsr_eligible_company(company):
-        logger.info("ORSR sync skipped for company_id=%s ico=%s", company_id, company.ico)
+        # The refusal has to be written down, not just returned. A due retry row
+        # is drawn by `rotating_batch` on `next_retry_at` alone, so a company
+        # this refuses and does not write back is due in every batch from here
+        # on -- one of the `RETRY_SHARE` slots spent, every batch, for ever, on
+        # a question that was answered before it was asked. See
+        # `sync_engine.record_orsr_not_monitored`, which is where the delay and
+        # the measured population are explained.
+        reason = orsr_ineligibility_reason(company)
+        record_orsr_not_monitored(company, f"ORSR monitoring preskočený: {reason}")
+        logger.info(
+            "ORSR sync skipped for company_id=%s ico=%s (%s)", company_id, company.ico, reason
+        )
         return f"ORSR sync skipped for {company.ico}"
 
     # Capture old executive names for change detection

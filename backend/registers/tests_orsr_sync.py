@@ -20,7 +20,11 @@ from registers.services.sync_engine import (
     companies_due_for_sync,
     record_orsr_failure,
 )
-from registers.tasks import orsr_sync_batch, schedule_missing_orsr_sync
+from registers.tasks import (
+    orsr_sync_batch,
+    schedule_missing_orsr_sync,
+    sync_company_orsr_data,
+)
 
 
 def _profile(fetch_ok=True, last_error="", oddiel="Sro", vlozka_cislo="12345/B"):
@@ -673,3 +677,119 @@ class OrsrRotationTests(TestCase):
 
         self.assertIn("5", result)
         self.assertEqual(mock_task.delay.call_count, 5)
+
+
+class OrsrNotMonitoredTests(TestCase):
+    """A retry row for a company ORSR will not ask about must stop being due.
+
+    `sync_company_orsr_data` refuses a dissolved company, or one whose legal
+    form ORSR does not carry, before it makes a request -- and it used to return
+    before writing anything either. `rotating_batch` draws retries on
+    `next_retry_at` alone, so such a row was due in every batch from then on and
+    written back by none: one of the `RETRY_SHARE` slots spent, every batch, for
+    ever, on a question already answered.
+
+    Measured 2026-09-15: 19 rows were in that state or heading for it, all of
+    them companies dissolved after their last successful read and all of them
+    due `2027-09`. Nothing leaked yet; the leak was what that date would have
+    started.
+    """
+
+    def _status(self, company):
+        return CompanySyncStatus.objects.get(
+            company_id=company.id, source=CompanySyncStatus.SOURCE_ORSR
+        )
+
+    def test_a_dissolved_company_is_taken_out_of_the_lane(self):
+        company, = _companies(1)
+        _profile_row(company)
+        CompanySyncStatus.objects.create(
+            company_id=company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            next_retry_at=timezone.now() - timedelta(hours=1),
+            consecutive_failures=1,
+        )
+        company.datum_zrusenia = date(2026, 5, 12)
+        company.save(update_fields=["datum_zrusenia"])
+
+        with self.assertLogs("registers.tasks", level="INFO"):
+            result = sync_company_orsr_data(company.id)
+
+        status = self._status(company)
+        self.assertIn("skipped", result)
+        self.assertGreater(status.next_retry_at, timezone.now() + timedelta(days=300))
+        self.assertIn("zrušená", status.last_detail)
+        self.assertIn("12.05.2026", status.last_detail)
+
+    def test_nothing_about_an_attempt_is_claimed(self):
+        """Nothing was requested, so nothing may read as if it had been."""
+        company, = _companies(1)
+        _profile_row(company)
+        attempted = timezone.now() - timedelta(days=400)
+        CompanySyncStatus.objects.create(
+            company_id=company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            last_attempted_at=attempted,
+            last_succeeded_at=attempted,
+            consecutive_failures=0,
+            next_retry_at=timezone.now() - timedelta(minutes=1),
+        )
+        company.datum_zrusenia = date(2026, 5, 12)
+        company.save(update_fields=["datum_zrusenia"])
+
+        with self.assertLogs("registers.tasks", level="INFO"):
+            sync_company_orsr_data(company.id)
+
+        status = self._status(company)
+        self.assertEqual(status.last_attempted_at, attempted)
+        self.assertEqual(status.last_succeeded_at, attempted)
+        self.assertEqual(status.consecutive_failures, 0)
+        self.assertEqual(status.last_error, "")
+
+    def test_a_company_that_never_had_a_row_gets_none(self):
+        """The `refresh_person_history` principle: a company ORSR refuses does
+        not belong in the ORSR retry lane at all."""
+        company, = _companies(1, pravna_forma="701")
+        company.datum_zrusenia = None
+        company.save(update_fields=["datum_zrusenia"])
+
+        with self.assertLogs("registers.tasks", level="INFO"):
+            sync_company_orsr_data(company.id)
+
+        self.assertFalse(
+            CompanySyncStatus.objects.filter(
+                company_id=company.id, source=CompanySyncStatus.SOURCE_ORSR
+            ).exists()
+        )
+
+    def test_the_reason_names_the_legal_form_when_the_company_is_not_dissolved(self):
+        company, = _companies(1, pravna_forma="701")
+        CompanySyncStatus.objects.create(
+            company_id=company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            next_retry_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        with self.assertLogs("registers.tasks", level="INFO"):
+            sync_company_orsr_data(company.id)
+
+        self.assertIn("701", self._status(company).last_detail)
+
+    def test_the_row_does_not_come_back_on_the_next_batch(self):
+        company, = _companies(1)
+        _profile_row(company)
+        CompanySyncStatus.objects.create(
+            company_id=company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            next_retry_at=timezone.now() - timedelta(minutes=1),
+        )
+        company.datum_zrusenia = date(2026, 5, 12)
+        company.save(update_fields=["datum_zrusenia"])
+
+        with self.assertLogs("registers.tasks", level="INFO"):
+            sync_company_orsr_data(company.id)
+
+        self.assertNotIn(company.id, orsr_sync_batch(20))
+        self.assertEqual(
+            list(companies_due_for_sync(CompanySyncStatus.SOURCE_ORSR, limit=10)), []
+        )

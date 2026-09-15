@@ -332,6 +332,52 @@ def record_orsr_failure(company: Company, exc: BaseException) -> CompanySyncStat
     )
 
 
+def record_orsr_not_monitored(company: Company, reason: str) -> CompanySyncStatus | None:
+    """Take a due ORSR row out of the lane for a company ORSR will not ask about.
+
+    `sync_company_orsr_data` refuses a company that is dissolved, or whose legal
+    form is not one ORSR carries, and returns before any request. It also
+    returned before any write -- so a retry row that came due for such a company
+    was drawn by every batch and written back by none, due for ever and
+    occupying one of the `RETRY_SHARE` slots the lane has for real retries.
+    Cheap per attempt (nothing is requested) and invisible to every reader,
+    which is the shape this codebase treats as the defect.
+
+    Measured 2026-09-15: 19 such rows exist, every one of them for a company
+    dissolved after its last successful read, and every one of them due
+    `2027-09` -- a year on from that read, because a success is what
+    `ANSWERED_RETRY_AFTER` pushes out. Nothing leaks today; the leak is what
+    happens on that date, and it then grows with each dissolution.
+
+    A year is the same delay a successful attempt gets, and for the same
+    reason: ORSR holds current records, so there is nothing to monitor about a
+    dissolved company, and a correction to `datum_zrusenia` in our own data is
+    something the annual pass will pick up. That the two constants agree is not
+    a coincidence but it is also not a coupling -- this is the cadence for
+    "the answer we already have stays good", which is what both are.
+
+    **No row is created if there is none.** A company ORSR refuses never had an
+    attempt recorded, and inventing one would put it into the retry lane for
+    ever -- the thing `RpoSyncService.refresh_person_history` refuses to do for
+    exactly this reason. This only ever edits a row that exists, which is to say
+    one an actual attempt already wrote.
+
+    Nothing about the attempt is claimed: `last_attempted_at`,
+    `last_succeeded_at`, `consecutive_failures` and `last_error` are all left as
+    they were, because nothing was attempted. `last_detail` carries the reason,
+    which is where a reader looking at the row will find it.
+    """
+    status = CompanySyncStatus.objects.filter(
+        company_id=company.id, source=CompanySyncStatus.SOURCE_ORSR
+    ).first()
+    if status is None:
+        return None
+    status.next_retry_at = timezone.now() + ANSWERED_RETRY_AFTER
+    status.last_detail = reason[:4000]
+    status.save(update_fields=["next_retry_at", "last_detail", "updated_at"])
+    return status
+
+
 def block_company(*, company_id: int, source: str, reason: str = "") -> CompanySyncStatus:
     status, _ = CompanySyncStatus.objects.update_or_create(
         company_id=company_id,

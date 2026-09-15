@@ -36,3 +36,24 @@ def is_orsr_eligible_company(company: Company) -> bool:
         return False
     return company.datum_zrusenia is None
 
+
+def orsr_ineligibility_reason(company: Company) -> str:
+    """Why ORSR monitoring does not ask about this company, in one Slovak phrase.
+
+    The counterpart of `is_orsr_eligible_company` for the places that need to
+    *say* why rather than just decide. `sync_company_orsr_data` returns early on
+    a company this refuses, and a due retry row it returns early on is a row
+    nothing will ever write back -- it is drawn by every batch and left due by
+    each one. Recording the reason on the row is what turns that from a state
+    nobody can see into one an operator can read.
+
+    Only meaningful for a company the predicate refuses; the caller checks that
+    first, so this does not repeat the check.
+    """
+    if company.datum_zrusenia is not None:
+        return f"firma je zrušená ({company.datum_zrusenia:%d.%m.%Y})"
+    return (
+        f"právna forma {company.pravna_forma!r} nepatrí medzi formy, "
+        f"ktoré ORSR monitoruje"
+    )
+
