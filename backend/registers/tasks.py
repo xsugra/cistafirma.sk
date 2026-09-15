@@ -864,7 +864,7 @@ def read_person_history(company_id: int) -> str:
 # batch to fit.
 #
 # It is a safety valve, not a throttle. The batch is 2 000 and the ORSR rotation
-# adds 200, so a healthy queue never passes ~2 200 and the bound below changes
+# adds 500, so a healthy queue never passes ~2 500 and the bound below changes
 # nothing on the happy path -- `min()` only bites once a backlog that size has
 # accumulated. And it cannot stall for ever: draining is always positive, so the
 # backlog must fall back under the bound and dispatch resumes by itself.
