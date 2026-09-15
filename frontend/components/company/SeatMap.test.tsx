@@ -393,16 +393,30 @@ describe('SeatMap', () => {
         expect(data.features.some((f) => f.geometry.type === 'Polygon')).toBe(false);
     });
 
-    it('draws a street as a point inside its measured spread', async () => {
+    it('draws a street as its measured spread, and as nothing else', async () => {
         // A street is an area, so it keeps the ring -- and the ring is that
         // street's own 90th percentile rather than a constant, so a wrong
-        // number here is a wrong claim about a specific road.
+        // number here is a wrong claim about a specific road. The absence of the
+        // point is a claim too: the centre of a street ring is the street's own
+        // centroid, and a dot there would name a place that is only an average.
         draw({...seat, radiusM: 184, precision: 'street'});
         const instance = await drawnMap();
 
         const data = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
-        expect(data.features).toHaveLength(2);
+        expect(data.features).toHaveLength(1);
+        expect(data.features[0].geometry.type).toBe('Polygon');
+        expect(data.features.some((f) => f.geometry.type === 'Point')).toBe(false);
         expect(ringHeightM(data)).toBeCloseTo(2 * 184, -2);
+    });
+
+    it('draws a PSČ as a ring, not as a dot on its centroid', async () => {
+        // The default seat here is a real postal-code row, which is the case the
+        // reader meets most often of the two ring precisions.
+        draw();
+        const instance = await drawnMap();
+
+        const data = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
+        expect(data.features.map((f) => f.geometry.type)).toEqual(['Polygon']);
     });
 
     it('names the precision it drew, not the address it looked up', async () => {
@@ -421,12 +435,14 @@ describe('SeatMap', () => {
         // same radius -- so the precision is the only thing the redraw can be
         // attributed to. `street` at 0 m is not a value the backend produces;
         // that is the point, since removing every other difference is what
-        // makes this a test of the key rather than of the radius.
+        // makes this a test of the key rather than of the radius. The drawn
+        // *shape* is what changes here, and it is the shape that carries the
+        // claim: a ring for an area, a bare point for a building.
         const {rerender} = draw({...seat, radiusM: 0, precision: 'street'});
         const instance = await drawnMap();
 
         const before = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
-        expect(before.features).toHaveLength(2);
+        expect(before.features.map((f) => f.geometry.type)).toEqual(['Polygon']);
 
         rerender(
             <ThemeProvider>
@@ -436,7 +452,7 @@ describe('SeatMap', () => {
 
         await waitFor(() => {
             const after = instance.sources.get(SEAT_SOURCE)?.data as FeatureCollection;
-            expect(after.features).toHaveLength(1);
+            expect(after.features.map((f) => f.geometry.type)).toEqual(['Point']);
         });
     });
 

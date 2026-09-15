@@ -23,11 +23,12 @@
  *
  * - **The circle is a claim, not a decoration.** It was drawn because the
  *   coordinate used to be a PSČ centroid -- a median 1 980 m from its own address
- *   points -- so the circle was the claim and the dot only marked what it was
- *   centred on. That is still true for a PSČ, and still true for a street. It is
- *   no longer true for the **78,6 %** of companies the MV SR register places on
- *   their own building: those get the point alone, because there is nothing left
- *   to be uncertain about. See `seatData`.
+ *   points -- so the circle was the claim. That is still true for a PSČ, and still
+ *   true for a street: those get the ring, and nothing but the ring, because a dot
+ *   at its centre would name a place that was only ever an average. It is no
+ *   longer true for the **78,6 %** of companies the MV SR register places on their
+ *   own building: those get the point alone, because there is nothing left to be
+ *   uncertain about. See `seatData`.
  * - **The zoom is computed from the radius**, not fixed. Our radii run 50 m (a
  *   street's floor, `MIN_STREET_RADIUS_M`) to 8 717 m (the widest PSČ); one zoom
  *   for all of them would either hide the circle or shrink it to a dot, and
@@ -161,7 +162,7 @@ const keyOf = (seat: SeatLocation) =>
     `${seat.precision}:${seat.psc}:${seat.lat}:${seat.lon}:${seat.radiusM}`;
 
 /**
- * The one glyph, whose shape is the claim: a bare point, or a point inside a ring.
+ * The one glyph, whose shape is the claim: a bare point, or a ring and nothing else.
  *
  * `precision` decides, and it is the backend's answer rather than a threshold on
  * `radiusM` invented here. A `building` really is one point -- the register's own
@@ -171,6 +172,14 @@ const keyOf = (seat: SeatLocation) =>
  * radius is what separates them: a street's 90th-percentile spread is tens to
  * hundreds of metres (floored at 50 m so one known point cannot be drawn as a
  * pin), a PSČ's is 270 m to 8 717 m.
+ *
+ * **An area is drawn as the ring alone, with no dot at its centre.** The dot used
+ * to mark what the circle was centred on, and the circle is still centred there --
+ * but the centre of a PSČ ring is the centroid of an area and the centre of a
+ * street ring is that street's centroid, and neither is a place. A dot on one
+ * reads as "here it is" against a shape whose entire meaning is "somewhere inside
+ * this", which is the one thing this map exists not to say. The point stays for a
+ * building, where it *is* the address point, and for nothing else.
  *
  * Filtering the polygon out here rather than relying on `radiusM: 0` to draw a
  * degenerate ring is deliberate. `circlePolygon(centre, 0)` produces a valid but
@@ -184,15 +193,16 @@ const keyOf = (seat: SeatLocation) =>
 const seatData = (seat: SeatLocation): FeatureCollection => {
     const features: FeatureCollection['features'] = [];
 
-    if (seat.precision !== 'building') {
-        features.push(circlePolygon({ lat: seat.lat, lon: seat.lon }, seat.radiusM));
+    if (seat.precision === 'building') {
+        features.push({
+            type: 'Feature',
+            properties: {},
+            geometry: { type: 'Point', coordinates: [seat.lon, seat.lat] },
+        });
+        return { type: 'FeatureCollection', features };
     }
 
-    features.push({
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'Point', coordinates: [seat.lon, seat.lat] },
-    });
+    features.push(circlePolygon({ lat: seat.lat, lon: seat.lon }, seat.radiusM));
 
     return { type: 'FeatureCollection', features };
 };
@@ -200,24 +210,37 @@ const seatData = (seat: SeatLocation): FeatureCollection => {
 /**
  * Three layers, no filters: each type draws only the geometry it can draw, so the
  * `fill` and the `line` take the polygon and the `circle` takes the point without
- * being told which is which.
+ * being told which is which -- and since only a building carries a point, the
+ * `circle` layer draws the dot on a building and nothing at all on an area.
  *
  * Added last, so they land on top of the base style -- the seat is the subject of
  * this map, not a feature of it.
+ *
+ * The ring is deliberately light: a wash of the brand colour with a soft edge
+ * rather than an outline. It covers a neighbourhood the reader still has to be
+ * able to read -- the point of the circle is which streets and which buildings
+ * fall inside it, and a filled disc hides exactly that. Hence 0.18 rather than
+ * anything opaque, and a half-pixel blur on the edge so it reads as a boundary
+ * drawn over the map instead of one cut out of it.
  */
 const SEAT_LAYERS: LayerSpecification[] = [
     {
         id: `${SEAT_SOURCE}-fill`,
         type: 'fill',
         source: SEAT_SOURCE,
-        paint: { 'fill-color': BRAND, 'fill-opacity': 0.12 },
+        paint: { 'fill-color': BRAND, 'fill-opacity': 0.18 },
     },
     {
         id: `${SEAT_SOURCE}-outline`,
         type: 'line',
         source: SEAT_SOURCE,
         layout: { 'line-join': 'round' },
-        paint: { 'line-color': BRAND, 'line-width': 2, 'line-opacity': 0.9 },
+        paint: {
+            'line-color': BRAND,
+            'line-width': 1.5,
+            'line-opacity': 0.7,
+            'line-blur': 0.5,
+        },
     },
     {
         // Pixels, and rightly so for a dot: a marker that grew with the zoom
