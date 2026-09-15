@@ -12,6 +12,7 @@ const relation = (overrides: Partial<PersonRelation> = {}): PersonRelation => ({
     is_active: true,
     vznik_funkcie: '2010-01-01',
     zanik_funkcie: null,
+    intervals: 1,
     ...overrides,
 });
 
@@ -93,5 +94,22 @@ describe('PersonRelationRow — what it prints', () => {
 
         expect(bodyText()).not.toContain('Vznik funkcie');
         expect(bodyText()).not.toContain('Zánik funkcie');
+    });
+
+    it('says when a row stands for several filings, and stays quiet otherwise', () => {
+        // The register files an office once per change; the backend folds a
+        // chain of consecutive filings into the one tenure it describes. A
+        // reader looking at a 2011 span must be able to tell whether that is
+        // one filing or twelve, so the fold is stated. Where there is nothing
+        // to state, saying "Spojené z 1" would be noise.
+        row({intervals: 12});
+
+        expect(bodyText()).toContain('Spojené z 12 po sebe idúcich zápisov');
+    });
+
+    it('does not claim a fold on an ordinary one-filing row', () => {
+        row({intervals: 1});
+
+        expect(bodyText()).not.toContain('Spojené');
     });
 });

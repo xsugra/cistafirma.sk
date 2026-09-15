@@ -35,6 +35,7 @@ const person = {
             is_active: null,
             vznik_funkcie: '2010-01-01',
             zanik_funkcie: null,
+            intervals: 1,
         },
     ],
 };

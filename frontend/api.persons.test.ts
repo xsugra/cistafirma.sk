@@ -27,6 +27,7 @@ describe('mapPersonRelation', () => {
         is_active: true,
         vznik_funkcie: '2010-01-01',
         zanik_funkcie: null,
+        intervals: 1,
     };
 
     it('keeps the third answer as the third answer', () => {
@@ -51,6 +52,19 @@ describe('mapPersonRelation', () => {
             vznik_funkcie: '2010-01-01',
             zanik_funkcie: null,
         });
+    });
+
+    it('counts a folded row as one filing when the API did not say', () => {
+        // A backend that predates the field, or a payload that lost it. Zero
+        // would render as "this row stands for nothing"; the honest default is
+        // the ordinary case, one filing.
+        expect(mapPersonRelation({...flat, intervals: undefined}).intervals).toBe(1);
+        expect(mapPersonRelation({...flat, intervals: 0}).intervals).toBe(1);
+        expect(mapPersonRelation({...flat, intervals: null}).intervals).toBe(1);
+    });
+
+    it('carries the number of filings a folded row stands for', () => {
+        expect(mapPersonRelation({...flat, intervals: 12}).intervals).toBe(12);
     });
 
     it('reads a nested company object too, rather than losing every company', () => {

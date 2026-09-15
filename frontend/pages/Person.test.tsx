@@ -36,6 +36,7 @@ const person = (overrides: Partial<PersonDetail> = {}): PersonDetail => ({
             is_active: true,
             vznik_funkcie: '2010-01-01',
             zanik_funkcie: null,
+            intervals: 12,
         },
         {
             ico: '31333532',
@@ -45,6 +46,7 @@ const person = (overrides: Partial<PersonDetail> = {}): PersonDetail => ({
             is_active: null,
             vznik_funkcie: null,
             zanik_funkcie: null,
+            intervals: 1,
         },
     ],
     coverage: {companies_with_persons: 19906, companies_total: 445626},

@@ -22,6 +22,14 @@ interface PersonRelationRowProps {
  * sentence is spelled out in the row rather than left in a `title` attribute --
  * a reader on a touch screen never sees a tooltip, and this is the one state
  * that must not be mistaken for a no.
+ *
+ * A row can also stand for more than one register filing, because the register
+ * records filings and not functions: it closes an office and reopens it the next
+ * day, and the backend folds such a chain into the single tenure it describes
+ * (`intervals`). That fold is disclosed here rather than left silent -- a row
+ * that replaced twelve filings with one line reads exactly like a row that
+ * always was one line, and those are different claims about how the register
+ * recorded this person.
  */
 export const PersonRelationRow: React.FC<PersonRelationRowProps> = ({ relation }) => {
     const state = roleStateOf(relation.is_active);
@@ -60,6 +68,13 @@ export const PersonRelationRow: React.FC<PersonRelationRowProps> = ({ relation }
                                 Zánik funkcie: {formatDate(relation.zanik_funkcie)}
                             </span>
                         )}
+                    </p>
+                )}
+
+                {relation.intervals > 1 && (
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        <i className="fas fa-layer-group mr-1"></i>
+                        Spojené z {relation.intervals} po sebe idúcich zápisov v registri
                     </p>
                 )}
 

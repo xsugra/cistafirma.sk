@@ -575,6 +575,16 @@ export interface PersonRelation {
     is_active: boolean | null;
     vznik_funkcie: string | null;
     zanik_funkcie: string | null;
+    /**
+     * How many register filings this one row stands for. One in the common case.
+     *
+     * The register keeps filings, not functions: each one closes an office and
+     * the next reopens it, so a single tenure arrives as a chain of intervals
+     * meeting day to day. The backend folds such a chain into one row, and this
+     * is how many it folded -- a row that quietly replaced twelve filings with
+     * one line must not read like a row that always was one line.
+     */
+    intervals: number;
 }
 
 /**

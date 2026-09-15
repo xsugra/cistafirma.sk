@@ -239,6 +239,10 @@ export function mapPersonRelation(data: any): PersonRelation {
     is_active: data?.is_active === true ? true : data?.is_active === false ? false : null,
     vznik_funkcie: data?.vznik_funkcie ?? null,
     zanik_funkcie: data?.zanik_funkcie ?? null,
+    // Floored at 1, like `records` below and for the same reason: the field is
+    // read as "how many filings this row stands for", and 0 or a missing field
+    // must not render as "this row stands for nothing".
+    intervals: Math.max(1, Number(data?.intervals) || 1),
   };
 }
 
