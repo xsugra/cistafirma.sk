@@ -100,9 +100,16 @@ ssh lenovo 'docker exec gitlab-server gitlab-rails runner \
 > (`ci_runners.updated_at` sa nepohol).
 
 Bezpečnostný model runnera (socket proxy, neprivilegované job kontajnery,
-`allowed_images`, pamäťové limity) je v `/home/sam/gitlab-runner/README.md` na
-lenovo — `config.toml` je **generovaný** skriptom
-`/home/sam/gitlab-runner/setup-config.sh`, ktorý je jediným zdrojom pravdy.
+`allowed_images`, pamäťové limity) je v [`deploy/ci/README.md`](../deploy/ci/README.md)
+— `config.toml` je **generovaný** skriptom [`deploy/ci/setup-config.sh`](../deploy/ci/setup-config.sh),
+ktorý je jediným zdrojom pravdy.
+
+Obe sú **verzionované kópie**; bežiaci runner číta `/home/sam/gitlab-runner/` na
+lenovo a obsah tých dvoch adresárov je totožný (`sha256sum`, overené 16. 9. 2026).
+Dovtedy existoval celý runner — vrátane `setup-config.sh`, ktorý tento dokument
+označuje za jediný zdroj pravdy — **len na jednom stroji a nikde v repozitári**:
+žiadny diff, žiadna história, žiadna záloha. `config/config.toml` sa zámerne
+nekopíruje, lebo obsahuje živý token; v skripte je zaň len placeholder.
 
 ## Prečo tu nie je `build` ani `deploy`
 
