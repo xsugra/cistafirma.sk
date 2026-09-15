@@ -51,6 +51,26 @@ VSZP_DEBTOR_ROW_PAGE = """
 </body></html>
 """
 
+# The "no records" sentence, but only where no reader can see it: a JS string, an
+# HTML comment and a <template>. The live site does not do this -- measured
+# 2026-09-15, the sentence appears exactly once per page and as rendered prose --
+# and that is precisely the hazard: a raw `response.text` substring search cannot
+# tell the difference, so the day VSZP moves that sentence into the script that
+# renders it, every unparsed page silently becomes a confident zero.
+VSZP_MARKER_ONLY_IN_HIDDEN_PLACES = """
+<html><body>
+<script>var noResults = "Nenašli sa žiadne záznamy";</script>
+<!-- Nenašli sa žiadne záznamy -->
+<template><span>Nenašli sa žiadne záznamy</span></template>
+<table class="table table-striped tabulkaStandard">
+    <thead>
+        <tr><th>Obchodné meno</th><th>Pohľadávka</th></tr>
+    </thead>
+    <tbody></tbody>
+</table>
+</body></html>
+"""
+
 # Both Socialna poistovna responses render the same `view-id-debitors`
 # container -- that is the anchor. What separates them is the result count:
 # only the response that has a debtor carries it. The page for a company that
@@ -176,6 +196,79 @@ class InsuranceDebtScraperTests(SimpleTestCase):
         self.assertEqual(result.state, DebtCheckState.UNKNOWN)
         self.assertIsNone(result.amount)
         self.assertEqual(result.error_type, "parse_error")
+
+    def test_vszp_no_record_sentence_inside_a_template_is_not_an_absence(self):
+        """The regression test for reading absence out of the raw HTML.
+
+        The sentence is present three times in this response, and a reader sees
+        it zero times. Answering `not_found` here would write a zero for a
+        company on the strength of a string in a template -- the one mistake the
+        insurance pipeline must never make, because a zero is a published fact
+        about somebody's debts.
+        """
+        session = Mock()
+        session.get.return_value = Mock(text=VSZP_MARKER_ONLY_IN_HIDDEN_PLACES)
+
+        with self._patch_session("registers.scrapers.vszp_debt.get_session_with_retry", session):
+            result = check_vszp_debt_get("12345678")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+        self.assertEqual(result.error_type, "parse_error")
+
+    def test_vszp_hidden_marker_does_not_overrule_a_listed_debtor(self):
+        """A listed row outranks any absence signal, hidden or not."""
+        page = VSZP_DEBTOR_ROW_PAGE.replace(
+            "<html><body>",
+            '<html><body><template><span>Nenašli sa žiadne záznamy</span></template>',
+        )
+        session = Mock()
+        session.get.return_value = Mock(text=page)
+
+        with self._patch_session("registers.scrapers.vszp_debt.get_session_with_retry", session):
+            result = check_vszp_debt_get("34136088")
+
+        self.assertEqual(result.state, DebtCheckState.FOUND)
+        self.assertAlmostEqual(result.amount, 6641.86, places=2)
+
+    def test_vszp_rendered_marker_beside_an_unattributed_row_is_unknown(self):
+        """The two signals contradict each other, so neither is trusted.
+
+        The table lists somebody -- but not the company that was asked about --
+        while the page also states there are no records. Picking either one would
+        be inventing an answer.
+        """
+        page = VSZP_DEBTOR_ROW_PAGE.replace(
+            "</body>", "<p>Nenašli sa žiadne záznamy.</p></body>"
+        )
+        session = Mock()
+        session.get.return_value = Mock(text=page)
+
+        with self._patch_session("registers.scrapers.vszp_debt.get_session_with_retry", session):
+            result = check_vszp_debt_get("99999999")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+
+    def test_vszp_marker_typeset_with_a_non_breaking_space_still_counts(self):
+        """The page typesets its prose with non-breaking spaces.
+
+        "§ 25\\xa0ods.1" is how VSZP writes it, so the absence sentence has to
+        match whichever space character the page used, or a genuine "no records"
+        page reads as unparseable and the company is re-queued for ever.
+        """
+        page = VSZP_NO_RECORD_PAGE.replace(
+            "Nenašli sa žiadne záznamy", "Nenašli sa\xa0žiadne záznamy"
+        )
+        session = Mock()
+        session.get.return_value = Mock(text=page)
+
+        with self._patch_session("registers.scrapers.vszp_debt.get_session_with_retry", session):
+            result = check_vszp_debt_get("31700764")
+
+        self.assertEqual(result.state, DebtCheckState.NOT_FOUND)
+        self.assertEqual(result.amount, 0.0)
+        self.assertTrue(result.is_authoritative)
 
     def test_social_explicit_no_record_is_authoritative_zero(self):
         session = Mock()
