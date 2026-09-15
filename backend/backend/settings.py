@@ -317,10 +317,18 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'  # Sem sa všetko pozbiera príkazom collectstatic
 
-# Django musí servovať 'frontend/dist' na URL '/static/'.
-STATICFILES_DIRS = [
-    FRONTEND_DIR / 'dist',
-]
+# Django can serve the built SPA out of 'frontend/dist'. That is the arrangement
+# `frontend_or_api_info` and `TEMPLATES['DIRS']` below still expect, and it is
+# how this repo served the app before nginx took the frontend over.
+#
+# The entry is conditional because that directory exists only on a host that has
+# run `npm run build`. The production backend container never has it -- nginx
+# serves the SPA from its own image -- and an unconditional entry makes Django
+# emit `staticfiles.W004: The directory '/frontend/dist' ... does not exist` on
+# every single management command. Nothing breaks, but a warning that fires on
+# every command is one a reader learns to scroll past, and this file has real
+# warnings that deserve the attention.
+STATICFILES_DIRS = [d for d in [FRONTEND_DIR / 'dist'] if d.exists()]
 
 # Whitenoise nastavenie pre kompresiu a caching
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
