@@ -399,7 +399,21 @@ recorded, when the recorded timestamp is unreadable, or when the last drill is
 older than `CISTAFIRMA_DRILL_MAX_AGE_DAYS` (default 30), and it warns when the
 last drill used the local dump while an off-site copy exists — where "exists"
 again means *really attached*, since an unreachable destination has no off-site
-copy to drill. A *failed* drill
+copy to drill.
+
+That warning has a second precondition, the host itself. The replica is
+encrypted to the public key, so a host holding only that half can verify a
+replica for ever and never read one — and the off-site drill is therefore not
+its to run. On such a host the report says that plainly instead of warning: an
+instruction the machine cannot carry out is not a control, and a warning nobody
+can clear is how a report teaches its reader to skip warnings. The consequence
+is worth stating because it is easy to mistake for a gap: **the encrypted
+replica is drilled on the machine that holds the private key, and the record of
+that drill lives in that machine's own log.** The replicating host's
+`CISTAFIRMA_DRILL_LOG` is not a shared ledger, and no amount of drilling
+elsewhere will make its off-site line read `off-site`.
+
+A *failed* drill
 writes nothing — the absence of a recent record is itself the signal, so an old
 entry cannot mask a broken one, and an unparseable trailing line falls back to
 the previous readable record rather than being trusted. Set `CISTAFIRMA_DRILL_LOG`

@@ -3640,6 +3640,71 @@ Oboje teraz hovorí, že produkcia je `dell` a Mac je odstavený — a že
 `make ops-check` na Macu **má** zlyhať, lebo tam už žiadny stack ani týždenná
 úloha nie je.
 
+### Drill šifrovanej repliky patrí tam, kde je kľúč — a brána to konečne vie (2026-09-15)
+
+Zadal som drill na `dell` a bola to chyba v dvoch vrstvách. Prvá je triviálna:
+v bloku príkazu zostal nevyplnený placeholder `<cesta k .dump.gpg>`, takže
+`make db-restore-drill` spadol na `backup file does not exist`. Druhá je vecná
+a dôležitejšia: **aj so správnou cestou by to na delle neprešlo.** Overené —
+`gpg --list-secret-keys` je tam prázdne, dell drží len verejný kľúč
+(`3043D31A…`). Replika je zašifrovaná na tento kľúč, takže bez privátnej
+polovice sa nedá dešifrovať.
+
+Nie je to porucha, ktorú treba opraviť — je to návrh a `docs/DATA_PROTECTION.md`
+to hovorí už predtým: *„the recovery drill has to run where the private key
+is"*. Kľúč patrí na stroj, odkiaľ by sa obnovovalo, a **nie** na produkciu ani
+na cieľ replikácie; na delle by znamenal, že kompromitácia produkcie vydá aj
+celú históriu off-site kópií, na lenove by zrušil zmysel šifrovania úplne.
+
+**Kde teda:** na Macu — jediný stroj s privátnym kľúčom. To neznamená návrat
+Macu do prevádzky; overené, že na ňom nič z cistafirmy nebeží (žiadne bežiace
+kontajnery, žiadny listener na 5432/5173/8080, žiadny launchd agent, žiadny
+crontab). Mac drží kľúč a je to tak správne.
+
+**Čo spravilo AI, aby to človek nemusel robiť dvakrát:** replika stiahnutá
+z lenovo na Mac (`~/cistafirma-drill/offsite/`), `sha256`
+`71b3d387…5bd010` porovnaný s manifestom — bit-identická — a `make
+db-backup-verify` prešiel (`encrypted to F3B8F3ADFBA9DB8F`). Drill potom spustil
+Samuel, lebo gpg si pýta passphrase:
+
+```
+Restore drill passed: 39 public tables restored from an ENCRYPTED replica
+into an isolated container.
+```
+
+**Nepresnosť, ktorú nechcem zamlčať:** nebol to prvý drill tejto repliky.
+V logu je záznam z 10:13 toho istého dňa s tým istým `sha256`, takže replika
+bola dokázaná už predtým a beh o 11:34 ju len zopakoval.
+
+Záznam sa zapísal ako `source: local`, nie `off-site` — a to je správne. Drill
+označí zdroj za off-site len vtedy, keď je replika na **inom filesystéme než
+`$HOME`**; stiahnutá kópia je na disku Macu, takže `cistafirma_offsite_mount_check`
+ju po právu odmietne uznať za off-site. Nefalšoval som to cez
+`CISTAFIRMA_OFFSITE_BACKUP_DIR` — kontrola by tým prestala platiť.
+
+**Nález (#121) a oprava:** brána na delle hlásila
+`WARN last drill used the local backup; drill the off-site copy when one is
+present` — a hlásila by to **navždy**, lebo dell ten drill nikdy nespraví a
+`DRILL_LOG` je strojovo lokálny, takže Macov záznam nevidí. Kontrola žiadala
+niečo, čo ten stroj štrukturálne nedokáže; presne ten typ poplachu, ktorý sa
+naučí človeka preskakovať warningy. Opravené takto:
+
+- `cistafirma_gpg_has_secret_key()` v `lib/backup_gpg.sh` — vie sa spýtať, či
+  tento zvozok dokáže repliku aj **prečítať**, nielen overiť.
+- `offsite_status.sh` varuje len tam, kde je privátny kľúč. Na hoste bez neho
+  namiesto WARN vypíše, že drill tam spustiť nemožno a kde patrí. Warning tak
+  zostáva tam, kde sa dá konať, a mizne tam, kde by bol neodstrániteľný.
+- `docs/DATA_PROTECTION.md` to isté slovom, vrátane toho, že drill log
+  replikačného hosta **nie je** zdieľaný register.
+
+**Otvorené a dôležité:** privátny kľúč existuje len v keyringu Macu. V state
+dir je exportovaná **len verejná** polovica (`cistafirma-backup-public.asc`),
+tajná nikde na disku. Ak Mac prejde reinštaláciou alebo zlyhá disk, všetky
+off-site repliky sa stanú navždy nečitateľné — a to je presne trieda zlyhania,
+ktorú drill odhaliť nevie, lebo sa prejaví až vtedy, keď už stroj nie je.
+`docs/DATA_PROTECTION.md` pritom žiada offline kópiu tajného kľúča v password
+manageri. Či tam je, vie len Samuel; je to otázka, nie nález.
+
 ---
 
 ## 8. Nemenné pravidlá
