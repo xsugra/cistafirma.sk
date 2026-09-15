@@ -1,11 +1,11 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { SearchBar } from '../components/SearchBar';
-import { LoadingSpinner } from '../components/LoadingSpinner';
-import { companyPath } from '../constants';
-import { DEFAULT_SECTION_ID } from '../companySections';
-import { api } from '../api';
-import { looksLikeIco } from '../utils/ico';
+import React, {useCallback, useEffect, useState} from 'react';
+import {Navigate, useNavigate, useSearchParams} from 'react-router-dom';
+import {SearchBar} from '../components/SearchBar';
+import {LoadingSpinner} from '../components/LoadingSpinner';
+import {companyPath} from '../constants';
+import {DEFAULT_SECTION_ID} from '../companySections';
+import {api} from '../api';
+import {looksLikeIco} from '../utils/ico';
 
 /**
  * The search page. It finds a firm and sends you to it.
@@ -115,10 +115,7 @@ export const Monitoring: React.FC = () => {
                         <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">Pripravený na analýzu?</h3>
                         <p className="text-gray-600 dark:text-gray-400 text-base max-w-lg mx-auto">
                             Náš systém preveruje registre dlžníkov, finančnú správu a obchodný register v reálnom čase.
-                        </p>
-                        <div className="mt-8 inline-block bg-gray-50 dark:bg-slate-900 px-4 py-2 rounded-lg text-sm text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-slate-800">
-                            Tip: Skúste vyhľadať IČO 50059959 alebo názov firmy
-                        </div>
+                        </p>    
                     </div>
                 )}
 
