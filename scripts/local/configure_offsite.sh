@@ -71,17 +71,24 @@ umask 077
 if [ -f "$config" ]; then
     # Rewrite the keys we own in place, leave every other line -- comments and
     # unrelated CISTAFIRMA_* settings -- exactly as it was.
+    #
+    # The exception and recipient keys are guarded on their *value*, not on the
+    # key name: an omitted (empty) argument means "leave this key as it is", as
+    # the usage text promises. Guarding on the key name instead -- which is
+    # never empty -- blanked an already-recorded recipient on every run that
+    # passed only the directory, and silently stopped replication, because
+    # replication refuses to write an unencrypted replica without one.
     awk -v key="$KEY" -v val="$target" \
         -v ekey="$EXCEPTION_KEY" -v evalue="$allow_unencrypted" \
         -v rkey="$RECIPIENT_KEY" -v rvalue="$recipient" '
         BEGIN { replaced = 0; replaced_exception = 0; replaced_recipient = 0 }
         $0 ~ "^[[:space:]]*" key "=" { print key "=" val; replaced = 1; next }
-        ekey != "" && $0 ~ "^[[:space:]]*" ekey "=" {
+        evalue != "" && $0 ~ "^[[:space:]]*" ekey "=" {
             print ekey "=" evalue
             replaced_exception = 1
             next
         }
-        rkey != "" && $0 ~ "^[[:space:]]*" rkey "=" {
+        rvalue != "" && $0 ~ "^[[:space:]]*" rkey "=" {
             print rkey "=" rvalue
             replaced_recipient = 1
             next
@@ -89,8 +96,8 @@ if [ -f "$config" ]; then
         { print }
         END {
             if (!replaced) print key "=" val
-            if (ekey != "" && !replaced_exception) print ekey "=" evalue
-            if (rkey != "" && !replaced_recipient) print rkey "=" rvalue
+            if (evalue != "" && !replaced_exception) print ekey "=" evalue
+            if (rvalue != "" && !replaced_recipient) print rkey "=" rvalue
         }
     ' "$config" > "$tmp"
 else
