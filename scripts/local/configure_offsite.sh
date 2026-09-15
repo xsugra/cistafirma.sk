@@ -9,20 +9,30 @@
 # The file is *updated*, not clobbered: any other CISTAFIRMA_* setting already
 # in it (for example the temporary CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP
 # exception) is preserved.
+#
+# The OpenPGP recipient of the off-site replica is recorded here too, and for the
+# same reason: it is per-machine (the host that replicates needs the public key,
+# the host that restores needs the private one) and the scheduled job has no
+# environment to pass it in. It is optional as an argument but not as a
+# configuration -- replication refuses to run without it, because the alternative
+# would be writing the database off-host in the clear.
 set -Eeuo pipefail
 
 KEY="CISTAFIRMA_OFFSITE_BACKUP_DIR"
 EXCEPTION_KEY="CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP"
+RECIPIENT_KEY="CISTAFIRMA_OFFSITE_GPG_RECIPIENT"
 
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-    echo "Usage: $0 /absolute/path/to/offsite/dir [true|false]" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
+    echo "Usage: $0 /absolute/path/to/offsite/dir [true|false] [recipient]" >&2
     echo "  The optional second argument sets $EXCEPTION_KEY." >&2
-    echo "  Omit it (or pass an empty string) to leave that key untouched." >&2
+    echo "  The optional third sets $RECIPIENT_KEY (a key id or fingerprint)." >&2
+    echo "  Omit either (or pass an empty string) to leave that key untouched." >&2
     exit 64
 fi
 
 target=$1
 allow_unencrypted="${2:-}"
+recipient="${3:-}"
 
 case "$allow_unencrypted" in
     ''|true|false) ;;
@@ -62,18 +72,25 @@ if [ -f "$config" ]; then
     # Rewrite the keys we own in place, leave every other line -- comments and
     # unrelated CISTAFIRMA_* settings -- exactly as it was.
     awk -v key="$KEY" -v val="$target" \
-        -v ekey="$EXCEPTION_KEY" -v evalue="$allow_unencrypted" '
-        BEGIN { replaced = 0; replaced_exception = 0 }
+        -v ekey="$EXCEPTION_KEY" -v evalue="$allow_unencrypted" \
+        -v rkey="$RECIPIENT_KEY" -v rvalue="$recipient" '
+        BEGIN { replaced = 0; replaced_exception = 0; replaced_recipient = 0 }
         $0 ~ "^[[:space:]]*" key "=" { print key "=" val; replaced = 1; next }
         ekey != "" && $0 ~ "^[[:space:]]*" ekey "=" {
             print ekey "=" evalue
             replaced_exception = 1
             next
         }
+        rkey != "" && $0 ~ "^[[:space:]]*" rkey "=" {
+            print rkey "=" rvalue
+            replaced_recipient = 1
+            next
+        }
         { print }
         END {
             if (!replaced) print key "=" val
             if (ekey != "" && !replaced_exception) print ekey "=" evalue
+            if (rkey != "" && !replaced_recipient) print rkey "=" rvalue
         }
     ' "$config" > "$tmp"
 else
@@ -85,6 +102,9 @@ else
         echo "$KEY=$target"
         if [ -n "$allow_unencrypted" ]; then
             echo "$EXCEPTION_KEY=$allow_unencrypted"
+        fi
+        if [ -n "$recipient" ]; then
+            echo "$RECIPIENT_KEY=$recipient"
         fi
     } > "$tmp"
 fi
@@ -99,4 +119,9 @@ if [ -n "$allow_unencrypted" ]; then
     echo "  $EXCEPTION_KEY=$allow_unencrypted"
 else
     echo "  $EXCEPTION_KEY left unchanged (pass 'true' or 'false' to set it)"
+fi
+if [ -n "$recipient" ]; then
+    echo "  $RECIPIENT_KEY=$recipient"
+else
+    echo "  $RECIPIENT_KEY left unchanged (pass a key id or fingerprint to set it)"
 fi

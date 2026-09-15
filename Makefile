@@ -129,9 +129,10 @@ db-backup-verify:
 # CISTAFIRMA_OFFSITE_BACKUP_DIR is optional here: when omitted, the script reads
 # it from the machine-local config written by `make db-offsite-configure`. An
 # empty value is forwarded as an empty string, which the loader treats as unset.
+# Same for the OpenPGP recipient, which replication refuses to run without.
 db-backup-replicate:
 	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
-	@CISTAFIRMA_OFFSITE_BACKUP_DIR="$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP="$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" scripts/local/replicate_postgres_backup.sh "$(BACKUP_FILE)"
+	@CISTAFIRMA_OFFSITE_BACKUP_DIR="$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" CISTAFIRMA_OFFSITE_GPG_RECIPIENT="$(CISTAFIRMA_OFFSITE_GPG_RECIPIENT)" CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP="$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" scripts/local/replicate_postgres_backup.sh "$(BACKUP_FILE)"
 
 db-restore-drill:
 	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
@@ -158,9 +159,34 @@ ops-check:
 # Record where the off-site backup volume lives on *this* machine, so the weekly
 # launchd job (which inherits almost no environment) can find it. Writes
 # ~/.config/cistafirma/backup.env; the repository stays free of machine paths.
+#
+# CISTAFIRMA_OFFSITE_GPG_RECIPIENT is the other half of that record: the public
+# key every replica is encrypted to. It is per-machine for the same reason the
+# path is — the host that replicates needs the public key, the host that would
+# restore needs the private one — and leaving it out is not a softer setting but
+# a stopped backup: replication refuses to write an unencrypted replica.
 db-offsite-configure:
-	@test -n "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" || (echo "ERROR: CISTAFIRMA_OFFSITE_BACKUP_DIR is required, e.g. make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/Verbatim/cistafirmaBackups" >&2; exit 2)
-	@scripts/local/configure_offsite.sh "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" "$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)"
+	@test -n "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" || (echo "ERROR: CISTAFIRMA_OFFSITE_BACKUP_DIR is required, e.g. make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/Verbatim/cistafirmaBackups CISTAFIRMA_OFFSITE_GPG_RECIPIENT=<fingerprint>" >&2; exit 2)
+	@scripts/local/configure_offsite.sh "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" "$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" "$(CISTAFIRMA_OFFSITE_GPG_RECIPIENT)"
+
+# The backup keypair. Two halves, two machines: the PUBLIC key goes to every host
+# that *writes* a replica, the PRIVATE key stays where a *restore* would be run
+# (plus an offline copy in the password manager). A host holding only the public
+# key can write and verify replicas and can never read one — which is why the
+# recovery drill has to run where the private key is, and doubles as the only
+# check that the key still exists.
+db-offsite-key-generate:
+	@scripts/local/gpg_backup_key.sh generate
+
+db-offsite-key-export:
+	@scripts/local/gpg_backup_key.sh export "$(PUBLIC_KEY_FILE)"
+
+db-offsite-key-import:
+	@test -n "$(PUBLIC_KEY_FILE)" || (echo "ERROR: PUBLIC_KEY_FILE is required, e.g. make db-offsite-key-import PUBLIC_KEY_FILE=~/cistafirma-backup-public.asc" >&2; exit 2)
+	@scripts/local/gpg_backup_key.sh import "$(PUBLIC_KEY_FILE)"
+
+db-offsite-key-status:
+	@scripts/local/gpg_backup_key.sh status
 
 # Weekly unattended backup via launchd (backup -> verify -> replica if mounted).
 db-backup-schedule-install:

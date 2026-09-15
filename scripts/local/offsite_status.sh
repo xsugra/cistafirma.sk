@@ -20,6 +20,8 @@ LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib
 . "$LIB_DIR/backup_os.sh"
 # shellcheck source=lib/offsite_crypto.sh
 . "$LIB_DIR/offsite_crypto.sh"
+# shellcheck source=lib/backup_gpg.sh
+. "$LIB_DIR/backup_gpg.sh"
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 STATE_DIR=$(state_dir)
@@ -142,43 +144,77 @@ else
         ok "off-site directory is on a different filesystem"
     fi
 
-    # Whether the destination counts as encrypted is per-platform and lives in
-    # lib/offsite_crypto.sh, so that this report and the script that actually
-    # copies a dump there can never disagree about it.
-    mount_point=$(mount_point_of "$offsite")
-    cistafirma_offsite_crypto_check "$offsite" "$mount_point"
-
-    if [ "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" = "encrypted" ]; then
-        ok "off-site volume reports encryption"
-    elif cistafirma_offsite_crypto_override_active; then
-        if [ "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" = "unknown" ]; then
-            warn "off-site volume encryption could NOT be verified (${CISTAFIRMA_OFFSITE_CRYPTO_REASON}) -- explicit temporary override active"
-        else
-            warn "off-site volume is NOT encrypted (explicit temporary override active)"
-        fi
-    elif [ "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" = "unknown" ]; then
-        # Not the same failure as an unencrypted volume, and not a milder one:
-        # nothing established that the destination is safe. Reported as its own
-        # verdict so it cannot be read as "checked, and it was fine".
-        bad "off-site volume encryption could not be verified: ${CISTAFIRMA_OFFSITE_CRYPTO_REASON}"
-    elif [ "$CISTAFIRMA_OS" = "macos" ]; then
-        # Kept word for word: the line production has always printed.
-        bad "off-site volume is not encrypted"
-    else
-        bad "off-site volume is not encrypted (${CISTAFIRMA_OFFSITE_CRYPTO_REASON})"
-    fi
-
+    # --- the artifact is the control -------------------------------------
+    #
+    # What is judged here is the replica itself, not the volume it sits on: the
+    # dump is encrypted at source, before it is written, so the destination's own
+    # encryption stopped being the thing that protects it. Every question below
+    # is asked of the file and of the manifest written beside it, and none of
+    # them needs a private key -- which is what lets this report run on the host
+    # that replicates, where only the public key exists.
     if [ -n "$newest" ]; then
-        replica="$offsite/$(basename "$newest")"
+        replica="$offsite/$(basename "$newest").gpg"
+
         if [ ! -f "$replica" ]; then
-            bad "no off-site replica of the newest dump ($(basename "$newest"))"
+            bad "no off-site replica of the newest dump ($(basename "$newest").gpg)"
         elif [ ! -f "${replica}.json" ]; then
             bad "off-site replica manifest missing: $(basename "$replica").json"
-        elif [ "$(read_sha256 "${replica}.json")" = "$(plain_checksum "$replica")" ]; then
-            ok "newest dump has a checksum-verified off-site replica"
-        else
+        elif [ "$(read_sha256 "${replica}.json")" != "$(plain_checksum "$replica")" ]; then
             bad "off-site replica checksum mismatch: $(basename "$replica")"
+        elif ! cistafirma_gpg_artifact_is_encrypted "$replica"; then
+            # A file that is only *named* .gpg. The checksum above passed, so it
+            # is exactly what the manifest describes -- and what it describes is
+            # not ciphertext.
+            bad "off-site replica is not an encrypted OpenPGP message: $(basename "$replica")"
+        else
+            replica_keyids=$(cistafirma_gpg_artifact_keyids "$replica" | paste -sd, -)
+            configured_recipient=$(cistafirma_gpg_configured_recipient)
+
+            if [ -n "$configured_recipient" ] && ! cistafirma_gpg_can_encrypt_to "$configured_recipient"; then
+                # "Addressed to a key" is not the control. Without the public key
+                # in this keyring the replica cannot be tied to the recipient
+                # this machine believes in, and that is not a milder failure than
+                # a missing replica -- it is the same one with the uncomfortable
+                # detail that nobody actually looked.
+                bad "the configured recipient '$configured_recipient' has no usable key in this keyring, so the replica cannot be shown to be encrypted to it (import it: make db-offsite-key-import PUBLIC_KEY_FILE=<file>)"
+            elif [ -n "$configured_recipient" ] && ! cistafirma_gpg_artifact_matches_recipient "$replica" "$configured_recipient"; then
+                bad "off-site replica is encrypted to $replica_keyids, which is not the configured recipient '$configured_recipient'"
+            else
+                ok "newest dump has a checksum-verified off-site replica, encrypted at source to $replica_keyids"
+            fi
         fi
+    fi
+
+    # A replica written before the dump was encrypted at source is still sitting
+    # there in the clear, and it is not a lesser finding than a missing replica:
+    # it is the entire database readable by anyone who picks the disk up. It is
+    # only detectable while the volume is attached, which is also the only moment
+    # it can be removed -- so the fix is printed with the finding. prune is
+    # dry-run unless --apply, so the operator sees the list before anything goes.
+    plaintext_replicas=$(ls -1 "$offsite"/cistafirma_*.dump 2>/dev/null | LC_ALL=C sort || true)
+    if [ -n "$plaintext_replicas" ]; then
+        plaintext_count=$(printf '%s\n' "$plaintext_replicas" | wc -l | tr -d ' ')
+        plaintext_names=$(printf '%s\n' "$plaintext_replicas" | xargs -n 1 basename | paste -sd, -)
+        bad "off-site volume holds $plaintext_count unencrypted replica(s): $plaintext_names — the database is there in the clear. Remove them with: make db-backup-prune PRUNE_ARGS=\"--apply --offsite\""
+    fi
+
+    # --- destination volume encryption: context, not a gate --------------
+    #
+    # This verdict used to decide the gate. It cannot any more: what is written
+    # off-host is ciphertext, so a volume that reports itself unencrypted -- or
+    # one that cannot be asked at all -- cannot expose the database. The check
+    # still runs and is still printed, because "we stopped looking" and "we
+    # looked and it was fine" are different facts. Failing on it now would make
+    # the gate report a control that no longer exists, and a gate that cries wolf
+    # is the failure mode this whole report was built to avoid.
+    mount_point=$(mount_point_of "$offsite")
+    cistafirma_offsite_crypto_check "$offsite" "$mount_point"
+    printf '  volume encryption: %s — %s\n' \
+        "$CISTAFIRMA_OFFSITE_CRYPTO_VERDICT" "$CISTAFIRMA_OFFSITE_CRYPTO_REASON"
+    printf '  %s\n' "(reported for context; the replica is encrypted at source and does not depend on it)"
+
+    if cistafirma_offsite_crypto_override_active; then
+        warn "CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP is still set and is no longer needed — the replica is encrypted before it is written; remove the line or set it to false"
     fi
 fi
 
