@@ -1,0 +1,78 @@
+# nginx config for the production frontend image.
+#
+# This is a TEMPLATE, not a finished config: the backend answers to a different
+# name in every place this image runs -- `backend` under docker compose,
+# `cistafirma-backend` as the Kubernetes Service the kustomize overlays create.
+# The official nginx image renders it at container start, from
+# /etc/nginx/templates (see the entrypoint's 20-envsubst-on-templates.sh).
+# Dockerfile.prod sets NGINX_ENVSUBST_FILTER=BACKEND_ so that only the variables
+# named on purpose here are substituted, leaving nginx's own $host / $uri /
+# $scheme untouched.
+#
+# Note that a static upstream name is resolved once, when nginx starts: if the
+# name does not resolve, nginx refuses to start ("host not found in upstream")
+# rather than serving the app and failing every API call. That is deliberate --
+# a loud failure beats a site that looks up and answers 502 to everything -- but
+# it does mean this container needs the backend service to exist.
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location /api/ {
+        proxy_pass http://${BACKEND_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /admin/ {
+        proxy_pass http://${BACKEND_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Django admin owns /admin/ -- the whole subtree, so it has to stay a prefix
+    # location. But the staff panel in the app is a client-side route at exactly
+    # /admin, and nginx matches a prefix location ending in a slash to the bare
+    # path too, answering /admin with a 301 to /admin/. In the built image that
+    # sent the staff panel to Django and the panel never loaded (the Vite dev
+    # server has no /admin/ rule, so this only ever broke in production). An
+    # exact match is tested before any prefix location, so it wins over that
+    # redirect and serves the app: /admin is the staff panel, /admin/ is Django.
+    location = /admin {
+        try_files /index.html =404;
+    }
+
+    location /static/ {
+        alias /usr/share/nginx/html/;
+        try_files $uri @backend_static;
+    }
+
+    location @backend_static {
+        proxy_pass http://${BACKEND_UPSTREAM};
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Liveness of THIS container. deploy/k8s/base/frontend-deployment.yaml wires
+    # this path to a livenessProbe, so it deliberately does not reach downstream:
+    # a backend outage must not restart every frontend pod.
+    #
+    # What it must not be is a constant. `return 200 'ok'` reports a healthy
+    # container even when there is no built app to serve -- an empty
+    # /usr/share/nginx/html serves 404 to every visitor while the probe stays
+    # green, which is the one failure this endpoint exists to make visible. It
+    # answers 503 unless index.html is there to be served.
+    location /healthz {
+        access_log off;
+        default_type text/plain;
+        if (!-f /usr/share/nginx/html/index.html) { return 503; }
+        return 200 'ok';
+    }
+}

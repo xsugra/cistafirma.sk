@@ -97,7 +97,7 @@ export default defineConfig(({mode}) => {
                     target: backendUrl,
                     changeOrigin: true,
                     // Forward the caller's address as `X-Forwarded-For`, the
-                    // way `nginx.conf` does in the built image. Without it the
+                    // way `nginx.conf.template` does in the built image. Without it the
                     // backend sees every request coming from this dev server,
                     // so anything keyed by client address -- DRF's throttling,
                     // the /metrics private-address check -- treats the whole
