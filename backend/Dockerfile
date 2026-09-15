@@ -26,8 +26,24 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY . .
 
-# Collect static files
-RUN python manage.py collectstatic --noinput --settings=backend.settings || true
+# Static files for the Django admin, DRF and unfold. This pass exists so the
+# image is runnable on its own, and because the image layer is what a fresh
+# named volume at /app/staticfiles is seeded from; the backend container also
+# collects again at start-up, with its real environment (docker-compose.yml).
+#
+# SECRET_KEY is passed on the command line rather than inherited from an env
+# file: no env file may be in the build context (see .dockerignore), and
+# settings.py refuses to import without a key once DEBUG is false. This value is
+# a placeholder that satisfies that check and nothing else -- collectstatic
+# hashes file contents and never the key, so no key material reaches the output.
+#
+# There is deliberately no `|| true`. It used to be here, and it is why the step
+# could sit broken indefinitely: without an env file in the context the import
+# raised ImproperlyConfigured, the `|| true` swallowed it, and the build shipped
+# an image with no /app/staticfiles at all -- which is exactly what every image
+# built on dell contained until 2026-09-15. A build that cannot collect its own
+# static files must fail here rather than at the first admin page.
+RUN SECRET_KEY=build-only-placeholder python manage.py collectstatic --noinput --settings=backend.settings
 
 # Expose port
 EXPOSE 8000
