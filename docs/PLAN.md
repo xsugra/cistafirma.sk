@@ -3189,13 +3189,23 @@ naďalej neplatil:
 
 **Toto je vec Macu a je to zároveň jeho posledná vec** — #109 ho vypína ako
 produkciu. Druhá vetva tej istej kontroly je `systemd` a číta `LastTriggerUSec`
-**časovača**, nie čas štartu služby. Na delle by ten záznam mal byť
-v `~/.local/state/systemd/timers/`, teda na **trvalej** ceste v `/home`, nie
-v `/run` — takže to vyzerá, že na Linuxe ten istý defekt nie je. **Overené to
-však nie je**: na delle zatiaľ žiadny user timer nebehol (adresár neexistuje)
-a `systemd` je tam 259. Overí sa to jedným príkazom po prvom behu timera
-(`ls -la ~/.local/state/systemd/timers/` a porovnanie mtime s časom posledného
-bootu). Kým to nevyjde, netreba tvrdiť, že to migrácia vyrieši sama.
+**časovača**, nie čas štartu služby. **Overené 2026-09-15: na Linuxe ten defekt
+nie je a záznam reštart prežije** — a overenie zároveň opravilo odhad cesty.
+Záznam nie je v `~/.local/state/systemd/timers/`, ako to tu stálo: ten adresár
+na delle **neexistuje** ani po tom, čo user timer naozaj odpálil. Je v
+**`~/.local/share/systemd/timers/stamp-<unit>.timer`** (namerané:
+`stamp-sk.cistafirma.backup.timer`, a po sonde aj
+`stamp-cistafirma-stamp-probe.timer`). Systémové timery majú svoje
+v `/var/lib/systemd/timers/` — odtiaľ pochádzal ten omyl.
+
+Sonda to overila priamo: jednorazový `Persistent=true` timer
+v `~/.config/systemd/user` odpálil, `LastTriggerUSec` sa nastavil a stamp
+vznikol na **trvalej** ceste v `/home`, nie v `/run`; po sebe sa upratala.
+A reálny týždenný timer ukazuje `LastTriggerUSec = 11:36:56`, kým boot bol
+`11:38:55` — hodnota teda **prežila reštart**. Dve veci to vedia pokaziť a obe
+sú nenápadné: sonda bez `Persistent=true` stamp **nevytvorí** (prvý pokus
+vyšel naprázdno presne preto — stamp existuje kvôli `Persistent=`, nie kvôli
+behu samému) a hľadať treba v `share`, nie v `state`.
 
 ### Čo presne spraviť po autorizácii Tailscale — v tomto poradí
 
