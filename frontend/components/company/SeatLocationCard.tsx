@@ -19,42 +19,73 @@ export const formatRadius = (radiusM: number): string => {
 };
 
 /**
+ * The address string we hand Google, built the same way for both verbs.
+ *
+ * `street` already carries the house number when there is one -- the register
+ * writes "Žilinská cesta 126", not a number in a field of its own -- so this is
+ * the whole address and not just its first line.
+ */
+const addressQuery = (address: Address): string =>
+    [address.street, [address.zipCode, address.city].filter(Boolean).join(' ')]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(', ');
+
+/**
  * The Google link, and what it is allowed to say it does.
  *
  * Two verbs, because a route and a search are not the same promise. A `building`
- * is one point on a doorstep, so Google can be asked for a route *to* it -- by
- * coordinate rather than by our address string, because a geocoder handed
- * "Hlavná 12, 06601 Humenné" can land at the far end of a long street while the
- * register's own address point is the door.
- *
- * A `street` or a PSČ is an area, and the only point we could hand a router is
- * that area's centroid -- the average this card exists to present as an average.
- * A route there would name the middle of a street as the firm's doorstep, which
- * is the same claim the ring is drawn to refuse. So an area gets a *search*:
- * Google receives the address we hold, disambiguates it itself, and puts a pin on
- * the street the reader can route from. The `title` carries the reason, so the
+ * is one point on a doorstep, so Google can be asked for a route *to* it. A
+ * `street` or a PSČ is an area, and the only point we could hand a router is that
+ * area's centroid -- the average this card exists to present as an average. A
+ * route there would name the middle of a street as the firm's doorstep, which is
+ * the same claim the ring is drawn to refuse. So an area gets a *search*: Google
+ * receives the address we hold, disambiguates it itself, and puts a pin on the
+ * street the reader can route from. The `title` carries the reason, so the
  * difference between the two buttons is not silent.
+ *
+ * Both verbs carry the *address*. The building branch used to carry a
+ * coordinate, and that is the version that failed. Handed
+ * `destination=48.6030256,17.8305999`, Google does not show that point -- it
+ * reverse-geocodes it and names the destination after whatever business it
+ * knows there. For ECOKLIMA s.r.o. (IČO 48097781) that was "poctive sirupy
+ * s.r.o., Žilinská 126, 921 01 Piešťany": a different company's name printed at
+ * the end of a route to this one. The point itself was never wrong -- the
+ * register's address point for Žilinská cesta 126 is that building, and a
+ * reverse lookup confirms it -- so the reader was shown a stranger's name on a
+ * correct route, which reads exactly like being sent to the wrong place. Nor
+ * was it one company's bad luck: any address point that coincides with a
+ * business Google knows picks up that business's name, and 288 966 of our seats
+ * sit on such points.
+ *
+ * The address is safe to hand over *here* because of what `building` means: it
+ * is the precision the register reaches only with a house number, so the string
+ * names a building rather than a street. Measured 2026-09-15 across all 361 527
+ * building-precision seats: every one carries a number in `Ulica` -- the 16 640
+ * a first count set aside are `10A`, `4B`, `50E`, number and letter -- and not
+ * one is a bare street name. Nor is that text a transcription we are merely
+ * hoping is right: `building` is the tier the register reached *by resolving
+ * this very string* to a house number, so an address that did not name a real
+ * building could not have produced the point we are standing on. That is also
+ * why the argument this branch used to give for sending a coordinate ("a
+ * geocoder handed our address string can land at the other end of a long
+ * street") does not apply to it: it is an argument about streets, and this
+ * branch is the one that has house numbers.
  */
 export const mapsLink = (
     seat: SeatLocation,
     address: Address,
 ): { href: string; label: string; icon: string; title: string } => {
+    const query = addressQuery(address);
+
     if (seat.precision === 'building') {
         return {
-            href: `https://www.google.com/maps/dir/?api=1&destination=${seat.lat},${seat.lon}`,
+            href: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(query)}`,
             label: 'Vypočítať trasu',
             icon: 'fa-diamond-turn-right',
-            title: 'Trasa do presného adresného bodu, ktorý k sídlu uvádza Register adries',
+            title: 'Trasa na adresu sídla, ktorú uvádza Register adries',
         };
     }
-
-    const query = [
-        address.street,
-        [address.zipCode, address.city].filter(Boolean).join(' '),
-    ]
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .join(', ');
 
     return {
         href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`,

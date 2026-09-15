@@ -139,7 +139,8 @@ describe('SeatLocationCard', () => {
         const link = screen.getByRole('link', {name: /Vypočítať trasu/});
         expect(link).toHaveAttribute(
             'href',
-            'https://www.google.com/maps/dir/?api=1&destination=48.14748,17.14051',
+            'https://www.google.com/maps/dir/?api=1&destination=' +
+                encodeURIComponent('Mlynské nivy 5, 82109 Bratislava'),
         );
         expect(link).toHaveAttribute('target', '_blank');
         expect(link).toHaveAttribute('rel', 'noreferrer noopener');
@@ -147,29 +148,42 @@ describe('SeatLocationCard', () => {
 });
 
 describe('mapsLink', () => {
-    it('asks Google for a route to the exact point when the seat is a building', () => {
+    it('asks Google for a route to the address when the seat is a building', () => {
         // The register gave us the building's own address point, so this is the
         // one precision where a route's destination is a place rather than an
-        // average -- and it goes as a coordinate, because a geocoder handed our
-        // address string can land at the other end of a long street.
+        // average -- and it goes as the address, not as the coordinate.
         const link = mapsLink({...seat, radiusM: 0, precision: 'building'}, address);
 
         expect(link.href).toBe(
-            'https://www.google.com/maps/dir/?api=1&destination=48.14748,17.14051',
+            'https://www.google.com/maps/dir/?api=1&destination=' +
+                encodeURIComponent('Mlynské nivy 5, 82109 Bratislava'),
         );
         expect(link.label).toBe('Vypočítať trasu');
+    });
+
+    it('never sends a coordinate, because Google names the pin after a business', () => {
+        // The failure: `destination=48.6030256,17.8305999` for ECOKLIMA s.r.o.
+        // opened Google Maps titled "poctive sirupy s.r.o., Žilinská 126, 921 01
+        // Piešťany" -- another company, at the address point that is genuinely
+        // the right building. Google reverse-geocodes a bare coordinate and
+        // labels it with whatever business it knows there, so the route looked
+        // like it went somewhere else. No precision may send one.
+        for (const precision of ['building', 'street', 'postal_code'] as const) {
+            const link = mapsLink({...seat, radiusM: 0, precision}, address);
+
+            expect(link.href).not.toContain(String(seat.lat));
+            expect(link.href).not.toContain(String(seat.lon));
+            expect(link.href).toContain('/maps/');
+        }
     });
 
     it('never routes to the centre of an area, because that centre is an average', () => {
         // The failure this guards against is the link contradicting the ring
         // drawn an inch above it: "somewhere inside this" on the map, "here it
-        // is" in the URL. The coordinates must therefore not appear in the link
-        // at all, for either area precision.
+        // is" in the URL. An area is therefore searched for, never routed to.
         for (const precision of ['street', 'postal_code'] as const) {
             const link = mapsLink({...seat, radiusM: 184, precision}, address);
 
-            expect(link.href).not.toContain(String(seat.lat));
-            expect(link.href).not.toContain(String(seat.lon));
             expect(link.href).toContain('/maps/search/');
             expect(link.label).toBe('Nájsť na Google Maps');
         }
