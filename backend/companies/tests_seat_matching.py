@@ -45,6 +45,7 @@ from companies.seat_matching import (
     T_PSC_ULICA_SUPISNE,
     candidates,
     resolve,
+    street_variants,
 )
 
 
@@ -294,6 +295,21 @@ def _tiers(found):
     return [tier for tier, _ in found]
 
 
+def _tier_order(found):
+    """The distinct tiers, in the order they are first asked.
+
+    Every tier is now asked once per spelling of the street (`street_variants`),
+    so the raw list repeats each tier three times. Deduping *without sorting* is
+    what keeps an assertion here about the policy -- which question is asked
+    before which -- rather than about how many spellings happen to exist.
+    """
+    order = []
+    for tier in _tiers(found):
+        if tier not in order:
+            order.append(tier)
+    return order
+
+
 class CandidatesTests(SimpleTestCase):
     """The order *is* the policy, so the order is what is asserted."""
 
@@ -310,7 +326,7 @@ class CandidatesTests(SimpleTestCase):
         """
         found = candidates('82108', 'Bratislava', 'Tomášikova 50/E')
         self.assertEqual(
-            _tiers(found),
+            _tier_order(found),
             [
                 T_PSC_ULICA_ORIENT,
                 T_PSC_ULICA_SUPISNE,
@@ -347,28 +363,35 @@ class CandidatesTests(SimpleTestCase):
     def test_a_lone_number_is_tried_as_both_and_the_register_decides(self):
         """One number, two possible columns, and the field cannot say which.
 
-        So the same value is offered to both, once for each scope -- four
-        building candidates, and the first one the register confirms wins.
+        So the same value is offered to both, once for each scope and once for
+        each spelling of the street -- and the first one the register confirms
+        wins.
         """
         found = candidates('82108', 'Bratislava', 'Starohájska 3')
+        spellings = street_variants('starohajska')
         orient = [v for t, v in found if t is T_PSC_ULICA_ORIENT]
         supisne = [v for t, v in found if t is T_PSC_ULICA_SUPISNE]
-        self.assertEqual(orient, [('82108', 'starohajska', '3')])
-        self.assertEqual(supisne, [('82108', 'starohajska', '3')])
-        self.assertEqual(len(_tiers(found)), 6, 'two scopes x two readings + both streets')
+        self.assertEqual(orient, [('82108', s, '3') for s in spellings])
+        self.assertEqual(supisne, [('82108', s, '3') for s in spellings])
+        self.assertEqual(
+            len(_tiers(found)),
+            2 * 2 * len(spellings) + 2 * len(spellings),
+            'two scopes x two readings x every spelling, then both streets',
+        )
 
     def test_a_split_number_asks_each_column_once_with_its_own_value(self):
         """`1458/71` names both columns, so the lone fallback must not also fire.
 
-        If it did, the same pair would be looked up four times per scope and a
-        rejected key would be rejected four times over -- inflating the counts
-        the report is read for.
+        If it did, the same pair would be looked up twice as often per scope and
+        a rejected key would be rejected twice over -- inflating the counts the
+        report is read for.
         """
         found = candidates('82108', 'Bratislava', 'Bratislavská 1458/71')
+        spellings = street_variants('bratislavska')
         orient = [v for t, v in found if t is T_PSC_ULICA_ORIENT]
         supisne = [v for t, v in found if t is T_PSC_ULICA_SUPISNE]
-        self.assertEqual(orient, [('82108', 'bratislavska', '71')])
-        self.assertEqual(supisne, [('82108', 'bratislavska', '1458')])
+        self.assertEqual(orient, [('82108', s, '71') for s in spellings])
+        self.assertEqual(supisne, [('82108', s, '1458') for s in spellings])
 
     def test_a_rural_address_keys_on_the_number_with_an_empty_street(self):
         """A village writes the municipality where the street goes.
@@ -406,6 +429,94 @@ class CandidatesTests(SimpleTestCase):
         self.assertEqual(candidates('', '', ''), [])
 
 
+def _fetch_table(table):
+    """A `fetch` over `{(tier_name, values): points}`, empty elsewhere."""
+    return lambda tier, values: table.get((tier.name, tuple(values)), ())
+
+
+class StreetVariantsTests(SimpleTestCase):
+    """The register writes the street's kind in front of the name; we may not.
+
+    Measured on the register's own keys: 29 684 of its address points sit under
+    a key beginning with `ulica` and 3 500 under one beginning with the glued
+    abbreviation (`ul.1.maja`). `street_key` folds that word only when it
+    *follows* the name, so `Ulica A. Dubčeka` and `A. Dubčeka` are two keys for
+    one street. These hold both ends of that join.
+    """
+
+    def test_the_name_itself_is_offered_before_any_repair(self):
+        """An exact match outranks a repaired one, so it is asked first.
+
+        Order is the whole policy in this module, and a repaired key is a guess
+        about the register's spelling where the plain one is not.
+        """
+        self.assertEqual(
+            street_variants('a.dubceka'),
+            ('a.dubceka', 'ulica a.dubceka', 'ul.a.dubceka'),
+        )
+
+    def test_it_repairs_the_word_the_register_writes_and_not_one_it_does_not(self):
+        """`namestie` is left alone, and that is a measurement rather than taste.
+
+        In four PSČs the register holds both `namestie X` and a street named `X`
+        as separate streets (02201, 03101, 03852, 96231), so folding that word
+        would merge two addresses the register keeps apart. `namestie 1.maja`
+        therefore gets no `1.maja` variant -- only the `ulica` spellings.
+        """
+        for spelling in street_variants('namestie 1.maja'):
+            self.assertNotEqual(spelling, '1.maja')
+
+    def test_a_company_that_drops_the_word_still_reaches_the_registers_row(self):
+        """The point of the repair, end to end: `A. Dubčeka` in, a building out.
+
+        The register stores this street as `ulica a.dubceka`. Without the repair
+        the company keyed on `a.dubceka`, missed, and kept its PSČ circle --
+        which looks exactly like a company the register cannot place.
+        """
+        found = candidates('82108', 'Bratislava', 'A. Dubčeka 12')
+        table = {
+            (T_PSC_ULICA_ORIENT.name, ('82108', 'ulica a.dubceka', '12')): [(48.15, 17.13)],
+        }
+        hit = resolve(found, _fetch_table(table))
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.precision, BUILDING)
+        self.assertEqual(hit.tier, T_PSC_ULICA_ORIENT.name)
+
+    def test_the_glued_abbreviation_is_repaired_too(self):
+        """`1. mája` reaches the register's `ul.1.maja`.
+
+        There is no space in that key where the source file had one, because
+        `street_key` collapses the space after a full stop -- so the repair has
+        to be spelled the way the stored key is, not the way the address reads.
+        """
+        found = candidates('82108', 'Bratislava', '1. mája 4')
+        table = {
+            (T_PSC_ULICA_ORIENT.name, ('82108', 'ul.1.maja', '4')): [(48.15, 17.13)],
+        }
+        hit = resolve(found, _fetch_table(table))
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.precision, BUILDING)
+
+    def test_the_repair_cannot_outrank_the_narrow_scope(self):
+        """A repaired key in the right PSČ beats an exact key in the municipality.
+
+        The scope is the outer loop for exactly this reason: the same street name
+        in the wrong district is the failure the tier order exists to avoid, and
+        a spelling repair must not become a way around it.
+        """
+        found = candidates('82108', 'Bratislava', 'A. Dubčeka 12')
+        tiers = _tiers(found)
+        last_narrow = max(
+            i for i, t in enumerate(tiers)
+            if t in (T_PSC_ULICA_ORIENT, T_PSC_ULICA_SUPISNE)
+        )
+        first_wide = min(
+            i for i, t in enumerate(tiers)
+            if t in (T_OBEC_ULICA_ORIENT, T_OBEC_ULICA_SUPISNE)
+        )
+        self.assertLess(last_narrow, first_wide)
+
+
 class ResolveTests(SimpleTestCase):
     """Which tier wins, and -- more importantly -- which ones are refused."""
 
@@ -414,7 +525,7 @@ class ResolveTests(SimpleTestCase):
 
     def _fetch(self, table):
         """A `fetch` over `{(tier_name, values): points}`, empty elsewhere."""
-        return lambda tier, values: table.get((tier.name, tuple(values)), ())
+        return _fetch_table(table)
 
     def test_the_first_tier_that_answers_wins(self):
         """A building beats a street, and a street beats nothing."""
@@ -461,7 +572,7 @@ class ResolveTests(SimpleTestCase):
         """
         found = candidates('82108', 'Bratislava', 'Golianova ul.')
         table = {(T_PSC_ULICA.name, ('82108', 'golianova')): [(48.15, 17.13)]}
-        self.assertEqual(_tiers(found), [T_PSC_ULICA, T_OBEC_ULICA])
+        self.assertEqual(_tier_order(found), [T_PSC_ULICA, T_OBEC_ULICA])
         self.assertIsNone(resolve(found, self._fetch(table)))
 
     def test_a_street_needs_more_than_one_point_to_have_a_shape(self):

@@ -31,6 +31,44 @@ from companies.address import (
     psc_key,
 )
 
+GENERIC_PREFIXES = ('ulica ', 'ul.')
+"""How the register writes a street's kind in front of its name.
+
+Measured on the register's own keys (9 879 distinct, 1 704 346 rows): 29 684
+address points sit under a key that begins with the word `ulica`, and 3 500
+under one that begins with the abbreviation glued to the name (`ul.1.maja`,
+because `address.street_key` collapses the space after a full stop).
+
+`street_key` folds that word only when it *follows* the name, so a company whose
+address reads `Ulica A. Dubčeka` keys on `ulica a.dubceka` while one that reads
+`A. Dubčeka` keys on `a.dubceka` — and the register stores whichever spelling its
+source file happened to carry. They are the same street and nothing joined them.
+
+`namestie` is deliberately **not** here, and that is a measurement rather than a
+hunch: in four PSČs the register holds both `namestie X` and a street named `X`
+as separate streets (02201, 03101, 03852, 96231), so folding that word would
+merge two addresses the register keeps apart. `ulica` has no such pair.
+"""
+
+
+def street_variants(street):
+    """The spellings of `street` at which a register key might hold it.
+
+    The name itself comes first: an exact match is a stronger statement than one
+    that had to be repaired, so it is tried before the repairs.
+
+    Why this is a variant at lookup rather than a fold inside `street_key`:
+    `street_key`'s output is what the importer writes into `AddressPoint.ulica`,
+    so changing it would leave every stored key spelled the old way until the
+    register's next quarterly reload — a window in which one street has two keys
+    and half the table is unreachable through the new one. A variant costs an
+    extra value in an array that is already sent as a single query, cannot
+    invalidate a stored row, and behaves identically before and after that
+    reload.
+    """
+    return (street, *(prefix + street for prefix in GENERIC_PREFIXES))
+
+
 BUILDING = 'building'
 """The company's own building. Drawn as a point."""
 
@@ -138,7 +176,8 @@ def candidates(psc, obec, ulica):
     reordering would silently change which claim the map makes.
 
     An address with no street name — rural, or only a number — goes to
-    `_rural`; everything else is keyed on the street, narrow scope first.
+    `_rural`; everything else is keyed on the street, narrow scope first, and on
+    every spelling of that street `street_variants` knows of.
 
     Both scopes are folded here, and the PSČ one is folded with `psc_key` rather
     than `normalize_text`, which would keep the space in `941 01` and send a key
@@ -152,26 +191,35 @@ def candidates(psc, obec, ulica):
     if not street or street == obec:
         return _rural(psc, obec, numbers)
 
+    # Every spelling of the street is offered to every tier, but the *scope* is
+    # still the outer loop: the narrow-before-wide rule above is the policy, and
+    # a repaired key in the right PSČ must not outrank an exact key in the
+    # municipality. The spelling is the inner loop because it is a repair to the
+    # same question, not a different question.
+    spellings = street_variants(street)
+
     found = []
     for scope in (psc, obec):
         if not scope:
             continue
         orient_tier = T_PSC_ULICA_ORIENT if scope == psc else T_OBEC_ULICA_ORIENT
         supisne_tier = T_PSC_ULICA_SUPISNE if scope == psc else T_OBEC_ULICA_SUPISNE
-        if orientation:
-            found.append((orient_tier, (scope, street, orientation)))
-        if registration:
-            found.append((supisne_tier, (scope, street, registration)))
-        if lone:
-            # The field does not say which number this is, so both are tried and
-            # the register decides — orientation first, because in a town that
-            # is what a lone number names.
-            found.append((orient_tier, (scope, street, lone)))
-            found.append((supisne_tier, (scope, street, lone)))
+        for spelling in spellings:
+            if orientation:
+                found.append((orient_tier, (scope, spelling, orientation)))
+            if registration:
+                found.append((supisne_tier, (scope, spelling, registration)))
+            if lone:
+                # The field does not say which number this is, so both are tried
+                # and the register decides — orientation first, because in a town
+                # that is what a lone number names.
+                found.append((orient_tier, (scope, spelling, lone)))
+                found.append((supisne_tier, (scope, spelling, lone)))
 
     for scope, tier in ((psc, T_PSC_ULICA), (obec, T_OBEC_ULICA)):
         if scope:
-            found.append((tier, (scope, street)))
+            for spelling in spellings:
+                found.append((tier, (scope, spelling)))
 
     return found
 
