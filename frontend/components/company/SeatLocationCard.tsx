@@ -1,5 +1,5 @@
 import React, { lazy, Suspense } from 'react';
-import type { SeatLocation } from '../../types';
+import type { Address, SeatLocation } from '../../types';
 import { formatNumber } from '../../utils/format';
 
 // Lazily: the renderer is MapLibre GL and it is the largest thing on the page,
@@ -18,8 +18,65 @@ export const formatRadius = (radiusM: number): string => {
     return `±${km} km`;
 };
 
+/**
+ * The Google link, and what it is allowed to say it does.
+ *
+ * Two verbs, because a route and a search are not the same promise. A `building`
+ * is one point on a doorstep, so Google can be asked for a route *to* it -- by
+ * coordinate rather than by our address string, because a geocoder handed
+ * "Hlavná 12, 06601 Humenné" can land at the far end of a long street while the
+ * register's own address point is the door.
+ *
+ * A `street` or a PSČ is an area, and the only point we could hand a router is
+ * that area's centroid -- the average this card exists to present as an average.
+ * A route there would name the middle of a street as the firm's doorstep, which
+ * is the same claim the ring is drawn to refuse. So an area gets a *search*:
+ * Google receives the address we hold, disambiguates it itself, and puts a pin on
+ * the street the reader can route from. The `title` carries the reason, so the
+ * difference between the two buttons is not silent.
+ */
+export const mapsLink = (
+    seat: SeatLocation,
+    address: Address,
+): { href: string; label: string; icon: string; title: string } => {
+    if (seat.precision === 'building') {
+        return {
+            href: `https://www.google.com/maps/dir/?api=1&destination=${seat.lat},${seat.lon}`,
+            label: 'Vypočítať trasu',
+            icon: 'fa-diamond-turn-right',
+            title: 'Trasa do presného adresného bodu, ktorý k sídlu uvádza Register adries',
+        };
+    }
+
+    const query = [
+        address.street,
+        [address.zipCode, address.city].filter(Boolean).join(' '),
+    ]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(', ');
+
+    return {
+        href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`,
+        label: 'Nájsť na Google Maps',
+        icon: 'fa-magnifying-glass-location',
+        title:
+            'Register pozná ulicu alebo PSČ, ale nie konkrétnu budovu — preto Google ' +
+            'otvárame s adresou na vyhľadanie, nie s trasou do presného bodu',
+    };
+};
+
 interface SeatLocationCardProps {
     seat: SeatLocation;
+    /**
+     * The address as the rest of the profile prints it.
+     *
+     * Needed only for the link above: a seat drawn as an area has no point worth
+     * routing to, and the street name is what Google can be asked to find. Passed
+     * in rather than added to `SeatLocation`, because it is a fact about the
+     * company record rather than a property of the drawing.
+     */
+    address: Address;
 }
 
 /** What the drawing claims, said in the heading rather than left to the shape. */
@@ -91,36 +148,60 @@ const explanation = (seat: SeatLocation): React.ReactNode => {
  * is decided on the backend rather than guessed here from the radius. Reading it
  * is what keeps the words and the drawing on the same card from disagreeing.
  */
-export const SeatLocationCard: React.FC<SeatLocationCardProps> = ({ seat }) => (
-    <div className="mt-6 border-t border-gray-200 dark:border-slate-800 pt-6">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
-                <i className="fas fa-map-location-dot text-blue-500 dark:text-blue-400" aria-hidden="true" />
-                Sídlo na mape
-            </h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-                {precisionNote(seat)}
+export const SeatLocationCard: React.FC<SeatLocationCardProps> = ({ seat, address }) => {
+    const link = mapsLink(seat, address);
+
+    return (
+        <div className="mt-6 border-t border-gray-200 dark:border-slate-800 pt-6">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+                    <i className="fas fa-map-location-dot text-blue-500 dark:text-blue-400" aria-hidden="true" />
+                    Sídlo na mape
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {precisionNote(seat)}
+                </p>
+            </div>
+
+            <div className="mt-3 h-56 overflow-hidden rounded-lg border border-gray-200 dark:border-slate-800">
+                <Suspense
+                    fallback={
+                        <div className="flex h-full items-center justify-center bg-gray-50 text-sm text-gray-500 dark:bg-slate-900 dark:text-gray-400">
+                            <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                            Načítavam mapu…
+                        </div>
+                    }
+                >
+                    <SeatMap seat={seat} />
+                </Suspense>
+            </div>
+
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {explanation(seat)}
             </p>
+            {/* The source and the way out, on one line: the reader who has just
+                been told how precise the drawing is is the reader who wants to go
+                there, and the credit belongs under the map it credits. It wraps to
+                two lines on a narrow card rather than squeezing either half. */}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                    Zdroj: Register adries MV SR
+                </p>
+                {/* An `<a>`, not a `<button>`: it navigates, so it keeps
+                    middle-click, ⌘-click and "open in new tab". The label changes
+                    with the precision because the promise does. */}
+                <a
+                    href={link.href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    title={link.title}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/50"
+                >
+                    <i className={`fas ${link.icon}`} aria-hidden="true" />
+                    {link.label}
+                    <span className="sr-only"> (otvorí sa v novej karte)</span>
+                </a>
+            </div>
         </div>
-
-        <div className="mt-3 h-56 overflow-hidden rounded-lg border border-gray-200 dark:border-slate-800">
-            <Suspense
-                fallback={
-                    <div className="flex h-full items-center justify-center bg-gray-50 text-sm text-gray-500 dark:bg-slate-900 dark:text-gray-400">
-                        <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-                        Načítavam mapu…
-                    </div>
-                }
-            >
-                <SeatMap seat={seat} />
-            </Suspense>
-        </div>
-
-        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            {explanation(seat)}
-        </p>
-        <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-            Zdroj: Register adries MV SR
-        </p>
-    </div>
-);
+    );
+};

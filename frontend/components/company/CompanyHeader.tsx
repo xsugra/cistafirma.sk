@@ -212,7 +212,12 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                 line above it already being the whole truth. Same shape as the
                 DIČ line, which also disappears rather than printing a label with
                 nothing after it. */}
-            {company.seatLocation && <SeatLocationCard seat={company.seatLocation} />}
+            {company.seatLocation && (
+                <SeatLocationCard
+                    seat={company.seatLocation}
+                    address={company.address}
+                />
+            )}
         </div>
     );
 };
