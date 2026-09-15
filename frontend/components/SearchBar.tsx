@@ -221,7 +221,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         <div className={`flex items-center bg-white dark:bg-slate-900 overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300 ${styles.frame}`}>
           <i className={`fas fa-search text-gray-400 ${styles.icon}`}></i>
           <input
+            // One box per page, so one id. `name` is what Chrome asks for
+            // before it will autofill a field, and it is also what a form looks
+            // for on submit -- `aria-label` names the box for a screen reader
+            // and answers neither.
+            id="site-search"
+            name="q"
             type="text"
+            autoComplete="off"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onFocus={() => { isFocused.current = true; if (query.length >= 2 && hasResults) setShowSuggestions(true); }}
