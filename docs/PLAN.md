@@ -3866,7 +3866,7 @@ lokálne, po jednej, v tom istom obraze `python:3.12-slim`:
 | Podmienka | Čo bez nej padalo |
 |---|---|
 | Postgres | `create_test_db` — `text_pattern_ops`, teda 0 vykonaných testov |
-| Redis | 11 testov na `ConnectionError` + healthz test čakal 200, dostal 503 |
+| Redis | 6 testov na `ConnectionError` (5× hľadanie osôb, 1× admin dashboard) + healthz test čakal 200, dostal 503 |
 | `collectstatic` | 6 testov admin dashboardov na `Missing staticfiles manifest entry` |
 
 Posledná položka vyzerá nečakane, ale je to dôsledok: `DiscoverRunner` má

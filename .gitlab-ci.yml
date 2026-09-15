@@ -126,10 +126,11 @@ backend_tests:
   services:
     - name: postgres:16-alpine
       alias: postgres
-    # Redis je tu z toho istého dôvodu: bez neho padá 11 testov na
-    # `ConnectionError` a healthz test čaká 200, ale dostane 503. Aj to je
-    # dôkaz, že job predtým nič nekontroloval — v CI nie je `.env`, takže
-    # `REDIS_URL` ostal na predvolenom `localhost` a na tom nič nebeží.
+    # Redis je tu z toho istého dôvodu: bez neho padne šesť testov na
+    # `ConnectionError` (päť v hľadaní osôb, jeden admin dashboard) a healthz
+    # test čaká 200, ale dostane 503 — spolu sedem výsledkov. Aj to je dôkaz,
+    # že job predtým nič nekontroloval: v CI nie je `.env`, takže `REDIS_URL`
+    # ostal na predvolenom `localhost` a na tom nič nebeží.
     - name: redis:7-alpine
       alias: redis
   variables:

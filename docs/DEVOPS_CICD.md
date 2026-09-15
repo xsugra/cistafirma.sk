@@ -204,9 +204,9 @@ job, ktorý nemôže prejsť, učí ľudí ignorovať červenú.
 Tri veci boli treba, aby job naozaj testoval:
 
 1. **Postgres** — bez neho sa schéma ani nedá postaviť.
-2. **Redis** — bez neho padalo 11 testov na `ConnectionError` a healthz test
-   čakal 200, ale dostal 503. V CI nie je `.env`, takže `REDIS_URL` ostal na
-   predvolenom `localhost`.
+2. **Redis** — bez neho padne šesť testov na `ConnectionError` (päť v hľadaní
+   osôb, jeden admin dashboard) a healthz test čaká 200, ale dostane 503. V CI
+   nie je `.env`, takže `REDIS_URL` ostal na predvolenom `localhost`.
 3. **`collectstatic`** — Django si počas testov sám prepne `DEBUG` na `False`
    (`DiscoverRunner(debug_mode=False)`), čím sa
    `CompressedManifestStaticFilesStorage` prepne do striktného režimu. Bez
