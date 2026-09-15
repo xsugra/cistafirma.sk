@@ -106,6 +106,67 @@ class OrsrOutcomeRecordingTests(TestCase):
             delta=1,
         )
 
+    def test_an_earlier_writers_note_does_not_survive_as_the_reason(self):
+        """A leftover sentence must not be read as what the newest attempt said.
+
+        The ORSR row has more than one writer: `record_orsr_not_monitored` puts a
+        reason on it, and migration 0018 seeded 147 rows with a note about the
+        migration. ORSR's own writer never wrote the column, so that note kept
+        the slot a reason occupies -- and the admin's `ReasonCell` renders
+        `last_detail` next to `last_error` as "the reason a company is where it
+        is". Measured on dell 2026-09-15: 125 rows carried a `not_in_register`
+        verdict from a real attempt and the migration note underneath it.
+        """
+        CompanySyncStatus.objects.create(
+            company_id=self.company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            last_detail="zaradené do fronty migráciou 0018: …",
+            consecutive_failures=1,
+        )
+
+        self._run()
+
+        self.assertEqual(self._status().last_detail, "")
+
+    def test_a_reason_this_source_owns_is_cleared_by_the_next_attempt_too(self):
+        """`record_orsr_not_monitored`'s reason is a reason, and it is the last one.
+
+        It describes an attempt that was *not* made -- nothing was requested --
+        so the row leaves the lane and is never superseded in practice. If it
+        ever is, the newest attempt is the one that must be read.
+        """
+        CompanySyncStatus.objects.create(
+            company_id=self.company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            last_detail="ORSR sa na firmu nepýta: zrušená 12.05.2026",
+            consecutive_failures=0,
+        )
+
+        self._run()
+
+        self.assertEqual(self._status().last_detail, "")
+
+    def test_the_error_column_is_still_the_attempts_own(self):
+        """Clearing `detail` must not be read as clearing the row's record.
+
+        `last_error` and `last_error_type` are written by this attempt and are
+        untouched by the change -- the point is that `last_detail` stops
+        carrying someone else's sentence, not that the row forgets.
+        """
+        CompanySyncStatus.objects.create(
+            company_id=self.company.id,
+            source=CompanySyncStatus.SOURCE_ORSR,
+            last_detail="zaradené do fronty migráciou 0018: …",
+            consecutive_failures=1,
+        )
+
+        self._run(fetch_ok=False, last_error="ORSR neodpovedal")
+
+        status = self._status()
+        self.assertEqual(status.last_detail, "")
+        self.assertEqual(status.last_error, "ORSR neodpovedal")
+        self.assertNotEqual(status.last_error_type, "")
+
     def test_a_scraper_error_is_recorded_as_a_failure_and_re_raised(self):
         """The company must leave a row behind *and* still fail loudly.
 

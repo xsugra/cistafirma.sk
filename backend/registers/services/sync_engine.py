@@ -158,12 +158,22 @@ def update_company_status(
     failure it replaces `compute_next_retry` outright.
 
     `detail` is the attempt's own sentence, and is written on success too --
-    which `error` never is, because a successful attempt blanks it. `None`
-    means "this caller has nothing to say about the reason", which is not the
-    same as "the reason is empty": the four sources that pass nothing (ORSR,
-    VZP, Sociálna poisťovňa, RUZ dates) leave the column at whatever the last
-    caller that did pass one wrote. They are different `source` rows, so
-    nothing is overwritten.
+    which `error` never is, because a successful attempt blanks it. The three
+    values mean three different things and the column is only honest if the
+    caller picks the right one:
+
+    - a sentence: what this attempt had to say about itself;
+    - `None`: this caller has nothing to say, so whatever is there stays. Three
+      sources pass nothing (VZP, Sociálna poisťovňa, RUZ dates) and they are
+      different `source` rows, so nothing of theirs is overwritten;
+    - `""`: nothing is there *because this attempt has no sentence*, and a
+      leftover from an earlier writer must not be read as one. Only ORSR passes
+      this, and it has to: its row is written by more than one writer --
+      `record_orsr_not_monitored` puts a reason on it, and migration 0018 seeded
+      147 of them with a note about the migration. Left alone, that note sat
+      under a `not_in_register` verdict from a later attempt and read, in the
+      admin's reason cell, as the reason for *that* attempt. Measured
+      2026-09-15: 125 rows were in exactly that state.
 
     `parser_revision` records which revision of the reading produced the rows
     this attempt wrote, and only `financials` passes it. `None` leaves the
@@ -277,6 +287,18 @@ def record_orsr_outcome(
     financials is: `next_retry_at = NULL` reads as "due now", so a success that
     wrote nothing would sit permanently at the head of the retry lane and starve
     every company that genuinely needs another attempt.
+
+    `detail` is passed as `""` rather than left at `None`, and that is a claim
+    rather than a default: ORSR has no sentence of its own to add, and this
+    attempt is now the newest thing that happened to the row, so anything an
+    earlier writer left on it has stopped being the reason. Two such writers
+    exist -- `record_orsr_not_monitored`, which puts a reason on the row when it
+    takes a company out of the lane, and migration 0018, which seeded 147 rows
+    with a note about itself. Leaving them alone made that note sit under a
+    later `not_in_register` verdict and read, in the admin's reason cell, as the
+    reason for the *newest* attempt. Measured 2026-09-15: 125 rows were in
+    exactly that state, and the note also doubled as the reverse migration's
+    delete key.
     """
     return update_company_status(
         company_id=company.id,
@@ -286,6 +308,7 @@ def record_orsr_outcome(
         error_type="" if fetch_ok else error_type,
         retry_after=ANSWERED_RETRY_AFTER if fetch_ok else None,
         failure_retry_after=None if fetch_ok else failure_retry_after,
+        detail="",
     )
 
 
