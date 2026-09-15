@@ -638,9 +638,39 @@ class OrsrRotationTests(TestCase):
 
         self.assertEqual(orsr_sync_batch(5), orsr_sync_batch(5))
 
-    def test_a_company_that_already_has_a_profile_is_not_new_ground(self):
+    def test_a_profile_with_no_status_row_is_still_new_ground(self):
+        """The blind spot, and the shape that hid it.
+
+        New ground used to be `orsr_profile__isnull=True`, so having a profile
+        was enough to be excluded from it -- on the reading that a company with
+        a profile needs no first read. The reading is right about the read and
+        wrong about the reach: the retry lane is a `CompanySyncStatus` row as
+        well, so a profile that has none is in neither half of the rotation.
+
+        Measured 2026-09-15: 19 591 profiles read successfully, not one of them
+        with an ORSR status row, 19 517 of them on companies this rotation may
+        touch. They were written before the source had a writer. Re-reading one
+        is what gives it the row that makes it visible to `source_health` and
+        enters it in the annual rotation -- and it is also what makes the
+        invariant self-healing, since a future writer that forgets to record an
+        attempt creates exactly this state and the rotation now repairs it.
+        """
         companies = _companies(10)
         _profile_row(companies[0])
+
+        self.assertIn(companies[0].id, orsr_sync_batch(10))
+
+    def test_a_profile_whose_attempt_is_recorded_is_not_new_ground(self):
+        """The other half of the same rule: the row, not the profile, decides.
+
+        `test_a_company_whose_retry_is_in_the_future_is_left_alone` states this
+        for a company that is not due. Said again here against a row that is not
+        due *and* has already succeeded, so the exclusion cannot be read as an
+        accident of the retry clock.
+        """
+        companies = _companies(10)
+        _profile_row(companies[0])
+        _record([companies[0].id], retry_at=timezone.now() + ANSWERED_RETRY_AFTER)
 
         self.assertNotIn(companies[0].id, orsr_sync_batch(10))
 
@@ -675,9 +705,17 @@ class OrsrRotationTests(TestCase):
         self.assertNotIn(companies[0].id, orsr_sync_batch(10))
 
     def test_a_due_company_with_no_profile_is_not_handed_out_twice(self):
-        """ORSR's new ground is "no profile", not "no attempt", so the two
-        populations can overlap -- and a batch that returns one company twice
-        would dispatch it twice."""
+        """A batch that returns one company twice dispatches it twice.
+
+        The two populations are disjoint by construction -- new ground excludes
+        any company with a status row, and every retry id is one -- and this
+        states it against the shape that used to make it non-obvious. It was
+        written when ORSR's new ground read "no profile", so the docstring here
+        claimed the populations *could* overlap and that the second exclusion in
+        `rotating_batch` was what kept them apart. They could not: that exclusion
+        was already doing it. The claim is corrected rather than deleted because
+        the invariant is the thing worth pinning, whatever holds it.
+        """
         companies = _companies(10)
         _record([companies[0].id], retry_at=timezone.now() - timedelta(minutes=1))
 

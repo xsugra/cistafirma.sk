@@ -825,13 +825,20 @@ def rotating_batch(
        without storing a cursor of its own.
 
     `candidates` is the queryset of companies this source is allowed to touch,
-    and the two populations are kept disjoint on purpose -- new ground excludes
-    both the companies that have an attempt recorded *and* the ids already taken
-    as retries. The second exclusion is redundant when "has an attempt" and "is
-    a candidate" line up, and it is what keeps the guarantee true when they do
-    not: ORSR's new ground is "no profile", which a company can lack while
-    having a due attempt recorded, and the same company would otherwise be
-    handed out twice in one batch.
+    and the two populations are kept disjoint -- new ground excludes both the
+    companies that have an attempt recorded *and* the ids already taken as
+    retries. The first exclusion is now what holds the guarantee on its own,
+    since every retry id is a company that has a row; the second is redundant
+    beside it and stays because it is free and because it does not depend on the
+    first staying sufficient for a caller whose `candidates` is narrower than
+    "everything without a row" (`financials_sync_batch` with `missing_only`).
+
+    It was load-bearing once, and for one source only: ORSR's new ground used to
+    be "no profile" rather than "no attempt", so a company could sit in the
+    retry lane and in new ground at once and be handed out twice in one batch.
+    `orsr_sync_batch` no longer selects that way -- and the company that shape
+    was hiding, one with a profile and no status row at all, could not be handed
+    out *once*, which is why the shape is gone. Its docstring carries the count.
 
     `restrict_retries_to_candidates` re-checks the due rows against
     `candidates`. It exists because a caller can narrow the population for one

@@ -936,24 +936,75 @@ def _orsr_candidates():
 
 
 def orsr_sync_batch(limit: int) -> list[int]:
-    """Choose the company ids for one ORSR batch: retries, then missing profiles.
+    """Choose the company ids for one ORSR batch: retries, then new ground.
 
     Retries come from `CompanySyncStatus(source='orsr')` -- which exists only
     because the previous commit gave the source a writer. Before it, an ORSR
     failure was recorded on the profile and nowhere else, so this population was
     empty by construction and there was nothing to retry *with*.
 
-    The retry lane is also the only way back to a company whose attempt failed
-    into a profile: `OrsrScraperError` leaves a row behind with
-    `fetch_ok=False`, which takes the company out of the `orsr_profile__isnull`
-    population for good.
+    **New ground is "no `CompanySyncStatus` row for this source", which is what
+    `rotating_batch` documents for every source and what this one used to
+    disagree with.** It asked for `orsr_profile__isnull=True` instead, on the
+    reading that a company already carrying a profile needs no first read. The
+    reading is right about the read and wrong about the reach: the retry lane is
+    a `CompanySyncStatus` row too, so a profile that has none was in neither
+    half of the rotation -- not for a period, but permanently, since neither
+    half was ever going to change its mind.
+
+    That population is not hypothetical. Measured 2026-09-15: **19 591 profiles
+    read successfully, not one of them with an ORSR status row**, and 19 517 of
+    them on companies this rotation is allowed to touch (the other 74 are
+    dissolved). They were written before commit 6603901 gave the source a
+    writer, when an attempt recorded itself on the profile and nowhere else.
+    Every writer records one now -- the Celery task and both management commands
+    -- so the population is frozen rather than growing: nothing adds to it and
+    nothing was ever going to take anything out of it.
+
+    So the one filter comes off. Re-reading those 19 517 once is what gives each
+    of them the row that makes it visible to `source_health`, enters it in the
+    annual rotation, and records when it was last actually read. Their
+    `last_synced_at` cannot say when that was, and that is a second reason the
+    date had stopped meaning anything: `RpoSyncService.refresh_person_history`
+    saves the profile with `update_fields=["raw_payload", "last_synced_at"]`, so
+    the person-history rotation moves it -- 15 201 of the 19 591 carry a date
+    from that rotation, and the other 4 390 the date of an ORSR write.
+
+    The cost is one request per company, once. It is not spread evenly, and the
+    ordering is worth stating because it is not what the shape suggests: the
+    stranded profiles carry the *low* ids (median `id` 19 815, against 293 774
+    for the candidates that have no profile at all), so the new-ground lane
+    drains them first instead of interleaving. Measured 2026-09-15 against the
+    live database: the first batch of 500 returned 40 retries and 460 new-ground
+    ids, and **every one of the 460 was stranded**. At that rate and the
+    four-hour beat it is ~42 ticks, about a week, and then the lane moves on to
+    the rest.
+
+    That week is not a detour around the other ground, it is the front of it:
+    the 19 517 have to be read either way, and reading them first costs the
+    227 104 that wait behind them nothing but the wait. The whole new-ground
+    backlog is 246 621 companies (the 254 697 candidates less the 8 076 that
+    already carry an answered row), so the order changes when each one is
+    reached, not whether.
+
+    It also makes the invariant self-healing. A future writer that forgets to
+    record an attempt creates a profile with no row, and that is now new ground:
+    the company is re-read once, records itself, and joins the rotation. No
+    separate alarm is needed for it and none is added -- a check for a state
+    this cannot reach again would be the "control that looks configured and
+    decides nothing" this repository keeps finding.
+
+    The retry lane is unchanged and remains the only way back to a company whose
+    attempt failed into a profile: `OrsrScraperError` leaves a row behind with
+    `fetch_ok=False`, and it is that row which puts it in the lane. It is no
+    longer also what takes the company out of new ground.
 
     Split out from the task so the selection can be tested without dispatching
     Celery work -- the same shape as `financials_sync_batch`.
     """
     return rotating_batch(
         source=CompanySyncStatus.SOURCE_ORSR,
-        candidates=_orsr_candidates().filter(orsr_profile__isnull=True),
+        candidates=_orsr_candidates(),
         limit=limit,
     )
 
@@ -1131,9 +1182,10 @@ def schedule_missing_orsr_sync(limit: int = 200):
 
     The rotation is now the shared `sync_engine.rotating_batch`: retries first,
     drawn from `CompanySyncStatus(source='orsr')` -- which is what the previous
-    commit's writer made possible -- and new ground from the companies that
-    still have no profile. Because an attempt always writes a status row now,
-    the head advances even when the attempt fails for good.
+    commit's writer made possible -- and new ground from the companies that have
+    no status row for this source, which is every company until an attempt
+    records one, profile or no profile. Because an attempt always writes a
+    status row now, the head advances even when the attempt fails for good.
     """
     company_ids = orsr_sync_batch(limit)
     for company_id in company_ids:
