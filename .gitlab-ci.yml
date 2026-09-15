@@ -103,18 +103,80 @@ frontend_tests:
     - npm test
     - npm run typecheck
 
+# Testy MUSIA bežať na Postgrese — a dovtedy tento job neurobil ani jeden test.
+#
+# Bez `DATABASE_URL` sa `settings.py` ticho prepne na SQLite. Lenže migrácia
+# `companies/0014_add_pattern_ops_structured_indexes.py` vytvára index s
+# `text_pattern_ops`, čo je Postgres-only trieda operátorov. Na SQLite teda
+# spadne už `create_test_db` — ešte pred prvým testom — hlásením
+# `near "text_pattern_ops": syntax error`, a job je červený vždy, nech je kód
+# akýkoľvek. Nebol to slabý test, bol to test s nulovým výpovedným obsahom.
+# (Index nie je ozdobný: `companies/services/peers.py` sa oň opiera pri
+# prefixovom hľadaní, takže „spravme migráciu prenosnou" by znamenalo ničiť
+# produkčný index kvôli CI.)
+#
+# Preto service kontajner s tou istou verziou, akú prevádzkuje produkcia
+# (`docker-compose.yml` → `postgres:16-alpine`).
 backend_tests:
   stage: test
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+    # Redis je tu z toho istého dôvodu: bez neho padá 11 testov na
+    # `ConnectionError` a healthz test čaká 200, ale dostane 503. Aj to je
+    # dôkaz, že job predtým nič nekontroloval — v CI nie je `.env`, takže
+    # `REDIS_URL` ostal na predvolenom `localhost` a na tom nič nebeží.
+    - name: redis:7-alpine
+      alias: redis
   variables:
+    # Jednorazové prihlasovacie údaje efemérneho service kontajnera. Nie sú to
+    # secrets a nemajú nič spoločné s produkčnou databázou na delle.
+    POSTGRES_USER: cistafirma
+    POSTGRES_PASSWORD: cistafirma
+    POSTGRES_DB: cistafirma
+    DATABASE_URL: "postgres://cistafirma:cistafirma@postgres:5432/cistafirma"
+    # `CACHE_REDIS_URL` sa z tohto odvodí sám (databáza broker + 1), takže
+    # stačí jediná premenná — viď `_default_cache_redis_url` v settings.py.
+    REDIS_URL: "redis://redis:6379/0"
     DEBUG: "true"
   before_script:
     - pip install --no-cache-dir --retries 3 --timeout 120 -r backend/requirements.txt
+    # Runner na otvorenie portu service kontajnera čaká sám; táto slučka je
+    # poistka, ktorá z prípadných pretekov spraví zrozumiteľnú vetu namiesto
+    # `connection refused` z prostriedku testovacej sady.
+    - |
+      python - <<'PY'
+      import socket, sys, time
+      for pokus in range(60):
+          try:
+              socket.create_connection(("postgres", 5432), timeout=2).close()
+              print(f"Postgres prijima spojenia (pokus {pokus + 1}).")
+              break
+          except OSError:
+              time.sleep(1)
+      else:
+          sys.exit("Postgres service sa nerozbehol do 60 s.")
+      PY
   script:
     - cd backend
+    # Produkcia pred štartom púšťa `collectstatic && gunicorn`
+    # (docker-compose.yml) a testy ho potrebujú z toho istého dôvodu.
+    #
+    # `DiscoverRunner` má `debug_mode=False`, takže si Django `settings.DEBUG`
+    # počas testov prepne na False sám — `DEBUG: "true"` vyššie to nezmení.
+    # A `HashedFilesMixin.url` skracuje na obyčajné meno len keď je DEBUG True,
+    # takže v testoch je `CompressedManifestStaticFilesStorage` striktná.
+    # Bez manifestu padne šesť testov admin dashboardov na
+    # `Missing staticfiles manifest entry for 'unfold/fonts/inter/styles.css'`.
+    #
+    # Vypnúť tú striktnosť (`WHITENOISE_MANIFEST_STRICT = False`) by bolo
+    # nesprávne: je to tá istá vec, ktorá v produkcii odhalí chýbajúci
+    # statický súbor.
+    - python manage.py collectstatic --noinput
     - python manage.py test --verbosity=1
 
 # ---------------------------------------------------------------------------
