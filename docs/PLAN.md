@@ -595,6 +595,14 @@ zaseknutý — a je dôležité vedieť, prečo to tak vyzerá:
 - 8 347 / 2 000 ≈ 4,2 dávky ≈ **~17 h** do konca, teda približne
   2026-09-16 popoludní. Plánovaný prechod je ~48 h a zdieľa frontu s
   `schedule_missing_orsr_sync`, takže je to v rámci návrhu.
+- **Overené priamo, nie len aritmetikou (21:44–21:47 UTC).** Dispatcher naozaj
+  odpálil: `PeriodicTask.last_run_at` pre `refresh-person-history-every-4-hours`
+  sa posunul na `21:44:14.557750+00:00` (`total_run_count` = 14), fronta `orsr`
+  skočila z **31 na 1 993** — teda dávka 2 000 úloh naozaj odišla. Následne
+  fronta klesla 1 993 → 1 984 za ~40 s, čo je **~13,5/min** proti
+  `rate_limit='15/m'`, a `pending` klesol 8 347 → 8 338. Toto je ten dôkaz,
+  ktorý ploché číslo nevedelo dať: lane dispatching funguje a odtok sedí
+  s nastaveným limitom.
 
 **Uzatváracia podmienka (jediná zvyšná práca na #95):** keď
 `refresh_person_history --dry-run` hlási na prvom riadku **0**, zmazať
