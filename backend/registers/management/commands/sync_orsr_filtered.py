@@ -3,7 +3,7 @@ from companies.models import Company
 from registers.eligibility import ORSR_ELIGIBLE_LEGAL_FORMS
 from registers.scrapers.orsr_scraper import OrsrScraperError
 from registers.services.orsr_sync import OrsrSyncService
-from registers.services.sync_engine import _classify_error, record_orsr_outcome
+from registers.services.sync_engine import record_orsr_failure, record_orsr_outcome
 
 
 
@@ -100,12 +100,7 @@ class Command(BaseCommand):
                 )
             except OrsrScraperError as exc:
                 failed += 1
-                record_orsr_outcome(
-                    company,
-                    fetch_ok=False,
-                    error=f"{type(exc).__name__}: {exc}",
-                    error_type="network",
-                )
+                record_orsr_failure(company, exc)
                 self.stdout.write(
                     self.style.WARNING(
                         f"[{idx}/{total}] ✗ {company.ico}: {exc}"
@@ -113,12 +108,7 @@ class Command(BaseCommand):
                 )
             except Exception as exc:
                 skipped += 1
-                record_orsr_outcome(
-                    company,
-                    fetch_ok=False,
-                    error=f"{type(exc).__name__}: {exc}",
-                    error_type=_classify_error(exc),
-                )
+                record_orsr_failure(company, exc)
                 self.stdout.write(
                     self.style.ERROR(
                         f"[{idx}/{total}] ⊘ {company.ico}: {type(exc).__name__}: {exc}"

@@ -42,6 +42,7 @@ from registers.models import (
     CompanySyncStatus,
     SyncJob,
 )
+from registers.scrapers.orsr_scraper import OrsrNoRecordError, OrsrScraperError
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,24 @@ BASE_BACKOFF_SECONDS = 30
 # `update_company_status`'s `retry_after` contract and about `sync_due_q`
 # below, and every rotating source needs the same value for the same reason.
 ANSWERED_RETRY_AFTER = timedelta(days=365)
+
+# A register that answered "I hold no such entity" is not going to change its
+# mind tomorrow, so backoff is the wrong shape for it -- but a year is more
+# certainty than the reading deserves. ORSR's public search is refreshed on its
+# own schedule, so a company registered last month can be missing from it today
+# and present next month; re-asking a few hundred companies once a month costs
+# about eight requests a day and keeps that from being a year-long mistake.
+#
+# This is what an absence costs, measured: 249 companies were coming round every
+# day at three requests each -- roughly 750 requests a day against a public
+# register, none of which could ever succeed (2026-09-15).
+NO_RECORD_RETRY_AFTER = timedelta(days=30)
+
+# The `CompanySyncStatus.ERROR_TYPE_CHOICES` value for "the register holds
+# nothing". Named from the register's side rather than ours -- `no_record` alone
+# would read as a note about our own bookkeeping rather than as a fact about the
+# company.
+ERROR_TYPE_NO_RECORD = "not_in_register"
 
 
 def compute_next_retry(consecutive_failures: int) -> timezone.datetime:
@@ -113,6 +132,7 @@ def update_company_status(
     error: str = "",
     error_type: str = "",
     retry_after: timedelta | None = None,
+    failure_retry_after: timedelta | None = None,
     detail: str | None = None,
     parser_revision: int | None = None,
 ) -> CompanySyncStatus:
@@ -126,6 +146,16 @@ def update_company_status(
 
     A failure ignores it: how long to wait after a failure is
     `compute_next_retry`'s decision, and it is backoff, not a fixed delay.
+
+    `failure_retry_after` is that decision, for the failures that are not
+    backoff-shaped. The two mean different things and are separate arguments
+    precisely so they cannot be confused: backoff answers "the source is having
+    trouble, wait and it may pass", while a caller passing this is saying "the
+    source *answered*, and the answer will still be this one in a month". ORSR
+    learning that the register holds no such IČO is the case that needed it --
+    `NO_RECORD_RETRY_AFTER` above -- and a daily retry there is not patience,
+    it is 249 companies asking a question whose answer is already known. On a
+    failure it replaces `compute_next_retry` outright.
 
     `detail` is the attempt's own sentence, and is written on success too --
     which `error` never is, because a successful attempt blanks it. `None`
@@ -158,7 +188,10 @@ def update_company_status(
             status.consecutive_failures += 1
             status.last_error = (error or "")[:4000]
             status.last_error_type = error_type or "unknown"
-            status.next_retry_at = compute_next_retry(status.consecutive_failures)
+            if failure_retry_after is not None:
+                status.next_retry_at = now + failure_retry_after
+            else:
+                status.next_retry_at = compute_next_retry(status.consecutive_failures)
         if detail is not None:
             status.last_detail = detail[:4000]
         if parser_revision is not None:
@@ -213,7 +246,12 @@ def record_ruz_date_outcome(
 
 
 def record_orsr_outcome(
-    company: Company, *, fetch_ok: bool, error: str = "", error_type: str = ""
+    company: Company,
+    *,
+    fetch_ok: bool,
+    error: str = "",
+    error_type: str = "",
+    failure_retry_after: timedelta | None = None,
 ) -> CompanySyncStatus:
     """Record one ORSR attempt for a company: the source's only writer.
 
@@ -247,6 +285,50 @@ def record_orsr_outcome(
         error="" if fetch_ok else error,
         error_type="" if fetch_ok else error_type,
         retry_after=ANSWERED_RETRY_AFTER if fetch_ok else None,
+        failure_retry_after=None if fetch_ok else failure_retry_after,
+    )
+
+
+def record_orsr_failure(company: Company, exc: BaseException) -> CompanySyncStatus:
+    """Record a failed ORSR attempt from the exception that ended it.
+
+    One function where there were three copies of the same claim. Each call site
+    -- the beat rotation and the two management commands -- caught
+    `OrsrScraperError` and filed it as `"network"`, which is a statement about
+    the transport, made about every way an attempt can end. It was true often
+    enough to look right: the scraper raises that class when a request failed,
+    and it also raised it when the register had answered with something that was
+    not a company výpis. The second reading is not a network error, and filing
+    it as one put 249 companies into a 24-hour backoff loop that could never
+    end, because the answer was never going to change.
+
+    So the classification lives here, next to the delays, rather than being
+    spelled out at each caller: `OrsrNoRecordError` keeps its own label and gets
+    `NO_RECORD_RETRY_AFTER` instead of backoff, every other `OrsrScraperError`
+    stays `"network"` exactly as before, and anything else falls through to
+    `_classify_error`, which is what the commands were already doing for their
+    catch-all clause.
+    """
+    if isinstance(exc, OrsrNoRecordError):
+        return record_orsr_outcome(
+            company,
+            fetch_ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type=ERROR_TYPE_NO_RECORD,
+            failure_retry_after=NO_RECORD_RETRY_AFTER,
+        )
+    if isinstance(exc, OrsrScraperError):
+        return record_orsr_outcome(
+            company,
+            fetch_ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type="network",
+        )
+    return record_orsr_outcome(
+        company,
+        fetch_ok=False,
+        error=f"{type(exc).__name__}: {exc}",
+        error_type=_classify_error(exc),
     )
 
 

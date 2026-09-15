@@ -30,6 +30,15 @@ FOOTER_DATES = {
     "vypis": re.compile(r"Dátum výpisu[:\s]*\n?\s*(\d{2}\.\d{2}\.\d{4})", re.IGNORECASE),
 }
 
+# To, čo register odpovie, keď o IČO nevie. Odpoveď, nie porucha -- a preto ju
+# `fetch_by_ico` hlási ako `OrsrNoRecordError`, nie ako `OrsrScraperError`.
+#
+# Zhoda je na vete, ktorú register sám píše, a to je zámer: keby ju preformuloval,
+# zhoda padne a pokus sa vráti medzi chyby. To je tá bezpečná strana -- "tejto
+# odpovedi už nerozumieme" je lepšie než "táto firma neexistuje", keďže druhé
+# tvrdenie by ju na 30 dní vyradilo z fronty.
+NO_RECORD_MARKER = "nezodpovedá žiadny záznam"
+
 PERSON_ROLE_TOKENS = {
     "konateľ", "konatelia", "spoločník", "spolocnik", "prokurista", "prokúra",
     "predstavenstvo", "kontrolná komisia", "dozorná rada", "člen predstavenstva",
@@ -49,7 +58,39 @@ TITLE_TOKENS = {
 
 
 class OrsrScraperError(Exception):
-    pass
+    """An ORSR attempt that produced no profile, whatever went wrong.
+
+    Deliberately broad, and a superclass of the narrower failures below: three
+    call sites catch it and each has to leave a record of the attempt, so a
+    shape nobody has classified yet still lands somewhere honest instead of
+    escaping as an unhandled exception.
+    """
+
+
+class OrsrNoRecordError(OrsrScraperError):
+    """The register answered, and its answer was that it holds no such IČO.
+
+    Not a transport failure and not a parse failure. ORSR served HTTP 200 with
+    its own sentence -- `NO_RECORD_MARKER` below -- which states a fact about
+    the register's contents rather than reporting that a request went wrong.
+
+    The distinction is the whole reason this class exists. `fetch_by_ico` used
+    to raise the generic error for both, so no caller could tell "we never
+    reached the register" from "the register has nothing", and every call site
+    filed the second as a transient network failure -- which `compute_next_retry`
+    retries at its 24-hour cap for ever. Measured on dell 2026-09-15: 249
+    companies in that loop, three requests each, every day, none of which could
+    ever have succeeded. They are churches (721), state contribution and budget
+    organisations (331/321), state funds (301) and foreign representations
+    (421/931) -- legal forms that live in RPO and in the ministry registers, not
+    in the Obchodný register. RPO was asked directly for three of them and
+    returned `{"results": []}`, so the register is right: nothing to fetch.
+
+    A subclass rather than a sibling so that every existing `except
+    OrsrScraperError` keeps working -- recording a failure is still the correct
+    thing to do for this outcome, it is only the *wait* and the *label* that
+    change.
+    """
 
 
 @dataclass
@@ -692,6 +733,7 @@ class OrsrScraper:
 
         last_html = ""
         last_url = ORSR_SEARCH_URL
+        no_record = False
 
         for params in attempts:
             try:
@@ -708,6 +750,18 @@ class OrsrScraper:
                     detail_response.encoding = "cp1250"
                     last_html = detail_response.text
                     last_url = detail_response.url
+                elif self._says_no_record(last_html):
+                    # The register answered the question. The remaining spellings
+                    # of the same query string are the same request -- these are
+                    # classic ASP pages, where `Request.QueryString` is
+                    # case-insensitive -- so they are skipped rather than spent.
+                    #
+                    # Raised after the loop rather than here on purpose: an
+                    # exception raised inside this `try` is one `except Exception`
+                    # away from being swallowed and filed as a transport failure
+                    # again, which is the defect this class exists to undo.
+                    no_record = True
+                    break
 
                 if self._looks_like_company_extract(last_html):
                     parsed = self.parser.parse(last_html, normalized_ico)
@@ -715,6 +769,12 @@ class OrsrScraper:
             except requests.exceptions.RequestException as exc:
                 logger.warning("ORSR fetch attempt failed for ICO %s (%s): %s", normalized_ico, params, exc)
                 continue
+
+        if no_record:
+            raise OrsrNoRecordError(
+                f"ORSR neeviduje IČO {normalized_ico} -- register odpovedal "
+                f"„{NO_RECORD_MARKER}“. URL: {last_url}"
+            )
 
         raise OrsrScraperError(
             f"ORSR data pre IČO {normalized_ico} sa nepodarilo získať. Posledná URL: {last_url}"
@@ -737,3 +797,18 @@ class OrsrScraper:
             ("obchodn" in probe and "meno" in probe)
             and ("oddiel" in probe or "vložka" in probe or "vypis z obchodn" in probe)
         )
+
+    def _says_no_record(self, html: str) -> bool:
+        """True when the register is saying it holds no such IČO.
+
+        Whitespace is collapsed and the case folded before the comparison, so a
+        change to the markup around the sentence does not break the match. A
+        change to the *sentence* does break it, deliberately -- see
+        `NO_RECORD_MARKER`.
+
+        Only ever consulted when no detail link was found, which is what keeps
+        a results page that carries the phrase somewhere in its furniture from
+        being read as an absence.
+        """
+        probe = re.sub(r"\s+", " ", html).casefold()
+        return NO_RECORD_MARKER in probe

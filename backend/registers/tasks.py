@@ -17,13 +17,13 @@ from companies.models import Company, Watchlist, normalize_legal_form_code
 from core.task_utils import BaseSyncTask
 from .models import CompanySyncStatus, OrsrCompanyProfile
 from .services.sync_engine import (
-    _classify_error,
     _env_int,
     claim_ruz_job,
     complete_job,
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
     fail_job,
+    record_orsr_failure,
     record_orsr_outcome,
     record_ruz_date_outcome,
     rotating_batch,
@@ -716,30 +716,22 @@ def sync_company_orsr_data(company_id: int):
     try:
         profile = service.sync_company(company)
     except OrsrScraperError as exc:
-        # Filed as "network" rather than left to `_classify_error`'s substring
-        # matching, for the reason `sync_company_and_record` gives one source
-        # over: this message carries the ICO inside a URL, so an ICO containing
-        # "500" would be filed as a server error. The scraper raises it after
-        # every transport attempt failed *or* returned nothing it could parse,
-        # and the one thing certainly true of both is that the register was not
-        # read.
-        record_orsr_outcome(
-            company,
-            fetch_ok=False,
-            error=f"{type(exc).__name__}: {exc}",
-            error_type="network",
-        )
+        # Classified by `record_orsr_failure` rather than filed as `"network"`
+        # here, which is what it used to do. The scraper raises this class both
+        # when a request failed and when the register answered that it holds no
+        # such IČO, and calling the second a network error is what kept 249
+        # companies retrying daily against an answer that was never going to
+        # change. It also carries the IČO inside a URL, so `_classify_error`'s
+        # substring matching would file an IČO containing "500" as a server
+        # error -- another reason the verdict is decided from the exception's
+        # type rather than from its text.
+        record_orsr_failure(company, exc)
         raise
     except Exception as exc:
         # A transport failure inside `RpoClient`, or a bug in the reading code.
         # Recorded and re-raised: whatever it was, the company would otherwise
         # leave no trace of having been attempted.
-        record_orsr_outcome(
-            company,
-            fetch_ok=False,
-            error=f"{type(exc).__name__}: {exc}",
-            error_type=_classify_error(exc),
-        )
+        record_orsr_failure(company, exc)
         raise
 
     record_orsr_outcome(

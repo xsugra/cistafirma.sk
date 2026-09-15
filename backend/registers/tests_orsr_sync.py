@@ -2,17 +2,23 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from companies.models import Company
 from registers.integrations.rpo_client import RpoApiError
 from registers.models import CompanySyncStatus, OrsrCompanyProfile
-from registers.scrapers.orsr_scraper import OrsrScraperError
+from registers.scrapers.orsr_scraper import (
+    OrsrNoRecordError,
+    OrsrScraper,
+    OrsrScraperError,
+)
 from registers.services.sync_engine import (
     ANSWERED_RETRY_AFTER,
+    NO_RECORD_RETRY_AFTER,
     RETRY_SHARE,
     companies_due_for_sync,
+    record_orsr_failure,
 )
 from registers.tasks import orsr_sync_batch, schedule_missing_orsr_sync
 
@@ -233,6 +239,259 @@ class OrsrOutcomeRecordingViaCommandsTests(TestCase):
             call_command("sync_orsr_filtered", ico=[self.company.ico])
 
         self.assertEqual(self._status().consecutive_failures, 0)
+
+
+# The register's own page for an IČO it does not carry, abbreviated to the parts
+# that decide the outcome: no detail link, and the sentence. `Záznamy: 0 - 0 / 0`
+# is the counter that precedes it on the real page; it is included because it is
+# the tempting thing to match on, and matching the sentence instead is a decision
+# this class exists to hold in place.
+_NO_RECORD_PAGE = """
+<html><body>
+<p align="center">Záznamy:&nbsp;<b>0&nbsp;-&nbsp;0&nbsp;/&nbsp;0</b></p>
+<p align="center" class="wrn">Kritériám vyhľadávania nezodpovedá žiadny záznam!</p>
+</body></html>
+"""
+
+# The same page with the sentence reworded the way a register might reword it.
+# Nothing in the response says "absent" any more, so the attempt has to fall back
+# to being an unclassified failure -- and wait on the short backoff rather than
+# being parked for a month on a guess.
+_REWORDED_PAGE = """
+<html><body>
+<p align="center">Záznamy:&nbsp;<b>0&nbsp;-&nbsp;0&nbsp;/&nbsp;0</b></p>
+<p align="center" class="wrn">Pre zadané kritériá nebol nájdený žiadny záznam.</p>
+</body></html>
+"""
+
+_RESULTS_PAGE = """
+<html><body>
+<a href="vypis.asp?ID=123&amp;SID=1">31987087</a>
+</body></html>
+"""
+
+_EXTRACT_PAGE = """
+<html><body>
+<span class="tl">Obchodné meno:</span><span class="ra">ORSR Zapísaná s.r.o.</span>
+<span class="tl">Oddiel:</span><span class="ra">Sro</span>
+</body></html>
+"""
+
+
+class _ScriptedResponse:
+    """Enough of a `requests.Response` for `fetch_by_ico`, and nothing else.
+
+    `text` is a plain attribute here rather than a property, so the scraper's
+    `response.encoding = "cp1250"` has nothing to re-decode -- these pages are
+    already the string the register would have handed us.
+    """
+
+    def __init__(self, text: str, url: str = "https://www.orsr.sk/hladaj_ico.asp?ICO=31987087"):
+        self.text = text
+        self.url = url
+        self.encoding = None
+
+    def raise_for_status(self):
+        return None
+
+
+class _ScriptedSession:
+    """Hands out responses in order and remembers what was asked for."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append((url, params))
+        if not self._responses:
+            raise AssertionError(
+                f"the scraper made {len(self.calls)} requests but the test scripted "
+                f"{len(self.calls) - 1}"
+            )
+        return self._responses.pop(0)
+
+
+def _scraper(*responses) -> OrsrScraper:
+    scraper = OrsrScraper()
+    scraper.session = _ScriptedSession(responses)
+    return scraper
+
+
+class OrsrNoRecordTests(SimpleTestCase):
+    """The register answering "I hold no such IČO" is an answer, not a fault.
+
+    Measured on dell 2026-09-15: 249 companies were in this state and were being
+    asked about every day, three requests each, because `fetch_by_ico` raised one
+    generic `OrsrScraperError` for "the request went wrong" and for "the register
+    has nothing" alike, and every call site filed both as `network`. Nothing
+    about that loop could ever have succeeded. RPO was asked directly about three
+    of the IČOs and returned `{"results": []}`, so the register is right.
+    """
+
+    def test_the_registers_own_sentence_is_read_as_an_absence(self):
+        with self.assertRaises(OrsrNoRecordError):
+            _scraper(_ScriptedResponse(_NO_RECORD_PAGE)).fetch_by_ico("31987087")
+
+    def test_an_absence_is_a_kind_of_scraper_error(self):
+        """Every `except OrsrScraperError` in the tree has to keep working.
+
+        Three call sites catch that class to leave a record of the attempt, and
+        recording a *failure* is still the right thing to do here -- it is only
+        the wait and the label that change. A subclass is what buys that.
+        """
+        self.assertTrue(issubclass(OrsrNoRecordError, OrsrScraperError))
+
+    def test_the_absence_costs_one_request_and_not_three(self):
+        """The three spellings are the same question to a classic ASP page.
+
+        `Request.QueryString` is case-insensitive, so `ICO`, `ico` and `Ico` are
+        one request asked three times. Spending the other two after the register
+        has already answered would triple the traffic of exactly the population
+        this whole change is about.
+        """
+        scraper = _scraper(_ScriptedResponse(_NO_RECORD_PAGE))
+        with self.assertRaises(OrsrNoRecordError):
+            scraper.fetch_by_ico("31987087")
+
+        self.assertEqual(len(scraper.session.calls), 1)
+        self.assertEqual(scraper.session.calls[0][1], {"ICO": "31987087"})
+
+    def test_a_contradictory_page_still_reads_as_an_absence(self):
+        """The sentence beats the "does this look like an extract" heuristic.
+
+        Both signals are ours except one: the sentence is the register's own
+        statement about the entity, while `_looks_like_company_extract` is a
+        guess at markup. When they disagree the register is the one that knows.
+        """
+        page = _NO_RECORD_PAGE + _EXTRACT_PAGE
+        with self.assertRaises(OrsrNoRecordError):
+            _scraper(_ScriptedResponse(page)).fetch_by_ico("31987087")
+
+    def test_the_sentence_is_matched_through_markup_and_whitespace(self):
+        page = (
+            '<p class="wrn">Kritériám vyhľadávania\n'
+            "        <b>nezodpovedá</b>\tžiadny záznam!</p>"
+        )
+        with self.assertRaises(OrsrNoRecordError):
+            _scraper(_ScriptedResponse(page)).fetch_by_ico("31987087")
+
+    def test_a_reworded_absence_stays_an_unclassified_failure(self):
+        """The safe side of matching a sentence rather than a count.
+
+        If the register rephrases, we no longer recognise the answer -- and the
+        honest reading of "we do not understand this reply" is a failure to be
+        retried, not a claim that the company does not exist. The opposite
+        choice would take a company out of the queue for a month on a guess.
+        """
+        scraper = _scraper(*(_ScriptedResponse(_REWORDED_PAGE) for _ in range(3)))
+
+        with self.assertRaises(OrsrScraperError) as caught:
+            scraper.fetch_by_ico("31987087")
+
+        self.assertNotIsInstance(caught.exception, OrsrNoRecordError)
+        self.assertEqual(len(scraper.session.calls), 3)
+
+    def test_a_company_the_register_does_carry_is_unaffected(self):
+        """The control: this change must not touch the path that works."""
+        scraper = _scraper(
+            _ScriptedResponse(_RESULTS_PAGE),
+            _ScriptedResponse(_EXTRACT_PAGE, url="https://www.orsr.sk/vypis.asp?ID=123&SID=1"),
+        )
+
+        result = scraper.fetch_by_ico("31987087")
+
+        self.assertEqual(result.ico, "31987087")
+        self.assertEqual(result.source_url, "https://www.orsr.sk/vypis.asp?ID=123&SID=1")
+
+
+class OrsrNoRecordRecordingTests(TestCase):
+    """Two outcomes that used to share a label, a wait and a fate.
+
+    The label is what `source_health` groups by and what an operator reads off
+    the admin column; the wait is what decides whether the company comes back
+    tomorrow or next month. Both are asserted here side by side, because the
+    point of the change is the *difference* between them.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=7703,
+            ico="31987087",
+            nazov_UJ="Cirkev Neevidovaná",
+            pravna_forma="721",
+        )
+
+    def _status(self):
+        return CompanySyncStatus.objects.get(
+            company=self.company, source=CompanySyncStatus.SOURCE_ORSR
+        )
+
+    def _run(self, exc: BaseException):
+        from registers.tasks import sync_company_orsr_data
+
+        def boom(company):
+            raise exc
+
+        service = SimpleNamespace(sync_company=boom)
+        with patch("registers.tasks.RpoSyncService", return_value=service):
+            with self.assertRaises(type(exc)):
+                sync_company_orsr_data(self.company.id)
+
+    def test_an_absence_is_labelled_as_the_register_not_holding_it(self):
+        self._run(OrsrNoRecordError("ORSR neeviduje IČO 31987087"))
+
+        status = self._status()
+        self.assertEqual(status.last_error_type, "not_in_register")
+        self.assertEqual(status.consecutive_failures, 1)
+        self.assertIsNone(status.last_succeeded_at)
+        self.assertIn("neeviduje", status.last_error)
+
+    def test_an_absence_waits_a_month_instead_of_a_day(self):
+        """Backoff is the wrong shape for an answer that cannot change.
+
+        30 days and not a year: ORSR refreshes its public search on its own
+        schedule, so a company registered last month can be missing today and
+        present next month. Re-asking ~250 companies monthly is about eight
+        requests a day; the old schedule spent roughly 750 a day on it.
+        """
+        before = timezone.now()
+        self._run(OrsrNoRecordError("ORSR neeviduje IČO 31987087"))
+
+        next_retry_at = self._status().next_retry_at
+        self.assertIsNotNone(next_retry_at)
+        self.assertGreater(next_retry_at, before + timedelta(days=29))
+        self.assertAlmostEqual(
+            (next_retry_at - before).days, NO_RECORD_RETRY_AFTER.days, delta=1
+        )
+
+    def test_an_absence_does_not_come_back_on_the_next_batch(self):
+        """What the wait is for: the retry lane must not be spent on it.
+
+        `companies_due_for_sync('orsr')` is that lane, and it is sized at a
+        fraction of each batch. A month-long `next_retry_at` is what keeps ~250
+        permanently-absent companies from crowding out the ones a retry can
+        actually help.
+        """
+        self._run(OrsrNoRecordError("ORSR neeviduje IČO 31987087"))
+
+        self.assertNotIn(
+            self.company.id, [s.company_id for s in companies_due_for_sync("orsr")]
+        )
+
+    def test_a_silent_register_is_still_a_network_failure_on_backoff(self):
+        """The contrast that proves the classification is doing work.
+
+        Same task, same company, a different exception -- and the row has to
+        come out labelled and scheduled differently, or the split bought
+        nothing.
+        """
+        before = timezone.now()
+        self._run(OrsrScraperError("ORSR data pre IČO 31987087 sa nepodarilo získať."))
+
+        status = self._status()
+        self.assertEqual(status.last_error_type, "network")
+        self.assertLess(status.next_retry_at, before + timedelta(days=1))
 
 
 def _companies(count: int, *, start: int = 1, **kwargs) -> list[Company]:

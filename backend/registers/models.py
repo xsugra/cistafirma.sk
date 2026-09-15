@@ -520,6 +520,12 @@ class CompanySyncStatus(models.Model):
         ("timeout", "Timeout"),
         ("parse_error", "Parsing chyba"),
         ("network", "Sieťová chyba"),
+        # The register answered, and its answer was that it holds no such
+        # entity. Not a transport fault and not a parsing fault: the distinction
+        # is what keeps a permanent "we do not carry this IČO" out of the
+        # backoff lane, where it was retried daily for ever. See
+        # `sync_engine.record_orsr_failure`.
+        ("not_in_register", "Register neeviduje"),
         ("validation", "Validačná chyba"),
         ("unknown", "Neznáma"),
     ]
