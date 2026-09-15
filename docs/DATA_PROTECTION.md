@@ -104,16 +104,26 @@ therefore writes it once to a machine-local file:
 ```
 
 ```bash
-make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups"
+make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups" \
+    CISTAFIRMA_OFFSITE_GPG_RECIPIENT="<fingerprint>"
 ```
+
+`CISTAFIRMA_OFFSITE_GPG_RECIPIENT` is recorded in the same place and for the same
+reason: the key a replica is encrypted to is per-machine — the host that
+*replicates* holds the public key, the machine that would *restore* holds the
+private one — and the weekly job has no environment to carry it. It is optional
+as an argument and mandatory in practice: replication refuses to run without it,
+because the only alternative is writing the database off-site in the clear. See
+*External encrypted replica* below.
 
 Every backup script sources `scripts/local/lib/backup_env.sh`, which reads that
 file. Precedence is: **an already-exported variable wins**, so one-off overrides
 still work (`make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=/tmp/x`), and
-the same file can carry other `CISTAFIRMA_*` settings — in particular the
-temporary unencrypted-volume exception below. Only `CISTAFIRMA_*` keys are ever
-set, so a stray line cannot inject an unrelated variable. `db-offsite-configure`
-updates the file in place; other keys already in it are preserved.
+the same file can carry other `CISTAFIRMA_*` settings. An exported variable that
+is *empty* does not win — blanking one is not a way to switch a setting off. Only
+`CISTAFIRMA_*` keys are ever set, so a stray line cannot inject an unrelated
+variable. `db-offsite-configure` updates the file in place; other keys already in
+it are preserved.
 
 The weekly job runs `scripts/local/scheduled_backup.sh` — backup, verify, and
 replicate when the off-site destination is really attached — and logs to:
@@ -144,13 +154,68 @@ repository.
 
 ## External encrypted replica
 
-The second copy must be stored on an encrypted volume that is a separate
-filesystem from the local backup. On macOS that is an encrypted external volume;
-on Linux it is a LUKS/dm-crypt filesystem — on a local block device, or on the
-remote host behind an sshfs mount. The replication command requires a destination
-that is really attached, verifies it is on a different filesystem than the local
-backup, and refuses a destination whose encryption it cannot establish. It never
-creates a fallback copy on the internal disk.
+The second copy is encrypted **at source**: the dump is encrypted on this machine,
+before a byte of it is written to the destination. What leaves the host is an
+OpenPGP message, and the name of the artifact says so — the replica is
+`cistafirma_<ts>.dump.gpg`, not `cistafirma_<ts>.dump`.
+
+This is a change of control, not a hardening of one. Before, the question was *is
+the destination volume encrypted?* — a property of a disk, checked by asking the
+platform about it, and true or false whether or not anyone had actually made a
+backup. Now the question is *is this artifact ciphertext, and is it ciphertext to
+the key we mean?* — a property of the file itself. The volume's encryption is
+still measured and still printed, but as **context**: an unencrypted destination
+cannot expose the database if what sits on it is ciphertext, so it is no longer a
+gate. Keeping it as a gate would make the report fail a control that no longer
+exists, and a gate that cries wolf is the failure this whole section exists to
+avoid.
+
+The one rule the encryption code is built around:
+
+> **A missing, unusable or failing key never produces a plaintext replica.**
+
+Encryption that silently falls back to plaintext on error is worse than none,
+because it looks finished. Every failure path in `scripts/local/lib/backup_gpg.sh`
+returns non-zero and leaves no destination file behind; the ciphertext is written
+to a temporary name beside the target and renamed into place only after it has
+been confirmed to be an encrypted OpenPGP message, so a replica either does not
+exist or is complete.
+
+### Key custody
+
+The keypair has two halves, and they belong on different machines. Getting this
+backwards is the mistake that costs the most, so it is worth stating plainly:
+
+| | holds the **public** key | holds the **private** key |
+|---|---|---|
+| where | every host that *writes* a replica | where a *restore* would be run, plus an offline copy in a password manager |
+| can | write and verify replicas | decrypt them |
+| cannot | read any replica it writes | — |
+
+A host with only the public key can still check a great deal about a replica
+without being able to read it: the checksum against the manifest, and — through
+`gpg --list-packets`, which needs no private key and not even a keyring — that the
+file really is a public-key encrypted message and which key ids it is addressed
+to. What it can never establish is that the replica is *decryptable*, and that is
+the one thing worth knowing. So the recovery drill has to run where the private
+key is, and the drill therefore answers two questions at once: that the backup
+restores, and that the key still exists and still works. Key loss is invisible to
+every other control here.
+
+```bash
+make db-offsite-key-generate     # on the machine that will hold the keypair
+make db-offsite-key-export       # write the public key out
+make db-offsite-key-import PUBLIC_KEY_FILE=<file>   # on each host that replicates
+make db-offsite-key-status       # what is set up here, and what is missing
+```
+
+`generate` asks for a passphrase through gpg's own pinentry — never through this
+script's arguments or the process table. It creates an ed25519 signing primary
+key with a **cv25519 encryption subkey**, which matters: a sign-only key reports
+"Unusable public key" the first time a replica is attempted, which is a bad way to
+learn it. `status` reports the private key's presence as its own line rather than
+folding it into "the key is fine", because on the replicating host its absence is
+correct and on the recovery host it is the whole problem.
 
 ### The destination must really be attached
 
@@ -193,8 +258,7 @@ attached, because the failure that matters there is not a failed deletion but a
 successful one in the wrong place.
 
 Record the destination once with `make db-offsite-configure` (see *Where the
-off-site path is recorded*), then after connecting and unlocking the external
-disk:
+off-site path is recorded*), then after connecting the external disk:
 
 ```bash
 make db-backup-replicate BACKUP_FILE="/absolute/path/to/cistafirma_YYYYMMDDTHHMMSSZ.dump"
@@ -207,10 +271,48 @@ The copied archive and manifest are checksum-verified after transfer. Keep the
 disk disconnected except while making or testing a replica. Perform an isolated
 restore drill from the external copy at least monthly.
 
-### What counts as encrypted, per platform
+### What is on the volume, and what is judged
 
-The verdict lives in one place, `scripts/local/lib/offsite_crypto.sh`, so the
-script that copies a dump and the report that checks it can never disagree. Three
+The artifact is the control, and these are the questions asked of it — all of
+them answerable **without a private key**, which is what lets the report run on
+the host that replicates:
+
+- the replica exists, and has a manifest beside it;
+- its checksum matches that manifest;
+- `gpg --list-packets` confirms it is a public-key encrypted OpenPGP message — a
+  file that is merely *named* `.gpg` protects nothing, and this is the only place
+  that can tell the two apart without a private key;
+- the key ids it is addressed to are the configured recipient's.
+
+The last one is not pedantry. A replica encrypted to a key nobody holds any more,
+or to a key that is not the one this machine believes in, looks exactly like a
+working replica from the outside and is discovered at restore time. When the
+configured recipient has no usable key in the keyring, that is reported as a
+failure rather than skipped: "could not check" must not read as "checked, and it
+was fine".
+
+One finding is about the *volume* rather than the artifact, and it is a failure:
+an unencrypted `cistafirma_*.dump` sitting there from a version of the tooling
+that predates encrypt-at-source. That is the entire database in the clear. It is
+only detectable while the volume is attached, which is also the only moment it
+can be removed, so the fix is printed with the finding:
+
+```bash
+make db-backup-prune PRUNE_ARGS="--offsite"                 # dry run, lists them
+make db-backup-prune PRUNE_ARGS="--apply --offsite"         # remove them
+```
+
+Retention knows both artifact shapes — `cistafirma_*.dump` locally,
+`cistafirma_*.dump.gpg` off-site. That distinction is load-bearing: a rule that
+counted `.dump` files off-site would find none, report "nothing to prune" for
+ever, and grow without bound. A retention control that silently does nothing is
+worse than none, because the space it was meant to free is believed freed.
+
+### Volume encryption, per platform (context, not a gate)
+
+The verdict still lives in one place, `scripts/local/lib/offsite_crypto.sh`, so
+the script that reports it and the script that prints it can never disagree. It is
+printed by `make db-offsite-status` on its own line, marked as context. Three
 cases, and three verdicts (`encrypted`, `unencrypted`, `unknown`):
 
 - **macOS, any destination** — `diskutil info <mount point>` must report
@@ -225,36 +327,37 @@ cases, and three verdicts (`encrypted`, `unencrypted`, `unknown`):
   timeout). The remote is derived from the mount source, or from
   `CISTAFIRMA_OFFSITE_SSH_TARGET=user@host:/path` when it cannot be.
 - **Anything else** — `unknown`, including a FUSE mount whose remote check could
-  not answer. `unknown` **fails exactly like `unencrypted`**; it is not a milder
-  verdict, it is the same failure with the uncomfortable detail that nobody
-  actually looked.
+  not answer.
 
-### Temporary unencrypted-volume exception
+Making the volume's encryption the control was the reason the off-site gate could
+not pass on Linux at all: the known target host is `/dev/sda3`, ext4, with no LUKS
+layer anywhere in its device stack (`lsblk -s -no NAME,TYPE,FSTYPE` → `sda3 part
+ext4` under `sda disk`), and the operator has no passwordless `sudo` to create one
+(`sudo -n true` → `a password is required`). Encrypting at source removes that
+dependency rather than routing around it: the destination's own encryption stops
+being load-bearing, so a host that cannot be given a LUKS container can still hold
+a replica it cannot read. Encrypting the destination volume remains worthwhile —
+it protects the *filenames*, the manifest's metadata, and anything else that
+lands on the disk later — but it is defence in depth now, not the control.
 
-An unencrypted external volume is not an acceptable long-term backup target.
-Only when explicitly approved for temporary use may the copy proceed with:
+### The unencrypted-volume token is retired
 
-```bash
-make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="/Volumes/<disk>/cistafirmaBackups" \
-    CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true
+`CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP` used to be the token that let a copy
+proceed to a destination whose encryption was **not established** (it never made
+an unencrypted destination count as encrypted). It is no longer consulted by the
+gate, because the volume verdict is no longer a gate. The variable is still read,
+and `make db-offsite-status` emits a warning while it is set:
+
+```
+WARN  CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP is still set and is no longer
+      needed — the replica is encrypted before it is written; remove the line or
+      set it to false
 ```
 
-(or `export CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true` for a single
-interactive run). Set it through the config file, not only an export, whenever
-the **weekly job** must keep working — a scheduler starts a job with almost no
-environment, so an `export` in a terminal never reaches it.
-
-The token is the one control whose meaning did not change in the port, and it
-must not be widened: it accepts a destination whose encryption was **not
-established**, it never makes an unencrypted destination count as encrypted. On
-Linux it is currently the only way the off-site gate can pass at all, because the
-known target host has no LUKS container — a destination that is honestly
-unencrypted is *supposed* to fail this gate.
-
-This exception is logged to stderr by the replication script and must be removed
-after the external volume is encrypted. Treat the unencrypted disk as containing
-confidential company data: keep it physically secured and disconnected when not
-performing backup or recovery work.
+Remove it from `~/.config/cistafirma/backup.env`. Leaving it in place is how a
+temporary exception becomes permanent — the state this section was written to
+avoid — and a token that is still set is still evidence that someone once decided
+the destination was not good enough.
 
 ## Isolated restore drill
 
@@ -592,15 +695,53 @@ never fail on something these docs describe as normal.
 ## Off-site setup runbook (required control)
 
 An off-host replica is the only protection against loss of this computer. The
-replication tooling already exists and fails closed; what is required is the
-encrypted destination plus one verified retrieval.
+replication tooling already exists and fails closed; what is required is a
+keypair, a destination, and one verified retrieval.
 
-1. Connect an external disk and encrypt its volume. On an **empty** disk, erase
-   it as **APFS (Encrypted)** in Disk Utility. On a disk that already holds
-   data — including one that already holds a replica — do **not** erase it;
-   encrypt it in place instead. This is non-destructive and the volume stays
-   readable and writable throughout, so a disk does not have to be empty — or
-   to be dedicated to backups — before it can be encrypted:
+1. **Create the backup keypair where a recovery would run.** Not necessarily on
+   the host that replicates — the private key belongs where you would actually
+   restore, plus an offline copy in a password manager:
+
+   ```bash
+   make db-offsite-key-generate     # asks for a passphrase via gpg's pinentry
+   make db-offsite-key-export       # writes <state dir>/gpg/cistafirma-backup-public.asc
+   ```
+
+   Note the fingerprint it prints; it is the only thing tying the public half to
+   this keypair. Store the passphrase next to the private key in the password
+   manager, and keep an exported copy of the **secret** key there too — a
+   passphrase you have and a key you do not is not a recovery.
+
+2. **Give the public key to every host that replicates.**
+
+   ```bash
+   make db-offsite-key-import PUBLIC_KEY_FILE=<the file from step 1>   # on that host
+   make db-offsite-key-status                                          # there
+   ```
+
+   Compare the fingerprint it prints against the one on the machine that
+   exported it before trusting it. `status` reports `private key: absent` on a
+   replicating host — that is correct there, not a problem to fix. On the host
+   that holds the keypair it must say `present`.
+
+3. **Create the target directory and record it**, together with the recipient:
+
+   ```bash
+   mkdir -p "/Volumes/<disk>/cistafirmaBackups"        # macOS
+   mkdir -p /mnt/cistafirma-offsite                    # Linux (or the sshfs mount point)
+   make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="<that directory>" \
+       CISTAFIRMA_OFFSITE_GPG_RECIPIENT="<fingerprint from step 1>"
+   ```
+
+   On Linux the directory is often an automount point that exists whether or not
+   the target is reachable, so the status command below is what tells the two
+   apart — see *The destination must really be attached*.
+
+   Encrypting the destination volume as well is still worthwhile — it protects
+   the filenames and the manifest metadata, and anything else that lands on the
+   disk — but it is no longer what protects the database, and the off-site gate
+   no longer turns on it. On macOS, an APFS volume on a disk that already holds
+   data can be encrypted in place, without erasing it:
 
    ```bash
    diskutil apfs encryptVolume <apfsVolumeDisk> -user disk
@@ -614,43 +755,9 @@ encrypted destination plus one verified retrieval.
    measured on an external USB disk, and whether the background pass completes
    without incident on one is Apple's design intent rather than a verified
    result: keep the disk connected and powered until the conversion is done.
+   Save the passphrase in the password manager.
 
-   Either way the replication script refuses volumes that do not report
-   encryption through `diskutil`. Save the passphrase in a password manager.
-
-   On **Linux** there is no vendor tool to ask, so the destination must be a
-   LUKS/dm-crypt filesystem and the check reads that from the device stack
-   (`cryptsetup status`, `lsblk -s`). Where the destination is an **sshfs** mount
-   (`user@host:/path`, normally created by an fstab entry with
-   `x-systemd.automount`), the bytes are on the remote host, so the same check is
-   performed there **over SSH**: unattended `ssh` to that host must work for the
-   backup user (key-based, host key already known) or the verdict is `unknown`
-   and the copy is refused. A destination that is honestly unencrypted fails this
-   gate on Linux exactly as it does on macOS — there is no Linux exemption, and
-   the only way past it is the same
-   `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true` token. The known Linux
-   target is `/dev/sda3`, ext4, with no LUKS layer anywhere in its device stack
-   (`lsblk -s -no NAME,TYPE,FSTYPE` → `sda3 part ext4` under `sda disk`), and the
-   operator has no passwordless `sudo` to create one (`sudo -n true` → `a password
-   is required`), so that gate **cannot** pass there today. Note which verdict
-   that produces: `lsblk` answers, and answers *no*, so the remote check reports
-   `unencrypted` — not `unknown`. The refusal is a finding about the destination,
-   not a limitation of the check. That is the control working, not a bug to route
-   around: the honest options are to encrypt the target, or to run with the token
-   while the gap is open.
-2. Create the target directory and record it on this machine:
-
-   ```bash
-   mkdir -p "/Volumes/<disk>/cistafirmaBackups"        # macOS
-   mkdir -p /mnt/cistafirma-offsite                    # Linux (or the sshfs mount point)
-   make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="<that directory>"
-   ```
-
-   On Linux the directory is often an automount point that exists whether or not
-   the target is reachable, so the status command below is what tells the two
-   apart — see *The destination must really be attached*.
-
-3. Make and replicate a verified backup:
+4. **Make and replicate a verified backup:**
 
    ```bash
    make db-backup
@@ -658,9 +765,14 @@ encrypted destination plus one verified retrieval.
    make db-offsite-status   # must print: Off-site backup controls: SATISFIED
    ```
 
-4. Install the weekly schedule so this repeats unattended. Do this *after*
-   step 2 — the job reads the recorded path from `~/.config/cistafirma/backup.env`,
-   and it cannot see an `export` from your shell:
+   If it stops with *no OpenPGP recipient is configured*, step 3 has not been
+   done on this machine — and that refusal is the feature: an unencrypted
+   replica is never written.
+
+5. **Install the weekly schedule** so this repeats unattended. Do this *after*
+   step 3 — the job reads the recorded path and recipient from
+   `~/.config/cistafirma/backup.env`, and it cannot see an `export` from your
+   shell:
 
    ```bash
    make db-backup-schedule-install
@@ -673,9 +785,11 @@ encrypted destination plus one verified retrieval.
    either `off-site volume detected; replicating` or an explicit warning naming
    what is missing. It must **not** be silent about the replica.
 
-5. At least monthly, restore the newest off-site dump **from a different
+6. **At least monthly, restore the newest off-site replica from a different
    machine** (or after a simulated disk loss) with `make db-restore-drill`,
-   proving retrieval from a second failure domain.
+   proving retrieval from a second failure domain — and, because the replica is
+   encrypted, proving the private key is still in hand on that machine. A drill
+   of a `.gpg` replica is the only control that can catch key loss.
 
-Until step 3 has produced a verified replica, the local backup is an important
+Until step 4 has produced a verified replica, the local backup is an important
 first layer — not a complete disaster-recovery solution.

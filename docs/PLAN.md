@@ -2899,6 +2899,49 @@ ktoré pri poruche kľúča spadne späť na plaintext, je horšie než žiadne,
 lebo vyzerá ako hotové. Preto sa `replicate` pri chybe gpg **zastaví**, a to
 istým spôsobom ako dnes pri neoverenom zväzku.
 
+#### Stav implementácie (2026-09-15) — hotové a overené
+
+Všetky štyri miesta z tabuľky sú prepísané a **prešli end-to-end testom** na
+ostrej druhej filesystéme (pripojený disk image), s reálnym `pg_dump`om
+z odhodeného `postgres:16-alpine` kontajnera a s **kľúčenkou, ktorá má len
+verejný kľúč** — teda v takom usporiadaní, v akom pobeží dell:
+
+| čo sa overilo | výsledok |
+|---|---|
+| `replicate` zašifruje na zdroji, na kľúčenke bez súkromného kľúča | áno, `X.dump.gpg` + `.json` |
+| na zväzku nezostane plaintext | áno (a `offsite_status` naň padá) |
+| `verify` overí `.gpg` bez súkromného kľúča | áno, cez manifest + `--list-packets` |
+| `offsite_status` súdi artefakt, zväzok len ako kontext | áno |
+| poškodený `.gpg` (checksum) | chytené |
+| `.gpg`, ktoré nie je ciphertext (checksum sedí) | chytené |
+| `prune --offsite` pozná `.gpg` a uprace plaintextové zvyšky | áno (dry-run aj `--apply`) |
+| drill zo **šifrovanej** repliky | prejde a zároveň dokáže, že kľúč je k dispozícii |
+| drill bez súkromného kľúča | odmietne, s vysvetlením oboch príčin |
+| `replicate` bez nakonfigurovaného príjemcu | odmietne, **nič nezapíše** |
+| `replicate` s príjemcom, na ktorý kľúčenka nemá kľúč | odmietne, **nič nezapíše** |
+| prázdna exportovaná premenná `CISTAFIRMA_OFFSITE_GPG_RECIPIENT` | **nevypne** šifrovanie (vyhráva súbor) |
+
+Nová je aj obsluha kľúča — `make db-offsite-key-generate` / `-export` /
+`-import` / `-status` (`scripts/local/gpg_backup_key.sh`) a `replicate` už
+účtuje príjemcu do záznamu o replike. Kľúč sa generuje s **`default default
+never`**, teda ed25519 podpisový primár + cv25519 **šifrovací** podkľúč: kľúč
+len na podpis ohlási pri prvom zápise repliky „Unusable public key", čo je zlý
+spôsob, ako sa to dozvedieť.
+
+**Čo tým padá:** `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP` prestáva byť
+vstupom brány (zväzok už nie je to, čo chráni databázu). Premenná sa už len
+číta a `offsite_status` na ňu píše `WARN`, kým je nastavená — na Macu teda
+treba ten riadok z `~/.config/cistafirma/backup.env` odstrániť. Tým zároveň
+mizne dôvod, prečo off-site brána nemohla na Linuxe prejsť vôbec: `/dev/sda3`
+je ext4 bez LUKS a bez passwordless `sudo` ju vytvoriť nemožno — šifrovanie na
+zdroji tú závislosť **ruší**, neobchádza.
+
+**Ešte nie je hotové:** samotný kľúč na Macu ešte neexistuje a na delle nie je
+jeho verejná polovica. To je krok 1 runbooku a robí sa raz, ručne —
+`make db-offsite-key-generate` sa pýta na passphrase, ktorá patrí do password
+managera, takže to nie je vec, ktorú by mal spustiť agent. Patrí to k #105
+(off-site na lenovo), spolu s pripojením zväzku.
+
 **Postup migrácie, v poradí (D1 a D2 sú rozhodnuté, takto sa to spraví):**
 
 1. **Autorizovať Tailscale na delle** → `tailscale status` je up, `gitlab-home`
