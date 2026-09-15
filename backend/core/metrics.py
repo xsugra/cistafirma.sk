@@ -61,6 +61,15 @@ if METRICS_AVAILABLE:
     # REGISTRY would return a single worker's view. Without the variable (tests,
     # runserver, management commands) the default registry is correct and
     # additionally carries the process/python collectors.
+    #
+    # Read-only here on purpose. `prometheus_client` chose its value class when
+    # it was first imported, which happens before this module is reached (the
+    # first metric in any Django process is built at import time by
+    # `companies.models`), so by now the choice is frozen and nothing in this
+    # file could change it. The variable is settled once, from `settings.py`,
+    # through `core/prometheus_env.py` -- including the empty-value case, where
+    # the library's presence test and this truthiness test would otherwise
+    # disagree. This line only asks which mode is in force.
     _MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
 
     if _MULTIPROC_DIR:

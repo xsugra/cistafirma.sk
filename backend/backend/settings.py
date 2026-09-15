@@ -6,6 +6,8 @@ from urllib.parse import urlparse, urlunparse
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
+from core.prometheus_env import ensure_multiproc_dir, normalize_multiproc_env
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -50,6 +52,22 @@ if _raw_metrics_enabled not in {'true', 'false', '1', '0', 'yes', 'no'}:
         f'METRICS_ENABLED must be a boolean-ish value, got {_raw_metrics_enabled!r}'
     )
 METRICS_ENABLED = _raw_metrics_enabled in {'true', '1', 'yes'}
+
+# PROMETHEUS_MULTIPROC_DIR is settled here, and only here, because this is the
+# only place early enough to settle it. prometheus_client freezes its choice of
+# value class at the import of `prometheus_client.values`, on the *presence* of
+# the variable, while every reader in this repo tests its value; and the first
+# metric in the process is built at import time by `companies.models`. The two
+# failures that follow from that mismatch -- counters mmapped into the working
+# directory, and a configured-but-missing directory killing the process at
+# import -- are documented in full in `core/prometheus_env.py`.
+#
+# This sits after the `load_dotenv` calls above on purpose: a `.env` that sets
+# the variable to nothing must be normalised too, and loading it afterwards
+# would put the empty value straight back.
+_prometheus_multiproc_dir = normalize_multiproc_env()
+if _prometheus_multiproc_dir:
+    ensure_multiproc_dir(_prometheus_multiproc_dir)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 _default_secret = 'django-insecure-nq_rv8nr_-xa(y^)la9g$rguj_k4^19t5gj7xi)0%me!n8g0ma'
