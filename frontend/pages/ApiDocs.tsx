@@ -344,18 +344,19 @@ const SECTIONS: Section[] = [
   },
 ];
 
-const AUTH_FLOW = `1. POST /api/auth/token/ → access + refresh token
-2. localStorage.setItem('token', access)
+const AUTH_FLOW = `1. POST /api/auth/token/ → access (30 min) + refresh (1 deň)
+2. Oba tokeny sa uložia spolu: localStorage pri „Zapamätať prihlásenie", inak sessionStorage
 3. Každý request: Authorization: Bearer <access>
-4. Pri 401: localStorage.removeItem('token') + logout
-5. AuthContext počúva event → automatický logout`;
+4. Pri 401: jeden POST /api/auth/token/refresh/ → nový access aj refresh,
+   pôvodný request sa zopakuje — prihlásenie teda nekončí po 30 minútach
+5. Ak refresh zlyhá alebo neexistuje: tokeny sa zmažú + event → automatický logout`;
 
 const ERROR_CODES = [
   { code: 200, meaning: 'Úspešné čítanie' },
   { code: 201, meaning: 'Úspešné vytvorenie' },
   { code: 204, meaning: 'Úspešné vymazanie (bez body)' },
   { code: 400, meaning: 'Validačná chyba' },
-  { code: 401, meaning: 'Neplatný/expirovaný token → automatický logout' },
+  { code: 401, meaning: 'Neplatný/expirovaný token → pokus o obnovenie, inak automatický logout' },
   { code: 403, meaning: 'CSRF / Forbidden' },
   { code: 404, meaning: 'Nenájdené' },
   { code: 500, meaning: 'Interná chyba servera' },

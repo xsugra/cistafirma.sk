@@ -3,6 +3,7 @@ import type {ReactElement} from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {AuthProvider} from '../context/AuthContext';
 import {ThemeProvider} from '../context/ThemeContext';
+import {clearSession, saveSession} from '../lib/tokenStore';
 import type {Company, Financials, User} from '../types';
 
 export const DEFAULT_USER: User = {
@@ -149,10 +150,12 @@ export const renderWithProviders = (
     ui: ReactElement,
     {route = '/', authenticated = false}: {route?: string; authenticated?: boolean} = {},
 ) => {
+    // Both storages, because these tests start from an unknown one: the store
+    // reads whichever holds the token, and a leftover from an earlier test in
+    // the same file would otherwise sign in a case that asked to be anonymous.
+    clearSession();
     if (authenticated) {
-        localStorage.setItem('token', 'test-token');
-    } else {
-        localStorage.removeItem('token');
+        saveSession({access: 'test-token', refresh: 'test-refresh'}, true);
     }
     return render(
         <MemoryRouter initialEntries={[route]}>

@@ -13,6 +13,11 @@ export const Login: React.FC = () => {
     const [identifier, setIdentifier] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    // Ticked by default: the box decides whether the session outlives the tab,
+    // and a reader who has to sign in again every morning is the complaint this
+    // answers. Unticking it is a real choice with a real effect -- see
+    // `tokenStore`, which puts an unticked session in `sessionStorage`.
+    const [remember, setRemember] = useState(true);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -21,8 +26,8 @@ export const Login: React.FC = () => {
         setLoading(true);
         setError('');
         try {
-            const data: any = await api.login(identifier, password);
-            login(data.user, data.token);
+            const data = await api.login(identifier, password);
+            login(data.user, {access: data.token, refresh: data.refresh}, remember);
             navigate(postAuthDestination(location.state), {replace: true});
         } catch (err: any) {
             setError(err.message || 'Prihlásenie zlyhalo. Skontrolujte svoje údaje.');
@@ -46,12 +51,20 @@ export const Login: React.FC = () => {
 
             <form onSubmit={handleSubmit} className="space-y-5">
                 <div className="form-group">
-                    <label className="form-label">Email alebo používateľské meno</label>
+                    <label className="form-label" htmlFor="login-identifier">Email alebo používateľské meno</label>
                     <div className="input-wrapper">
                         <i className="fas fa-user input-icon"></i>
+                        {/* `id`/`name`/`autoComplete` together: Chrome refuses to
+                            autofill a field without an id or a name, and says so
+                            in the console. The name is what the browser keys the
+                            saved credential on, so it is also what makes the
+                            password manager fill this form at all. */}
                         <input
+                            id="login-identifier"
+                            name="identifier"
                             type="text"
                             required
+                            autoComplete="username"
                             value={identifier}
                             onChange={(e) => setIdentifier(e.target.value)}
                             className="app-input"
@@ -62,7 +75,7 @@ export const Login: React.FC = () => {
 
                 <div className="form-group">
                     <div className="flex justify-between items-center mb-1">
-                        <label className="form-label mb-0">Heslo</label>
+                        <label className="form-label mb-0" htmlFor="login-password">Heslo</label>
                         <button type="button" onClick={() => alert('Funkcia obnovy hesla bude čoskoro dostupná.')}
                                 className="text-xs text-blue-600 hover:text-blue-700 font-medium">Zabudli ste?
                         </button>
@@ -70,8 +83,11 @@ export const Login: React.FC = () => {
                     <div className="input-wrapper relative">
                         <i className="fas fa-lock input-icon"></i>
                         <input
+                            id="login-password"
+                            name="password"
                             type={showPassword ? "text" : "password"}
                             required
+                            autoComplete="current-password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             className="app-input pr-10"
@@ -89,9 +105,18 @@ export const Login: React.FC = () => {
                 </div>
 
                 <div className="flex items-center text-sm mb-2">
+                    {/* The box wraps the input, so the text is its label and the
+                        whole line is the click target. It carries the same
+                        wording as before and now means something: ticked, the
+                        session goes to `localStorage` and outlives the browser;
+                        unticked, to `sessionStorage` and ends with the tab. */}
                     <label
                         className="flex items-center text-gray-600 dark:text-gray-400 cursor-pointer select-none group">
                         <input type="checkbox"
+                               id="login-remember"
+                               name="remember"
+                               checked={remember}
+                               onChange={(e) => setRemember(e.target.checked)}
                                className="mr-2 w-4 h-4 rounded border-gray-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500 transition-colors"/>
                         <span className="group-hover:text-gray-800 dark:group-hover:text-gray-200 transition-colors">Zapamätať prihlásenie</span>
                     </label>

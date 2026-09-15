@@ -1,12 +1,25 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../api';
+import {
+    clearSession,
+    getAccessToken,
+    getRefreshToken,
+    saveSession,
+} from '../lib/tokenStore';
+import type { TokenBundle } from '../lib/tokenStore';
 import type { User } from '../types';
 
 interface AuthContextType {
     user: User | null;
     isAuthenticated: boolean;
-    login: (user: User, token: string) => void;
+    /**
+     * `remember` is the "Zapamätať prihlásenie" box: it decides whether the
+     * session goes to `localStorage` (survives closing the browser) or to
+     * `sessionStorage` (ends with the tab). The box had no state at all before
+     * this, so it promised something it never did.
+     */
+    login: (user: User, tokens: TokenBundle, remember: boolean) => void;
     logout: () => void;
     isLoading: boolean;
 }
@@ -18,12 +31,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [isLoading, setIsLoading] = useState(true);
 
     const logout = () => {
-        localStorage.removeItem('token');
+        clearSession();
         setUser(null);
     };
 
-    const login = (userData: User, token: string) => {
-        localStorage.setItem('token', token);
+    const login = (userData: User, tokens: TokenBundle, remember: boolean) => {
+        saveSession(tokens, remember);
         setUser(userData);
     };
 
@@ -42,8 +55,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         const initAuth = async () => {
-            const token = localStorage.getItem('token');
-            if (token) {
+            // Either token is enough to try. With a refresh token and no access
+            // token the request goes out unauthenticated, is refused, and comes
+            // back on the refresh -- which is the same path an expired access
+            // token takes, so there is no second one to write here.
+            if (getAccessToken() || getRefreshToken()) {
                 try {
                     // This will now use the centralized 'request' in api.js.
                     // If it fails with 401, the event listener above will handle it.

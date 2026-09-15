@@ -13,6 +13,7 @@ import type {
   SyncJob,
 } from './types';
 import { apiRequest } from '../lib/apiClient';
+import { getAccessToken } from '../lib/tokenStore';
 
 const API_BASE = '/api/admin';
 
@@ -22,7 +23,10 @@ function adminRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T
 }
 
 async function adminDownload(endpoint: string, params?: Record<string, string | number | boolean | undefined | null>): Promise<Blob> {
-  const token = localStorage.getItem('token');
+  // Through the store, not `localStorage` directly: an unticked "remember"
+  // session lives in `sessionStorage`, and reading only one of the two would
+  // download the report as an anonymous request.
+  const token = getAccessToken();
   const filtered = Object.fromEntries(
     Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
   ) as Record<string, string>;

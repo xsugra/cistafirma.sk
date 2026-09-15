@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../constants';
+import { clearSession, getAccessToken, getRefreshToken, updateSession } from './tokenStore';
 
 const ERROR_TRANSLATIONS: Record<string, string> = {
   'user with this email address already exists.': 'Používateľ s týmto emailom už existuje.',
@@ -107,22 +108,87 @@ async function parseErrors(response: Response): Promise<string> {
   }
 }
 
+/**
+ * The endpoints that mint tokens.
+ *
+ * A 401 from either is an answer to what was asked -- a wrong password, a spent
+ * refresh token -- and not an expiry to recover from. Refreshing on one of them
+ * would spend a request to be told the same thing twice.
+ */
+const TOKEN_ENDPOINTS = '/auth/token';
+
+/**
+ * One refresh, however many requests are refused at once.
+ *
+ * A page that loads a firm and its people and its financials fires several
+ * requests together; when the access token has expired they all answer 401 in
+ * the same tick. Without a single shared promise each one would POST its own
+ * refresh, and the rotation would leave all but the last response holding a
+ * refresh token that has already been superseded.
+ */
+let refreshInFlight: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refresh = getRefreshToken();
+  if (!refresh) return null;
+
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}${TOKEN_ENDPOINTS}/refresh/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh }),
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        if (!data?.access) return null;
+        // The backend rotates: this answer carries a new refresh token with a
+        // fresh lifetime, and that is what makes a session slide forward instead
+        // of ending one day after it began.
+        updateSession({ access: data.access, refresh: data.refresh ?? null });
+        return data.access as string;
+      } catch {
+        return null;
+      }
+    })();
+    refreshInFlight.finally(() => {
+      refreshInFlight = null;
+    });
+  }
+
+  return refreshInFlight;
+}
+
 export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {},
   baseUrl: string = API_BASE_URL,
 ): Promise<T> {
-  const token = localStorage.getItem('token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...((options.headers as Record<string, string>) || {}),
-  };
+  const send = (token: string | null) =>
+    fetch(`${baseUrl}${endpoint}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...((options.headers as Record<string, string>) || {}),
+      },
+    });
 
-  const response = await fetch(`${baseUrl}${endpoint}`, { ...options, headers });
+  let response = await send(getAccessToken());
 
+  // An access token lives 30 minutes. A session that is still usable must not
+  // end there: refresh once, silently, and repeat the request that was refused.
+  if (response.status === 401 && !endpoint.startsWith(TOKEN_ENDPOINTS)) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) response = await send(refreshed);
+  }
+
+  // Reached when there was no refresh token, when the refresh itself was
+  // refused, or when the retry was refused too -- all three mean the same thing
+  // to the reader, and none of them is survivable without a sign-in.
   if (response.status === 401) {
-    localStorage.removeItem('token');
+    clearSession();
     window.dispatchEvent(new CustomEvent('auth:unauthorized'));
     throw new ApiError('Platnosť prihlásenia vypršala. Prihláste sa prosím znova.', 401);
   }

@@ -71,10 +71,17 @@ interface SearchResult {
 interface TokenResponse {
   access?: string;
   token?: string;
+  /**
+   * Carried, not dropped. It used to be read past: `access` was taken and the
+   * refresh token thrown away, which left an expired access token with nothing
+   * to recover from and signed the reader out 30 minutes after every sign-in.
+   */
+  refresh?: string;
 }
 
 interface LoginResult {
   token: string;
+  refresh: string | null;
   user: User;
 }
 
@@ -683,9 +690,13 @@ export const api = {
     if (ENABLE_MOCK_DATA) {
       return new Promise((resolve) => {
         setTimeout(() => {
-          localStorage.setItem('token', 'mock-jwt-token-12345');
+          // No storage write here: `AuthContext.login` owns that, so the mock
+          // session lands in the same place a real one does and the "remember"
+          // box behaves the same either way.
           resolve({
             token: 'mock-jwt-token-12345',
+            // A mock sign-in has no backend to refresh against.
+            refresh: null,
             user: {
               id: 'u1',
               email: 'jozef@example.com',
@@ -717,7 +728,11 @@ export const api = {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
-    return { token: accessToken, user: mapUserResponse(rawUserProfile) };
+    return {
+      token: accessToken,
+      refresh: tokenResponse.refresh ?? null,
+      user: mapUserResponse(rawUserProfile),
+    };
   },
 
   register: async (userData: UserPayload): Promise<{ success: boolean }> => {
