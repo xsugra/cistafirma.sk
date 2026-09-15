@@ -19,10 +19,11 @@ def move_the_birth_date_out_of_the_address(apps, schema_editor):
 
         name:matej vacha|addr:datum narodenia: 20.08.1992
 
-    Measured 2026-09-15: **14** `Person` rows of 121 257 carry the line, and in
-    all 14 it is the *whole* address -- the register stated no address for that
-    entry at all. So each one holds a fingerprint that no future read can
-    produce, because the reader no longer puts the line into the address.
+    Measured 2026-09-15 on the live table: **14** `Person` rows of 121 558 carry
+    the line, and in all 14 it is the *whole* address -- the register stated no
+    address for that entry at all. So each one holds a fingerprint that no
+    future read can produce, because the reader no longer puts the line into the
+    address.
 
     That is what makes leaving them alone the harmful choice rather than the
     cautious one. Every one of those people is in a company that ORSR re-reads
@@ -35,12 +36,15 @@ def move_the_birth_date_out_of_the_address(apps, schema_editor):
 
     Two shapes, and the second is why this migration reads the way it does:
 
-    * **13 rows** the cleaned key is free for -- a plain `UPDATE` of `address`,
+    * **11 rows** the cleaned key is free for -- a plain `UPDATE` of `address`,
       `fingerprint` and the new `birth_date`;
-    * **1 row** (`id=44903`, Matej Vácha) where the cleaned key is already taken
-      by `id=44904`, the same name in the same company, created 2.8 ms later
-      from the *same document* -- `spolocníci` and `statutárny orgán` wrote the
-      same person twice, and only one of the two says the date. There the
+    * **3 rows** the cleaned key is already taken for, and each is the same
+      shape. `id=44903` (Matej Vácha) is the clearest: the key is held by
+      `id=44904`, the same name in the same company, created 2.8 ms later from
+      the *same document* -- `spolocníci` and `statutárny orgán` wrote the same
+      person twice, and only one of the two says the date. `id=25225` (Zoltán
+      Baláž, held by `25227`, 13.9 ms later) and `id=25226` (Marek Labuda, held
+      by `25228`, 8.2 ms later) are the same thing in company 29861. There the
       source row is unreachable by construction, so it is absorbed: its
       relations move to the row the parser reaches (their role and start date
       do not clash there), its birth date fills the target's empty column, and

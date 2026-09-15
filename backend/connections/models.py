@@ -69,12 +69,14 @@ class Person(models.Model):
     # written once with the line and once without got two `Person` rows, which is
     # the split `connections.identity` documents and refuses to merge away.
     #
-    # Measured 2026-09-15: 14 `Person` rows carry the prefix in `address`, out of
-    # 115 096. Those keep their fingerprints -- every stored value still has to
-    # reproduce from the row's own fields, and rewriting one to drop the date
-    # would collide with the row that already holds the bare spelling (both
-    # fingerprints are unique). The column is filled for them from the sentence
-    # they already carry; only new reads write it from the parser.
+    # Measured 2026-09-15 on the live table: 14 `Person` rows carry the prefix in
+    # `address`, out of 121 558, and in all 14 it is the *whole* address -- the
+    # register stated no address for those entries at all. Migration
+    # `connections/0004` re-keys 11 of them to the bare spelling and absorbs the
+    # other 3 into the row that already holds it, so no stored fingerprint is
+    # left one that no future read can reproduce. The column is filled from the
+    # sentence those rows already carried; only new reads write it from the
+    # parser.
     #
     # `NULL` is "the register did not state it", which is every row but those 14
     # -- an empty date and an unknown date are the same claim here, and only one

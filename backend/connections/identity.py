@@ -36,9 +36,11 @@ deliberately refuses:
   postcode is not unique to a municipality (Hrnčiarska Ves and Hrnčiarske
   Zalužany are both 980 13), and PSČ 040 01 alone holds 1 284 `Person` rows;
 * the one signal that could refute a wrong merge -- a birth date -- reached this
-  module on 14 rows of 121 257, and no name group held two. It is now read from
-  `Person.birth_date` (migration `connections/0004`) and used to *refuse* joins,
-  which is all it is good for at that prevalence;
+  module on 14 rows out of 121 558 (measured 2026-09-15, and no *name group*
+  held two dates: each of the three collisions this table had was a dated row
+  against an undated one). It is now read from `Person.birth_date` (migration
+  `connections/0004`) and used to *refuse* joins, which is all it is good for
+  at that prevalence;
 * no read path filters a merged marker, so a wrong merge is invisible in the
   product: it shows a role the register never states, permanently.
 
@@ -182,7 +184,7 @@ def cluster_evidence(rows):
     direction of joining two people; this one can only ever refuse, so a wrong
     answer from it is a visible split rather than an invisible fusion. It was
     written when the register's date line was being stored as an address and so
-    was unreadable as evidence (14 rows of 121 257, no name group holding two);
+    was unreadable as evidence (14 rows, no name group holding two dates);
     it is here because the column now holds it and because this is the one
     signal that can contradict a merge instead of merely failing to confirm it.
 

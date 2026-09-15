@@ -125,8 +125,9 @@ class BirthDateTests(TestCase):
     unrecognised line of a person's block, and because `compute_fingerprint`
     keys a row by the last non-numeric part of its address, the date became the
     row's *identity* -- so the same officer written once with the line and once
-    without produced two `Person` rows. Measured 2026-09-15: 14 rows of 121 257
-    carried it, and in every one of them it was the whole address.
+    without produced two `Person` rows. Measured 2026-09-15: 14 rows of 121 558
+    carried it, in every one of them as the whole address, and migration
+    `connections/0004` repaired all 14 (11 re-keyed, 3 absorbed).
     """
 
     def setUp(self):
