@@ -220,6 +220,19 @@ Oba obrazy (`postgres:16-alpine`, `redis:7-alpine`) museli pribudnúť do
 `/home/sam/gitlab-runner/setup-config.sh` (jediný zdroj pravdy pre `config.toml`)
 a prejaví sa po reštarte runnera.
 
+> **Prečo práve `allowed_images`, keď ide o `services:`.** Runner má dva
+> zoznamy — `allowed_images` pre obraz jobu a `allowed_services` pre obrazy
+> `services:`. `allowed_services` ale **nie je nastavený** (overené 15. 9. 2026:
+> nevyskytuje sa ani v `config.toml`, ani v `setup-config.sh`), a v tom
+> prípade GitLab Runner **fallbackuje na `allowed_images`** — čo je dôvod, prečo
+> pipeline 105 a 106 prešli.
+>
+> Je to nezamýšľaná väzba a je to pasca: kto raz `allowed_services` nastaví
+> (napríklad aby služby vôbec sprísnil), **rozbitne `backend_tests`** bez toho,
+> aby sa dotkol repozitára — job spadne na pull image service kontajnera.
+> Ak sa `allowed_services` niekedy zavedie, musia v ňom byť `postgres:16-alpine`
+> aj `redis:7-alpine`.
+
 ## Helm validačné príkazy (lokálne)
 
 Presne to, čo robí CI — dá sa pustiť aj ručne:
