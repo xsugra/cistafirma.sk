@@ -348,8 +348,51 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'  # Sem sa všetko pozbiera príkazom coll
 # warnings that deserve the attention.
 STATICFILES_DIRS = [d for d in [FRONTEND_DIR / 'dist'] if d.exists()]
 
-# Whitenoise nastavenie pre kompresiu a caching
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# Whitenoise: compress the static files and give them content-hashed names.
+#
+# `STATICFILES_STORAGE` used to sit on this line and did nothing at all. Django
+# 6.0 removed that setting -- it is absent from `global_settings`, replaced by
+# `STORAGES` -- and a setting whose name no longer exists is not an error, it is
+# simply never read. So for as long as that has been true this project shipped
+# Django's plain `StaticFilesStorage`: no manifest, no hashed names, no
+# compression, while this file said otherwise. The tell is `staticfiles.json`,
+# which `collectstatic` writes only for a manifest storage and which was missing
+# from `/app/staticfiles` on both the Mac and dell.
+#
+# Nothing our own code renders was broken by it: no template in this repo calls
+# `{% static %}` (`company_report.html` loads the tag library and never uses it),
+# so the only static URLs any page resolves are Django admin's, DRF's and
+# unfold's -- all rendered by the backend container, which mounts `static_volume`
+# and collects into it before gunicorn starts. nginx needs no change either: its
+# `/static/` block already tries the frontend image and falls back to the backend
+# (`@backend_static`), so a hashed name is served by the same route the unhashed
+# one was, out of the same `STATIC_ROOT` that `collectstatic` just hashed into.
+#
+# Both keys have to be given: `STORAGES` replaces the default wholesale rather
+# than merging into it, so a `staticfiles`-only dict would leave `default_storage`
+# without a backend.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        # Manifest storage is strict: a template asking for a file the manifest
+        # does not list raises `Missing staticfiles manifest entry for '...'`
+        # instead of quietly serving an unhashed name. That is the behaviour worth
+        # having, because the backend container collects before it serves
+        # (`collectstatic && gunicorn` in docker-compose.yml).
+        #
+        # Strictness only bites with DEBUG off, which is the only mode production
+        # runs: `HashedFilesMixin.url` short-circuits to the plain name whenever
+        # DEBUG is true. A dev machine therefore shows `/static/admin/css/base.css`
+        # and resolves a name that is not in the manifest, and that is not the
+        # storage being inert again -- measured on the Mac, where the same call
+        # with `settings.DEBUG = False` forced on raised the ValueError above.
+        # `WHITENOISE_MANIFEST_STRICT = False` is the escape hatch if a host ever
+        # has to serve without a manifest.
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 # 1. Pridaj adresu frontendu medzi dôveryhodné pre CSRF (Django 4.0+)
 # Toto je presne to, čo vyrieši chybu "CSRF verification failed"
