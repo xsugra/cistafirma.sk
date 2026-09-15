@@ -8,6 +8,16 @@ interface AssetsPieChartProps {
     data: Financials;
 }
 
+/**
+ * The wrapper below is `w-44 h-44`, which is 11rem -- 176px at this app's 16px
+ * root. Recharts measures at `{width: -1, height: -1}` until its ResizeObserver
+ * answers and logs a warning on the way, in production as well as in dev
+ * (Recharts 3 hardcodes `isDev = true`). Handing it the real box means the pie
+ * draws at its final size on the first frame and nothing is logged. Keep the two
+ * in step: if the class changes, this changes with it.
+ */
+const PIE_BOX = 176;
+
 const COLORS = [
     '#93c5fd', // blue-300
     '#3b82f6', // blue-500
@@ -78,7 +88,11 @@ export const AssetsPieChart: React.FC<AssetsPieChartProps> = ({ data }) => {
         <InfoCard title={`Aktíva ${data.year}`} icon="fa-chart-pie">
             <div className="flex flex-col items-center gap-4">
                 <div className="w-44 h-44">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                        initialDimension={{ width: PIE_BOX, height: PIE_BOX }}
+                    >
                         <PieChart>
                             <Pie
                                 data={filtered}

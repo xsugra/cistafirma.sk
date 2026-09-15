@@ -34,6 +34,15 @@ Object.defineProperty(window, 'matchMedia', {
 // FinancialChart) touches ResizeObserver whenever a responsive chart measures.
 // These specs never mount a chart, but a no-op stub keeps the whole import
 // graph safe if that ever changes.
+//
+// jsdom has no layout engine, so every element here measures 0x0 and the stub
+// never fires. Recharts reads that as a zero-size container and says so --
+// "The width(0) and height(0) of chart should be greater than 0" -- in the
+// output of any spec that mounts one. That message is the test environment
+// talking, not the app: in a browser the container has the size its class list
+// gives it, and each chart is handed that size through `initialDimension` so it
+// never sees a negative or zero measurement at all. Do not "fix" a component to
+// silence this line.
 class ResizeObserverStub {
     observe(): void {}
     unobserve(): void {}
@@ -46,6 +55,10 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 beforeEach(() => {
     vi.clearAllMocks(); // reset call history; implementations survive
     localStorage.clear();
+    // Also the session storage: an unticked "Zapamätať prihlásenie" puts the
+    // tokens there, and jsdom keeps one `sessionStorage` for the whole file --
+    // so without this a signed-in test signs in the next one.
+    sessionStorage.clear();
     document.documentElement.className = '';
 });
 

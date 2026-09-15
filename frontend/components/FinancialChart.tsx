@@ -208,7 +208,24 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
 
             {/* Chart */}
             <div className="w-full h-[320px] sm:h-[380px]">
-                <ResponsiveContainer width="100%" height="100%">
+                {/* `initialDimension` is what the container measures before its
+                    own ResizeObserver has answered, and its default is
+                    `{width: -1, height: -1}` -- which makes Recharts log "The
+                    width(-1) and height(-1) of chart should be greater than 0"
+                    once per chart. That warning is not dev-only: Recharts 3
+                    ships `isDev = true` hardcoded, so it reaches a production
+                    console. A positive height alone satisfies it.
+
+                    The width stays 0 because the real one comes from `w-full`
+                    and no honest number exists before measurement; with a
+                    non-positive width the chart draws nothing on the first
+                    frame, which is invisible, where a guessed width would paint
+                    once at the wrong size and then jump. */}
+                <ResponsiveContainer
+                    width="100%"
+                    height="100%"
+                    initialDimension={{ width: 0, height: 320 }}
+                >
                     <ComposedChart data={sorted} margin={{ top: 20, right: 12, left: 0, bottom: 4 }}>
                         <defs>
                             <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
