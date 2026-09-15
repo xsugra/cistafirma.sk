@@ -3705,6 +3705,38 @@ ktorú drill odhaliť nevie, lebo sa prejaví až vtedy, keď už stroj nie je.
 `docs/DATA_PROTECTION.md` pritom žiada offline kópiu tajného kľúča v password
 manageri. Či tam je, vie len Samuel; je to otázka, nie nález.
 
+**Doplnené — export je dokázateľne úplný (2026-09-15).** Dovtedy sme mali
+overené menej, než sa zdalo: že export obsahuje práve jeden blok súkromného
+kľúča, že fingerprint sedí a že sa do cudzieho keyringu naimportuje. Ani jedno
+z toho neznamená, že sa z neho dá **čítať**. Exportu, ktorému chýba cv25519
+podkľúč, prejde importom aj fingerprintom a predsa repliku neprelúskne —
+rozdiel sa prejaví až pri obnove, teda v najhoršej možnej chvíli. Skript
+`~/restore-check.sh` preto spravil presne to, čo by robil človek po strate
+Macu: exportoval kľúč, naimportoval ho do **prázdneho** keyringu a z neho
+obnovil repliku. Výsledok: `sec 80CB28C38ED7468B` + `ssb F3B8F3ADFBA9DB8F
+použitie=e`, a `Restore drill passed: 39 public tables restored from an
+ENCRYPTED replica`. Export teda obsahuje šifrovací podkľúč a je životaschopný,
+nie len dobre vyzerajúci.
+
+Čo tým **nie je** uzavreté: či tá kópia naozaj leží v password manageri. To
+stroj neoverí. A je to celý rozdiel medzi „kľúč sa dá obnoviť" a „kľúč
+existuje len dovtedy, kým existuje Mac".
+
+Dve veci k prostrediu, ktoré stáli za to zistiť:
+
+- `gpg --export-secret-keys` **neprejde** v sandboxovanom shelli. V gpg 2.x
+  vlastní súkromné kľúče `gpg-agent` a `gpg` sa ho pýta cez socket; bez tty to
+  skončí na `Inappropriate ioctl for device`. Skript sa preto musí spúšťať
+  z terminálu — a zlyhanie exportu v mojom shelli nebolo zlyhanie kľúča.
+- To, čo pri tom zlyhaní vyzeralo ako dva cudzie kľúče, boli **keygripy**, nie
+  fingerprinty. `private-keys-v1.d` má presne dva súbory — primárny kľúč a jeho
+  šifrovací podkľúč. Keygrip sa s fingerprintom nezhoduje a nemá; zámena tých
+  dvoch vyzerá ako kompromitácia keyringu, ktorá sa neudiala.
+
+Fetchovaná replika (`~/cistafirma-drill/`, 131 MB) sa po drille zmazala —
+sha256 sa predtým overil proti zdroju na lenovo (`71b3d387…5bd010`, zhoda na
+bit), takže na Macu ostal len overený duplikát, a Mac má byť dev.
+
 ---
 
 ## 8. Nemenné pravidlá
