@@ -470,16 +470,38 @@ weekly_job_systemd() {
 
     # Two readings of one fact, because the property names have moved across
     # systemd versions. An empty value means "this systemd does not report that
-    # property", which is NOT the same as "it never fired" -- so the other is
-    # consulted, and if neither answered the gate fails closed rather than
-    # assuming the friendlier of the two readings.
+    # property", which is NOT the same as "it never fired".
+    #
+    # The two can also *disagree*, and that is the case this host was in: a timer
+    # that caught up a missed window at install time (`Persistent=true`) reports
+    # `LastTriggerUSec` as the real wall-clock moment of that run -- 2026-09-15
+    # 11:36:56 here -- while `LastTriggerUSecMonotonic` is 0. Reading the
+    # monotonic stamp first called that "has not fired yet", and because that
+    # branch returns early the run-age check below it never ran either: for the
+    # whole first interval after an install, the gate could not report a weekly
+    # job that had stopped. A "yes" from either reading therefore wins.
+    #
+    # That is the safe direction rather than the lenient one. Everything past
+    # this point requires the log to record a start and a recent one, so a wrong
+    # "yes" is caught by the next check and fails closed -- while a wrong "no" is
+    # the one with nothing behind it, which is how a fired timer with a failed
+    # run behind it came to be reported as a first run still pending.
+    mono_says=""
+    last_says=""
     if [ -n "$mono" ]; then
-        if [ "$mono" = "0" ]; then triggered="no"; else triggered="yes"; fi
-    elif [ -n "$last" ]; then
+        if [ "$mono" = "0" ]; then mono_says="no"; else mono_says="yes"; fi
+    fi
+    if [ -n "$last" ]; then
         case "$last" in
-            n/a) triggered="no" ;;
-            *) triggered="yes" ;;
+            n/a) last_says="no" ;;
+            *) last_says="yes" ;;
         esac
+    fi
+
+    if [ "$mono_says" = "yes" ] || [ "$last_says" = "yes" ]; then
+        triggered="yes"
+    elif [ "$mono_says" = "no" ] || [ "$last_says" = "no" ]; then
+        triggered="no"
     else
         triggered=""
     fi
@@ -530,6 +552,34 @@ case "$CISTAFIRMA_OS" in
     linux) weekly_job_systemd ;;
     *) bad "no weekly-job check exists for platform '$CISTAFIRMA_OS'" ;;
 esac
+
+# --- the last scheduled run's own verdict --------------------------------
+#
+# `scheduled_backup.sh` writes this marker whenever it exits non-zero and removes
+# it only on a fully successful run, so its presence says exactly one thing: no
+# scheduled run has succeeded since the failure it records. That makes it worth
+# reading here rather than only writing there -- and on this host it is the whole
+# of the alarm. `notify-send` is not installed (a headless server normally has
+# no desktop session to show one), the scheduler's own record is the exit code
+# nobody looks at, and a failure whose only signal is a file nobody opens is the
+# silent failure this gate exists to prevent.
+#
+# A warning, never a failure -- and not as a softer verdict on the same fact, but
+# because a marker that could fail the gate would keep failing it. The weekly job
+# ends by running this gate and writes the marker when the gate fails, so a
+# marker able to fail the gate would outlive the condition it records with no run
+# able to clear it. The failure channel stays the job's own non-zero exit.
+FAILURE_MARKER="$(log_dir)/LAST_FAILURE"
+if [ -f "$FAILURE_MARKER" ]; then
+    marker_head=$(head -n 1 "$FAILURE_MARKER" 2>/dev/null || true)
+    marker_fail=$(grep -m 1 '^FAIL  ' "$FAILURE_MARKER" 2>/dev/null || true)
+    if [ -n "$marker_fail" ]; then
+        # The gate's own first concrete failure is more actionable than the
+        # marker's header, which says only that something failed and when.
+        marker_head="${marker_fail#FAIL  }"
+    fi
+    warn "the last scheduled backup run failed: ${marker_head:-see $FAILURE_MARKER}"
+fi
 
 # --- verdict -------------------------------------------------------------
 printf '\n'

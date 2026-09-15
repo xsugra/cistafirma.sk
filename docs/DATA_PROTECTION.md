@@ -437,6 +437,16 @@ best-effort), and exits non-zero so the scheduler records it too. The marker is
 cleared only by a fully successful run, so a later partial success cannot
 silently forgive an earlier failure.
 
+The gate also **reads** that marker and reports it as a warning, quoting the
+first concrete failure inside it. On the Linux host this is the whole alarm:
+`notify-send` is not installed there (a headless server usually has no desktop
+session to show a notification on), so without this the marker would be a record
+that nothing reads. It is deliberately a warning and never a failure — the
+weekly job ends by running this gate and writes the marker *when the gate
+fails*, so a marker able to fail the gate would keep failing it after the
+condition it records had been repaired, with no run able to clear it. The
+failure channel stays the job's own non-zero exit.
+
 Two deliberate asymmetries keep that alert trustworthy:
 
 - **A disconnected volume is not a failure there.** This document says to keep
