@@ -33,7 +33,7 @@ const SECTIONS: Section[] = [
     id: 'auth',
     title: 'Autentifikácia',
     icon: 'fa-key',
-    description: 'JWT Bearer token v Authorization headeri. Token sa ukladá do localStorage.',
+    description: 'JWT Bearer token v Authorization headeri. Ukladá sa do localStorage, alebo do sessionStorage, keď „Zapamätať prihlásenie" nie je zaškrtnuté.',
     endpoints: [
       {
         method: 'POST',
