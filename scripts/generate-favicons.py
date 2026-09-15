@@ -23,14 +23,25 @@ Three decisions in here are deliberate and are worth keeping if you edit it:
   a square canvas with an even margin. Hard-coding a crop box would silently
   mis-frame the next logo.
 
-* The sizes at or below 48px get `ALPHA_GAMMA` applied to the alpha channel
+* The sizes at or below 48px get `SMALL_SIZE_ALPHA` applied to the alpha channel
   *after* resampling, and the larger ones do not. The mark is fine line art --
   1329px of drawing squeezed into 16 gives each output pixel ~83 source pixels to
   average, so every thin stroke lands as a pale wash and the tab icon reads as a
-  smudge rather than as the logo. Weighting the averaged alpha back up is what
-  "make it hold up at small sizes" means in practice. At 180px the same curve
-  would do nothing useful (those pixels are already opaque) and would only harden
-  the mark's soft edges, so it is scoped by size rather than applied throughout.
+  smudge rather than as the logo. That is the whole job of this curve.
+
+  It cuts first and lifts second: alpha at or below `GLOW_CUTOFF` is dropped, and
+  what survives is spread over the full range with `ALPHA_GAMMA`. The first
+  version of this file lifted without cutting, and it made things worse -- the
+  mark carries a soft glow, and brightening alpha brightens the glow into a pale
+  halo that is *wider* than the mark, so the icon read as a fat blue smudge and
+  was reported as both too small and stretched. Measured, it was neither: the
+  aspect matched the logo to within 0.01 at every size. What it lacked was
+  contrast between the strokes and the fog around them, and that is what the
+  cutoff buys.
+
+  At 180px the same curve would do nothing useful (those pixels are already
+  opaque) and would only harden the mark's soft edges, so it is scoped by size
+  rather than applied throughout.
 
 * `apple-touch-icon.png` is composited on **black**, and only that one is. iOS
   does not keep transparency in a home-screen icon, so what it composites onto is
@@ -54,11 +65,17 @@ ALPHA_FLOOR = 8
 
 # Empty space kept around the mark, as a fraction of the square, per side. A
 # favicon is drawn in a 16px box with the tab bar's own padding around it, and a
-# mark touching the edges reads as clipped rather than as large.
-MARGIN = 0.08
+# mark touching the edges reads as clipped rather than as large. But the mark is
+# landscape (1.25:1) on a square canvas, so the *height* is what this costs: at
+# 0.08 the mark was 84% of the width and only 67% of the height, which is most of
+# why the tab icon looked small. 0.02 gives 96% and 77%.
+MARGIN = 0.02
 
-# See the module docstring. 1.0 would mean "no adjustment".
-ALPHA_GAMMA = 0.65
+# See the module docstring. Alpha at or below the cutoff is the mark's glow and
+# is dropped; the rest is spread over the full range by the gamma. 1.0 would mean
+# "no adjustment", 0.0 "everything survives at full weight".
+GLOW_CUTOFF = 40
+ALPHA_GAMMA = 0.70
 GAMMA_MAX_SIZE = 48
 
 # Emitted sizes. 16 and 32 are the two a desktop browser actually asks for; 48 is
@@ -81,12 +98,18 @@ def square_master(image: Image.Image) -> Image.Image:
     return canvas
 
 
+def small_size_alpha(value: int) -> int:
+    """One alpha value, with the glow dropped and the strokes lifted."""
+    if value <= GLOW_CUTOFF:
+        return 0
+    return round(255 * ((value - GLOW_CUTOFF) / (255 - GLOW_CUTOFF)) ** ALPHA_GAMMA)
+
+
 def render(master: Image.Image, size: int) -> Image.Image:
     """One square icon at `size`, with the small-size alpha adjustment applied."""
     icon = master.resize((size, size), Image.LANCZOS)
     if size <= GAMMA_MAX_SIZE:
-        alpha = icon.getchannel("A").point(lambda v: round(255 * (v / 255) ** ALPHA_GAMMA))
-        icon.putalpha(alpha)
+        icon.putalpha(icon.getchannel("A").point(small_size_alpha))
     return icon
 
 

@@ -23,7 +23,9 @@
          miss used to be answered by `try_files $uri $uri/ /index.html` with a 200
          and this page, which a browser draws as no icon at all rather than as an
          error. Regenerate after replacing the logo: scripts/generate-favicons.py -->
-    <link rel="icon" href="/favicon.ico" sizes="32x32">
+    <!-- `sizes="any"` on the .ico rather than a number: the file holds 16, 32 and
+         48, and a single number there is a claim about the file that is false. -->
+    <link rel="icon" href="/favicon.ico" sizes="any">
     <link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32">
     <link rel="icon" href="/favicon-16x16.png" type="image/png" sizes="16x16">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
