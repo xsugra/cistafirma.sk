@@ -3387,17 +3387,107 @@ Rotáciu vykonáva **používateľ** — hodnoty tajomstiev nevytváram ani neza
 
    **Verdikt šifrovania je teraz predoverený, nie odhadnutý.** SSH z dela na
    lenovo prejde neinteraktívne — kľúč `id_ed25519_offsite` je v
-   `authorized_keys` na lenove a fstab ho použúva explicitne cez
+   `authorized_keys` na lenove a fstab ho používa explicitne cez
    `IdentityFile=`, takže `~/.ssh/config` záznam netreba. A na lenove je cieľ
    `/home/sam/cistafirmaBackups` na `/dev/sda3`, `ext4`, bez LUKS vrstvy
    (`lsblk -s -no NAME,TYPE,FSTYPE` → `sda3 part ext4` pod `sda disk`), takže
    vzdialená kontrola **odpovie** — verdikt bude `unencrypted`, nie `unknown`.
 
-   `replicate` sa teda odmietne. **To je správne** a je to presne dôvod, prečo
-   existuje D2: buď sa cieľ zašifruje, alebo sa replikuje s tokenom
-   `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP=true` a s vedomím, že off-site
-   kópia je nešifrovaná. Token na delle v `backup.env` **nie je** (overené),
-   takže dnes by replikácia neprešla ani omylom.
+   `replicate` sa teda odmietne. **Toto už neplatí — prekonal to D2** (commit
+   `18e8d24`), a je dôležité, aby to tu nezostalo ako fakt, lebo je to presne
+   tá veta, podľa ktorej by sa niekto rozhodol cieľ najprv šifrovať. Verdikt
+   zväzku je odvtedy **kontext, nie brána**: replikuje sa artefakt zašifrovaný
+   na zdroji, takže nešifrovaný cieľ už databázu nevystavuje a kópia sa
+   neodmietne. Kontrola sa stále spúšťa a stále sa vypisuje — „prestali sme sa
+   pozerať" a „pozreli sme sa a je to v poriadku" sú dva rôzne fakty — ale len
+   ako `NOTE`. Očakávaný verdikt na lenove je `unencrypted` (ext4 bez LUKS),
+   a to je v poriadku. Token `CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP` teda
+   netreba a na delle v `backup.env` ani nie je (overené).
+
+### Migrácia na `dell` je hotová. Posledný krok zastavilo jedno slovo v `/etc/fstab`
+
+Stav overený naživo 2026-09-15: **10 kontajnerov beží** (`restart:
+unless-stopped`; `db`, `redis` aj `backend` healthy), `/healthz/` vracia
+`{"status": "ok", "db": "ok", "redis": "ok (0ms)"}`, frontend aj
+`/api/stats/landing/` odpovedajú cez `https://dell.taildb03cf.ts.net/`
+(449 776 firiem), `showmigrations --plan` má **0 neaplikovaných**. Databáza je
+obnovená a **39 tabuliek / 2 762 306 riadkov je zhodných s Macom**; všetky tri
+tajomstvá boli zrotované **pred prvým štartom `db`**, takže volume sa
+inicializoval už s novým heslom — po prvom štarte by to bola `ALTER USER` nad
+živými dátami.
+
+Reštart stroja to prežil bez zásahu, a to je zároveň dôkaz, že prežije:
+kontajnery nabehli samy (`RestartCount=0`), `docker` aj `tailscaled` sú
+`enabled`, `tailscale serve` konfigurácia ostala. (Pri kontrole pozor na
+`Up 5 minutes` — po reštarte to nie je príznak, ale očakávaný údaj; `uptime -s`
+je jediná odpoveď na otázku „kedy naozaj".)
+
+Po oprave nižšie týždenná úloha prejde až k operačnej bráne a **lokálnu záložu
+naozaj vytvorí** (131 MB dump, overený checksum). Padá už len na off-site
+kontrole. Restore drill je zapísaný (`39 public tables`, `source: local`) — to
+bola druhá nesplnená kontrola a bola celý čas **neblokovaná**, len sa nikdy
+nespustila.
+
+**Nález: `systemd --user` manažér si drží skupiny z okamihu svojho štartu.**
+Týždenná úloha zlyhala na `permission denied ... /var/run/docker.sock`, hoci
+`sam` v grupe `docker` **bol** — a ručne spustená tá istá úloha fungovala. To
+je to, čo to robí nepríjemným: rovnaký príkaz uspeje v ssh session a zlyhá pod
+časovačom. Namerané: manažér (PID 1701) štartoval `18:36:21`, `/etc/group` sa
+zmenil `19:04:38` (o 28 minút neskôr), a jeho skupiny boli
+`4/24/27/30/46/100/101/1000` — **bez 983**. Opravuje to reštart stroja (alebo
+`user@1000.service`), nie `daemon-reload`, a ručné spustenie z ssh to nikdy
+neukáže, lebo ssh session má skupiny čerstvé.
+
+**Nález: FUSE mount vlastnený rootom nie je pre `sam` priechodný bez
+`allow_other` — a chyba to nepovie.** `sshfs` z `/etc/fstab` mountuje
+`systemd` ako **root**, a bez `allow_other` je taký mount priechodný len pre
+roota. Pre `sam` to vyzerá ako `Permission denied` pri `cd`, ale kontrola to
+hlási ako **„is not a directory"** — čo pošle operátora hľadať preklep v ceste,
+nie chýbajúcu mount option. Overené z oboch strán: `sudo ls -la
+/mnt/cistafirma-offsite` vypíše `total 8` a obsah patrí `uid 1000`, kým
+`mountpoint` aj `[ -d ]` pre `sam` zlyhajú na `EACCES`. Mount pritom
+`active (mounted)` **je**. Rozdiel je teda výhradne vo viditeľnosti, nie
+v pripojení — a to je presne dvojica, ktorú treba odlíšiť, lebo „nepripojené"
+a „nepriechodné" majú inú opravu.
+
+*Poznámka k `user_allow_other` v `/etc/fuse.conf`: netreba ho.* Mount spúšťa
+root a root je z toho pravidla vyňatý; pridávať ho by rozšírilo oprávnenie pre
+všetkých používateľov stroja bez dôvodu. Stačí `allow_other` v riadku pre
+`cistafirma-offsite`.
+
+**Nález: automount sa po sérii zlyhaní vzdá a cesta sa ticho stane obyčajným
+adresárom.** `systemd` defaultne rate-limituje pokusy o mount; po ~13 minútach
+sondovania s nedostupným lenovom bola jednotka `failed
+(mount-start-limit-hit)`, autofs trigger zmizol z `/proc/self/mountinfo`
+a `/mnt/cistafirma-offsite` **bola obyčajná cesta na koreňovom filesystéme**.
+To je presne stav, v ktorom by zálohovací skript mohol zapísať „off-site
+repliku" na ten istý disk ako originál a hlásiť úspech. Rieši to drop-in
+`StartLimitIntervalSec=0`
+(`/etc/systemd/system/mnt-cistafirma\x2doffsite.automount.d/override.conf`),
+po ktorom trigger ostane armed a každý prístup zlyhá poctivo na `ENODEV` —
+namiesto toho, aby sa tváril ako adresár. **Je to však machine-local a pri
+preinštalovaní sa stratí**, preto to patrí aj sem, nie len do komentára
+v drop-ine.
+
+**Nález: na hoste, ktorý má len verejný kľúč, je výzva „drill the off-site
+copy" nesplniteľná — a ako `WARN` je to správne.** `offsite_status.sh`
+upozorní, že posledný drill bol z lokálnej zálohy, keď je off-site kópia
+k dispozícii. Na delle sa to nikdy nevyrieši: `.gpg` repliku tam **nemožno**
+rozšifrovať, lebo private kľúč tam zámerne nie je (overené:
+`--list-secret-keys` je prázdny, verejný `3043D31A…` s šifrovacím podkľúčom
+`…F3B8F3ADFBA9DB8F` je tam správne). Drill šifrovaného artefaktu teda patrí na
+Mac. Je to `WARN`, nie `FAIL`, takže brána ostáva poctivá — a zároveň je to
+jediná kontrola v celom reťaze, ktorá overuje, že private kľúč ešte existuje
+a funguje; každá iná by jeho stratu prehliadla.
+
+**Zostáva jediný krok a je to jedno slovo** — `allow_other` v riadku pre
+`cistafirma-offsite` v `/etc/fstab`, potom `systemctl daemon-reload` a reštart
+automount jednotky. Zapíše ho používateľ: je to systémový súbor s dopadom na
+štart a permission vrstva to agentovi zamieta. Po ňom nasleduje
+`make db-offsite-configure` (s recipientom `3043D31A…`) → `make
+db-backup-replicate BACKUP_FILE=<najnovší dump>` → `make ops-check` s **0
+unmet**. Na lenove je pritom prázdno (0 súborov), takže žiadne pred-D2
+plaintext repliky netreba upratovať.
 
 ---
 
