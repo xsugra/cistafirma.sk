@@ -171,21 +171,22 @@ describe('Person page', () => {
     });
 
     it('shows the rows a grouped person was gathered from', async () => {
-        // The register lists one officer under the predstavenstvo and again
-        // among the spoločníci, and the two sections carry different addresses,
-        // so the extractor stored two rows. Grouping them is a judgement made
-        // from a name and a postcode -- the reader who knows these are a father
-        // and a son can only correct it if the rows are shown.
+        // The register lists one officer under the statutárny orgán and again
+        // among the spoločníci, and the two sections do not carry the same
+        // lines, so the extractor stored two rows. Grouping them is a judgement
+        // made from a name and a postcode -- the reader who knows these are a
+        // father and a son can only correct it if the rows are shown, with the
+        // evidence each one holds.
         mocks.api.getPerson.mockResolvedValue(
             person({
-                records: 3,
+                records: 2,
                 members: [
-                    {id: 44903, name: 'Matej Vácha', address: 'Dátum narodenia: 20.08.1992'},
-                    {id: 44904, name: 'Matej Vácha', address: ''},
+                    {id: 44904, name: 'Matej Vácha', address: '', birth_date: '1992-08-20'},
                     {
                         id: 45335,
                         name: 'Matej Vácha',
                         address: 'Beniakova, 3100/12, Bratislava, 841 05',
+                        birth_date: null,
                     },
                 ],
             }),
@@ -193,11 +194,15 @@ describe('Person page', () => {
 
         renderPerson();
 
-        expect(await screen.findByText(/#44903/)).toBeInTheDocument();
+        expect(await screen.findByText(/#44904/)).toBeInTheDocument();
         expect(screen.getByText(/Beniakova, 3100\/12/)).toBeInTheDocument();
         // A row whose address is the empty string says so, rather than printing
         // an empty gap that reads as a rendering fault.
         expect(screen.getByText('bez adresy')).toBeInTheDocument();
+        // The date of birth is the one piece of evidence here that can
+        // contradict the grouping, so it is read off the row it belongs to --
+        // and it is *not* in the address, which is where it used to be.
+        expect(screen.getByText('nar. 20.08.1992')).toBeInTheDocument();
     });
 
     it('says nothing about grouping for the ordinary one-row person', async () => {

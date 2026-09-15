@@ -659,10 +659,20 @@ export interface PersonSearchResponse {
 export interface PersonMember {
     id: number;
     name: string;
-    /** The address this row stored, verbatim. Often empty; sometimes a birth
-     * date, which is what the register puts there when the document has no
-     * address for that section. */
+    /** The address this row stored, verbatim. Often empty: the section of the
+     * register document the row came from stated none. */
     address: string;
+    /**
+     * The date of birth this row stored, `YYYY-MM-DD`, or null.
+     *
+     * It is per row rather than per person on purpose. The register writes it on
+     * an address line, which is where it used to be stored -- and because a
+     * row's identity is read from its address, that made the date the identity
+     * of 14 rows. It has its own column now (migration `connections/0004`), and
+     * rows that state two *different* dates are the one thing this page must
+     * never present as one person.
+     */
+    birth_date: string | null;
 }
 
 /** One person, plus every relation we hold for them. */

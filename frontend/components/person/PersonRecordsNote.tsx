@@ -1,5 +1,6 @@
 import React from 'react';
 import type { PersonMember } from '../../types';
+import { formatDate } from '../company/helpers';
 
 interface PersonRecordsNoteProps {
     members: PersonMember[];
@@ -20,6 +21,10 @@ interface PersonRecordsNoteProps {
  * the only one who can correct it -- which they cannot do about rows they are
  * not shown. A merge would have hidden this; grouping is what lets it be
  * checked.
+ *
+ * Where the register states a date of birth it is shown on the row it belongs
+ * to, because that is the one piece of evidence here that can contradict the
+ * grouping rather than merely agree with it.
  *
  * Renders nothing for the ordinary case of one row, because a note on every
  * person page would be noise and this one has to be read when it appears.
@@ -46,6 +51,11 @@ export const PersonRecordsNote: React.FC<PersonRecordsNoteProps> = ({ members, c
                         <span className="font-medium text-slate-900 dark:text-slate-100">
                             {member.name}
                         </span>
+                        {member.birth_date && (
+                            <span className="text-slate-500 dark:text-slate-400">
+                                nar. {formatDate(member.birth_date)}
+                            </span>
+                        )}
                         <span className="text-slate-500 dark:text-slate-400">
                             {member.address || 'bez adresy'}
                         </span>
