@@ -72,6 +72,12 @@ def _relation_payload(rel) -> dict:
         "is_active": rel.is_active,
         "vznik_funkcie": rel.vznik_funkcie,
         "zanik_funkcie": rel.zanik_funkcie,
+        # How many stored relations this one row stands for. One in the common
+        # case. More once `_joined_periods` has folded a chain of them into the
+        # single office they describe -- and saying so is what keeps the fold
+        # honest, because a row that quietly replaced twelve register filings
+        # with one line reads exactly like a row that always was one line.
+        "intervals": 1,
     }
 
 
@@ -199,8 +205,11 @@ def _merged_relations(member_ids, grouped):
     relation for the same office in the same company, that sentence is false:
     we demonstrably did read it. Measured on 2026-09-13, this drops 4 lines in
     the whole table, all of them created by grouping -- one row alone never
-    showed the pair. Dated relations are never collapsed into each other, so a
-    real second tenure survives.
+    showed the pair.
+
+    What is left is one row per **office**, not per register filing: the periods
+    that meet are folded by `_joined_periods`. Two rows survive it only where
+    the office really did stop and start again.
     """
     payloads = [
         item for person_id in member_ids for item in grouped.get(person_id, [])
@@ -224,11 +233,109 @@ def _merged_relations(member_ids, grouped):
         for item in merged
         if item["vznik_funkcie"] or item["zanik_funkcie"]
     }
-    return [
+    return _joined_periods([
         item for item in merged
         if item["vznik_funkcie"] or item["zanik_funkcie"]
         or (item["ico"], item["role"]) not in dated_offices
-    ]
+    ])
+
+
+def _continues_period(previous, item) -> bool:
+    """Two filings of one office, or one office written down twice.
+
+    The register does not keep a function; it keeps filings. Each one ends the
+    office and the next filing reopens it, so one continuous tenure from 2011
+    arrives as a chain of intervals that meet day to day. Measured on person
+    56172 (FREYSSINET CS): twelve relations, eleven of them meeting the next.
+
+    **Both dates are required**, which is the whole of the rule. An open filing
+    (`zanik_funkcie is None`) is the end of a chain by definition -- nothing can
+    follow a function that has not ended -- and a filing whose start we do not
+    know cannot be shown to meet anything, so it stands on its own. Guessing
+    there would merge two tenures into one on no evidence, which is the failure
+    this function exists to avoid; leaving them apart costs a duplicate line the
+    reader can see.
+
+    One day of slack, not zero: the register closes an office on the day it
+    files and reopens it the next, so `zanik 2013-04-10` and `vznik 2013-04-11`
+    is one tenure. It absorbs an overlap as well, and overlaps are the other
+    shape of "the same office, written twice".
+    """
+    if previous["zanik_funkcie"] is None or item["vznik_funkcie"] is None:
+        return False
+    return (item["vznik_funkcie"] - previous["zanik_funkcie"]).days <= 1
+
+
+def _join_periods(chain):
+    """One office, from the first filing that opened it to the last that closed it.
+
+    `vznik` is the earliest and `zanik` the latest, and `is_active` is taken
+    from the **newest** filing, because a joined function is current exactly
+    when its last period is. Not from the first, and not from any of them: the
+    `None` that means "we never read this company" has to survive the fold, and
+    a rule that let eleven `False`s outvote the one `True` would show a current
+    officer as a former one -- the defect #86 removed, reached from the other
+    side.
+
+    The latest end date is the maximum rather than the last one in order. The
+    chain is ordered by start date and a pair may overlap, so the filing that
+    starts last is not always the one that ends last.
+
+    The register's longest wording wins, which is the same tiebreak `_is_richer`
+    uses a few lines up: filings of one office can carry slightly different
+    labels, and the fuller one says more without claiming anything extra.
+    """
+    newest = chain[-1]
+    ends = [item["zanik_funkcie"] for item in chain if item["zanik_funkcie"]]
+    return {
+        **newest,
+        "vznik_funkcie": chain[0]["vznik_funkcie"],
+        "zanik_funkcie": max(ends) if newest["zanik_funkcie"] else None,
+        "role_display": max(
+            (item["role_display"] or "" for item in chain), key=len
+        ) or newest["role_display"],
+        "intervals": sum(item["intervals"] for item in chain),
+    }
+
+
+def _joined_periods(items):
+    """One row per office, its consecutive filings folded into one period.
+
+    Why this is read-time and not a migration: the table's unique key is
+    `(person_id, company_id, role, vznik_funkcie)`, which makes a re-import
+    idempotent -- and would undo a write-time merge, because the merged row
+    keeps the first filing's `vznik` and filings 2..12 would have nothing left
+    to match, so the next import would create them again. Merging on the way out
+    needs no bookkeeping about what has already been merged.
+
+    Only filings of the **same** `(company, role)` are candidates: `konateľ`
+    until 31 December and `prokurista` from 1 January are two offices, not one,
+    and they stay two rows.
+    """
+    by_office = defaultdict(list)
+    for item in items:
+        by_office[(item["ico"], item["role"])].append(item)
+
+    rows = []
+    for filings in by_office.values():
+        # Oldest first, so a chain is built in the direction it happened. An
+        # open filing sorts last among those that start together, which is
+        # where the chain has to end anyway.
+        filings.sort(key=lambda item: (
+            item["vznik_funkcie"] or date.min,
+            item["zanik_funkcie"] or date.max,
+        ))
+        chain = [filings[0]]
+        for item in filings[1:]:
+            if _continues_period(chain[-1], item):
+                chain.append(item)
+            else:
+                rows.append(_join_periods(chain))
+                chain = [item]
+        rows.append(_join_periods(chain))
+
+    rows.sort(key=_relation_sort_key, reverse=True)
+    return rows
 
 
 def _active_rank(is_active):

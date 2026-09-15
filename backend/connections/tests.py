@@ -269,6 +269,147 @@ class PersonDetailAPITests(APITestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class JoinedPeriodsTests(APITestCase):
+    """One office, not one register filing per row (#93).
+
+    The register does not keep a function, it keeps filings: each one closes the
+    office and the next reopens it, so a single tenure from 2011 arrives as a
+    chain of intervals that meet day to day. Measured live on person 56172
+    (FREYSSINET CS): twelve relations for one office, eleven of them meeting the
+    next -- and the reader, shown twelve rows, saw `od 07.07.2026`. The answer to
+    "since when" was at the bottom of the list.
+
+    What each test below holds down is a way the fold could lie: by merging two
+    real tenures, by merging two offices, by inventing a start, or by dropping
+    the `None` that means we never read the company.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=1, ico="50059959", nazov_UJ="Test s.r.o."
+        )
+        self.person = Person.objects.create(fingerprint="f-jan", name="Ján Novák")
+
+    def _rel(self, vznik, zanik=None, role="konatel", is_active=None, company=None):
+        return PersonCompanyRelation.objects.create(
+            person=self.person,
+            company=company or self.company,
+            role=role,
+            is_active=is_active,
+            vznik_funkcie=vznik,
+            zanik_funkcie=zanik,
+        )
+
+    def _companies(self):
+        response = self.client.get(f"/api/persons/{self.person.pk}/")
+        self.assertEqual(response.status_code, 200)
+        return response.json()["companies"]
+
+    def test_a_chain_of_filings_becomes_one_row(self):
+        """The live shape: an office reopened the day after it was closed."""
+        self._rel(date(2011, 6, 8), date(2011, 6, 9))
+        self._rel(date(2011, 6, 10), date(2011, 6, 11))
+        self._rel(date(2011, 6, 12), None, is_active=True)
+
+        rows = self._companies()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vznik_funkcie"], "2011-06-08")
+        self.assertIsNone(rows[0]["zanik_funkcie"])
+        self.assertIs(rows[0]["is_active"], True)
+
+    def test_a_real_gap_stays_two_rows(self):
+        """Person 56172 has a 34-day hole, and the hole is the fact.
+
+        `2013-04-10 -> 2013-05-14` is not a filing rhythm, it is the office
+        having ended and been taken up again. Folding it away would answer
+        "continuous since 2011" to a question whose answer is two tenures.
+        """
+        self._rel(date(2011, 6, 8), date(2013, 4, 10), is_active=False)
+        self._rel(date(2013, 5, 14), date(2019, 12, 31), is_active=False)
+
+        rows = self._companies()
+
+        self.assertEqual(
+            [(row["vznik_funkcie"], row["zanik_funkcie"]) for row in rows],
+            [("2013-05-14", "2019-12-31"), ("2011-06-08", "2013-04-10")],
+        )
+
+    def test_two_offices_on_one_company_stay_two_rows(self):
+        """`konateľ` until 31 December and `prokurista` from 1 January.
+
+        The key is `(company, role)`, not `(company)`. These two meet day to day
+        exactly like a chain of filings does, so a fold keyed on the company
+        alone would silently turn a change of office into a continuation of one.
+        """
+        self._rel(date(2010, 1, 1), date(2010, 12, 31), role="konatel")
+        self._rel(date(2011, 1, 1), None, role="prokurista", is_active=True)
+
+        rows = self._companies()
+
+        self.assertEqual(
+            sorted((row["role"], row["vznik_funkcie"]) for row in rows),
+            [("konatel", "2010-01-01"), ("prokurista", "2011-01-01")],
+        )
+
+    def test_currency_comes_from_the_newest_filing(self):
+        """Eleven `False`s must not outvote the one `True` (#86, from the other side)."""
+        self._rel(date(2010, 1, 1), date(2010, 12, 31), is_active=False)
+        self._rel(date(2011, 1, 1), None, is_active=True)
+
+        rows = self._companies()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIs(rows[0]["is_active"], True)
+
+    def test_nevieme_survives_the_fold(self):
+        """`None` is "we never read this company", and folding must not invent a yes.
+
+        The last filing of the chain is the one whose currency the merged row
+        reports, so this is also the check that the rule reads the *newest*
+        filing and not the first, the richest, or any.
+        """
+        self._rel(date(2010, 1, 1), date(2010, 12, 31), is_active=False)
+        self._rel(date(2011, 1, 1), None, is_active=None)
+
+        rows = self._companies()
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["is_active"])
+
+    def test_an_open_filing_ends_the_chain(self):
+        """Nothing follows an office that has not ended.
+
+        The data can still hold a later filing (a re-read mid-write, a register
+        correction). Swallowing it into the open period would extend a current
+        office over a stretch the register says it was closed for, so it stays
+        its own row.
+        """
+        self._rel(date(2010, 1, 1), None, is_active=True)
+        self._rel(date(2010, 6, 1), date(2011, 1, 1), is_active=False)
+
+        rows = self._companies()
+
+        self.assertEqual(len(rows), 2)
+        self.assertIsNone(rows[0]["zanik_funkcie"])
+
+    def test_the_row_says_how_many_filings_it_stands_for(self):
+        """The fold is disclosed, not silent.
+
+        A row that replaced twelve register filings with one line reads exactly
+        like a row that always was one line, and those are different claims.
+        """
+        self._rel(date(2011, 6, 8), date(2011, 6, 9))
+        self._rel(date(2011, 6, 10), date(2011, 6, 11))
+        self._rel(date(2011, 6, 12), None, is_active=True)
+        other = Company.objects.create(ruz_id=2, ico="87654321", nazov_UJ="Iná s.r.o.")
+        self._rel(date(2015, 1, 1), None, role="spolocnik", company=other)
+
+        by_role = {row["role"]: row["intervals"] for row in self._companies()}
+
+        self.assertEqual(by_role, {"konatel": 3, "spolocnik": 1})
+
+
 class NameNormalizationTests(TestCase):
     """`name_normalized` is what search reads, so it has to be right by itself."""
 
