@@ -744,6 +744,23 @@ keypair, a destination, and one verified retrieval.
    manager, and keep an exported copy of the **secret** key there too — a
    passphrase you have and a key you do not is not a recovery.
 
+   Then prove that the copy you filed away actually works, because nothing else
+   does:
+
+   ```bash
+   make db-offsite-key-drill BACKUP_FILE=<replica.dump.gpg> KEY_FILE=<the stored copy>
+   ```
+
+   This is a third question, and neither of the other two answers it.
+   `db-offsite-key-status` says whether *this machine* holds a key; the restore
+   drill says whether a backup is restorable. Neither says whether the copy you
+   would actually reach for after a disk died can read anything — and an export
+   that lost its cv25519 encryption subkey imports perfectly, carries a
+   matching fingerprint, and cannot decrypt a byte. The key drill imports the
+   copy into an empty keyring and restores a replica using nothing else, so it
+   is the only check that settles it. It can only be run while the key still
+   exists, which is why it belongs on a schedule and not in a drawer.
+
 2. **Give the public key to every host that replicates.**
 
    ```bash

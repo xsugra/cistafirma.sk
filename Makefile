@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-offsite-configure db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status ops-check run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-offsite-configure db-offsite-key-drill db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status ops-check run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
 
 # ====================================================================================
 # HELP
@@ -187,6 +187,19 @@ db-offsite-key-import:
 
 db-offsite-key-status:
 	@scripts/local/gpg_backup_key.sh status
+
+# Prove that an EXPORTED private key can still read an off-site replica.
+# `db-offsite-key-status` answers "does this machine hold the key"; this answers
+# "would the copy I stored actually work" — a different question, and the only
+# one whose answer survives losing the machine. Pass KEY_FILE to test the copy
+# kept in the password manager (the point of the command); omit it to test a
+# fresh export, which proves the export format is complete but says nothing
+# about whether any copy was ever stored.
+#
+#   make db-offsite-key-drill BACKUP_FILE=<replica.dump.gpg> [KEY_FILE=<exported secret key>]
+db-offsite-key-drill:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required, e.g. make db-offsite-key-drill BACKUP_FILE=<replica.dump.gpg> [KEY_FILE=<exported secret key>]" >&2; exit 2)
+	@CISTAFIRMA_KEY_DRILL_KEY_FILE="$(KEY_FILE)" scripts/local/offsite_key_drill.sh "$(BACKUP_FILE)"
 
 # Weekly unattended backup via launchd (backup -> verify -> replica if mounted).
 db-backup-schedule-install:
