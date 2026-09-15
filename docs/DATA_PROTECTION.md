@@ -5,6 +5,13 @@ data. Treat it as production data: it must never be removed, reinitialized, or
 restored over without a separately verified backup and an approved maintenance
 procedure.
 
+As of **2026-09-15** production runs on the **`dell` server** (Ubuntu, reached
+over Tailscale). The MacBook that hosted it before is retired as a production
+host — stack stopped, weekly job uninstalled — and its volume and dumps are kept
+untouched as a frozen fallback. The same volume name exists on both hosts, and
+nothing else in this document changes with the move: these rules bind whichever
+copy is live.
+
 ## Non-negotiable rules
 
 - Never run `make docker-reset`, `docker compose down -v`, `docker volume rm`, or
@@ -23,8 +30,8 @@ procedure.
 
 ## The primary copy is not encrypted at rest — recorded 2026-09-15
 
-The disk of the host that runs production is **not** encrypted. This is a
-decision, not an oversight, and it is written down here precisely because the
+The disk of `dell`, the host that runs production, is **not** encrypted. This is
+a decision, not an oversight, and it is written down here precisely because the
 machine it replaces (a Mac with FileVault) *was* encrypted — so this is a
 deliberate step down, taken knowingly.
 
@@ -431,6 +438,17 @@ Two deliberate asymmetries keep that alert trustworthy:
   never launched cannot be reported as "ran recently" merely because someone ran
   the script by hand — and on systemd the *timer's* stamp is what is read, since
   starting the service by hand leaves it untouched.
+
+  On macOS that counter counts starts since the job was *loaded*, and a reboot
+  reloads it — so a zero means "has not fired since this machine last booted",
+  not "never fired". Reading the zero as "never" failed the gate on a healthy
+  Mac for as long as its plist was older than `CISTAFIRMA_RUN_GAP_MAX_DAYS`
+  (observed 2026-09-15: a false FAIL on a machine whose job had fired two days
+  earlier). A zero counter now falls back to the log and, when that holds a
+  recent start, reports a **warning** carrying both the last start and the boot
+  time — never an OK, because a manual run writes that line too. The strict
+  verdict is not lost: the weekly run reaches the gate with a non-zero counter
+  and is judged on the log alone.
 
 The gate does not read the off-site report's prose. `offsite_status.sh` publishes
 two summary lines of its own — `Off-site backup controls: N unmet` and

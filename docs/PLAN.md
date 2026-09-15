@@ -3207,6 +3207,10 @@ sú nenápadné: sonda bez `Persistent=true` stamp **nevytvorí** (prvý pokus
 vyšel naprázdno presne preto — stamp existuje kvôli `Persistent=`, nie kvôli
 behu samému) a hľadať treba v `share`, nie v `state`.
 
+> **Vyriešené 2026-09-15** — macOS vetva je opravená, pozri „Mac je vypnutý ako
+> produkcia" nižšie. Návrh v druhej odrážke (nula sa prestane čítať ako
+> „nikdy") je to, čo sa spravilo, vrátane času posledného bootu v správe.
+
 ### Čo presne spraviť po autorizácii Tailscale — v tomto poradí
 
 Toto je zoznam krokov, ktoré sa **nedajú spraviť predtým**, aby sa po
@@ -3545,12 +3549,106 @@ plaintext repliky nebolo treba upratovať.
 
 ---
 
+### Mac je vypnutý ako produkcia — a kontrola, ktorá o tom klamala (2026-09-15)
+
+Poradie krokov nebolo ľubovoľné: najprv čerstvá overená záloha, potom zrušenie
+týždennej úlohy, až nakoniec zastavenie stacku. Teplá záložka (Mac) sa necháva
+živá, kým existuje krok, ktorý ju môže potrebovať — a tým bol práve off-site.
+Ten je hotový a overený, takže dôvod držať Mac v produkcii padol.
+
+**Čo sa spravilo (všetko na Macu):**
+
+- `make db-backup` → `cistafirma_20260915T103122Z.dump`, hneď overená cez
+  `make db-backup-verify`.
+- `make db-backup-schedule-uninstall` → odobrala `sk.cistafirma.backup`
+  z launchd a zmazala plist. Skript odstraňuje **len rozvrh**; zálohy, záznamy
+  o drilloch ani cieľ replikácie necháva tak, aby odinštalácia nemohla vyzerať
+  ako strata dát. Vetví sa podľa `$CISTAFIRMA_OS`, takže spustený na Macu sa
+  nemôže dostať k systemd timeru na delle.
+- `make docker-down` — **bez `-v`**, ako všade v tomto dokumente.
+
+Pred zastavením Macu bolo overené, že dell cez tailnet naozaj odpovedá (frontend
+200 za 0,057 s, API 200 za 0,373 s) — Mac sa nezastavoval naslepo.
+
+**Overené po:** žiadne kontajnery, žiadny listener na 5432/5173/8080, volume
+`cistafirma_postgres_data` na mieste, 35 dumpov, žiadny launchd agent, žiadny
+crontab, žiadna brew služba, žiadny zvyšný proces.
+
+**Nález, ktorý to odhalilo:** klon na delle bol pozadu o štyri commity
+(`021e3e6` vs `868e57c`) — vrátane `a60aa56`, teda opravy, bez ktorej
+`configure_offsite.sh` spustený bez recipienta vymaže už uloženého recipienta
+a **ticho zastaví replikáciu**. Kým sa to nepullne, beží na delle starý skript.
+
+**#114 — kontrola, ktorá o úlohe klamala.** Tá istá trieda ako všetko ostatné
+v tomto dokumente: nie kontrola, ktorá zle počíta, ale ktorá nemôže ukázať to,
+čo tvrdí. `ops_check.sh` sa na macOS pýtal `launchd` počítadlo `runs` a log
+čítal až keď bolo `>= 1`. Lenže `runs` sa počíta **od načítania úlohy**, nie od
+inštalácie — a reštart stroja je reload.
+
+Prehovor overený, nie prevzatý: zahadzovacia launchd úloha dala `runs = 2` po
+dvoch štartoch a `runs = 0` po reloade (`bootout` + `bootstrap`). Falošný FAIL
+sa potom podarilo zreprodukovať hermeticky — falošný `$HOME`, stub `launchctl`,
+plist posunutý o 30 dní dozadu, log so štartom spred dvoch dní:
+
+```
+FAIL  launchd has never run the job although it was installed 30 day(s) ago
+```
+
+Na Macu to nebolo teoretické: plist mal mtime 10. 9. 09:09, `RUN_GAP_MAX_DAYS`
+je 8, takže od 19. 9. 09:09 by brána hlásila tvrdý FAIL na zdravom stroji —
+a po každom ďalšom reštarte by sa už nevyčistil.
+
+Oprava nerobí z nuly dôkaz, ale prestáva z nej robiť nepravdu: `runs == 0` sa
+teraz pozrie do logu a keď v ňom je čerstvý štart, vráti **WARN** s časom
+posledného štartu aj s časom posledného bootu. Nikdy `OK` — ručný beh píše do
+logu ten istý riadok. Prísny verdikt sa nestráca: týždenný beh prichádza do
+brány s počítadlom aspoň 1 a tam sa logom súdi ďalej.
+
+| prípad | `runs` | log | plist | verdikt |
+|---|---|---|---|---|
+| A | 0 | štart pred 2 dňami | 30 dní | **WARN** (predtým FAIL) |
+| B | 0 | štart pred 30 dňami | 30 dní | FAIL |
+| C | 0 | prázdny | 30 dní | FAIL |
+| D | 0 | prázdny | 2 dni | WARN (prvý beh ešte len príde) |
+| E | 2 | štart pred 2 dňami | 30 dní | OK |
+| F | 2 | prázdny | 30 dní | FAIL |
+
+Zmenil sa **jediný** prípad — A. B–F vrátane oboch FAILov sú identické
+s pôvodným správaním.
+
+Dve poznámky k tomu, čo oprava **zámerne nerobí**:
+
+- **Nerozhoduje.** Rozhodnúť by znamenalo modelovať kalendárové pravidlo
+  z plistu: štart zapísaný po boote dokazuje, že ho nespravil `launchd`, ale
+  nedokazuje, že od bootu už nejaký štart mal prísť. Verdikt by bol hádanie,
+  takže správa povie obe pravdy a úsudok nechá na operátora.
+- **Neplatí pre Linux.** `systemd` vetva číta `LastTriggerUSec` časovača, čo
+  reštart prežije; overené v #119.
+
+Chybu som pritom spravil aj vo vlastnej oprave a test ju chytil: `sed` vzor
+`.*sec = ` je greedy a v `{ sec = 1789414967, usec = 914123 }` sa chytil na
+`usec`, takže správa hlásila boot v roku 1970. Vzor je teraz `[{,] *sec = `.
+
+Opravené je to napriek tomu, že Mac je odstavený a vetva je teda spiaca:
+kontrola, ktorá klame, je v tomto projekte tá chyba — nie nepríjemnosť.
+
+**Doplnené v dokumentácii:** `CLAUDE.md` aj `docs/DATA_PROTECTION.md` meno
+produkčného stroja dovtedy **nevymenúvali** — hovorili len o „host that runs
+production" a „lokálny Docker **je** produkcia". Po presune na dell je to
+nepravda, ktorá by poslala ďalšiu session pracovať s Macom ako s produkcion.
+Oboje teraz hovorí, že produkcia je `dell` a Mac je odstavený — a že
+`make ops-check` na Macu **má** zlyhať, lebo tam už žiadny stack ani týždenná
+úloha nie je.
+
+---
+
 ## 8. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
 
-- Docker volume `cistafirma_postgres_data` je nenahraditeľný a lokálny Docker
-  **je** produkcia.
+- Docker volume `cistafirma_postgres_data` je nenahraditeľný. **Produkcia beží
+  na `dell`** (od 2026-09-15); ten istý volume existuje aj na Macu, ktorý je
+  odstavený a drží sa ako zamrznutá záloha. Pravidlá platia na obe kópie.
 - **Nikdy**: `make docker-reset`, `docker compose down -v`, `docker volume rm`,
   `docker volume prune`.
 - **Nikdy** rušiť `make celery-purge`, plný RUZ resync ani restore ako

@@ -5,11 +5,20 @@ when working with code in this repository. `AGENTS.md` at the repo root points
 here. **Read `docs/DATA_PROTECTION.md` before running any Docker or data
 command** — this repo treats a local Docker Postgres as production data.
 
+## Where production runs
+
+**Production is the `dell` server** (Ubuntu, reachable over Tailscale), not the
+machine you happen to be sitting at. It moved there on **2026-09-15**, when the
+MacBook that used to host it was retired as a production host: its stack is
+stopped, its weekly backup job is uninstalled, and its database volume and dumps
+are kept untouched as a frozen fallback. `make ops-check` therefore *fails* on
+the Mac by design — no stack, no weekly job — and that is not a fault to repair.
+
 ## Data safety rules (non-negotiable)
 
 The Docker PostgreSQL volume `cistafirma_postgres_data` holds durable,
-irreplaceable company data. Running locally in Docker IS the production
-environment for this project.
+irreplaceable company data. The same volume name exists on both hosts, and every
+rule below applies to whichever one holds it.
 
 - **Never** run `make docker-reset`, `docker compose down -v`, `docker volume rm`,
   or `docker volume prune`. These destroy the database volume.
@@ -270,7 +279,8 @@ in `.env` (`BACKEND_HOST`/`BACKEND_PORT`).
 
 - `deploy/helm/cistafirma/` – Helm chart (future deploy contract)
 - `deploy/k8s/` – Kustomize overlays (current GitLab deploy path; marked DEPRECATED)
-- Local "production" today runs via `docker-compose.yml` at the repo root.
+- "Production" today runs via `docker-compose.yml` at the repo root — on the
+  `dell` server since 2026-09-15, not on a developer machine.
 
 ### Environment variables
 
