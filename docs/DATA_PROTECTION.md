@@ -21,6 +21,30 @@ procedure.
   does not protect against loss of the computer; an encrypted off-host replica
   is required before relying on it as the only recovery mechanism.
 
+## The primary copy is not encrypted at rest — recorded 2026-09-15
+
+The disk of the host that runs production is **not** encrypted. This is a
+decision, not an oversight, and it is written down here precisely because the
+machine it replaces (a Mac with FileVault) *was* encrypted — so this is a
+deliberate step down, taken knowingly.
+
+The option considered and declined was reinstalling the host with LUKS and TPM2
+auto-unlock. That combination would have been unattended (no passphrase prompt
+at boot), so it was not declined on operational grounds; it was declined on
+scope. The host is a home project rather than a full production deployment, and
+building it outweighed the protection it would have added on a machine that is
+otherwise configured and verified.
+
+What this accepts, stated plainly so it is not rediscovered later:
+
+- Anyone who removes the **disk** — separately from the machine — can read the
+  database. That is public register data plus user accounts.
+- It does **not** weaken the off-site story, which is the copy that actually
+  leaves the house: that replica is encrypted on the source.
+
+Revisit this if the data stops being a hobby project, or if personal data that
+is not already public is added to the database.
+
 ## Local backup procedure
 
 The default backup directory is platform-specific — a backup directory nobody

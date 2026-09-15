@@ -2819,6 +2819,9 @@ po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
     chráni presne tú kópiu, ktorá naozaj opúšťa domov.
 
   **Poradie je dôležitejšie než voľba: D1 patrí pred autorizáciu Tailscale.**
+  *(Platilo pre (a); pri rozhodnutí (b) nižšie to celé odpadá — nič sa
+  neprebudúva, takže sa nemá čo stratiť. Nechávam to tu ako záznam toho, prečo
+  sa na poradí trvalo v čase, keď (a) bolo v hre.)*
   Ak vyjde (a), preinštalácia zmaže všetko, čo je na delle pripravené —
   fstab riadok pre off-site, automount drop-in s `StartLimitIntervalSec=0`,
   `Linger=yes`, `.env`, rsyncnutý kód — a stroj dostane **inú identitu v
@@ -2846,34 +2849,30 @@ po #107 (obnova databázy) je to už prevádzková akcia. **Patrí preto pred
   zväzku), `prune` musí poznať nový suffix a restore runbook dostane krok
   s odšifrovaním.
 
-**Rozhodnuté 15. 9.** — D1 používateľ delegoval na mňa („vyber to, čo by si
-odporúčal, ale tak, aby to bolo suitable pre ten dell"), D2 schválil.
+**Rozhodnuté 15. 9.** — D1 používateľ najprv delegoval na mňa („vyber to, čo by
+si odporúčal"), a **v ten istý deň ho vrátil na (b)**: „vykašlime sa na to
+preinštalovanie, veď to nie je nutné, veď to bude len môj domáci projekt, nie
+úplná produkcia." Rešpektované a reinstall sa ruší.
 
-- **D1 = (a): dell sa preinštaluje s LUKS a odomkýnaním cez TPM2.** Dôvody
-  v poradí podľa váhy:
+- **D1 = (b): dell ostáva bez LUKS, primár je nešifrovaný — a je to zapísané.**
+  Zdôvodnenie, ktoré rozhodlo, je rozsah: nie je to plná produkcia, takže
+  ochrana nevyvážila prácu s prebudovaním stroja, ktorý je inak nastavený
+  a overený. Zapísané v `docs/DATA_PROTECTION.md` („The primary copy is not
+  encrypted at rest — recorded 2026-09-15"), aby to nebolo prekvapenie pri
+  čítaní dokumentu o ochrane dát — a aby bolo jasné, že to je **vedomý krok
+  nadol** oproti Macu s FileVaultom, nie prehliadnutie.
 
-  1. **Teraz je to takmer zadarmo a nikdy viac nebude.** Stroj je holý,
-     databáza naň ešte nešla a Tailscale na delle **ešte nie je
-     autorizované** — takže sa nemení žiadna identita, o ktorú by sa prišlo.
-     Po #107 je to tá istá hodina navyše k riziku nad živými dátami.
-  2. **Dnešná produkcia je šifrovaná** (FileVault na Macu). Presun na
-     nešifrovaný primár by bol **regresia** v ochrane, ktorú dokument
-     vyžaduje — a presne tá zmena, ktorá sa po nahratí dát obhajuje ťažko.
-  3. **A nie je to voľba „človek pri každom boote".** To bola možnosť 3, ktorú
-     používateľ odmietol — a odmietol ju správne: pri mŕtvej batérii v delle
-     by znamenala fyzickú účasť po **každom** nečistom výpadku prúdu. TPM2
-     s PCR 7 (Secure Boot je zapnutý) odomkne disk **bez človeka** a prežije
-     aktualizácie jadra. Fyzická účasť je tu teda **raz** (inštalácia), nie
-     pri každom štarte. To je celý rozdiel medzi (a) a (3).
+  Čo to prijíma: kto odnesie **disk** (nie celý stroj), prečíta databázu —
+  verejné registrové dáta plus používateľské účty. Čo to **nenarúša**: off-site
+  story, lebo tá kópia, ktorá naozaj opúšťa domov, je šifrovaná na zdroji
+  (D2). Revízia patrí na stôl, keď dáta prestanú byť hobby, alebo keď pribudnú
+  osobné dáta, ktoré nie sú už aj tak verejné.
 
-  Čo to **nerieši**, a musí byť napísané rovnako jasne: kto odnesie celý
-  stroj, ten ho proste zapne a TPM mu kľúč vydá. Chráni to proti tomu, že
-  **disk** opustí dom (predaj, RMA, vyradenie, vybratie) — nie proti
-  vlámaniu. Presne tú kópiu, ktorá naozaj opúšťa domov, chráni D2.
-
-  Zvyškové riziko, ktoré patrí k rozhodnutiu: ak sa zmení meranie (firmvér,
-  BIOS), TPM kľúč nevydá a stroj sa spýta na passphrase — teda fyzická
-  účasť. Preto passphrase slot **ostáva**; je to poistka, nie porucha.
+  **Dôsledok, ktorý ruší celé poradie: Tailscale už nie je blokované
+  rozhodnutím.** Varovanie „D1 patrí pred autorizáciu" platilo pre (a), kde
+  preinštalovanie mení identitu stroja v tailnete. Pri (b) sa nič neprebudúva,
+  takže autorizácia sa dá spraviť hneď a je to **jediná zostávajúca vec, ktorú
+  musí spraviť používateľ** — všetko ostatné ide bez neho.
 
 - **D2 = šifrovať na zdroji (`gpg`), schválené.** Implementácia je nová
   kontrola v `scripts/local/`, preto má vlastný plán nižšie.
@@ -2902,22 +2901,21 @@ istým spôsobom ako dnes pri neoverenom zväzku.
 
 **Postup migrácie, v poradí (D1 a D2 sú rozhodnuté, takto sa to spraví):**
 
-1. **Preinštalovať dell s LUKS** (inštalátor: „Encrypt the LVM group with
-   LUKS"), potom `systemd-cryptenroll --tpm2-device=auto` (PCR 7) a zopakovať
-   predletovú kontrolu. *Fyzický krok, len používateľ.*
-2. **Autorizovať Tailscale na delle** → `tailscale status` je up, `gitlab-home`
-   funguje, sshfs na lenovo sa pripojí.
-3. **Kód a `.env` na dell** — dnes to ide aj po LAN z Macu; po autorizácii
-   čistejšie `git clone` z gitlabu.
-4. **Rotácia `SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` (#112)** —
-   **pred** krokom 6, kým na delle neexistuje volume.
-5. **Databáza (#106/#107)** — utíšiť Mac (beat a workery), čerstvý overený
+1. **Autorizovať Tailscale na delle** → `tailscale status` je up, `gitlab-home`
+   funguje, sshfs na lenovo sa pripojí. *Jediný krok, ktorý musí spraviť
+   používateľ* — a pri D1=(b) už na nič nečaká.
+2. **Kód a `.env` na dell** — dnes to ide aj po LAN z Macu; po autorizácii
+   čistejšie `git clone` z gitlabu. Server je inak nastavený a overený
+   z predletovej kontroly, takže sa nezačína od nuly.
+3. **Rotácia `SECRET_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` (#112)** —
+   **pred** krokom 5, kým na delle neexistuje volume.
+4. **Databáza (#106/#107)** — utíšiť Mac (beat a workery), čerstvý overený
    dump, prenos, obnova, overiť počty.
-6. **Prvý štart (#108)** — workery, **beat až po obnove databázy**, potom
+5. **Prvý štart (#108)** — workery, **beat až po obnove databázy**, potom
    `tailscale serve --bg 5173`.
-7. **Dokončiť kontroly** — prvý drill a prvá replika na lenovo, inštalovať
+6. **Dokončiť kontroly** — prvý drill a prvá replika na lenovo, inštalovať
    týždenný timer (#115).
-8. **Cutover (#109)** — vypnúť Mac, overiť z iného zariadenia.
+7. **Cutover (#109)** — vypnúť Mac, overiť z iného zariadenia.
 
 Tri veci, ktoré pri tom treba mať vopred na pamäti:
 
