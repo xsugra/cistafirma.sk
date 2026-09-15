@@ -247,7 +247,22 @@
 {% else %}
 <div class="section">
     <h2>Evidované nedoplatky</h2>
+    {% if social_listed_without_amount %}
+    {% comment %}
+    The two facts are separate and the sentence keeps them separate: no sum is
+    recorded, and the register nonetheless lists the company. The green tick
+    below is only for a company both registers actually cleared.
+    {% endcomment %}
+    <p style="color:#b45309;font-size:9pt;">
+        Peňažné nedoplatky voči VšZP, Sociálnej poisťovni ani Finančnej správe sme
+        nezistili. <strong>Sociálna poisťovňa však túto spoločnosť uvádza vo svojom
+        zozname dlžníkov bez zverejnenej sumy</strong> — dôvodom je nesplnená
+        vykazovacia povinnosť (nepredložený výkaz poistného a príspevkov alebo
+        neoznámené príjmy a výdavky).
+    </p>
+    {% else %}
     <p style="color:#16a34a;font-size:9pt;">✓ Spoločnosť nemá evidované nedoplatky voči VšZP, Sociálnej poisťovni ani Finančnej správe.</p>
+    {% endif %}
 </div>
 {% endif %}
 

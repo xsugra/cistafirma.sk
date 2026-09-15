@@ -493,6 +493,35 @@ class Company(
         help_text="Dlh v Sociálnej poisťovni",
         db_column="Dlh v SP"
     )
+    # The SP registry publishes two kinds of entry under one heading, and only
+    # one of them is a sum: a company owing at least 5,00 € carries an amount,
+    # while an employer that failed to submit its výkaz poistného a príspevkov
+    # -- or a foreign SZČO that failed to report income and expenses -- is
+    # listed with a bare hyphen in the amount column and the missing periods
+    # beside it (measured on the live site 2026-09-15). Around one row in ten
+    # of the register's 131 510 debtors is of the second kind.
+    #
+    # `debt_soc_poist` cannot hold that fact: NULL there means "no debt", which
+    # is exactly the wrong thing to show, and the company page said it for
+    # every one of these because `total_debt` reads NULL as zero. So the
+    # listing gets its own column -- and no figure is ever written for it,
+    # because the register never published one.
+    #
+    # NULL is "not known": every company checked before this column existed,
+    # and every company the rotation has not reached. It is deliberately not
+    # collapsed into False, so "we have not looked" never reads as "we looked
+    # and there is nothing" -- the same distinction the company page draws from
+    # the two check dates.
+    social_listed_without_amount = models.BooleanField(
+        verbose_name="Evidencia v SP bez sumy",
+        null=True,
+        blank=True,
+        help_text=(
+            "Sociálna poisťovňa uvádza spoločnosť v zozname dlžníkov bez "
+            "zverejnenej sumy (nesplnená vykazovacia povinnosť)"
+        ),
+        db_column="SP bez zverejnenej sumy",
+    )
     last_insurance_debt = models.DateTimeField(
         verbose_name="Posledná kontrola dlhov vo VSZP a SP",
         null=True,

@@ -28,6 +28,11 @@ export const mockCompanyData: Company = {
   lastUpdatedFromSource: new Date().toISOString(),
   insuranceCheckedOn: '2026-09-10T00:00:00Z',
   taxCheckedOn: '2026-09-12T00:00:00Z',
+  // The register's two SP populations are complementary in the rows measured on
+  // 2026-09-15 (43 of 50 carried a sum, 5 carried a dash and missing periods),
+  // and this fixture is one of the first: it owes money, so it is not listed
+  // for a reporting breach.
+  socialListedWithoutAmount: false,
   debts: [
     { id: 'd1', source: 'Sociálna poisťovňa', amountEur: 1250.75, dateOfRecord: '2024-07-15' },
     { id: 'd2', source: 'Finančná správa', amountEur: 840.00, dateOfRecord: '2024-07-10' },

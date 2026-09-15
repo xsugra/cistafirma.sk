@@ -81,6 +81,17 @@ AMOUNT_FIELDS = {
     CompanySyncStatus.SOURCE_SOCIAL: "debt_soc_poist",
 }
 
+# Sources whose answer can be a listing *without* an amount, mapped to the
+# company field that records it. `soc_poist_debt` reads two kinds of row from
+# one table -- a debt with a sum, and a reporting breach with a hyphen and the
+# missing periods instead -- and both are the register recognising the company.
+# Counting only the first as "found" would move every second kind into the
+# no-record column, which is the column this gate watches for a parser that has
+# stopped recognising anybody. It would read the opposite of what happened.
+LISTING_FIELDS = {
+    CompanySyncStatus.SOURCE_SOCIAL: "social_listed_without_amount",
+}
+
 # Sources that can also *refuse* a field, mapped to what it is they could not
 # read. Every source now writes one row per company per attempt carrying
 # whether it succeeded -- `ruz` included, which is why it is no longer held out
@@ -435,18 +446,26 @@ class Command(BaseCommand):
         return f" (recorded: {', '.join(parts)})" if parts else ""
 
     def _found_count(self, source: str, window_start) -> int | None:
-        """How many of this source's in-window successes reported a real amount.
+        """How many of this source's in-window successes recognised a company.
 
         None for a source whose answer carries no amount: that source cannot be
         read this way, and is left unjudged rather than guessed at.
+
+        "Recognised" is the amount column *or* the listing flag, because for
+        Socialna poistovna a company the register lists without a sum is a
+        company the parser read correctly. See `LISTING_FIELDS`.
         """
         field = AMOUNT_FIELDS.get(source)
         if field is None:
             return None
+        found = Q(**{f"company__{field}__gt": 0})
+        listed_field = LISTING_FIELDS.get(source)
+        if listed_field:
+            found |= Q(**{f"company__{listed_field}": True})
         return (
             CompanySyncStatus.objects.filter(
                 source=source, last_succeeded_at__gte=window_start
             )
-            .filter(**{f"company__{field}__gt": 0})
+            .filter(found)
             .count()
         )

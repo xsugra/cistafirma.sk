@@ -85,6 +85,12 @@ export const DEFAULT_COMPANY: Company = {
     // exercise the "we never looked" panel.
     insuranceCheckedOn: '2026-01-01T00:00:00Z',
     taxCheckedOn: '2026-01-01T00:00:00Z',
+    // `false`, not `null`: the two dates above say the insurance register was
+    // read, so the register not listing this company is the answer it gave. A
+    // `null` here would be a fixture contradicting itself -- "read, and we know
+    // nothing" -- and it would put the SP-listing branch one careless assertion
+    // away from firing in an unrelated test.
+    socialListedWithoutAmount: false,
     debts: [],
     dic: '1234567890',
     vatStatus: {

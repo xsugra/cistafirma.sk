@@ -118,6 +118,125 @@ class SyncPipelineTests(TestCase):
         with self.assertRaises(Company.DoesNotExist):
             update_insurance_debt(99999)
 
+    # ── The SP register's second population (#141) ────────────────────────
+    #
+    # Sociálna poisťovňa carries two kinds of entry under one heading: employers
+    # owing at least 5,00 €, and employers that did not file the výkaz poistného
+    # a príspevkov (plus foreign SZČO that did not report income and expenses),
+    # listed with a bare hyphen where the sum would be. Measured live 2026-09-15:
+    # 43 of 50 rows carried a sum, 5 carried the hyphen and the missing periods.
+    #
+    # The defect these pin: the second kind parsed as `UNKNOWN`, which is not
+    # authoritative, so the company was never written, `last_insurance_debt`
+    # never advanced, and the row stayed in the `nulls_first` group to be
+    # re-scraped every 12 hours for ever -- while the page showed it as a company
+    # with no social-insurance debt, green tick and all.
+
+    @patch("registers.tasks.check_vszp_debt_get", return_value=DebtCheckResult.not_found())
+    @patch(
+        "registers.tasks.check_socpoist_debt",
+        return_value=DebtCheckResult.listed_without_amount(
+            "Sociálna poisťovňa uvádza spoločnosť v zozname dlžníkov bez "
+            "zverejnenej sumy. Chýbajúce podklady za obdobie: 01/2026 - 03/2026."
+        ),
+    )
+    def test_a_listing_without_a_sum_settles_the_check_without_inventing_debt(
+        self, mock_soc, mock_vszp
+    ):
+        from registers.tasks import update_insurance_debt
+
+        update_insurance_debt(self.company.id)
+        self.company.refresh_from_db()
+
+        # The listing is recorded, and it is not a figure. `None` and not `0`:
+        # the register published no sum, and a stored zero would be a number it
+        # never printed.
+        self.assertTrue(self.company.social_listed_without_amount)
+        self.assertIsNone(self.company.debt_soc_poist)
+        self.assertIsNone(self.company.debt_vszp)
+
+        # The point of the whole fix. An authoritative answer advances the check
+        # date, which is what takes the company out of the `nulls_first` group
+        # and ends the 12-hour re-scrape it was in for ever.
+        self.assertIsNotNone(self.company.last_insurance_debt)
+
+        status = self.company.sync_statuses.get(source="social")
+        self.assertIsNotNone(status.last_succeeded_at)
+        self.assertEqual(status.last_error, "")
+        # The periods the register published, kept where a reader can find them
+        # -- they are the reason for the listing and the only place it says which
+        # filings are missing.
+        self.assertIn("01/2026 - 03/2026", status.last_detail)
+        self.assertIn("bez zverejnenej sumy", status.last_detail)
+
+    @patch("registers.tasks.check_vszp_debt_get", return_value=DebtCheckResult.not_found())
+    @patch("registers.tasks.check_socpoist_debt", return_value=DebtCheckResult.not_found())
+    def test_a_clean_answer_records_that_the_company_is_not_listed(
+        self, mock_soc, mock_vszp
+    ):
+        # `False` and not left NULL. A flag that is only ever set and never
+        # cleared would make "listed" permanent -- the company would keep the
+        # warning after it filed, and nothing could ever remove it.
+        self.company.social_listed_without_amount = True
+        self.company.save(update_fields=["social_listed_without_amount"])
+
+        from registers.tasks import update_insurance_debt
+
+        update_insurance_debt(self.company.id)
+        self.company.refresh_from_db()
+
+        self.assertFalse(self.company.social_listed_without_amount)
+
+    @patch("registers.tasks.check_vszp_debt_get", return_value=DebtCheckResult.not_found())
+    @patch("registers.tasks.check_socpoist_debt", return_value=DebtCheckResult.found(50.0))
+    def test_a_later_sum_replaces_the_listing(self, mock_soc, mock_vszp):
+        # The register can start publishing a sum for a company it previously
+        # listed without one -- a filed výkaz with an assessed debt. The amount
+        # then arrives and the listing stops being true.
+        self.company.social_listed_without_amount = True
+        self.company.save(update_fields=["social_listed_without_amount"])
+
+        from registers.tasks import update_insurance_debt
+
+        update_insurance_debt(self.company.id)
+        self.company.refresh_from_db()
+
+        self.assertEqual(self.company.debt_soc_poist, 50.0)
+        self.assertFalse(self.company.social_listed_without_amount)
+
+    @patch(
+        "registers.tasks.check_vszp_debt_get",
+        return_value=DebtCheckResult.unknown("response changed", "parse_error"),
+    )
+    @patch(
+        "registers.tasks.check_socpoist_debt",
+        return_value=DebtCheckResult.unknown("response changed", "parse_error"),
+    )
+    def test_a_failed_check_does_not_clear_a_listing_an_earlier_run_earned(
+        self, mock_soc, mock_vszp
+    ):
+        # A parse error is not evidence of anything about the company, so it may
+        # neither set nor clear the flag. Without the `is_authoritative` guard a
+        # registry outage would quietly wipe a listing we had read from a page we
+        # actually saw -- the reassuring direction, which is the worse one.
+        self.company.social_listed_without_amount = True
+        self.company.save(update_fields=["social_listed_without_amount"])
+
+        from registers.tasks import update_insurance_debt
+
+        update_insurance_debt(self.company.id)
+        self.company.refresh_from_db()
+
+        self.assertTrue(self.company.social_listed_without_amount)
+        self.assertIsNone(self.company.last_insurance_debt)
+        self.assertTrue(
+            self.company.sync_statuses.filter(
+                source="social",
+                last_error_type="parse_error",
+                last_succeeded_at__isnull=True,
+            ).exists()
+        )
+
     @patch("registers.tasks.sync_company_and_record")
     def test_sync_financials_calls_service(self, record):
         from registers.services.ruz_financials_sync import (

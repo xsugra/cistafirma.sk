@@ -29,13 +29,15 @@ const debt: Debt = {
 const render = (
     debts: Debt[],
     insuranceCheckedOn: string | null,
-    taxCheckedOn: string | null
+    taxCheckedOn: string | null,
+    socialListedWithoutAmount: boolean | null = false
 ) =>
     renderWithProviders(
         <CompanyDebts
             debts={debts}
             insuranceCheckedOn={insuranceCheckedOn}
             taxCheckedOn={taxCheckedOn}
+            socialListedWithoutAmount={socialListedWithoutAmount}
         />
     );
 
@@ -94,5 +96,91 @@ describe('CompanyDebts — the debts themselves', () => {
         expect(screen.getByText(/15\.07\.2024/)).toBeInTheDocument();
         expect(screen.getByText('Celkový dlh')).toBeInTheDocument();
         expect(screen.queryByText(NOT_CHECKED)).not.toBeInTheDocument();
+    });
+});
+
+/**
+ * The other half of the SP register.
+ *
+ * Sociálna poisťovňa carries two populations under one heading: employers owing
+ * at least 5,00 €, and employers that did not file the výkaz poistného a
+ * príspevkov (plus foreign SZČO that did not report income and expenses),
+ * listed with a bare hyphen where the sum would be. Measured 2026-09-15 on the
+ * live register: 43 of 50 rows carried a sum and a hyphen in the periods column,
+ * 5 carried a hyphen in the sum column and the missing periods beside it. So the
+ * populations are complementary, and the second one has no money in it at all.
+ *
+ * The defect these tests pin: a `LISTED_NO_AMOUNT` company has `debt_soc_poist`
+ * NULL, so it built no debt row, so it was rendered as a company with no
+ * social-insurance debt -- with the green tick when both check dates happened to
+ * be set. The money really is zero and the listing really is not.
+ */
+describe('CompanyDebts — SP lists the company without a sum', () => {
+    const LISTED = /uvádza túto spoločnosť vo svojom zozname dlžníkov bez\s+zverejnenej sumy/;
+
+    it('refuses the green tick even when both sources were read', () => {
+        // The exact case that was wrong: both dates present, no debt rows, and
+        // the section printed "Neboli nájdené žiadne aktuálne dlhy." over a
+        // company the register does list.
+        render([], '2026-09-10T12:00:00Z', '2026-09-12T12:00:00Z', true);
+
+        expect(screen.queryByText(TICK)).not.toBeInTheDocument();
+        expect(screen.getByText(LISTED)).toBeInTheDocument();
+    });
+
+    it('separates the listing from the money instead of merging them', () => {
+        // Two different facts, and the one the reader must not misread is the
+        // second: no sum is published, so the amount is not "unknown" -- it is
+        // absent, and the reason is a filing breach rather than a debt.
+        render([], '2026-09-10T12:00:00Z', '2026-09-12T12:00:00Z', true);
+
+        expect(screen.getByText(/Nejde o peňažný nedoplatok/)).toBeInTheDocument();
+        expect(screen.getByText(/nesplnená vykazovacia povinnosť/)).toBeInTheDocument();
+        expect(
+            screen.getByText(/Peňažné nedoplatky voči VšZP, Sociálnej poisťovni ani Finančnej\s+správe sme nezistili/)
+        ).toBeInTheDocument();
+    });
+
+    it('does not claim the money question was answered when it was not', () => {
+        // Only the insurers were read. Saying "no monetary arrears" here would be
+        // the same unearned all-clear the empty state exists to refuse, just in a
+        // different sentence.
+        render([], '2026-09-10T12:00:00Z', null, true);
+
+        expect(screen.getByText(LISTED)).toBeInTheDocument();
+        expect(screen.getByText(/Či dlží aj/)).toBeInTheDocument();
+        expect(
+            screen.queryByText(/Peňažné nedoplatky voči VšZP, Sociálnej poisťovni ani Finančnej\s+správe sme nezistili/)
+        ).not.toBeInTheDocument();
+    });
+
+    it('keeps the listing visible when the company owes someone else', () => {
+        // A company can be listed for a filing breach *and* owe VšZP. The total
+        // is money and the listing is not, so they stay separate -- but the
+        // listing must not vanish from the screen where a reader looks hardest
+        // at debts.
+        render([debt], '2026-09-10T12:00:00Z', '2026-09-12T12:00:00Z', true);
+
+        expect(screen.getByText('Celkový dlh')).toBeInTheDocument();
+        expect(screen.getByText(/nie je zahrnutá v celkovej sume/)).toBeInTheDocument();
+    });
+
+    it('says nothing extra when the register did list a sum', () => {
+        // The 43 of 50. `false` is the register answering "not this population",
+        // and the section is then the ordinary earned green tick.
+        render([], '2026-09-10T12:00:00Z', '2026-09-12T12:00:00Z', false);
+
+        expect(screen.getByText(TICK)).toBeInTheDocument();
+        expect(screen.queryByText(LISTED)).not.toBeInTheDocument();
+    });
+
+    it('reads an unread register as the unread panel, not as a listing', () => {
+        // `null` is "we have not read it", which is the state the insurance pass
+        // leaves 92 % of the register in. It is not a listing, and it must not
+        // borrow the listing's sentence.
+        render([], null, null, null);
+
+        expect(screen.getByText(NOT_CHECKED)).toBeInTheDocument();
+        expect(screen.queryByText(LISTED)).not.toBeInTheDocument();
     });
 });

@@ -370,6 +370,16 @@ export function mapCompanyResponse(data: any): Company {
     ...(debtTax > 0 ? [{ id: 'fs', source: 'Finančná správa' as const, amountEur: debtTax, dateOfRecord: data.fs_update_date }] : []),
   ];
 
+  // The register's second population, and the reason `debts` cannot carry it:
+  // a `LISTED_NO_AMOUNT` company has `debt_soc_poist` NULL, so it builds no row
+  // and its arrears read as zero. Read with `=== true` and not a truthy test:
+  // the column is nullable, `null` means we never read the register, and a
+  // default here would be the fourth wrong screen this mapper produced.
+  const socialListedWithoutAmount =
+    data.social_listed_without_amount === true ? true
+      : data.social_listed_without_amount === false ? false
+        : null;
+
   const totalDebt = debtVszp + debtSocPoist + debtTax;
   const hasDebt = totalDebt > 0;
 
@@ -473,6 +483,7 @@ export function mapCompanyResponse(data: any): Company {
     // section each reach for `data.fs_update_date` and drift apart.
     insuranceCheckedOn: data.last_insurance_debt ?? null,
     taxCheckedOn: taxCheckedOn,
+    socialListedWithoutAmount,
     debts,
     vatStatus: {
       icDph: data.ic_dph,

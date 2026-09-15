@@ -409,6 +409,11 @@ def generate_company_report(company: Company) -> bytes:
         'risk_score': {'score': risk_score, 'summary': risk_summary},
         'debts': debts,
         'total_debt': total_debt,
+        # The report is downloaded, so a green "no arrears" line in it is a
+        # claim somebody keeps. Sociálna poisťovňa lists companies it publishes
+        # no sum for, and for those the money really is zero and the listing
+        # really is not -- the template needs both facts to say so.
+        'social_listed_without_amount': bool(company.social_listed_without_amount),
         'analysis': analysis,
         'ratio_rows': ratio_rows,
         'ratio_basis_note': RATIO_BASIS_NOTE,

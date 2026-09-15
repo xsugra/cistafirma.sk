@@ -1,9 +1,10 @@
 from unittest.mock import Mock
 
+from bs4 import BeautifulSoup
 from django.test import SimpleTestCase
 
 from registers.scrapers.debt_result import DebtCheckState
-from registers.scrapers.soc_poist_debt import check_socpoist_debt
+from registers.scrapers.soc_poist_debt import _header_label, check_socpoist_debt
 from registers.scrapers.vszp_debt import check_vszp_debt_get
 
 # Trimmed copies of the two responses the live site actually returns, so the
@@ -82,6 +83,71 @@ SP_GLOSSARY = """
         <li><a href="?glossary=a" class="govuk-link">A</a></li>
       </ul>"""
 
+# The result table's header, column for column and in the order the view renders
+# it. `period__value` carries the double underscore the live page uses.
+_SP_COLUMNS = (
+    ("Názov / Meno", "name", True),
+    ("IČO", "ico", False),
+    ("Adresa", "address", True),
+    ("Mesto", "city", True),
+    ("Dlžná suma", "price", True),
+    ("Chýbajúce podklady za obdobie", "period__value", False),
+)
+
+# The price column really does carry `views-align-right` twice on the live page.
+_SP_TH_CLASSES = {
+    "name": "views-field views-field-name",
+    "ico": "views-field views-field-ico",
+    "address": "views-field views-field-address",
+    "city": "views-field views-field-city",
+    "price": "views-align-right views-field views-field-price views-align-right",
+    "period__value": "views-field views-field-period__value",
+}
+
+
+def _sp_thead(column: str) -> str:
+    """The result table's `<thead>`, as the view actually renders it.
+
+    The sort control is the part that matters. Every *sortable* column nests an
+    `<a>` whose screen-reader span reads `zoradiť podľa <column>`, so the cell's
+    plain text comes out as
+
+        "Dlžná suma zoradiť podľa Dlžná suma"
+
+    -- a string equal to no column name at all. Verbatim from the live register,
+    measured 2026-09-15, where the amount column renders as
+
+        <th class="views-align-right views-field views-field-price views-align-right"
+            id="view-price-table-column--2" scope="col"><span class="th-span">
+          Dlžná suma
+          <a class="arrowBtn" href="?order=price&amp;sort=asc" rel="nofollow"
+             title="zoradiť podľa Dlžná suma"><span class="sr-only">zoradiť podľa
+            Dlžná suma</span></a></span></th>
+
+    IČO and `Chýbajúce podklady za obdobie` are not sortable and carry no anchor.
+
+    Written out here rather than trimmed into each fixture by hand because these
+    fixtures once carried `<th>Dlžná suma</th>` -- what the column *means* rather
+    than what the page *emits*. Twenty tests passed against that while the live
+    page matched nothing the parser looked for, so every check in the register
+    would have come back `unknown`: the money path as well as the hyphen one.
+    """
+    cells = []
+    for label, field, sortable in _SP_COLUMNS:
+        anchor = ""
+        if sortable:
+            anchor = (
+                f' <a class="arrowBtn" href="?order={field}&amp;sort=asc"'
+                f' rel="nofollow" title="zoradiť podľa {label}">'
+                f'<span class="sr-only">zoradiť podľa {label}</span></a>'
+            )
+        cells.append(
+            f'<th class="{_SP_TH_CLASSES[field]}"'
+            f' id="view-{field}-table-column--{column}" scope="col">'
+            f'<span class="th-span">{label}{anchor}</span></th>'
+        )
+    return "\n          ".join(cells)
+
 SP_NO_RECORD_PAGE = f"""
 <html><body>
 <div class="govuk-grid-column-full">
@@ -105,22 +171,17 @@ SP_DEBTOR_ROW_PAGE = f"""
     <table class="cols-6">
       <thead>
         <tr>
-          <th id="view-name-table-column--2" scope="col"><span class="th-span">Názov / Meno</span></th>
-          <th id="view-ico-table-column--2" scope="col"><span class="th-span">IČO</span></th>
-          <th id="view-address-table-column--2" scope="col"><span class="th-span">Adresa</span></th>
-          <th id="view-city-table-column--2" scope="col"><span class="th-span">Mesto</span></th>
-          <th id="view-price-table-column--2" scope="col"><span class="th-span">Dlžná suma</span></th>
-          <th id="view-period-value-table-column--2" scope="col"><span class="th-span">Chýbajúce podklady za obdobie</span></th>
+          {_sp_thead("2")}
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td headers="view-name-table-column--2" class="views-field views-field-name">MMBOXX, s.r.o.</td>
-          <td headers="view-ico-table-column--2" class="views-field views-field-ico">36439151</td>
-          <td headers="view-address-table-column--2" class="views-field views-field-address">Družstevná 4,</td>
-          <td headers="view-city-table-column--2" class="views-field views-field-city">Liptovský Mikuláš</td>
-          <td headers="view-price-table-column--2" class="views-field views-field-price views-align-right">731,46 €</td>
-          <td headers="view-period-value-table-column--2" class="views-field views-field-period__value"><p>-</p></td>
+          <td class="views-field views-field-name" headers="view-name-table-column--2">MMBOXX, s.r.o.</td>
+          <td class="views-field views-field-ico" headers="view-ico-table-column--2">36439151</td>
+          <td class="views-field views-field-address" headers="view-address-table-column--2">Družstevná 4,</td>
+          <td class="views-field views-field-city" headers="view-city-table-column--2">Liptovský Mikuláš</td>
+          <td class="views-field views-field-price views-align-right" headers="view-price-table-column--2">731,46 €</td>
+          <td class="views-field views-field-period__value" headers="view-period-value-table-column--2"><p>-</p></td>
         </tr>
       </tbody>
     </table>
@@ -128,6 +189,53 @@ SP_DEBTOR_ROW_PAGE = f"""
 </div>
 </body></html>
 """
+
+
+# The second population the registry carries. SP publishes employers that did
+# not submit their výkaz, and foreign SZČO that did not report income, in the
+# same table as its debtors -- with a bare hyphen where the sum would be and
+# the missing periods in the next column instead (measured 2026-09-15: the two
+# columns are complementary, money with "-" in 43 of 50 rows and "-" with
+# periods in 5). So the hyphen means "listed for a reporting breach", not
+# "owes an amount we could not read".
+SP_LISTED_WITHOUT_AMOUNT_PAGE = f"""
+<html><body>
+<div class="govuk-grid-column-full">
+  <div class="view view-debitors view-id-debitors view-display-id-embed js-view-dom-id-a1b2c3d4">
+    <div class="view-header">
+      Dlžníci podľa zadaných kritérií: <strong>1</strong>
+      {SP_GLOSSARY}
+    </div>
+    <table class="cols-6">
+      <thead>
+        <tr>
+          {_sp_thead("3")}
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="views-field views-field-name" headers="view-name-table-column--3">STAVBY - SERVIS, s.r.o.</td>
+          <td class="views-field views-field-ico" headers="view-ico-table-column--3">36269727</td>
+          <td class="views-field views-field-address" headers="view-address-table-column--3">Priemyselná 8,</td>
+          <td class="views-field views-field-city" headers="view-city-table-column--3">Zvolen</td>
+          <td class="views-field views-field-price views-align-right" headers="view-price-table-column--3"><p>-</p></td>
+          <td class="views-field views-field-period__value" headers="view-period-value-table-column--3"><p>01/2026 - 03/2026</p></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</body></html>
+"""
+
+# The same hyphen-first row with the header labels stripped, so the table can
+# no longer say which column is the amount. Reading the mark from "whichever
+# cell is empty" would answer `listed_no_amount` here; the header lookup leaves
+# it unknown instead, which is the safe direction -- a re-queue, not a claim.
+SP_LISTED_WITHOUT_AMOUNT_NO_HEADER_PAGE = (
+    SP_LISTED_WITHOUT_AMOUNT_PAGE.replace("Dlžná suma", "Suma")
+    .replace("Chýbajúce podklady za obdobie", "Obdobie")
+)
 
 
 class InsuranceDebtScraperTests(SimpleTestCase):
@@ -310,6 +418,28 @@ class InsuranceDebtScraperTests(SimpleTestCase):
         self.assertEqual(result.state, DebtCheckState.FOUND)
         self.assertAlmostEqual(result.amount, 731.46, places=2)
 
+    def test_social_header_is_read_without_the_sort_control(self):
+        """The name a column is matched by excludes the sort link inside it.
+
+        This is the pin on the whole module. Drupal nests a sort anchor in every
+        sortable `<th>`, and that anchor carries screen-reader text of its own,
+        so the cell's plain text is
+
+            "Dlžná suma zoradiť podľa Dlžná suma"
+
+        Read that way the table named no amount column, so no table was found --
+        and the consequence was not confined to the hyphen branch it was written
+        for: the money path went with it and every SP check came back `unknown`,
+        which is the re-queue-forever state the whole rewrite exists to end.
+        """
+        header = BeautifulSoup(_sp_thead("2"), "html.parser")
+        labels = [_header_label(th) for th in header.find_all("th")]
+
+        self.assertIn("Dlžná suma", labels)
+        self.assertIn("Chýbajúce podklady za obdobie", labels)
+        # The control is furniture, not part of the name.
+        self.assertNotIn("zoradiť podľa", " ".join(labels))
+
     def test_social_row_for_another_ico_is_not_attributed(self):
         """The old scan took the first "€" anywhere on the page.
 
@@ -350,6 +480,99 @@ class InsuranceDebtScraperTests(SimpleTestCase):
         self.assertEqual(result.state, DebtCheckState.UNKNOWN)
         self.assertIsNone(result.amount)
         self.assertEqual(result.error_type, "parse_error")
+
+    def test_social_listed_row_without_an_amount_is_its_own_state(self):
+        """A hyphen in the amount column is an answer, not a parsing failure.
+
+        The registry lists employers who did not file and foreign SZČO who did
+        not report, in the same table as its debtors, with a hyphen where the
+        sum would be. Read as `unknown` the company was never written and never
+        settled -- `last_insurance_debt` stayed NULL, so it sat in the
+        never-checked group and was scraped twice a day for ever, while the
+        company page showed it as debt-free. Read as `0.00` it would publish a
+        figure the register never printed. It is neither.
+        """
+        session = Mock()
+        session.get.return_value = Mock(text=SP_LISTED_WITHOUT_AMOUNT_PAGE)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36269727")
+
+        self.assertEqual(result.state, DebtCheckState.LISTED_NO_AMOUNT)
+        # The whole point: conclusive about the company, silent about money.
+        self.assertIsNone(result.amount)
+        self.assertTrue(result.is_authoritative)
+
+    def test_social_listed_row_carries_the_periods_the_register_published(self):
+        """The periods are the claim. A sum was never the only thing SP says."""
+        session = Mock()
+        session.get.return_value = Mock(text=SP_LISTED_WITHOUT_AMOUNT_PAGE)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36269727")
+
+        self.assertIn("01/2026 - 03/2026", result.detail)
+        self.assertIn("bez zverejnenej sumy", result.detail)
+
+    def test_social_dash_elsewhere_does_not_make_the_row_a_listing(self):
+        """A hyphen in *another* column is not the amount column's mark.
+
+        This is the guard on the whole branch. The periods column is `-` on
+        every ordinary debtor row, so a rule that accepted any empty cell would
+        turn an unreadable amount into a confident "listed without a sum" --
+        putting a claim in the register's mouth it never made.
+        """
+        page = SP_DEBTOR_ROW_PAGE.replace("731,46 €", "neuvedené")
+        # The period cell in that fixture is already "-", so the row now holds
+        # exactly one hyphen and no money at all.
+        session = Mock()
+        session.get.return_value = Mock(text=page)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36439151")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+
+    def test_social_listed_row_without_its_header_stays_unknown(self):
+        """When the table cannot say which column is the amount, we do not guess.
+
+        The failure is deliberately in the safe direction: the company is
+        re-queued rather than recorded as something the register did not say.
+        """
+        session = Mock()
+        session.get.return_value = Mock(text=SP_LISTED_WITHOUT_AMOUNT_NO_HEADER_PAGE)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36269727")
+
+        self.assertEqual(result.state, DebtCheckState.UNKNOWN)
+        self.assertIsNone(result.amount)
+        self.assertEqual(result.error_type, "parse_error")
+
+    def test_social_debtor_row_beside_a_listed_row_is_still_found(self):
+        """The two populations share a table; each row is read on its own."""
+        page = SP_LISTED_WITHOUT_AMOUNT_PAGE.replace(
+            "</tbody>",
+            """
+            <tr>
+              <td class="views-field views-field-name" headers="view-name-table-column--3">MMBOXX, s.r.o.</td>
+              <td class="views-field views-field-ico" headers="view-ico-table-column--3">36439151</td>
+              <td class="views-field views-field-address" headers="view-address-table-column--3">Družstevná 4,</td>
+              <td class="views-field views-field-city" headers="view-city-table-column--3">Liptovský Mikuláš</td>
+              <td class="views-field views-field-price views-align-right" headers="view-price-table-column--3">731,46 €</td>
+              <td class="views-field views-field-period__value" headers="view-period-value-table-column--3"><p>-</p></td>
+            </tr>
+            </tbody>""",
+        )
+        session = Mock()
+        session.get.return_value = Mock(text=page)
+
+        with self._patch_session("registers.scrapers.soc_poist_debt.get_session_with_retry", session):
+            result = check_socpoist_debt("36439151")
+
+        self.assertEqual(result.state, DebtCheckState.FOUND)
+        self.assertAlmostEqual(result.amount, 731.46, places=2)
 
     def _patch_session(self, target, session):
         from unittest.mock import patch

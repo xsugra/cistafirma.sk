@@ -727,6 +727,7 @@ class IndividualEntityAdmin(UnfoldModelAdmin):
             'fields': (
                 'debt_display',
                 'debt_vszp', 'debt_soc_poist',
+                'social_listed_without_amount',
                 'last_insurance_debt'
             )
         }),
@@ -753,6 +754,10 @@ class IndividualEntityAdmin(UnfoldModelAdmin):
             parts.append(f'VSZP: {obj.debt_vszp:,.2f} €')
         if obj.debt_soc_poist:
             parts.append(f'SP: {obj.debt_soc_poist:,.2f} €')
+        elif obj.social_listed_without_amount:
+            # "—" would say we know nothing here. We know something: the
+            # register lists the company and published no sum for it.
+            parts.append('SP: bez zverejnenej sumy')
         if not parts:
             return mark_safe('<span style="color: #999;">—</span>')
         return mark_safe('<br/>'.join(parts))
@@ -771,6 +776,12 @@ class IndividualEntityAdmin(UnfoldModelAdmin):
             total = (obj.debt_vszp or 0) + (obj.debt_soc_poist or 0)
             return mark_safe(
                 f'<span class="cf-badge cf-badge--danger">{total:,.0f} €</span>'
+            )
+        if obj.social_listed_without_amount:
+            return mark_safe(
+                '<span class="cf-badge cf-badge--warning" title="Sociálna '
+                'poisťovňa uvádza spoločnosť v zozname dlžníkov bez zverejnenej '
+                'sumy">SP bez sumy</span>'
             )
         return mark_safe(
             '<span class="cf-badge cf-badge--success">OK</span>'

@@ -19,6 +19,29 @@ interface CompanyDebtsProps {
     insuranceCheckedOn: string | null;
     /** When we last read Finančná správa for this company, or null. */
     taxCheckedOn: string | null;
+    /**
+     * Sociálna poisťovňa lists the company without publishing a sum for it.
+     * See the `Company` type for the register's two populations.
+     */
+    socialListedWithoutAmount: boolean | null;
+}
+
+/**
+ * The sources nobody has read for this company, named.
+ *
+ * Hoisted out of `EmptyState` because two branches now ask the same question --
+ * the unread panel below, and the sentence under a SP listing that has to say
+ * whether the *money* question was answered at all. Two copies of this is how
+ * the two would come to disagree about which source is missing.
+ */
+function unreadSources(
+    insuranceCheckedOn: string | null,
+    taxCheckedOn: string | null
+): string[] {
+    const unread: string[] = [];
+    if (!insuranceCheckedOn) unread.push(INSURANCE);
+    if (!taxCheckedOn) unread.push(TAX);
+    return unread;
 }
 
 /**
@@ -39,7 +62,57 @@ interface CompanyDebtsProps {
 function EmptyState({
     insuranceCheckedOn,
     taxCheckedOn,
-}: Pick<CompanyDebtsProps, 'insuranceCheckedOn' | 'taxCheckedOn'>) {
+    socialListedWithoutAmount,
+}: Pick<
+    CompanyDebtsProps,
+    'insuranceCheckedOn' | 'taxCheckedOn' | 'socialListedWithoutAmount'
+>) {
+    // The listing is a *finding*, so it is answered before either of the two
+    // branches below. It can never be the green tick -- the register does have
+    // something recorded against this company -- and it is not a gap either, so
+    // neither of the other two sentences may be printed over it.
+    //
+    // It is reached whenever the register said so, which implies the insurance
+    // side *was* read: the flag is only ever written from a result that settled
+    // the question. So this branch does not need `insuranceCheckedOn` to be set
+    // to be true; it needs it to be absent to be a contradiction, and the
+    // listing is still the honest thing to show in that case.
+    if (socialListedWithoutAmount) {
+        const unread = unreadSources(insuranceCheckedOn, taxCheckedOn);
+        return (
+            <div className="py-4 px-4 text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-lg">
+                <p>
+                    <i className="fas fa-circle-exclamation mr-2"></i>
+                    <strong>
+                        Sociálna poisťovňa uvádza túto spoločnosť vo svojom zozname dlžníkov bez
+                        zverejnenej sumy.
+                    </strong>
+                </p>
+                <p className="mt-2 text-sm">
+                    Nejde o peňažný nedoplatok — register k tejto firme nezverejnil žiadnu sumu.
+                    Dôvodom je nesplnená vykazovacia povinnosť: nepredložený výkaz poistného a
+                    príspevkov alebo neoznámené príjmy a výdavky.
+                </p>
+                <p className="mt-2 text-sm">
+                    {unread.length === 0 ? (
+                        <>
+                            Peňažné nedoplatky voči VšZP, Sociálnej poisťovni ani Finančnej
+                            správe sme nezistili.
+                        </>
+                    ) : (
+                        <>
+                            Či dlží aj <strong>peňažné</strong> nedoplatky, zatiaľ nevieme —{' '}
+                            {unread.length === 2
+                                ? `ani u ${INSURANCE}, ani na ${TAX} sme túto firmu ešte nekontrolovali`
+                                : `u ${unread[0]} sme pre túto firmu ešte nekontrolovali`}
+                            .
+                        </>
+                    )}
+                </p>
+            </div>
+        );
+    }
+
     // Tested directly rather than through a list length, so TypeScript narrows
     // both to non-null in the branch that needs them.
     if (insuranceCheckedOn && taxCheckedOn) {
@@ -100,6 +173,7 @@ export const CompanyDebts: React.FC<CompanyDebtsProps> = ({
     debts,
     insuranceCheckedOn,
     taxCheckedOn,
+    socialListedWithoutAmount,
 }) => {
     const totalDebt = debts.reduce((sum, debt) => sum + debt.amountEur, 0);
 
@@ -128,11 +202,26 @@ export const CompanyDebts: React.FC<CompanyDebtsProps> = ({
                             currency: 'EUR'
                         })}</p>
                     </div>
+                    {/* The total above is money, and the SP listing is not, so it
+                        is not folded into it -- but it must not vanish either
+                        just because the company also owes someone else. The
+                        reader looking hardest at debts is the one this matters
+                        to most. */}
+                    {socialListedWithoutAmount && (
+                        <p className="text-sm text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 rounded-lg p-3">
+                            <i className="fas fa-circle-exclamation mr-2"></i>
+                            Sociálna poisťovňa navyše uvádza túto spoločnosť vo svojom zozname
+                            dlžníkov <strong>bez zverejnenej sumy</strong> — dôvodom je nesplnená
+                            vykazovacia povinnosť. Táto položka nie je zahrnutá v celkovej sume,
+                            pretože register k nej žiadnu sumu neuvádza.
+                        </p>
+                    )}
                 </div>
             ) : (
                 <EmptyState
                     insuranceCheckedOn={insuranceCheckedOn}
                     taxCheckedOn={taxCheckedOn}
+                    socialListedWithoutAmount={socialListedWithoutAmount}
                 />
             )}
         </InfoCard>

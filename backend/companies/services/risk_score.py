@@ -107,6 +107,30 @@ def _describe_debt(debt: Decimal) -> str:
     return f'{text} €'
 
 
+#: What the debt factor says when no sum is recorded. "žiadne" answers the
+#: question the factor asks -- are there arrears -- and every company the
+#: rotation has not reached answers it the same way, which the check dates on
+#: the debts card are there to qualify.
+NO_DEBT_DETAIL = 'žiadne'
+
+#: ...except when the register listed the company without publishing a sum.
+#: Sociálna poisťovňa carries two populations under one heading, and the second
+#: -- employers that did not file, foreign SZČO that did not report -- is
+#: recorded in `social_listed_without_amount` and nowhere else. It costs the
+#: score nothing, because the register printed no sum to cost it with, so this
+#: is a change to the sentence and not to the number: a factor at zero and a
+#: factor we could not put a number on are different facts, and `parts` exists
+#: to keep them apart.
+NO_DEBT_LISTED_DETAIL = 'žiadne peňažné; SP eviduje bez zverejnenej sumy'
+
+
+def describe_no_debt(company) -> str:
+    """The debt factor's sentence for a company with no recorded arrears."""
+    if getattr(company, 'social_listed_without_amount', None):
+        return NO_DEBT_LISTED_DETAIL
+    return NO_DEBT_DETAIL
+
+
 def _describe_zone(zone: str) -> str:
     """The zone in the words the summary already uses for it."""
     return {
@@ -153,7 +177,7 @@ def compute_risk_score(company, analysis: dict | None = None) -> dict:
         'key': 'debt',
         'label': 'Evidované nedoplatky',
         'delta': -debt_deduction,
-        'detail': _describe_debt(debt) if has_debt else 'žiadne',
+        'detail': _describe_debt(debt) if has_debt else describe_no_debt(company),
     }]
 
     latest = (analysis or {}).get('latest') or {}

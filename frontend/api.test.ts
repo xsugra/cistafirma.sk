@@ -123,3 +123,71 @@ describe('mapCompanyResponse — the VAT block', () => {
         expect(mapCompanyResponse(base).dic).toBeNull();
     });
 });
+
+/**
+ * The register's second population, where a missing amount is the answer.
+ *
+ * This mapper has produced three wrong screens by defaulting a field the API did
+ * not send, and this is the field most able to produce a fourth: `debts` is
+ * built only from amounts above zero, so a `LISTED_NO_AMOUNT` company has an
+ * empty `debts` array and `social_listed_without_amount` is the *only* record of
+ * the listing. A `?? false` here would hide it again, and a truthy test would
+ * read the string `"false"` -- or any future non-boolean -- as a listing.
+ */
+describe('mapCompanyResponse — the SP listing without a sum', () => {
+    const base = {
+        id: 'c-1',
+        ico: '36269727',
+        nazov_UJ: 'Testovacia, s. r. o.',
+        datum_zalozenia: '2001-01-01',
+        ulica: 'Hlavná 1',
+        mesto: 'Bratislava',
+        psc: '811 01',
+    };
+
+    it('carries the listing, which no debt row can hold', () => {
+        // The whole defect in one assertion: the register lists the company and
+        // publishes no sum, so `debt_soc_poist` is NULL, so `debts` is empty.
+        const company = mapCompanyResponse({
+            ...base,
+            social_listed_without_amount: true,
+            debt_soc_poist: null,
+        });
+
+        expect(company.socialListedWithoutAmount).toBe(true);
+        expect(company.debts).toEqual([]);
+    });
+
+    it('tells a false apart from an absent', () => {
+        // `false` is "we read the register and it does not list this company" --
+        // the answer for the overwhelming majority. `null` is "we have not read
+        // it", which is the 92 % the insurance pass has not reached.
+        expect(
+            mapCompanyResponse({...base, social_listed_without_amount: false})
+                .socialListedWithoutAmount
+        ).toBe(false);
+        expect(mapCompanyResponse(base).socialListedWithoutAmount).toBeNull();
+        expect(
+            mapCompanyResponse({...base, social_listed_without_amount: null})
+                .socialListedWithoutAmount
+        ).toBeNull();
+    });
+
+    it('does not read a non-boolean as a listing', () => {
+        // The backend sends a real boolean, and anything else reaching here is a
+        // contract break. The safe reading of a value we cannot interpret is the
+        // one that adds no claim, not the one that prints a listing.
+        expect(
+            mapCompanyResponse({...base, social_listed_without_amount: 'true'})
+                .socialListedWithoutAmount
+        ).toBeNull();
+        expect(
+            mapCompanyResponse({...base, social_listed_without_amount: 1})
+                .socialListedWithoutAmount
+        ).toBeNull();
+        expect(
+            mapCompanyResponse({...base, social_listed_without_amount: undefined})
+                .socialListedWithoutAmount
+        ).toBeNull();
+    });
+});

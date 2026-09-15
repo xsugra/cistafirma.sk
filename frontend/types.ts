@@ -60,6 +60,31 @@ export interface Company {
    * `vatStatus.lastCheckedAt` — one expression in the mapper fills both, so the
    * two cannot drift apart. */
   taxCheckedOn: string | null;
+  /**
+   * Whether Sociálna poisťovňa lists the company in its debtors register
+   * **without publishing a sum for it**.
+   *
+   * The register carries two populations under one heading: employers owing at
+   * least 5,00 € (an amount in the sum column) and employers that failed to file
+   * the výkaz poistného a príspevkov, plus foreign SZČO that failed to report
+   * income and expenses — listed with a bare hyphen and the missing **periods**
+   * instead. The two columns are complementary: measured 2026-09-15 on the live
+   * register, 43 of 50 rows carried money and a hyphen, 5 carried a hyphen and
+   * periods. A dash therefore means "listed for a reporting breach", not "owes
+   * an unknown amount", and extrapolated over SP's 131 510 debtors it is roughly
+   * 10 000–13 000 companies.
+   *
+   * It matters because `debts` cannot hold it: `debt_soc_poist` is NULL for
+   * every one of them, `total_debt` treats NULL as zero, and so every such
+   * company was rendered as having **no social-insurance debt** — with the green
+   * tick when both check dates happened to be set. The money really is zero and
+   * the listing really is not, so this flag is what lets the section say both.
+   *
+   * `null` is "we have not read the register", `false` is "read, and not
+   * listed". The nullable column mirrors `vatStatus.isVatPayer`: collapsing
+   * unknown into `false` is the same mistake in the same direction.
+   */
+  socialListedWithoutAmount: boolean | null;
   debts: Debt[];
   vatStatus: VatStatus;
   riskScore: RiskScore;

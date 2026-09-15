@@ -20,6 +20,7 @@ export const DebtsSection: React.FC<DebtsSectionProps> = ({ company }) => (
             debts={company.debts}
             insuranceCheckedOn={company.insuranceCheckedOn}
             taxCheckedOn={company.taxCheckedOn}
+            socialListedWithoutAmount={company.socialListedWithoutAmount}
         />
     </div>
 );

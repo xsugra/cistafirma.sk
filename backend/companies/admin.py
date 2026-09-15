@@ -272,6 +272,7 @@ class CompanyAdmin(UnfoldModelAdmin):
         ('Dlhy v poistovniach', {
             'fields': (
                 ('debt_vszp', 'debt_soc_poist'),
+                'social_listed_without_amount',
                 'last_insurance_debt',
             ),
             'classes': ('collapse',),
@@ -351,6 +352,16 @@ class CompanyAdmin(UnfoldModelAdmin):
                 f'cf-badge {level}',
                 ', '.join(issues).replace('&euro;', '€'),
                 format_currency_eur(total_debt)
+            )
+        if obj.social_listed_without_amount:
+            # Listed by the social insurer, with no sum published for it. The
+            # badge below is shaped like money, so this is not folded into it:
+            # "0,00 €" beside a listing that is not about money would be a new
+            # wrong answer in place of the old one.
+            return mark_safe(
+                '<span class="cf-badge cf-badge--warning" title="Sociálna '
+                'poisťovňa uvádza spoločnosť v zozname dlžníkov bez zverejnenej '
+                'sumy (nesplnená vykazovacia povinnosť)">SP bez sumy</span>'
             )
         if obj.last_insurance_debt:
             return mark_safe(

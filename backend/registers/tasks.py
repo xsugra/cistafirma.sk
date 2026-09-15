@@ -8,6 +8,7 @@ import logging
 
 from .scrapers.vszp_debt import check_vszp_debt_get
 from .scrapers.soc_poist_debt import check_socpoist_debt
+from .scrapers.debt_result import DebtCheckState
 from .scrapers.orsr_scraper import OrsrScraperError
 from .integrations.ruz_api import RuzApi, apply_ruz_dates
 from .services.rpo_sync import RpoSyncService, pending_person_history
@@ -150,10 +151,31 @@ def update_insurance_debt(company_id: int):
                 success=result.is_authoritative,
                 error=result.error,
                 error_type=result.error_type,
+                # `None` where the attempt has nothing to say, which is every
+                # state but `LISTED_NO_AMOUNT` -- the argument's own contract
+                # is that `None` leaves a previous writer's sentence alone,
+                # and neither of these two sources has another writer.
+                detail=result.detail or None,
             )
             if result.is_authoritative:
+                # For `LISTED_NO_AMOUNT` this writes `None`: the register
+                # stopped publishing a sum for this company, so the one we
+                # stored is no longer what it says. The listing itself is
+                # recorded in the column below, not here.
                 setattr(company, field_name, result.amount)
                 update_fields.append(field_name)
+
+        # The SP registry lists two kinds of entry and only one of them is
+        # money. `debt_soc_poist` is NULL for both "owes nothing" and "listed
+        # without a sum", so the second needs its own column or the company
+        # page cannot tell them apart -- and it currently shows the second as
+        # the first. Guarded on `is_authoritative` so that a network error
+        # cannot clear a flag a previous attempt set from a page it did read.
+        if social_result.is_authoritative:
+            listed = social_result.state is DebtCheckState.LISTED_NO_AMOUNT
+            if company.social_listed_without_amount != listed:
+                company.social_listed_without_amount = listed
+                update_fields.append("social_listed_without_amount")
 
         if vszp_result.is_authoritative and social_result.is_authoritative:
             company.last_insurance_debt = timezone.now()

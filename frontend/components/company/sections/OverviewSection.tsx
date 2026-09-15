@@ -25,6 +25,7 @@ export const OverviewSection: React.FC<OverviewSectionProps> = ({ company }) => 
                 debts={company.debts}
                 insuranceCheckedOn={company.insuranceCheckedOn}
                 taxCheckedOn={company.taxCheckedOn}
+                socialListedWithoutAmount={company.socialListedWithoutAmount}
             />
 
             {company.financials.length > 0 ? (
