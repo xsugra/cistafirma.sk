@@ -579,6 +579,31 @@ ani jednu stranu → 3 zhluky; `total_people` je `null`, keď okno nestačí.
 
 ### #95 — História funkcií z RPO sa dopĺňa (beží)
 
+**Stav 2026-09-15 21:44 UTC: `refresh_person_history --dry-run` na delle hlási
+8 347 čakajúcich z 27 422 RPO profilov.** Lane beží podľa návrhu, nie je
+zaseknutý — a je dôležité vedieť, prečo to tak vyzerá:
+
+- Dva odbery **4 minúty od seba dali presne to isté číslo** (8 347 → 8 347).
+  To vyzerá ako zastavený lane, ale je to medzera medzi dávkami: fronta `orsr`
+  mala v tom okamihu 31 úloh a posledný dispatch bol o 17:44 UTC, teda 4 h
+  dozadu. Ďalší bol na spadnutie o 21:44.
+- Aritmetika je v `settings.py` pri `refresh-person-history-every-4-hours`
+  a sedí: 2 000 firiem každé 4 h proti odtoku 15/min znamená, že sa fronta
+  **stihne vyprázdniť vnútri intervalu** a časť každého cyklu je zámerne
+  nečinná. Preto je ploché číslo v krátkom okne **očakávané**, a preto sa
+  pokrok nemeria dĺžkou fronty (viď pasca vyššie).
+- 8 347 / 2 000 ≈ 4,2 dávky ≈ **~17 h** do konca, teda približne
+  2026-09-16 popoludní. Plánovaný prechod je ~48 h a zdieľa frontu s
+  `schedule_missing_orsr_sync`, takže je to v rámci návrhu.
+
+**Uzatváracia podmienka (jediná zvyšná práca na #95):** keď
+`refresh_person_history --dry-run` hlási na prvom riadku **0**, zmazať
+`PeriodicTask` riadok `refresh-person-history-every-4-hours` aj jeho záznam
+v `CELERY_BEAT_SCHEDULE` (`backend/backend/settings.py`). Riadok je
+samovyprázdňujúci — po dobehnutí len každé 4 h dispatchuje nula úloh — takže
+ak sa na to zabudne, nič sa nepokazí, ale ostane „kontrola, ktorá vyzerá
+nastavená a nerozhoduje nič", čo tento repozitár inde sústavne nachádza.
+
 Pôvodný čítač zapisoval `is_active` natvrdo ako `True` a `zanik_funkcie` nikdy
 nedoplnil, takže graf o všetkých väzbách tvrdil, že trvajú. Nový čítač
 (`read_person_history`) to vie a **beží** — toto je stav dopĺňania, nie nová
