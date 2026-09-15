@@ -87,6 +87,15 @@ async function parseErrors(response: Response): Promise<string> {
 
     if (data.code === 'token_not_valid') return 'Platnosť prihlásenia vypršala.';
     if (response.status === 429) return translateThrottle(data.detail);
+    // A refusal that carries its own length. The company refresh answers a
+    // second click this way, and the number is computed from the moment the
+    // first pass started -- so it is the wait that is actually left, not the
+    // width of the window. Left to `data.detail` the reader would get the
+    // machine token on screen and lose the number beside it, which is the half
+    // of the answer worth having.
+    if (response.status === 409 && typeof data.retry_after_seconds === 'number') {
+      return `Požiadavka sa už spracúva. Skúste to znova o ${formatWait(data.retry_after_seconds)}.`;
+    }
     if (data.detail) return data.detail;
 
     if (typeof data === 'object') {

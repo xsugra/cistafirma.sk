@@ -3,6 +3,7 @@ from .dashboard import dashboard_overview, dashboard_sync, dashboard_business, d
 from .sync import (
     SyncJobViewSet,
     CompanySyncStatusViewSet,
+    company_refresh_view,
     focus_mode_state,
     enter_focus_mode_view,
     exit_focus_mode_view,

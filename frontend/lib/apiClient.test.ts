@@ -81,6 +81,48 @@ describe('apiRequest — the throttled answer', () => {
     });
 });
 
+/**
+ * The other refusal that carries its own length.
+ *
+ * The company refresh answers a second click with `409 {detail: "already_running",
+ * retry_after_seconds: …}` -- a machine token and a number. `data.detail` would
+ * put the token on screen and drop the number beside it, which is the half of
+ * the answer a reader can use. So the status alone is not enough to recognise
+ * this body: it is the field that makes it that refusal, and a 409 from
+ * elsewhere that carries only a sentence must still come through as written.
+ */
+describe('apiRequest — a refusal that states its own wait', () => {
+    it('turns the machine token and the number into a sentence', async () => {
+        respondWith(409, {detail: 'already_running', retry_after_seconds: 720});
+
+        await expect(apiRequest('/admin/companies/1/refresh/', {method: 'POST'})).rejects.toThrow(
+            'Požiadavka sa už spracúva. Skúste to znova o 12 minút.',
+        );
+    });
+
+    it('says the wait in the unit it is actually in', async () => {
+        // The window is fifteen minutes, but the number sent is what is *left* of
+        // it -- so a pass most of the way through states seconds, and a sentence
+        // that assumed minutes would round it to nothing.
+        respondWith(409, {detail: 'already_running', retry_after_seconds: 40});
+
+        await expect(apiRequest('/admin/companies/1/refresh/', {method: 'POST'})).rejects.toThrow(
+            'Požiadavka sa už spracúva. Skúste to znova o 40 s.',
+        );
+    });
+
+    it('leaves a 409 that states no wait alone', async () => {
+        // The RUZ pause and cancel guards answer 409 too, with a Slovak sentence
+        // and no number. Matching on the status would replace one of those
+        // sentences with a cooldown it does not have.
+        respondWith(409, {detail: 'Synchronizácia je pozastavená.'});
+
+        await expect(apiRequest('/admin/sync/ruz/cancel/', {method: 'POST'})).rejects.toThrow(
+            'Synchronizácia je pozastavená.',
+        );
+    });
+});
+
 describe('apiRequest — ApiError carries the status', () => {
     it('exposes the status so a caller can tell 404 from a broken server', async () => {
         respondWith(404, {detail: 'Osoba nebola nájdená.'});

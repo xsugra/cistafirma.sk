@@ -6,6 +6,7 @@ import {CompanyHeader} from './CompanyHeader';
 import {makeCompany, makeUser, renderWithProviders} from '../../test/testUtils';
 import {getLegalFormProfile} from '../../utils/legalFormProfile';
 import {postAuthDestination} from '../../utils/postAuthDestination';
+import {ApiError} from '../../lib/apiClient';
 
 const mocks = vi.hoisted(() => ({
     api: {
@@ -14,9 +15,13 @@ const mocks = vi.hoisted(() => ({
         removeFromWatchlist: vi.fn(),
         getProfile: vi.fn(),
     },
+    adminApi: {
+        refreshCompany: vi.fn(),
+    },
 }));
 
 vi.mock('../../api', () => ({api: mocks.api}));
+vi.mock('../../admin/api', () => ({adminApi: mocks.adminApi}));
 vi.mock('../../utils/pdfExport', () => ({exportCompanyPDF: vi.fn()}));
 // The real map needs a laid-out container jsdom does not have; what this file
 // checks is whether the card is there at all.
@@ -101,6 +106,154 @@ describe('CompanyHeader — Sledovať', () => {
         await user.click(screen.getByRole('button', {name: /Sledovať/}));
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Server je nedostupný.');
+    });
+});
+
+describe('CompanyHeader — obnovenie údajov', () => {
+    beforeEach(() => {
+        mocks.api.getWatchlist.mockReset().mockResolvedValue([]);
+        mocks.api.getProfile.mockReset();
+        mocks.adminApi.refreshCompany.mockReset();
+    });
+
+    /** Signed in, staff, and past the profile fetch the button waits behind. */
+    const renderAsStaff = async () => {
+        mocks.api.getProfile.mockResolvedValue(makeUser({isStaff: true}));
+        renderWithProviders(
+            <CompanyHeader company={makeCompany({ico})} profile={profile}/>,
+            {authenticated: true},
+        );
+        return screen.findByRole('button', {name: /Aktualizovať údaje/});
+    };
+
+    const dispatch = (overrides: Record<string, unknown> = {}) => ({
+        company_id: 1,
+        ico,
+        dispatched: ['ruz', 'financials', 'orsr', 'vszp', 'social'],
+        skipped: [],
+        blocked_but_asked: [],
+        cooldown_seconds: 900,
+        ...overrides,
+    });
+
+    it('is absent for an anonymous reader, not disabled', async () => {
+        // The page is public: `CompanyViewSet` is `AllowAny` and `/firma/:ico`
+        // sits outside `ProtectedRoute`. A control rendered for everyone would
+        // be a button that 403s for most readers, and a "len pre adminov" hint
+        // would be a second thing that does not exist for them today.
+        renderHeader();
+
+        expect(screen.getByText('Posledná aktualizácia')).toBeInTheDocument();
+        expect(screen.queryByText(/Aktualizovať údaje/)).not.toBeInTheDocument();
+    });
+
+    it('is absent for a signed-in reader who is not staff', async () => {
+        mocks.api.getProfile.mockResolvedValue(makeUser({isStaff: false}));
+        renderWithProviders(
+            <CompanyHeader company={makeCompany({ico})} profile={profile}/>,
+            {authenticated: true},
+        );
+
+        // Waiting on the watchlist proves the profile landed: without it the
+        // assertion below would pass on the signed-out branch instead.
+        await waitFor(() => expect(mocks.api.getWatchlist).toHaveBeenCalled());
+        expect(screen.queryByRole('button', {name: /Aktualizovať údaje/})).not.toBeInTheDocument();
+    });
+
+    it('sends the database pk, not the IČO in the URL', async () => {
+        const user = userEvent.setup();
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        // The fixture's IČO and pk differ on purpose: the endpoint is keyed by
+        // pk, and the page is keyed by IČO, so the two are one careless line
+        // apart and only a test that separates them can tell them apart.
+        expect(mocks.adminApi.refreshCompany).toHaveBeenCalledWith('1');
+    });
+
+    it('says the pass has started, and that the page has to be reloaded to see it', async () => {
+        const user = userEvent.setup();
+        mocks.adminApi.refreshCompany.mockResolvedValue(dispatch());
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        const notice = await screen.findByRole('status');
+        // The number in this cell is written by the pass that was just queued,
+        // so a message implying the page is now fresh would be a lie about the
+        // very value it sits under.
+        expect(notice).toHaveTextContent('Obnova spustená');
+        expect(notice).toHaveTextContent('obnovení stránky');
+    });
+
+    it('names a skipped source instead of leaving it out of the sentence', async () => {
+        const user = userEvent.setup();
+        mocks.adminApi.refreshCompany.mockResolvedValue(dispatch({
+            dispatched: ['ruz', 'financials', 'vszp', 'social'],
+            skipped: [{source: 'orsr', reason: 'not_eligible'}],
+        }));
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        expect(await screen.findByRole('status')).toHaveTextContent('Preskočené: ORSR');
+    });
+
+    it('warns that a blocked source is asked anyway', async () => {
+        const user = userEvent.setup();
+        mocks.adminApi.refreshCompany.mockResolvedValue(dispatch({blocked_but_asked: ['orsr']}));
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        expect(await screen.findByRole('status')).toHaveTextContent('osloví zablokovaný zdroj ORSR');
+    });
+
+    it('answers a 409 in its own words, not with the machine token', async () => {
+        const user = userEvent.setup();
+        // `parseErrors` is what turns the body into that sentence, and it needs
+        // the body to do it -- `ApiError` carries only the status, so the
+        // component passes the message straight through. The number is real:
+        // the server computes it from the moment the first pass started.
+        mocks.adminApi.refreshCompany.mockRejectedValue(
+            new ApiError('Požiadavka sa už spracúva. Skúste to znova o 12 minút.', 409),
+        );
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent('Skúste to znova o 12 minút');
+        expect(alert).not.toHaveTextContent('already_running');
+    });
+
+    it('shows a failed refresh instead of leaving it in the console', async () => {
+        const user = userEvent.setup();
+        mocks.adminApi.refreshCompany.mockRejectedValue(new ApiError('Dispatch failed: broker je nedostupný', 502));
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('broker je nedostupný');
+    });
+
+    it('disables the button while the request is in flight', async () => {
+        const user = userEvent.setup();
+        let release: (value: unknown) => void = () => {};
+        mocks.adminApi.refreshCompany.mockReturnValue(new Promise(resolve => { release = resolve; }));
+        const button = await renderAsStaff();
+
+        await user.click(button);
+
+        // A second click during the cooldown window is a 409 at best, and the
+        // button is the only thing that can say the request is still out.
+        expect(await screen.findByRole('button', {name: /Obnovujem/})).toBeDisabled();
+
+        release(dispatch());
+        // Resolved inside `waitFor`, so the update it causes is wrapped in act.
+        await waitFor(() => expect(screen.getByRole('button', {name: /Aktualizovať údaje/})).toBeEnabled());
+        expect(screen.getByRole('status')).toHaveTextContent('Obnova spustená');
     });
 });
 
