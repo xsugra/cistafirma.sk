@@ -120,6 +120,14 @@ ORSR_PERSON_CACHE_SECONDS = int(os.getenv('ORSR_PERSON_CACHE_SECONDS', '900'))
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    # Every refresh hands back a new refresh token, so the day starts again from
+    # each one. Without it the lifetime is measured from the sign-in and nothing
+    # the reader does extends it -- someone who opens this every morning was
+    # signed out once a day no matter how they used it, which is the complaint
+    # the frontend's new refresh path answers. Rotation here needs no blacklist
+    # app: `BLACKLIST_AFTER_ROTATION` stays off, so a superseded refresh token
+    # simply expires on its own rather than being revoked.
+    "ROTATE_REFRESH_TOKENS": True,
 }
 
 # Application definition
