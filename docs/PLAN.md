@@ -1,6 +1,6 @@
 # Plán prác — CistaFirma
 
-**Aktualizované:** 2026-09-15
+**Aktualizované:** 2026-09-17
 **Vetva:** `feat/ai-ready-baseline` (celá lokálna, bez upstreamu)
 **Autor:** Samuel Šugra + Claude Code
 
@@ -49,7 +49,9 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 96 | Mapa sídla je oficiálne Google Maps — Leaflet preč, kruh zostal tvrdením, kľúč a Map ID z prostredia. **Prekonané #97 v ten istý deň** | `ed50844` |
 | — | Produkčný frontend image dostane obe `VITE_` hodnoty ako `--build-arg`. **Prekonané #97** — build-argy aj obe premenné zmizli, image sa stavia z holého zdroja | `c493eed` |
 | 97 | Mapa sídla je OpenStreetMap s vlastnou kartografiou (`maplibre-gl`) — bez kľúča, účtu aj karty; druhá téma je `setStyle`, nie druhá mapa | tento commit |
+| 93 | Jedna funkcia rozsekaná na intervaly podľa dokumentov registra je **jedna funkcia** — spája sa pri čítaní, v jednej zdieľanej funkcii pre detail osoby aj hľadanie; 34-dňová diera zostáva dvoma obdobiami | `973d6d7` |
 | 95 | História funkcií z RPO je doplnená — `--dry-run` hlási **0 z 27 427**; plánovací záznam aj riadok `PeriodicTask` zmazané, beat reštartovaný | `a789555` |
+| 98 | Kruh okolo sídla bol tvrdenie o presnosti — tvar zobrazenia teraz nesie presnosť namiesto neho | `3e7d11a` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -1025,9 +1027,23 @@ zdieľaná fronta s ORSR rotáciou je caveat, ktorý treba zvážiť spolu s tý
 
 ---
 
-## 3. Čaká na prácu
+## 3. Hotové — odôvodnenie a dôkazy
 
-### #98 — Kruh okolo sídla je tvrdenie o presnosti; dá sa nahradiť skutočnou budovou
+> Sekcia sa volala **„Čaká na prácu"** a premenovaná je 2026-09-17, lebo
+> v nej nezostala ani jedna čakajúca úloha: všetkých päť sekcií pod ňou nesie
+> ✅. Bola to pristávacia plocha pre prácu, ktorá sa ešte len mala spraviť, a tá
+> sa vyprázdnila — takže nadpis tvrdil o dokumente niečo, čo už neplatilo.
+> §1 je index hotového, táto sekcia je tá istá hotová práca **s odôvodnením
+> a s dôkazmi**, a preto sa obsah nemení, len nadpis. Ak sa sem niekedy vráti
+> čakajúca práca, patrí jej nová sekcia, nie tento nadpis.
+>
+> **Jedna vec tu napriek tomu otvorená je** a je to naozaj nález, nie úloha:
+> **(a)** v #98 nižšie — `seat_*` nemá cestu, ktorá by ho zneplatnila, takže
+> firme, ktorá sa presťahovala, kreslíme mapu na starú adresu natrvalo. Je
+> výslovne mimo schválenej prírastky #98 a sú v ňom dve možné podoby opravy,
+> takže patrí do samostatného rozhodnutia — nie do tohto nadpisu.
+
+### #98 — Kruh okolo sídla je tvrdenie o presnosti; dá sa nahradiť skutočnou budovou — ✅ hotové (`3e7d11a`)
 
 **Otázka Samuela (2026-09-13):** „načo tam je ten kruh okolo toho miesta? to je
 zbytočné, ja potrebujem len jedno presné zobrazenie na mape."
@@ -1295,9 +1311,12 @@ Oprava je nová prírastka (buď `seat_*` vyčistiť pri zmene adresy a matcher
 naplánovať, alebo pridať `seat_matched_at` a zastarané riadky hlásiť) —
 neimplementované, patrí do samostatného rozhodnutia.
 
-**(b)** § 1 tabuľka nižšie vynecháva #85 – #92.
+**(b) — vyriešené.** §1 tabuľka vtedy vynechávala #85 – #92; dnes ich má
+(overené 2026-09-17: riadky 85, 86, 87, 88, 89, 90, 91 aj 92 tam sú). Poznámka
+zostáva len ako záznam, že diera existovala a bola doplnená — nie ako otvorená
+vec.
 
-### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra
+### #93 — Jedna funkcia je rozsekaná na intervaly podľa dokumentov registra — ✅ hotové (`973d6d7`)
 
 **Nález z #89, nie jeho súčasť.** Po zhlukovaní som na živej stránke osoby
 narazil na toto — a `records: 1`, takže zhlukovanie za to nemôže:
@@ -1415,10 +1434,45 @@ späť**: zlúčený riadok si ponechá `vznik` prvého dokumentu, takže dokume
 Zápis by teda musel buď obchádzať vlastný unikátny kľúč, alebo si pamätať, čo
 už zlúčil — a to je presne tá kniha, ktorú read-time nepotrebuje.
 
-**Prečo to nie je hotové teraz:** je to nová prírastka, nie dokončenie #89
-(zhlukovanie spája *riadky osôb*, toto spája *obdobia funkcie*), a mení to, čo
-stránka tvrdí o histórii — to patrí do samostatného rozhodnutia. Podklad preň
-je premeranie vyššie; rozhodnutie je Samuelovo.
+#### Hotové 2026-09-15 — `973d6d7` (backend) a `9a6e48b` (frontend)
+
+Rozhodnutie padlo v prospech read-time a spojenie vzniklo ako **jedna zdieľaná
+funkcia** `_joined_periods` (`backend/connections/views.py:302`), ktorú volá
+`_merged_relations` (`:237`). Detail osoby aj výsledky hľadania tak dostali
+spojenie z jedného miesta — odporúčanie žiadalo práve to, lebo dve
+implementácie toho istého by sa rozišli v tom, čo tvrdia o tom istom človeku.
+
+Čo implementácia drží — každý bod je jeden test v `JoinedPeriodsTests`
+(`backend/connections/tests.py:429`), takže je to vynútené, nie zamýšľané:
+
+- kľúč je **`(ico, role)`**, nie samotná firma: `konateľ` do 31. 12. a
+  `prokurista` od 1. 1. sa stretávajú deň po dni presne ako reťaz zápisov, a
+  zbalenie podľa firmy samotnej by zmenilo *výmenu funkcie* na *pokračovanie
+  jednej*;
+- `_continues_period` spája, keď je nasledujúce obdobie vzdialené **nanajvýš
+  jeden deň** — register funkciu ukončí a ďalším zápisom ju na druhý deň znovu
+  otvorí — a **absorbuje aj prekryv**, čo je ten istý jav zapísaný inak;
+- **otvorené obdobie reťaz ukončuje**; nič sa doň nepripája, lebo dáta môžu
+  obsahovať neskorší zápis (opätovné čítanie počas zápisu, oprava registra) a
+  jeho zhltnutie by rozšírilo aktuálnu funkciu na úsek, o ktorom register
+  tvrdí, že bola zatvorená;
+- `vznik` = najskorší, `zanik` = **maximum**, nie posledný v poradí — dvojica sa
+  môže prekrývať, takže neskorší začiatok neznamená neskorší koniec;
+- `is_active` pochádza z **najnovšieho** zápisu, takže `None` („túto firmu sme
+  nečítali", #86) spojenie prežije a jedenásť `False` neprehlasuje jednu `True`;
+- riadok nesie `intervals` — počet zlúčených zápisov — aby zbalenie **priznal**;
+  tiché by bolo presne to, čomu sa projekt vyhýba.
+
+To posledné je aj dôvod, prečo je príklad s dierou testom a nie anekdotou:
+osoba 56172 má v reťazi **34-dňovú dieru** (`2013-04-10` → `2013-05-14`), takže
+z dvanástich riadkov vzniknú **dva**, nie jeden. Diera je fakt o histórii, nie
+rytmus zápisov, a zlepenie by na otázku „odkedy" odpovedalo „nepretržite od
+2011" na funkciu, ktorá mala dve obdobia.
+
+**Graf patrí #100, nie #93 — a je to správne rozdelenie.** `CompanyGraphView`
+nemá časovú os, takže zbalenie období by naň nemalo čo povedať; rozhoduje tam
+identita hrany (`_edges_by_identity`, `views.py:357`). Admin počítadlo ostáva na
+surových riadkoch: je to staff-only pohľad na tabuľku, nie tvrdenie o človeku.
 
 ### #100 — Graf kreslí tú istú hranu 12× (a #95 to zhoršuje) — ✅ hotové
 
