@@ -4090,8 +4090,43 @@ históriu ReplicaSetov, ktorá drží rollback cieľ, aj keď nič nebeží.
 (bez `--apply` je to suchý beh). Skript **neobsahuje ani jeden volume príkaz**,
 má poistku na `cistafirma_postgres_data` pred aj po a mazanie odmietne, ak by
 sa cieľ objavil medzi živými obrazmi (kontajner, pod alebo ReplicaSet) — takže
-stará položka v zozname je neškodná, nie deštruktívna. Na Macu uvoľní ~22
-obrazov a ~20 GB build cache; **nespustil sa**, pozri „Čaká na teba".
+stará položka v zozname je neškodná, nie deštruktívna.
+
+**Spustený 2026-09-17** (`--apply`, Samuelovo povolenie z toho dňa). Uvoľnil
+**33 GB**: voľné miesto na Macu 57 GB → **90 GB** (zaplnenie 94 % → 90 %).
+
+| | pred | po |
+|---|---|---|
+| obrazy | 131 (47,11 GB) | 112 (31,52 GB) |
+| build cache | 31,31 GB (20,37 GB vratných) | 10,95 GB (**0 vratných**) |
+| lokálne volumes | 74 (40,62 GB) | 74 (**40,62 GB**) |
+| kontajnery | 17 | 17 |
+
+Zmazaných bolo všetkých 22 značiek zo zoznamu (overené `docker image inspect`
+pre každú z nich, nie podľa počtu — 131 − 112 = 19, lebo tri značky ukazovali na
+ten istý image ID ako iné). `ghcr.io/jkroepke/kube-webhook-certgen:1.8.3` sa
+preskočil ako obvykle (containerd store). Kanárik prešel:
+`cistafirma_postgres_data` (vytvorené 2026-08-03) je po behu na mieste a
+**volumes sa nepohli ani o bajt**.
+
+Overené prežitie, nie predpokladané: `kindest/node:*`, `cistafirma-*` (13),
+`localhost:5050/web/cistafirma/*` (54 rollback cieľov), cudzí projekt
+`localhost:5050/web/code-reviews/*` (4), `gitlab/gitlab-ee:nightly`,
+`gitlab/gitlab-runner:latest`, `postgres:16-alpine`, `redis:7-alpine`,
+`alpine:latest`, `python:3.12-slim`, `node:20-alpine`, `alpine/helm:3.17.2`,
+`grafana/grafana:13.2.1`, `prom/prometheus:v3.14.0`.
+
+**Oprava skoršieho tvrdenia.** Tu stálo, že mazanie odmietla permission vrstva.
+Overené 2026-09-17 na dvoch úrovniach: samotné volanie
+`bash scripts/local/cleanup_mac_docker.sh --apply` **nezodpovedá žiadnemu deny
+vzoru** (tie pokrývajú `docker volume rm/prune`, `docker system prune`,
+`docker compose down -v` a `make docker-reset`), a **ani jeden príkaz vnútri
+skriptu** im nezodpovedá — skript volá `docker rmi`, `docker builder prune -f`,
+`docker system df`, `docker images` a `docker volume inspect`, teda vymenovanie
+a rušenie obrazov, nikdy volume. Prekážkou teda nebolo pravidlo, ale **súhlas,
+ktorý nemal kto dať** (beh v noci). To je rozdiel, na ktorom záleží: pravidlo
+platí stále a chráni volume, kým súhlas sa dá raz dať. Druhý beh je navyše
+idempotentný — po tomto už nemá čo zmazať.
 
 **Čo sa medzitým spravilo:** na lenovo zmizol
 `gitlab-runner_19.3.2-1_amd64.deb` (31 MB) a `install-runner-native-OBSOLETE.sh`.
@@ -4102,8 +4137,6 @@ s `exit 1` skončí.
 
 **Čaká na teba (rozhodnutie, nie mechanika):**
 
-- **Spustiť `scripts/local/cleanup_mac_docker.sh --apply`** — permission vrstva
-  mi mazanie obrazov odmietla, takže to musí spustiť človek.
 - **Osud klastra v Docker Desktop Kubernetes.** Je dátový (1,2 GB Postgres),
   takže sa nedá zhodiť ako „zvyšok". Ak je odpoveď „zrušiť", treba najprv
   `helm uninstall` v oboch namespace a potom zmazať PVC — a vtedy sa uvoľní aj
