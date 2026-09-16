@@ -526,6 +526,11 @@ CELERY_BEAT_SCHEDULE = {
     # while a row of the same name exists, everything here except the schedule
     # itself is inert. The row was updated to match, and all three layers agree,
     # but changing this dict alone would change nothing on a live system.
+    #
+    # Measured 2026-09-13: every row on this instance carries `expires=None`
+    # while its `args` and `queue` do match this dict, so `options` does not
+    # reach a row that already exists. It is set here for a fresh install,
+    # where the row is created from this dict.
     'schedule-insurance-debt-checks-every-12-hours': {
         'task': 'registers.tasks.schedule_insurance_debt_checks',
         'schedule': 43200.0,
@@ -548,38 +553,21 @@ CELERY_BEAT_SCHEDULE = {
         'args': [500],
         'options': {'expires': 14000.0, 'queue': 'orsr'},
     },
-    # One-time repair, self-emptying: it selects companies whose profile has no
-    # `osoby_historia` (24 237 of them when this was written) and stops
-    # selecting anything once the last one has been read. Delete this entry and
-    # its `PeriodicTask` row when `refresh_person_history --dry-run` reports 0.
+    # `refresh-person-history-every-4-hours` used to sit here: a one-time,
+    # self-emptying backfill of `osoby_historia`, 2 000 companies every 4 h on
+    # the `celery` queue. It finished -- `refresh_person_history --dry-run`
+    # reported 0 of 27 426 RPO profiles on 2026-09-17 -- so the entry and its
+    # `PeriodicTask` row were both deleted. Neither needs to come back: the same
+    # key is written by the normal ORSR reader, so a newly read profile is never
+    # missing its history. The task and its dispatcher stay -- the routes above
+    # cover them, and the manual dispatcher and the tests call them.
     #
-    # 2 000 every 4 h, and both numbers are load-bearing:
-    #
-    # * The `orsr` queue drains at 15 requests a minute -- orsr.sk has no API and
-    #   this is somebody else's server. 2 000 tasks take 133 minutes to drain,
-    #   which leaves the queue empty well inside the 4 h interval even with the
-    #   500 companies the entry above adds to the same queue. Raising the batch
-    #   past ~3 000 would push the next dispatch of `schedule_missing_orsr_sync`
-    #   behind its own backlog -- the failure the insurance entry's comment
-    #   describes.
-    # * The pass is therefore ~48 h of wall clock, not the 27 h the requests
-    #   alone would take, because it shares the queue with that lane.
-    #
-    # `queue: celery`, not `orsr`: a dispatcher that waits behind the 2 000
-    # tasks it just queued would run hours late.
-    #
-    # The `expires` here is inert on this instance, and the arithmetic above does
-    # not depend on it: all nine `PeriodicTask` rows carry `expires=None` while
-    # their `args` and `queue` do match this dict (checked 2026-09-13), so
-    # `options` does not reach the row. It is set for a fresh install, where the
-    # row would be created from here. What bounds this lane in practice is the
-    # batch size against the drain rate, not an expiry.
-    'refresh-person-history-every-4-hours': {
-        'task': 'registers.tasks.schedule_person_history_resync',
-        'schedule': 14400.0,
-        'args': [2000],
-        'options': {'expires': 14000.0, 'queue': 'celery'},
-    },
+    # The `500` in `sync-missing-orsr-profiles-every-4-hours` above was sized
+    # against the same drain rate this lane was: queue `orsr` drains 15 requests
+    # a minute (orsr.sk has no API and is somebody else's server), so ~133 min
+    # for 2 000. Adding to that queue past roughly 3 000 would push the next
+    # dispatch of the entry above behind its own backlog -- the failure the
+    # insurance entry's comment describes.
     # 2 000 companies every 12 h, not 500. The rotation walks the eligible
     # population (251 598 legal persons: forms 112/121/321/721/801/205, not
     # struck off) and 250 480 of them had no result yet, so at 500 a cycle the

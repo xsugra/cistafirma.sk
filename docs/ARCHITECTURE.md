@@ -81,19 +81,22 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 | `orsr` | 4 h | ORSR sync pre chýbajúce profily |
 | `financials` | 12 h | RUZ finančné výsledky per-company |
 | `insurance` | 12 h | Kontrola dlhov v poisťovniach (VŠZP, Soc. poisťovňa) |
-| `celery` (default) | 4 h | Plánovač dočítania histórie osôb — jednorazová oprava; prácu posiela na `orsr` |
 | `celery` (default) | 24 h | Aktualizácia FS dát, sektorové mediány, orchestračné a ad-hoc úlohy |
 
-> `refresh-person-history-every-4-hours` je **jednorazová, samovyprázdňujúca sa
-> oprava**: vyberá firmy, ktorých profil nemá v `structured` kľúč
-> `osoby_historia` (24 237 z 24 237 RPO profilov k 2026-09-13), a keďže ten istý
-> kľúč zapisuje aj nový čítač, po prečítaní posledného profilu už nenaplánuje
-> nič. **Riadok `PeriodicTask` sa vypína (nie maže) vtedy, keď
-> `refresh_person_history --dry-run` hlási 0.** Dávka 2 000 firiem každé 4 h
-> vychádza z toho, že queue `orsr` odtečie 15 requestov/min (~133 min na dávku),
-> takže sa stíhne vyprazdniť pred ďalším plánovaním aj s 500 firmami z
-> `sync-missing-orsr-profiles-every-4-hours`. Dispatcher beží na queue `celery`:
-> plánovač na queue, ktorú sám zaplavuje, čaká za vlastným backlogom.
+> `refresh-person-history-every-4-hours` bola **jednorazová, samovyprázdňujúca sa
+> oprava**: vyberala firmy, ktorých profil nemá v `structured` kľúč
+> `osoby_historia`, a keďže ten istý kľúč zapisuje aj nový čítač, po prečítaní
+> posledného profilu už nenaplánovala nič. **17. 9. 2026 boli zmazané obe jej
+> vrstvy — záznam v `CELERY_BEAT_SCHEDULE` aj jeho riadok `PeriodicTask`** —
+> lebo `refresh_person_history --dry-run` na delle hlásil `0 z 27 426 RPO
+> profilov`. Zmazanie, nie vypnutie: vypnutý riadok je kontrola, ktorá sa tvári,
+> že niečo rozhoduje nad prázdnou množinou. Dávka bola 2 000 firiem každé 4 h
+> a vychádzala z toho, že queue `orsr` odtečie 15 requestov/min (~133 min na
+> dávku), takže sa stihla vyprázdniť pred ďalším plánovaním aj s 500 firmami
+> z `sync-missing-orsr-profiles-every-4-hours`. Dispatcher bežal na queue
+> `celery`: plánovač na queue, ktorú sám zaplavuje, čaká za vlastným backlogom.
+> Samotná úloha `read_person_history` aj jej dispatcher ostávajú — volá ich
+> manuálny dispatcher a testy.
 >
 > Prácu vykonáva `read_person_history`, **nie** `sync_company_orsr_data`, a to
 > je zámer. Tá druhá úloha je vstupný bod ORSR *monitoringu* a
