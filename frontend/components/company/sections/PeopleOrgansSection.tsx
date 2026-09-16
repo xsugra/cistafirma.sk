@@ -1,7 +1,7 @@
 import React from 'react';
-import type { Company } from '../../../types';
-import { PeopleSection } from '../PersonCard';
-import { useCompanyProfile } from '../useCompanyProfile';
+import type {Company} from '../../../types';
+import {PeopleSection} from '../PersonCard';
+import {useCompanyProfile} from '../useCompanyProfile';
 
 interface PeopleOrgansSectionProps {
     company: Company;
@@ -55,10 +55,7 @@ export const PeopleOrgansSection: React.FC<PeopleOrgansSectionProps> = ({ compan
                     people={statutari}
                     accent="blue"
                     personIcon="fa-badge-check"
-                    subtitle={
-                        profile.statutar!.subtitle ||
-                        (structured.statutarny_organ_typ ? `Typ: ${structured.statutarny_organ_typ}` : undefined)
-                    }
+                    subtitle={profile.statutar!.subtitle}
                     emptyLabel={profile.statutar!.emptyLabel || 'Žiadny štatutárny orgán'}
                 />
             )}
