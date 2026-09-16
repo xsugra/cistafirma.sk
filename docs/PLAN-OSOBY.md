@@ -189,6 +189,13 @@ vlastným dočítaním histórie (`schedule_person_history_resync`), ktoré je
    nemohlo kľúč získať nikdy, takže populácia nikdy nedosiahla nulu a riadok
    beat-u by sa nedal vypnúť.
 
+> **Doplnené 2026-09-17:** presne to sa stalo — populácia nulu dosiahla
+> (`refresh_person_history --dry-run`: `0 z 27 427`), takže plánovací záznam
+> aj jeho riadok `PeriodicTask` boli zmazané. Bod 1 vyššie („2 000 firiem / 4 h")
+> je preto minulosť; bežný ORSR čítač píše ten istý kľúč, takže nový profil
+> prichádza už prečítaný a dopĺňač nemá čo robiť. Podrobnosti a dôkazy:
+> `docs/PLAN.md`, #95.
+
 **Prečo to nesmie byť automatické pri každom hľadaní:**
 
 1. Príkaz na zápis riadený vstupom z klávesnice je neohraničená cesta.

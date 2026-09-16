@@ -49,6 +49,7 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 96 | Mapa sídla je oficiálne Google Maps — Leaflet preč, kruh zostal tvrdením, kľúč a Map ID z prostredia. **Prekonané #97 v ten istý deň** | `ed50844` |
 | — | Produkčný frontend image dostane obe `VITE_` hodnoty ako `--build-arg`. **Prekonané #97** — build-argy aj obe premenné zmizli, image sa stavia z holého zdroja | `c493eed` |
 | 97 | Mapa sídla je OpenStreetMap s vlastnou kartografiou (`maplibre-gl`) — bez kľúča, účtu aj karty; druhá téma je `setStyle`, nie druhá mapa | tento commit |
+| 95 | História funkcií z RPO je doplnená — `--dry-run` hlási **0 z 27 427**; plánovací záznam aj riadok `PeriodicTask` zmazané, beat reštartovaný | `a789555` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -577,7 +578,7 @@ ani jednu stranu → 3 zhluky; `total_people` je `null`, keď okno nestačí.
 
 ---
 
-### #95 — História funkcií z RPO sa dopĺňa (beží)
+### #95 — História funkcií z RPO je doplnená (hotovo 2026-09-17)
 
 **Stav 2026-09-15 21:44 UTC: `refresh_person_history --dry-run` na delle hlási
 8 347 čakajúcich z 27 422 RPO profilov.** Lane beží podľa návrhu, nie je
@@ -604,13 +605,41 @@ zaseknutý — a je dôležité vedieť, prečo to tak vyzerá:
   ktorý ploché číslo nevedelo dať: lane dispatching funguje a odtok sedí
   s nastaveným limitom.
 
-**Uzatváracia podmienka (jediná zvyšná práca na #95):** keď
-`refresh_person_history --dry-run` hlási na prvom riadku **0**, zmazať
-`PeriodicTask` riadok `refresh-person-history-every-4-hours` aj jeho záznam
-v `CELERY_BEAT_SCHEDULE` (`backend/backend/settings.py`). Riadok je
-samovyprázdňujúci — po dobehnutí len každé 4 h dispatchuje nula úloh — takže
-ak sa na to zabudne, nič sa nepokazí, ale ostane „kontrola, ktorá vyzerá
-nastavená a nerozhoduje nič", čo tento repozitár inde sústavne nachádza.
+**Uzatváracia podmienka splnená 2026-09-17 (00:16 CEST / 2026-09-16 22:16 UTC).**
+`refresh_person_history --dry-run` na delle hlási `Firmy bez precitanej historie
+osob: 0 z 27 427 RPO profilov` → `Nie je co robit`. Zmazané boli **obe vrstvy**:
+
+| čo | kde | stav |
+|---|---|---|
+| záznam `refresh-person-history-every-4-hours` | `backend/backend/settings.py` | zmazaný (`a789555`), namiesto neho náhrobok s dôvodom, prečo sa nesmie vrátiť |
+| riadok `PeriodicTask` | produkčná DB na delle | zmazaný (ostáva 9 riadkov z 10) |
+| `celery_beat` | dell | reštartovaný 22:16:36 UTC, aby načítal nový `settings.py` |
+
+**Prečo je to naozaj koniec, a nie len nula v okne.** Dve merania tej istej
+podmienky dali `0 z 27 426` a potom `0 z 27 427` — populácia medzitým narástla
+o jeden profil a chýbajúcich ostalo nula. To je priamy dôkaz tvrdenia, na
+ktorom celý lane stál: nový profil prichádza **už prečítaný**, lebo ten istý
+kľúč `osoby_historia` zapisuje bežný ORSR čítač. Keby to tak nebolo, číslo by
+pri raste populácie stúplo. Preto sa lane nesmie vrátiť — nemal by čo robiť.
+
+**Priamy dôkaz, že sa linka naozaj zastavila** (nie že sme len zmazali kód):
+bežiaci beat zalogoval `DatabaseScheduler: Schedule changed.` o **22:16:20 UTC**,
+hneď po zmazaní riadku a **pred** reštartom — dispatcher teda zareagoval na
+zmazanie riadku okamžite. Po reštarte je riadok stále neprítomný a počet
+riadkov ostal 9, čo je kontrola, že beat si ho **nezaložil znovu**.
+
+> **Poradie je záväzné a je to pasca.** `DatabaseScheduler` pri štarte
+> zosúlaďuje `CELERY_BEAT_SCHEDULE` do riadkov, takže zmazanie riadku pri
+> **zvyšnom** zázname v dichte ho nechá vrátiť sa pri najbližšom štarte beatu.
+> Najprv sa ruší záznam v `settings.py`, potom riadok — nikdy naopak.
+
+Posledný dispatch linky bol 21:44:14 UTC (`total_run_count = 20`) a už vtedy
+poslal nula úloh. Pred zásahom do produkčnej DB bola podľa predpisu urobená
+a overená záloha: `cistafirma_20260916T221507Z.dump` (`make db-backup` +
+`make db-backup-verify`). Rozpor v dokumentácii je vyriešený —
+`ARCHITECTURE.md` tvrdil „riadok sa **vypína** (nie maže)", čo odporovalo
+tomuto plánu aj `settings.py`; zjednotené na **zmazanie**, lebo vypnutý riadok
+je kontrola, ktorá sa tvári, že rozhoduje nad prázdnou množinou.
 
 Pôvodný čítač zapisoval `is_active` natvrdo ako `True` a `zanik_funkcie` nikdy
 nedoplnil, takže graf o všetkých väzbách tvrdil, že trvajú. Nový čítač
@@ -887,6 +916,16 @@ dvojdňová degradácia áno. **Zámerne nemenené**: prekalibrovať kontrolu, n
 sa spolieha týždenný job (pri zlyhaní zapíše `LAST_FAILURE` a pošle notifikáciu),
 si zaslúži samostatné rozhodnutie, nie tichú úpravu v rámci #95.
 
+> **Táto premisa 2026-09-17 padla — a je to dôvod prah nemeniť ani teraz.**
+> Celý ten argument stál na tom, že frontu `orsr` drží vysoko dispatcher #95
+> s 2 000 úlohami každé 4 h. Ten je zmazaný (viď #95 vyššie), takže `orsr` sa
+> vracia k pôvodnému tvaru „vyprázdni sa" — ostáva mu len 500 z
+> `sync-missing-orsr-profiles-every-4-hours` a rotácia ORSR. Prekalibrovať prah
+> na ~6 000 by teda znamenalo nastaviť ho podľa stavu, ktorý **už neexistuje**,
+> čo je presne tá chyba, ktorú tento odsek vytýka pôvodnému komentáru.
+> Či je `50 000` správne pre obnovený tvar fronty, je naďalej otvorená otázka
+> na človeka — nie tichá úprava, a už vôbec nie v rámci #95.
+
 **Štrukturálny dôvod nízkeho odtoku.** `read_person_history`
 a `sync_company_orsr_data` majú **oba** `queue='orsr'` a `rate_limit='15/m'`
 (`tasks.py:697` a `:818`) a delia sa o tie isté **dva** sloty. Za 13 h worker
@@ -978,6 +1017,11 @@ kým fronta udrží 894/h. Zvýšenie dávky na ~3 500 (alebo interval na 2 h by
 stihol to isté) by teda skrátilo #95 zhruba z 24 h na ~14 h. Neimplementované:
 je to zmena `args` v `PeriodicTask` riadku bežiacej úlohy, nie vec #95, a
 zdieľaná fronta s ORSR rotáciou je caveat, ktorý treba zvážiť spolu s tým.
+
+> **Zavreté 2026-09-17: odporúčanie je bezpredmetné, neimplementuje sa.** #95
+> dobehol a jeho riadok `PeriodicTask` aj záznam v `CELERY_BEAT_SCHEDULE` boli
+> zmazané (viď #95 vyššie). Zdvihnúť dávku na ~3 500 by dnes znamenalo
+> zrýchľovať linku, ktorá už nemá čo robiť.
 
 ---
 
