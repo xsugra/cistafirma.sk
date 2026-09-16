@@ -2093,16 +2093,26 @@ PSČ.
    nespárovali, je to nepravda o **schopnosti**, nie len hrubšia mapa — a to je
    iná trieda chyby. Preto (A) patrí dokopy s rozlíšením „nespárované" vs.
    „nepárovateľné" v texte karty; inak by sme jednu tichú lož vymenili za druhú.
-2. **Firme s pinom a prázdnym PSČ zmizne karta úplne.** Keď sa `seat_*` vyčistí
-   a `psc` je prázdne alebo mimo `PostalCodeArea`, `serializers.py:164-168`
-   vráti `None` — žiadny kruh, teda ani karta (dnes: presný pin). Je to
-   regresia a má byť **pomenovaná vopred**, nie objavená po nasadení.
+2. **Firme s pinom a neumiestniteľným PSČ zmizne karta úplne.** Keď sa `seat_*`
+   vyčistí a nové `psc` je prázdne alebo mimo `PostalCodeArea`,
+   `serializers.py:164-168` vráti `None` — žiadny kruh, teda ani karta (dnes:
+   presný pin). Je to regresia a má byť **pomenovaná vopred**, nie objavená po
+   nasadení. Zmierňuje ju, že si serializér ten stav sám definuje ako správny:
+   „`None` je skutočná odpoveď a znamená *nedokážeme sídlo umiestniť*, nie
+   *firma nemá sídlo*" (`:146-150`), s meraním 1,92 % riadkov s PSČ, ktoré
+   register neuvádza, plus tri riadky bez PSČ vôbec. Preto je to **prijateľná**
+   cena — ale len keď je pomenovaná; počet, ktorý ju kvantifikuje, je v druhom
+   dotaze v „Zablokované meranie".
 3. **Pravidlo musí znieť „zmenilo sa na inú *neprázdnu* hodnotu".** Adresné
    kľúče idú do `defaults` cez holé `data.get('mesto')` (`repair_ruz_sync.py:206-208`
    a rovnako v ostatných štyroch), takže **chýbajúci** kľúč zapíše `None` — a
    naivné „zmenilo sa" by vymazalo pin firme, ktorej sa adresa v skutočnosti len
    neposlala. Repo ten istý rozdiel už rieši inde (`apply_ruz_dates` odlišuje
    *neprítomné* od *nečitateľného*); tu treba ten istý vzor, nie `!=`.
+   A nie je to len analógia: `apply_ruz_dates` (`ruz_api.py:325-349`) funguje
+   **tým istým mechanizmom** — nechá kľúč *von* z `defaults`, a práve preto
+   `update_or_create` uloženú hodnotu nechá (zistenie 7). Vzor je teda v tomto
+   repozitári už nosný a otestovaný, nie nový.
 - ➕ Bez nového stĺpca, bez migrácie, bez backfillu.
 - ➕ Nevyžaduje si **ani poznať** populáciu s pečiatkou (zistenie 4) a nezávisí
   na význame `datumPoslednejUpravy`, ktorý je **neoverený** — registrová príručka
