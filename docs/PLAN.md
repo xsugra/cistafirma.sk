@@ -1312,7 +1312,7 @@ Overené 2026-09-13 v troch krokoch:
    sa táto oprava netýka.) Adresa sa teda zmení a umiestnenie zostane na starom
    mieste. `models.py:349-350` to aj priznáva — „Nepíše ich synchronizácia
    z RUZ, takže import firmy ich neprepíše" — a podáva to ako ochranu, čo je
-   správne: bez toho by sync zmazal dobrú prácu matcherа. Chýbajúca polovica
+   správne: bez toho by sync zmazal dobrú prácu matchera. Chýbajúca polovica
    je, že **nič nerozpozná, keď sa zdroj pravdy pohol**.
 2. `match_seat_addresses` **nie je naplánovaný nikde**: nie je v
    `CELERY_BEAT_SCHEDULE`, nie je v `PeriodicTask` riadkoch (overené výpisom
@@ -2228,7 +2228,7 @@ WHERE seat_matched_at IS NOT NULL
 
 Ani jedno z tých čísel **nie je podmienkou opravy** — (A) funguje bez nich.
 Sú odpoveďou na „aké veľké to je a čo tým rozbijeme", teda do reportu;
-druhé z nich je zároveň jediné, ktoré vie regresiu z pascе 2 kvantifikovať
+druhé z nich je zároveň jediné, ktoré vie regresiu z pasce 2 kvantifikovať
 **pred** nasadením namiesto po ňom.
 
 ---
