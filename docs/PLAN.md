@@ -4383,9 +4383,17 @@ s `exit 1` skončí.
   `deploy/ci/README.md`, ktorý už jeho súrodencov verzionuje. Jediná kópia
   pripravenej záložnej cesty je presne tá chyba, ktorú tento projekt raz už
   opravil pri configu runnera.
-- **Prístup na čítanie produkčnej DB** (`[Production Reads]`). Permission vrstva
-  mi odmietla aj `SELECT count(*)` nad produkčnou databázou na `dell` — a
-  obchádzať to nebudem. Dôsledok je konkrétny: čísla k #148 a #98 viem opísať,
+- **Prístup na čítanie produkčnej DB.** Zaznamenávam, čo som **pozoroval**, nie
+  diagnózu: auto mode classifier odmietol `SELECT count(*)` nad produkčnou
+  databázou na `dell` s dôvodom `[Production Reads]` — príkaz neprebehol.
+  Zdrojom je **classifier za behu, nie pravidlo v `.claude/settings.json`**:
+  ten som si prečítal celý a o produkčných čítaniach neobsahuje nič (jeho
+  `deny` pokrýva `docker volume rm/prune`, `docker system prune`,
+  `docker compose down -v`, `make docker-reset`, `celery-purge`, `pg_restore
+  --clean`, `dropdb`/`createdb` a `DROP`/`TRUNCATE` cez `psql`). Rozdiel je
+  praktický: nejde o pravidlo, ktoré by sa dalo zmeniť v repe — classifier sa
+  pýta vtedy, keď nikto nie je pri PC, a to je presne tento prípad.
+  Obchádzať to nebudem. Dôsledok je konkrétny: čísla k #148 a #98 viem opísať,
   ale **nie zmerať**. Tri dotazy, ktoré to spravia, sú v §4 pri #148. Ak ich
   chceš v reporte, treba Bash pravidlo, ktoré read-only dotaz na `dell` povolí;
   inak ich spustíš ty (alebo sa na to vykašleme — ani jedno z tých čísel nie je
