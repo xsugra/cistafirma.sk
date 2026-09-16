@@ -3929,6 +3929,99 @@ neexistujúci job, len predstiera, že niečo chráni.
 
 ---
 
+### Mac má druhý, zabudnutý klaster — a „zbytočnosti" na ňom zbytočné neboli (2026-09-17)
+
+Pri hľadaní miesta na Macu sa ukázalo, že na ňom **146 dní beží druhý klaster
+CistaFirma**, o ktorom nevedel ani repozitár, ani `make ops-check`.
+
+**Prečo ho nič nevidelo.** Docker Desktop Kubernetes je *kind*: šesť uzlov
+(`desktop-control-plane`, `desktop-worker`..`worker5`) beží ako docker
+kontajnery, ale Docker Desktop ich **zámerne skrýva z `docker ps -a`**. Vidieť
+sú len v `docker system df -v`, v `docker stats` a v `docker info` — a práve
+nesúlad `docker ps -a` (8 kontajnerov) proti `docker info` (17) bol jediná
+stopa. Celý môj predchádzajúci prieskum Macu preto ten klaster minul.
+
+**Čo v ňom je.** V namespace `cistafirma` beží celý stack: dva Postgres
+StatefulSety (PVC 1,2 GB a 45,6 MB), päť Celery workerov, beat, backend,
+frontend, `postgres-backup` CronJob (posledný beh dokončený, 5 Gi PVC). Vedľa
+je namespace `monitoring` s kube-prometheus-stack. **Obe Helm releasy sú
+`failed`.** Služby sú výhradne ClusterIP a ingress má placeholder
+`dev.cistafirma.example.com` — takže klaster neobsluhuje žiadnu premávku.
+
+**Je živý a skenuje.** Worker `orsr` práve vtedy púšťal
+`registers.tasks.sync_company_orsr_data` každé ~4 sekundy a opakoval
+`RpoEntityNotFoundForCompany`. To je **paralelné skenovanie verejných
+registrov s produkciou na delle** — a najpravdepodobnejšie vysvetlenie
+pôvodnej otázky „prečo bol výkon vysoko". Jeho databáza ale **nie je kópia
+produkcie**: 1 275 674 firiem proti 447 776 na delle, päť mesiacov starý
+rozbíhajúci sa experiment.
+
+**A teraz to dôležité — čo z môjho vlastného zoznamu „zbytočností" zbytočné
+nebolo.** Cez sedem nezávislých protivníkov, ktorých úlohou bolo môj záver
+*vyvrátiť*, padli tri položky:
+
+1. **`runner-*-cache-*` volume (26 ks).** Cieľ je v poriadku — `LINKS 0`, žiadny
+   kontajner ich nemontuje, obsah je prebuildovateľná CI cache. Vyvrátená bola
+   ale **cesta**: zmazať ich znamená `docker volume rm`, čo §8 zakazuje
+   bezvýhradne a `.claude/settings.json` to blokuje na permission vrstve.
+   A je dôvod: `cistafirma_postgres_data` je na Macu tiež `LINKS 0` — visí na
+   **žiadnom** kontajneri — takže plošný `docker volume prune` by ho vzal so
+   sebou. To nie je hypotéza, to je overený stav.
+
+2. **`localhost:5050/web/cistafirma/*:<sha>` („zastarané CI obrazy").** Nie sú
+   zastarané. `scripts/k8s/rollback.sh` robí `kubectl rollout undo` a to
+   rozbaľuje obraz **podľa mena** z predchádzajúcej ReplicaSet revízie —
+   backend aj frontend ich držia šesť. A register, ktorý ich vydával (Mac
+   GitLab na `:5050`), je mŕtvy, takže **lokálny store je jediná kópia**.
+   Navyše `backend:461c48ca` a `backend:dev` sú **ten istý image ID** — mazanie
+   podľa ID by vzalo aj `:dev`. Do tretice: `localhost:5050/web/code-reviews/*`
+   patrí inému živému projektu (kontajner `review-bot`).
+
+3. **`gitlab-ci.yml.new` na lenovo.** Je to **jediná kópia** (jeho sha256 sa
+   nezhoduje so žiadnym commitom `gitlab-ci.yml` v histórii) a je to
+   dokumentovaný vstup ponechaného `commit-ci-tags.rb`. `gitlab-ci.yml.original`
+   naopak v gite je (commit `ab3138ec`). Rovnako `gitlab/gitlab-ee:nightly`
+   a `gitlab/gitlab-runner:latest` sú pinované v `~/gitlab/docker-compose.yml`
+   vedľa 1,6 GB dátového adresára — mazať sa dá len `:latest`.
+
+**Ponaučenie.** `docker ps -a` **nie je inventúra stroja.** Zoznam „čo nič
+nepoužíva" je na tomto hoste nesprávny dvakrát: raz pre skrytý klaster, raz pre
+históriu ReplicaSetov, ktorá drží rollback cieľ, aj keď nič nebeží.
+
+**Výsledok.** Odkladací skript je `scripts/local/cleanup_mac_docker.sh`
+(bez `--apply` je to suchý beh). Skript **neobsahuje ani jeden volume príkaz**,
+má poistku na `cistafirma_postgres_data` pred aj po a mazanie odmietne, ak by
+sa cieľ objavil medzi živými obrazmi (kontajner, pod alebo ReplicaSet) — takže
+stará položka v zozname je neškodná, nie deštruktívna. Na Macu uvoľní ~22
+obrazov a ~20 GB build cache; **nespustil sa**, pozri „Čaká na teba".
+
+**Čo sa medzitým spravilo:** na lenovo zmizol
+`gitlab-runner_19.3.2-1_amd64.deb` (31 MB) a `install-runner-native-OBSOLETE.sh`.
+Štyri textové súbory (`README.md`, `ci-tags.md`, `gitlab-ci.yml.new`,
+`gitlab-ci.yml.original`) aj `runner-token.txt` ostávajú — token je
+`TOKENFILE` predvolba verzionovaného `setup-config.sh`, ktorý bez neho
+s `exit 1` skončí.
+
+**Čaká na teba (rozhodnutie, nie mechanika):**
+
+- **Spustiť `scripts/local/cleanup_mac_docker.sh --apply`** — permission vrstva
+  mi mazanie obrazov odmietla, takže to musí spustiť človek.
+- **Osud klastra v Docker Desktop Kubernetes.** Je dátový (1,2 GB Postgres),
+  takže sa nedá zhodiť ako „zvyšok". Ak je odpoveď „zrušiť", treba najprv
+  `helm uninstall` v oboch namespace a potom zmazať PVC — a vtedy sa uvoľní aj
+  tých ~12 GB sha-tagovaných obrazov, ktoré dnes drží rollback.
+- **Či má byť starý Mac GitLab (`~/gitlab`, 1,6 GB dát) ešte niekedy
+  spustiteľný.** `nightly` je pohyblivý tag, takže presný build 19.0.0-pre sa
+  po zmazaní už nedá stiahnuť; dáta sú host bind mount a prežijú.
+- **Rotácia runner tokenu** a **`sudo rm -rf /etc/gitlab-runner`** — bez zmeny,
+  oboje z 15. 9.
+- **`/home/sam/gitlab-runner-setup/gitlab-ci.yml.new` skopírovať do repa** vedľa
+  `deploy/ci/README.md`, ktorý už jeho súrodencov verzionuje. Jediná kópia
+  pripravenej záložnej cesty je presne tá chyba, ktorú tento projekt raz už
+  opravil pri configu runnera.
+
+---
+
 ## 8. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
