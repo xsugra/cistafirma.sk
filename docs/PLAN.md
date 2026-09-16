@@ -58,7 +58,14 @@ a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
 
 ---
 
-## 2. Robí sa
+## 2. Hotové — odôvodnenie a merania
+
+> Táto sekcia a §3 sú **to isté**: hotová práca s odôvodnením. §1 je index
+> oboch. Rozdelenie je len poradie, v akom prírastky vznikali — tu sú tie
+> skoršie (#83, #90, #89, #95) a merania, na ktoré sa zvyšok dokumentu
+> odvoláva ako na „§ 2"; v §3 sú novšie (#98, #93, #100, hľadanie osôb, #85).
+> Nadpis tu donedávna znel „Robí sa" a **nebola to pravda**: všetky štyri
+> prírastky nižšie sú dokončené a otestované.
 
 ### #83 — RUZ inkrementálny sync od 11. 9. mlčky nerobil nič
 
@@ -512,13 +519,14 @@ PSČ — líši sa v **76** riadkoch a voľnejší tvar zachraňuje
 falošný poplach je `HRB 29493`, ktoré sa číta ako PSČ. (d) Zlučovanie podľa
 holého mena (bez PSČ) — to je presne trieda, ktorá spája otca so synom.
 
-**Kroky.** Krok 1 je hotový (tento commit). Kroky 2–4 menia **zápis**, a preto
-každý z nich začína **čerstvou overenou zálohou** (`make db-backup` +
-`make db-backup-verify`) a **nie je schválený**:
+**Kroky.** Kroky 1, 2 a 4 sú hotové. Kroky 2 a 4 menili **zápis**, a preto
+každý z nich začínal **čerstvou overenou zálohou** (`make db-backup` +
+`make db-backup-verify`); oba sú dodané v `6c8b236`:
 
 1. ✅ **Zhlukovanie pri čítaní** — `connections/identity.py` (čistý modul, nič
    neukladá), `views.py` (hľadanie, detail, oba grafy), `PersonRecordsNote`.
-2. ⏳ **`Person.birth_date`** (`DateField`) — aditívna migrácia.
+2. ✅ **`Person.birth_date`** (`DateField`) — aditívna migrácia
+   `connections/0004`, ktorá aj presunula uložené dátumy z adresy do stĺpca.
 3. ❌ **Zapisovač preberá namiesto vytvárania — vypúšťam.** Takto napísaný krok
    je to isté zlúčenie, len o poschodie nižšie: keby zapisovač pri zhode prebral
    existujúci riadok, zmizne práve to, čo robí zhlukovanie bezpečným —
@@ -527,7 +535,7 @@ každý z nich začína **čerstvou overenou zálohou** (`make db-backup` +
    dátum narodenia, druhá ulicu), jedna z nich by sa ticho zahodila — práve tá
    informácia, ktorá ich od seba odlišuje. Rozhodnutie z tohto cyklu znie
    „nezlučovať"; krok 3 by ho obišiel.
-4. ⏳ **Dátum narodenia sa prestane ukladať ako adresa** — ale **závisí od
+4. ✅ **Dátum narodenia sa prestane ukladať ako adresa** — ale **záviselo to od
    kroku 2, nie od kroku 3**. Ten údaj drží nový stĺpec; preberanie riadkov
    s ním nemá nič spoločné. Pôvodná väzba bola nesprávna.
 
@@ -568,8 +576,12 @@ to, čo už je uložené. Opraví ich **#95 sám**: tie firmy sú v rotácii, kt
 beží, a keď sa prečítajú znova, zapíšu sa už správne. Migrácia dát by teda
 robila ručne to, čo bežiaca rotácia spraví za sebou.
 
-Bez tohto rozhodnutia sa nič nedeje a nič nestráca — krok 2 ostáva aditívny
-a vratný, `address` sa nemení, kým sa krok 4 nedokončí.
+**Prijaté a dodané** (`6c8b236`): stĺpec pribudol, parser má **jednu** vetvu
+pre prefix `Dátum narodenia:` (`orsr_scraper.py:498`, hneď za vetvou
+`Vznik funkcie`) a tá hodnota sa do `address_lines` nepridá. Všeobecné pravidlo
+„riadok s dvojbodkou nie je adresa" sa **neimplementovalo** — ostáva odmietnuté
+z dôvodu vyššie. Tým je #89 uzavreté: kroky 1, 2 a 4 hotové, krok 3 vedome
+vypustený.
 
 **Testy.** `connections/tests_identity.py` — 34 testov (holé funkcie aj API).
 Sada `connections` je **72 OK** (38 pôvodných + 34 nových); frontend 239 OK,
@@ -1288,9 +1300,16 @@ firiem neznesie ďalší import, a veta je presne to, čo tu celý čas chýbalo
 **(a) `seat_*` nemá cestu, ktorá by ho zneplatnila — a nikto ho ani neprepočíta.**
 Overené 2026-09-13 v troch krokoch:
 
-1. `_update_company_from_ruz_data` píše `mesto`, `ulica`, `psc` cez
-   `update_or_create(defaults=…)` (`tasks.py:412-427`), ale `seat_*` v tých
-   `defaults` **nie je**. Adresa sa teda zmení a umiestnenie zostane na starom
+1. Adresu firmy zapisuje **sedem** ciest v troch vrstvách a **ani jedna** nemá
+   `seat_*` v `defaults`: päť synchronizačných (`tasks.py:570-572`;
+   `fetch_ruz_data.py:538-540`; `repair_ruz_gaps.py:185-187`;
+   `repair_ruz_sync.py:206-208`; `repair_ruz_sync_v2.py:175-177`), formulár
+   Django adminu (`companies/admin.py:240-243`) a admin REST API
+   (`adminapi/serializers/companies.py:152`, `fields = "__all__"`). Mapovanie
+   `mesto`/`ulica`/`psc` je v tých piatich `defaults` skopírované doslovne, takže
+   spoločný bod, kam invalidáciu zavesiť, **neexistuje**. (ORSR a RPO adresu
+   firmy nepíšu — ukladajú ju len do `OrsrCompanyProfile.sidlo`, takže scraperov
+   sa táto oprava netýka.) Adresa sa teda zmení a umiestnenie zostane na starom
    mieste. `models.py:349-350` to aj priznáva — „Nepíše ich synchronizácia
    z RUZ, takže import firmy ich neprepíše" — a podáva to ako ochranu, čo je
    správne: bez toho by sync zmazal dobrú prácu matcherа. Chýbajúca polovica
@@ -1300,16 +1319,29 @@ Overené 2026-09-13 v troch krokoch:
    všetkých zapnutých), a nespomína ho `Makefile` ani `scripts/`. Je to ručný
    príkaz, takže „kým sa matcher znova nespustí" neznamená „čoskoro" — znamená
    „až kým to niekto spraví".
-3. Na `seat_*` **nie je žiadny časový stĺpec** (overené v `models.py:350-375`),
-   takže sa z dát nedá ani zistiť, ktoré riadky sú zastarané. Nedá sa teda
-   odhadnúť ani rozsah.
+3. `seat_matched_at` **existuje** (`models.py:377`; migrácia `0022`, commit
+   `9bbdb6b`) a matcher ho zapisuje (`match_seat_addresses.py:217,224`). Tu
+   donedávna stálo, že na `seat_*` **nie je žiadny časový stĺpec** — to bola
+   **nepravda** (overené 2026-09-17). Stĺpec však znamená „kedy sa umiestnenie
+   naposledy **zmenilo**", nie „kedy sa naposledy overilo": riadok, ktorého
+   prepočet vyjde na tie isté hodnoty, sa preskočí (`:204-206`) a pečiatka sa
+   s ním neobnoví. Migrácia navyše stĺpec pridala **bez backfillu**, takže koľko
+   riadkov dnes pečiatku má, sa z repozitára vyčítať nedá: ostrý beh, ktorý
+   dokument meria (dokončený 21:01), je starší než zapisujúca časť matchera
+   (`560427b`, 21:06), takže sám pečiatky písať nemusel.
+4. Ani keby pečiatka znamenala „naposledy overené", nie je z nej hlásenie: okrem
+   definície, migrácie a dvoch riadkov v matcheri sa doslovný názov v repozitári
+   **nevyskytuje nikde** — nie je v serializeroch, v admin API, v
+   `companies/admin.py` ani vo frontende. Hodnota sa pritom **posiela po drôte**:
+   `CompanyDetailSerializer` používa `Meta.exclude` (nie zoznam polí), takže DRF
+   vygeneruje pole pre každý stĺpec `Company` vrátane `seat_*` a
+   `seat_matched_at` — lenže ju nikto nečíta.
 
 Dôsledok je používateľsky viditeľný: firme, ktorá sa presťahovala, kreslíme
 mapu na starú adresu — natrvalo. Je to tá istá trieda ako počítadlo, ktoré
 nevie, čo počíta: chýba údaj, ktorý by povedal, či je hodnota ešte pravdivá.
-Oprava je nová prírastka (buď `seat_*` vyčistiť pri zmene adresy a matcher
-naplánovať, alebo pridať `seat_matched_at` a zastarané riadky hlásiť) —
-neimplementované, patrí do samostatného rozhodnutia.
+**Rozhodnutie je rozpísané v §4 (#148)** — s odporúčaním, dvomi odmietnutými
+možnosťami a meraním, ktoré je zablokované na prístupovom práve.
 
 **(b) — vyriešené.** §1 tabuľka vtedy vynechávala #85 – #92; dnes ich má
 (overené 2026-09-17: riadky 85, 86, 87, 88, 89, 90, 91 aj 92 tam sú). Poznámka
@@ -1997,6 +2029,197 @@ nie je to klasifikácia textu, ako sme si najprv mysleli.
 **Čo by to odblokovalo:** entitné rozlíšenie (entity resolution) — priradiť
 meno z textu konkrétnej firme tak, aby sa dalo obhájiť. To je samostatný
 projekt, nie úloha do sekcie.
+
+---
+
+### #148 — Sídlo sa presunie, mapa zostane na starej adrese (nová prírastka, čaká na schválenie)
+
+**Prečo to nie je hotové:** je to **nová prírastka** — mení zápis do `Company`
+a pridáva periodickú úlohu — takže podľa pravidiel ju nespúšťam sama a čakám na
+tvoje slovo. Nižšie je rozhodnutie pripravené tak, aby stačilo „áno".
+
+#### Čo je zle
+
+`seat_*` (šesť stĺpcov) je **odvodená** hodnota: počíta ju `match_seat_addresses`
+z `Company.{psc,mesto,ulica}` a z referenčnej tabuľky `AddressPoint`. Zdrojom
+pravdy zostáva adresa — a **nič neznehodnotí umiestnenie, keď sa adresa pohne**.
+Firma, ktorá sa presťahovala, má preto natrvalo pripnutú mapu na starej adrese.
+
+#### Čo som overil (2026-09-17)
+
+| # | zistenie | dôkaz |
+|---|---|---|
+| 1 | Adresu **prepisuje sedem** ciest a ani jedna nemá `seat_*` v `defaults` | päť sync ciest (`tasks.py:570-572`, `fetch_ruz_data.py:538-540`, `repair_ruz_gaps.py:185-187`, `repair_ruz_sync.py:206-208`, `repair_ruz_sync_v2.py:175-177`), formulár adminu (`companies/admin.py:240-243`), admin API (`adminapi/serializers/companies.py:152`). Ôsma cesta (`create_test_orsr.py:11-25`) adresu len **vytvára** cez `get_or_create`, takže existujúcemu riadku ju prepísať nevie a hook tam nemá čo invalidovať |
+| 2 | Matcher **nie je naplánovaný nikde** | nie je v `CELERY_BEAT_SCHEDULE`, v `PeriodicTask` riadkoch, v `Makefile` ani v `scripts/` |
+| 3 | `seat_matched_at` **existuje**, ale znamená „kedy sa zmenilo", nie „kedy sa overilo" | `models.py:377`; `match_seat_addresses.py:204-206` nezmenený riadok preskočí, `:217,224` píše pečiatku len so zmenou |
+| 4 | Koľko riadkov pečiatku má, **sa z repa vyčítať nedá** | migrácia `0022` bez backfillu; meraný ostrý beh (21:01) je starší než zapisujúca časť (`560427b`, 21:06) |
+| 5 | Všetkých sedem ciest ide cez `Company.save()` — pri dvoch to nie je zjavné (zistenie 7) | `save()` dnes obchádza len `bulk_update`, a ten adresu nepíše (`update_fs_data.py:122` = FS polia, `match_seat_addresses.py:222` = `seat_*`); `Company.objects.filter(...).update(<adresa>)` v repozitári nie je |
+| 6 | ORSR a RPO adresu firmy **nepíšu** | `orsr_sync.py:36` ukladá len `OrsrCompanyProfile.sidlo`; `Company` adresu nemení |
+| 7 | `update_or_create` **volá `save()`** — ale s **explicitným `update_fields`** | Django 6.0.1 `query.py:1053`: `obj.save(using=self.db, update_fields=update_fields)`, kde `update_fields = set(update_defaults)` (`:1012`). Hook na `save()` teda chytí všetkých päť sync ciest, ale musí si `seat_*` do `update_fields` **pridať** — inak sa vyčistenie v piatich hlavných cestách ticho neuloží. (Overené čítaním nainštalovanej knižnice: prvý návrh tohto plánu tvrdil, že `update_or_create` `save()` nevolá vôbec — bolo to nesprávne.) |
+
+#### Koho sa to týka — a koho nie
+
+Toto je dôležité, lebo prvá analýza to tvrdila opačne:
+
+- **Netýka sa to 65 324 neumiestnených firiem.** Ich mapa je kruh okolo PSČ a ten
+  sa počíta **živo z `obj.psc` pri každom čítaní** (`serializers.py:163`), takže
+  sa s adresou pohne sám. Nie sú zastarané, sú len nepresné — a to je ich
+  zdokumentovaný zámer (`match_seat_addresses.py:7-9`). Nepotrebujú ani
+  backfill, ani zneplatnenie.
+- **Týka sa to umiestnených firiem** — tých, ktoré majú `seat_*` vyplnené
+  (meranie z 13. 9.: 384 440, teda 85,5 %). Ich pin je presný, a preto aj
+  presne zlý, keď sa adresa pohne.
+
+#### Možnosti
+
+**(A) Zneplatniť pri zmene — odporúčam.** Keď zapisovateľ zmení `psc`/`mesto`/
+`ulica`, vyčistiť šesť `seat_*` aj `seat_matched_at`. Riadok tým padne presne do
+stavu, ktorý matcher už dnes píše pre neumiestniteľnú firmu
+(`None, None, '', None, None, ''`), a serializér odpovie kruhom okolo **novej**
+PSČ.
+
+- Miesto zavesenia: `Company.save()` s uloženým pôvodným stavom z `from_db`,
+  takže **žiadny dotaz navyše** — pokrýva všetkých sedem ciest, lebo všetky idú
+  cez `save()` (a `update_or_create` je medzi nimi, zistenie 7).
+- K tomu **naplánovať `match_seat_addresses`**, aby sa presnosť vrátila.
+
+**Tri veci, ktoré musí (A) vyriešiť — inak vyrobí novú tichú chybu:**
+
+1. **Karta by o sebe tvrdila nepravdu.** `explanation()` v `SeatLocationCard.tsx`
+   (`:138-166`) to píše v oboch hrubších vetvách — raz pre ulicu
+   („…pozná ulicu, ale nie konkrétnu budovu, takže bližšie sídlo umiestniť
+   nevieme", `:152-154`), raz pre PSČ („…pozná len stred PSČ…", `:161-162`).
+   Pre firmu, ktorú register umiestniť **vie** a my sme ju len ešte
+   nespárovali, je to nepravda o **schopnosti**, nie len hrubšia mapa — a to je
+   iná trieda chyby. Preto (A) patrí dokopy s rozlíšením „nespárované" vs.
+   „nepárovateľné" v texte karty; inak by sme jednu tichú lož vymenili za druhú.
+2. **Firme s pinom a prázdnym PSČ zmizne karta úplne.** Keď sa `seat_*` vyčistí
+   a `psc` je prázdne alebo mimo `PostalCodeArea`, `serializers.py:164-168`
+   vráti `None` — žiadny kruh, teda ani karta (dnes: presný pin). Je to
+   regresia a má byť **pomenovaná vopred**, nie objavená po nasadení.
+3. **Pravidlo musí znieť „zmenilo sa na inú *neprázdnu* hodnotu".** Adresné
+   kľúče idú do `defaults` cez holé `data.get('mesto')` (`repair_ruz_sync.py:206-208`
+   a rovnako v ostatných štyroch), takže **chýbajúci** kľúč zapíše `None` — a
+   naivné „zmenilo sa" by vymazalo pin firme, ktorej sa adresa v skutočnosti len
+   neposlala. Repo ten istý rozdiel už rieši inde (`apply_ruz_dates` odlišuje
+   *neprítomné* od *nečitateľného*); tu treba ten istý vzor, nie `!=`.
+- ➕ Bez nového stĺpca, bez migrácie, bez backfillu.
+- ➕ Nevyžaduje si **ani poznať** populáciu s pečiatkou (zistenie 4) a nezávisí
+  na význame `datumPoslednejUpravy`, ktorý je **neoverený** — registrová príručka
+  ho definuje ako dátum zmeny ovplyvňujúcej *zobrazenie*, s príkladmi, ktoré
+  adresou nie sú (`api_ruz_navod.txt:171`).
+- ➕ Pravdivé sú **dáta**, nie len jedno čítanie — a to tu má váhu, lebo surové
+  `seat_*` ide po drôte (admin API, `fields = "__all__"`).
+- ➖ Je to správanie skryté v modeli; bez docstringu a testov je to presne tá
+  trieda chyby, ktorú tento projekt stíha.
+- ➖ **Naivná verzia je horšia než žiadna.** Pridať `seat_*=None` do piatich
+  `defaults` slovníkov vyzerá ako tá istá oprava a je to prvá vec, ktorá
+  napadne — ale pri jednej otočke syncu (6 h) zmaže piny **celej** populácie,
+  a keďže matcher naplánovaný nie je (zistenie 2), niet čím ich vrátiť.
+  Práve preto patrí rozhodnutie do **jedného** miesta, ktoré porovnáva hodnoty,
+  a nie do piatich zápisov naslepo.
+- ➖ Nerieši druhú os: `AddressPoint` je referenčná tabuľka, nahradzovaná celá pri
+  (štvrťročnom) importe, a nesie len `source_version` na snímku —
+  `serializers.py:140-145` to pomenúva ako „dve nezávislé cesty k zastaraniu".
+
+**(B) Hlásiť zastarané riadky — odmietam.** `seat_matched_at < datum_poslednej_upravy`
+ako detektor **nemôže fungovať** tak, ako je navrhnutý:
+
+- Pečiatka znamená „naposledy zmenené" (zistenie 3), takže riadok, ktorý sa
+  prepočíta na tie isté hodnoty, sa hlási ako zastaraný **navždy** — aj po
+  správnom behu matcheru.
+- `datum_poslednej_upravy` sa podľa vlastnej dokumentácie hýbe aj z dôvodov,
+  ktoré adresou nie sú, takže väčšina nahlásených riadkov by neboli sťahovania.
+- Potreboval by backfill, ktorý nemáme (zistenie 4).
+- `NULL < dátum` je `NULL`, nie `true`, takže neumiestnené riadky by nešlo
+  označiť (hoci podľa vyššie uvedeného ani netreba).
+- A hlavne: **nič neopravuje.** Mapa zostane na starom mieste a pribudne zoznam,
+  ktorý nemá kto spracovať.
+
+Hodí sa dodať, že repozitár **už má** funkčný mechanizmus tejto triedy — schému
+`parser_revision` + `companies_due_for_sync(stale_revision=…)`, ktorá sa dolieči
+tým, že riadky **znovu prečíta** (`sync_engine.py:782`, `tasks.py:1273`). To je
+lepší vzor než hlásenie: liečiť, nie sa sťažovať. (A) je jeho obdobou.
+
+**(C) Odložiť odtlačok vstupu** — hash z `psc|mesto|ulica` plus `source_version`
+použitej snímky, a v **čítaní** považovať nezhodu za „neumiestnené".
+➕ Ako jediná pokrýva aj druhú os (verzia datasetu). ➖ Nový stĺpec a migrácia;
+backfill je buď lož („vyhlásime dnešok za zhodný"), alebo drahý (všetky
+umiestnené riadky spadnú na kruh, kým neprebehne celý matcher — merane 53 minút,
+`PLAN.md` § 2); a surové `seat_*` v admin API by aj tak ukazovali starý pin.
+
+#### Odporúčanie
+
+**(A) + naplánovať matcher.** Rieši presne to, na čo sa úloha sťažuje (mapa na
+starom mieste), nepotrebuje schému ani backfill a dá sa overiť testom na každej
+z troch vrstiev zápisu. Druhú os (verzia datasetu) navrhujem viesť ako
+**samostatný** záznam — inak sa z malej opravy stane zmena schémy.
+
+#### Čo spravím po schválení
+
+1. `Company.save()` + `from_db`: pri zmene ktorejkoľvek z troch adresných hodnôt
+   na inú **neprázdnu** hodnotu vyčistiť `seat_*` a `seat_matched_at`. Tri
+   pasce, ktoré treba ošetriť:
+   - `update_fields` **nie je okrajový prípad**: všetkých päť sync ciest volá
+     `update_or_create`, a to v Djangu 6.0 `save(update_fields=…)` posiela
+     (zistenie 7). Hook preto musí `seat_*` a `seat_matched_at` do zoznamu
+     **doplniť** — inak sa vyčistenie v piatich hlavných cestách ticho neuloží.
+   - `from_db` dostane pri `only()`/odložených poliach **podmnožinu** stĺpcov
+     (porovnávať len keď tam sú všetky tri).
+   - porovnávať **hodnoty**, nie prítomnosť kľúča — pasca 3 vyššie.
+2. Docstring `models.py:347-349` — dnes tvrdí, že sync `seat_*` neprepíše; po
+   zmene musí znieť presne (neprepíše ich, ale zneplatní).
+3. Text karty `SeatLocationCard.tsx:138-166` (`explanation()`): rozlíšiť
+   **„ešte nespárované"** od **„nepárovateľné"**. Dnešná veta sľubuje
+   neschopnosť registra; po (A) by klamala. Malá zmena textu, ale bez nej je
+   oprava len polovica — a je to presne tá polovica, ktorú používateľ vidí.
+4. Testy: (a) zmena adresy cez `update_or_create` vyčistí `seat_*`
+   **a naozaj sa uloží** (kontrola `update_fields`, nie len objekt v pamäti);
+   (b) zmena adresy cez admin API `PATCH` tiež; (c) **nezmenená** adresa `seat_*`
+   nechá tak; (d) zmena na `None` (chýbajúci kľúč) `seat_*` **nevyčistí**;
+   (e) `bulk_update` adresy `seat_*` **nevyčistí** — test to musí priznať
+   nahlas, aby diera nebola tichá.
+5. Naplánovať `match_seat_addresses`: zápis do `CELERY_BEAT_SCHEDULE` **aj**
+   `PeriodicTask` riadok s tými istými `args` (riadok je to, čo naozaj beží)
+   a `last_run_at` do minulosti, aby prvý beh neposunul reštart beatu o celý
+   interval — presne pasca z §7. Interval 6 h, nie denný.
+6. Nasadenie na `dell`: `git pull gitlab-home`, `migrate` (táto zmena migráciu
+   neprináša, ale krok patrí do postupu), reštart beatu; predtým `make db-backup`
+   a `make db-backup-verify`.
+7. Po nasadení jeden plný beh matchera, ktorý **dorovná dnešný dlh** — adresy,
+   ktoré sa pohli od 13. 9.
+
+#### Zablokované meranie
+
+Koľko firiem je dnes naozaj zle, **neviem zmerať**: dotaz na produkčnú databázu
+mi permission vrstva odmietla (`[Production Reads]`) a obchádzať to nebudem.
+Presné dotazy sú na tebe (alebo na Bash pravidlo, ktoré ich povolí). Otázky sú
+zámerne tri, lebo každá odpovedá na iné rozhodnutie:
+
+```sql
+-- 1) Horná hranica dosahu: koľko riadkov má vôbec pin, ktorý sa dá pokaziť.
+--    (Obdoba: seat_precision <> '' — matcher píše '' pre neumiestnené.)
+SELECT count(*) FROM "Companies and SZCO" WHERE seat_lat IS NOT NULL;
+
+-- 2) Z nich tie, ktoré (A) pošle na kruh a kruh im nevznikne — prázdne PSČ
+--    (pasca 2). Koľko z nich má PSČ, ktoré v PostalCodeArea NIE JE, SQL sám
+--    nepovie; to je druhá polovica tej istej regresie a chce join na tabuľku PSČ.
+SELECT count(*) FROM "Companies and SZCO"
+WHERE seat_lat IS NOT NULL
+  AND coalesce(btrim("PSČ"), '') = '';
+
+-- 3) Koľko pinov je naozaj podozrivých (pečiatka staršia než posledná zmena).
+--    Pozor: `NULL < dátum` je NULL, nie true — bez `IS NOT NULL` by dotaz
+--    ticho vrátil nulu a tváril sa, že je všetko v poriadku.
+SELECT count(*) FROM "Companies and SZCO"
+WHERE seat_matched_at IS NOT NULL
+  AND seat_matched_at::date < "Dátum a čas kontroly RUZ";
+```
+
+Ani jedno z tých čísel **nie je podmienkou opravy** — (A) funguje bez nich.
+Sú odpoveďou na „aké veľké to je a čo tým rozbijeme", teda do reportu;
+druhé z nich je zároveň jediné, ktoré vie regresiu z pascе 2 kvantifikovať
+**pred** nasadením namiesto po ňom.
 
 ---
 
@@ -4150,6 +4373,13 @@ s `exit 1` skončí.
   `deploy/ci/README.md`, ktorý už jeho súrodencov verzionuje. Jediná kópia
   pripravenej záložnej cesty je presne tá chyba, ktorú tento projekt raz už
   opravil pri configu runnera.
+- **Prístup na čítanie produkčnej DB** (`[Production Reads]`). Permission vrstva
+  mi odmietla aj `SELECT count(*)` nad produkčnou databázou na `dell` — a
+  obchádzať to nebudem. Dôsledok je konkrétny: čísla k #148 a #98 viem opísať,
+  ale **nie zmerať**. Tri dotazy, ktoré to spravia, sú v §4 pri #148. Ak ich
+  chceš v reporte, treba Bash pravidlo, ktoré read-only dotaz na `dell` povolí;
+  inak ich spustíš ty (alebo sa na to vykašleme — ani jedno z tých čísel nie je
+  podmienkou opravy).
 
 ---
 
