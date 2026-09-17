@@ -27,7 +27,26 @@ FROM nginx:1.27-alpine
 # entrypoint substitutes every variable name it finds in the environment, and
 # this container is handed the whole root .env. The filter narrows it to the
 # names chosen on purpose here.
+#
+# BACKEND_RESOLVER is declared EMPTY on purpose, and that is the opposite of the
+# treatment BACKEND_UPSTREAM gets. The upstream name has a correct default (the
+# k8s Service); the resolver address does not, because it is per-environment and
+# nginx never falls back to /etc/resolv.conf for run-time resolution --
+# docker-compose.prod.yml sets Docker's embedded DNS, and each Kubernetes
+# cluster has its own. Declaring it here rather than omitting it is what makes
+# the omission loud: it puts the name in the environment, so envsubst renders
+# `resolver  valid=10s ipv6=off;` and nginx refuses to start with "no name
+# servers defined". Left undeclared, the placeholder would survive into the
+# rendered config and fail as an unreadable syntax error instead. Either way the
+# container does not start; this way the message says which variable is missing.
+#
+# See nginx.conf.template for why the resolver and the upstream group exist at
+# all -- the short version is the 2026-09-17 outage, in which a statically
+# resolved upstream name kept pointing at a recycled container address for
+# 3h43m. deploy/k8s and deploy/helm must set BACKEND_RESOLVER before a new
+# frontend image is deployed there.
 ENV BACKEND_UPSTREAM=cistafirma-backend:8000 \
+    BACKEND_RESOLVER= \
     NGINX_ENVSUBST_FILTER=BACKEND_
 
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template

@@ -19,8 +19,16 @@ services:
 
     # docker compose reaches the backend by its service name, which is not the
     # Kubernetes Service name baked into the image.
+    #
+    # BACKEND_RESOLVER is Docker's embedded DNS. nginx needs it because the
+    # upstream is resolved at run time (see nginx.conf.template): a compose
+    # service name maps to a container IP that changes whenever that container
+    # is recreated, and a name resolved once at nginx's start goes stale the
+    # moment it does. That is what took every API call down for 3h43m on
+    # 2026-09-17. The image ships this variable empty, so it must be set here.
     environment:
       BACKEND_UPSTREAM: backend:8000
+      BACKEND_RESOLVER: 127.0.0.11
 
     # `!override` replaces the merged value instead of appending to it, and this
     # is the whole reason this file exists in the form it does. A plain `ports:`

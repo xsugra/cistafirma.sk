@@ -7,13 +7,64 @@
 # /etc/nginx/templates (see the entrypoint's 20-envsubst-on-templates.sh).
 # Dockerfile.prod sets NGINX_ENVSUBST_FILTER=BACKEND_ so that only the variables
 # named on purpose here are substituted, leaving nginx's own $host / $uri /
-# $scheme untouched.
+# $scheme untouched. The upstream GROUP name below is deliberately not
+# BACKEND_-prefixed, so that filter can never reach it.
 #
-# Note that a static upstream name is resolved once, when nginx starts: if the
-# name does not resolve, nginx refuses to start ("host not found in upstream")
-# rather than serving the app and failing every API call. That is deliberate --
-# a loud failure beats a site that looks up and answers 502 to everything -- but
-# it does mean this container needs the backend service to exist.
+# The backend is reached through an upstream group whose server carries
+# `resolve` (open source since nginx 1.27.3, and this image is 1.27.5), so the
+# name is resolved at RUN TIME and re-resolved as the answer expires, instead of
+# once when nginx starts.
+#
+# That is the fix for the 2026-09-17 outage, which ran 3h43m and took every API
+# call down while /healthz stayed green. nginx had resolved `backend` once, at
+# its own start (06:36:54Z), to 172.18.0.5; the backend container was recreated
+# 22 seconds later and came back at 172.18.0.11; 172.18.0.5 was then recycled to
+# celery_beat, which listens on nothing at :8000 -- so every request died with
+# "connect() failed (111: Connection refused)" and answered 502. A static name
+# cannot recover from that, and deploy order cannot prevent it: `depends_on`
+# says nothing about which container compose recreates afterwards, and a lone
+# `docker compose up -d --build backend` moves the address just as well.
+#
+# Measured on a throwaway pair of containers reproducing exactly that sequence
+# (target started first, both proxy forms started, target recreated, a squatter
+# taking the freed address): the old static form answered 502 to every request
+# after the recreate and never recovered. This form answers 502 to the first
+# request only and recovers on its own within ~5 seconds -- bounded by `valid=`
+# below, and reaching it sooner because a failed connection to the held address
+# triggers an early re-resolve. Seconds of degradation instead of hours.
+#
+# Two mistakes stay LOUD, at container start, which is the property the old
+# comment here was protecting: omitting the resolver fails with "no resolver
+# defined to resolve names at run time in upstream", and substituting it empty
+# fails with "no name servers defined". What no longer happens is the old
+# refusal to start on "host not found in upstream" -- with `resolve`, nginx
+# starts even while the name answers nothing.
+#
+# BACKEND_RESOLVER is required and, unlike BACKEND_UPSTREAM, is deliberately
+# left empty in the image rather than defaulted. It is an address, not a name:
+# nginx never consults /etc/resolv.conf for run-time resolution, and there is no
+# portable fallback -- 127.0.0.11 is Docker's embedded DNS (docker-compose.prod.yml
+# sets it) while Kubernetes answers at its own cluster DNS (10.96.0.10 on a
+# kubeadm default, 10.43.0.10 on k3s). A wrong-but-valid address would start
+# fine and fail per request, which is the exact silent shape this change removes,
+# so the value is required rather than guessed. Dockerfile.prod declares it empty
+# so the failure names itself; deploy/k8s and deploy/helm do not set it yet, and
+# must before a new frontend image is deployed there.
+
+resolver ${BACKEND_RESOLVER} valid=10s ipv6=off;
+
+upstream backend_upstream {
+    # `resolve` needs the group in shared memory. 64k is the size nginx's own
+    # example uses; this group holds a single address.
+    zone backend_upstream 64k;
+
+    # max_fails=0 disables the passive health check, so nginx never marks this
+    # lone peer down and never answers "no live upstreams": every request tries
+    # whatever address nginx currently holds. Reaching a stale address is what
+    # triggers the early re-resolve, which is the recovery measured above.
+    server ${BACKEND_UPSTREAM} resolve max_fails=0;
+}
+
 server {
     listen 80;
     server_name _;
@@ -21,8 +72,12 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # All three backend locations name the GROUP, which is looked up among the
+    # declared upstreams before any DNS is involved. proxy_pass keeps its static
+    # no-URI form, so the original request URI is passed upstream unchanged --
+    # byte for byte what the three separate literal proxy_pass lines did before.
     location /api/ {
-        proxy_pass http://${BACKEND_UPSTREAM};
+        proxy_pass http://backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -30,7 +85,7 @@ server {
     }
 
     location /admin/ {
-        proxy_pass http://${BACKEND_UPSTREAM};
+        proxy_pass http://backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -53,7 +108,7 @@ server {
     }
 
     location @backend_static {
-        proxy_pass http://${BACKEND_UPSTREAM};
+        proxy_pass http://backend_upstream;
     }
 
     location / {
@@ -69,6 +124,16 @@ server {
     # /usr/share/nginx/html serves 404 to every visitor while the probe stays
     # green, which is the one failure this endpoint exists to make visible. It
     # answers 503 unless index.html is there to be served.
+    #
+    # It is also, by the same design, blind to the 2026-09-17 outage: this
+    # container reported healthy for the whole 3h43m in which every API call
+    # answered 502. That is the correct trade for a LIVENESS probe -- restarting
+    # nginx cannot fix an unreachable backend, and a probe that failed here would
+    # restart every frontend pod during any backend restart. It does mean this
+    # endpoint is not an availability signal, and nothing else in the stack is
+    # either: prometheus.yml provisions no alerting rules, and scripts/local/ops_check.sh
+    # probes no frontend. Detecting the next occurrence needs a check that
+    # exercises /api/ from outside, not a change to this location.
     location /healthz {
         access_log off;
         default_type text/plain;
