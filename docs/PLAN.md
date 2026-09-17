@@ -2422,7 +2422,7 @@ meraním **vecne zmenili** — to je dôvod, prečo tu nie sú odpísané zo swe
 pridáva úlohu), takže podľa pravidiel čaká na tvoje slovo. Nasleduje stav
 a cena, nie hotová vec.
 
-#### A. `SectorBenchmark` — firma príde o porovnanie práve tým, že zverejní novšiu závierku
+#### A. `SectorBenchmark` — počíta sa len pre **jediný** rok, takže 1 586 firiem nemá porovnanie vôbec
 
 | | |
 |---|---|
@@ -2433,36 +2433,54 @@ a cena, nie hotová vec.
 
 Pri `year=None` (a beat tú úlohu púšťa **bez `args`**, takže `year` je vždy
 `None`) funkcia prejde roky od najnovšieho a vybere **prvý, ktorý má aspoň 500
-výsledkov** (`benchmarking.py:47-63`). Beatin riadok je pritom jediný spúšťač —
-je v tabuľke `PeriodicTask` (`runs=3`, naposledy 2026-09-16 18:34), takže sa to
-naozaj deje.
+výsledkov** (`benchmarking.py:47-63`) — a **zapíše len ten jediný**. Beatin riadok
+je pritom jediný spúšťač: je v tabuľke `PeriodicTask` (`runs=3`, naposledy
+2026-09-16 18:34), takže sa to naozaj deje.
+
+**Pri meraní sa ukázalo, že koreň je inde, než to vyzeralo — a je to horšie.**
+Prah 500 **nie je** to, čo drží pokrytie na jednom roku: cez prah prejde každý
+rok od 2013 po 2025.
+
+| rok závierok | firiem s výsledkami | `>= 500`? |
+|---|---|---|
+| 2026 | 80 | **nie** |
+| 2025 | 12 555 | áno |
+| 2024 | 12 935 | áno |
+| 2023–2014 | 13 005 – 13 461 (každý rok) | áno |
+| 2013 | 12 752 | áno |
+
+Úloha teda **má** dáta na 13 rokov a spočíta **jeden** — na prvom vyhovujúcom
+roku `break`-ne. Prah 500 vysvetľuje len to, prečo je tým rokom 2025 a nie 2026;
+chýbajúce roky 2013–2024 s prahom nemajú nič.
 
 Rozdelenie firiem podľa **ich vlastného najnovšieho roka** (merané 2026-09-17):
 
 | najnovší rok firmy | firiem | riadkov benchmarku pre ten rok |
 |---|---|---|
-| **2026** | **80** | **0** |
+| 2026 | 80 | **0** |
 | 2025 | 12 479 | 19 |
-| 2024 a staršie | 1 506 | 0 |
+| **2024 a staršie** | **1 506** | **0** |
 
-**Dôsledok, ktorý je horší než „chýbajúce dáta":** firma, ktorá **zverejnila
-novšiu závierku**, o porovnanie so sektorom **príde** — posunie sa na 2026,
-pre ktorý riadok neexistuje, a `get_benchmark` vráti `None`. Je to presne
-opačná motivácia, než akú má produkt: čerstvejšie dáta = horšia stránka.
-A je to **monotónne** — s každou ďalšou firmou, ktorá podá závierku za 2026,
-tých 80 rastie. Nikde na to nie je kontrola; API vráti `null` a PDF sekciu
-ticho vynechá.
+**Dôsledok — dve rôzne veci, obe zlé:**
 
-**Koreň:** prah 500 je **globálny**, takže zastaví obsluhovaný rok dovtedy, kým
-cez neho neprelezie celý rok — kým čitateľ sa posunie okamžite. Per-sekciová
-poistka `company_count < 5` v tom istom súbore (`:100-102`) už existuje a je tá
-čestná; globálna 500 je navyše a práve ona mrazí rok.
+1. **1 506 firiem** (tie, ktorých najnovšia závierka je z 2024 a staršia) nemá
+   porovnanie so sektorom **bez akéhokoľvek dôvodu** — benchmark pre ich rok sa
+   dal dávno spočítať z 12–13 tisíc firiem, ktoré ten rok majú. Toto je
+   prevládajúca časť nálezu a v sweepu **nebola**.
+2. **80 firiem, a rastie:** firma, ktorá **zverejní novšiu závierku**, sa posunie
+   na 2026, `get_benchmark` vráti `None` a o porovnanie **príde** — teda presne
+   opačná motivácia, než akú má produkt: čerstvejšie dáta = horšia stránka. Toto
+   je tá **rastúca hrana** a s každou ďalšou závierkou za 2026 sa zväčšuje.
+
+Nikde na to nie je kontrola; API vráti `null` a PDF sekciu ticho vynechá.
 
 **Možnosti:** (1) počítať pre **každý rok, ktorý má dáta**, a nechať rozhodovať
-len per-sekciovú poistku `>= 5`; (2) čítať fallbackom na najnovší
-benchmarkovaný rok sekcie; (3) znížiť/odstrániť globálny prah. **Odporúčam
-(1)** — je to najmenšia zmena, ktorá odstráni mrazenie a ponechá jedinú
-poistku, ktorá naozaj chráni pred mediánom z pár firiem.
+len per-sekciovú poistku `>= 5`, ktorá v tom istom súbore už je (`:100-102`);
+(2) čítať fallbackom na najnovší benchmarkovaný rok sekcie; (3) znížiť alebo
+odstrániť globálny prah. **Odporúčam (1)** — odstráni obe časti nálezu naraz a
+ponechá jedinú poistku, ktorá naozaj chráni pred mediánom z pár firiem. Cena je
+malá a ohraničená: ~14 rokov × najviac 19 NACE sekcií, teda **rádovo 250 riadkov**
+namiesto dnešných 19.
 
 #### B. `vat_deleted_date` / `vat_deleted_reason` — výmaz z DPH sa nikdy nezruší
 
@@ -2483,6 +2501,20 @@ dátum je fakt, ktorý zdroj zapísal). Takže tých **33 firiem sa vykreslí ak
 „Vymazaný z registra DPH"**, hoci register ich práve teraz vedie ako platiteľov
 — teda **v opačnom smere, než aký je pravda**, a v tom alarmujúcejšom. A opäť
 monotónne: nič ten dátum nevyčistí, takže číslo môže len rásť.
+
+**Skúsil som to vyvrátiť, aby som ti nedal odporúčanie na základe dojmu** —
+mohlo ísť o artefakt parsovania alebo o právne reálny stav „ešte platiteľ, výmaz
+ohlásený na neskôr". Nevyšlo:
+
+| test | výsledok |
+|---|---|
+| majú vyplnené `IČ DPH` **aj** dátum registrácie? | **33 z 33 áno** — sú to riadne firmy v aktuálnom zozname, nie artefakt |
+| má niektorá dátum výmazu v **budúcnosti**? | **0** — takže „výmaz ohlásený na neskôr" to nie je |
+| z ktorých rokov tie výmazy sú? | **2014 – 2026**, registrácie až do 2023-04-20 |
+
+Takže sú to naozaj firmy, ktoré z registra vypadli a **vrátili sa**, a UI im
+roky (najstaršej z nich ~12) tvrdí opak. Nie je to nová regresia — je to stav,
+ktorý tu bol celý čas a nikto ho nemeral.
 
 **Možnosti:** (1) v `handle_vat_payers` pri firme v aktuálnom zozname obe polia
 vyčistiť; (2) vo `vatStanding()` uprednostniť `isVatPayer === true` pred dátumom
@@ -2539,9 +2571,10 @@ administrátorský zásah **presne počas** focus mode, takže výskyt je úzky.
 
 #### Čo z toho plynie
 
-- **A a B** sú ozajstné chyby s merateľným, rastúcim dopadom (80 firiem; 33
-  firiem) a s malou, dobre ohraničenou opravou. Vedia čakať, ale sú to
-  kandidáti na ďalší cyklus.
+- **A a B** sú ozajstné chyby s merateľným dopadom (1 586 firiem bez benchmarku;
+  33 firiem s obráteným stavom DPH) a s malou, dobre ohraničenou opravou
+  (~250 riadkov; vyčistenie dvoch polí na jednej ceste). Vedia čakať, ale sú to
+  najlepší kandidáti na ďalší cyklus.
 - **C** je rozhodnutie o produkte, nie oprava — patrí tebe.
 - **D** je záznam, nie úloha.
 
