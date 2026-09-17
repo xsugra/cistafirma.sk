@@ -3030,18 +3030,88 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   probe`. Beží aj na delle v rámci celej brány: `OK  GET
   http://127.0.0.1:5173/api/stats/landing/ answered 200 through the published
   frontend port`.
-- ℹ️ **`/admin/` posiela o dve hlavičky menej než `/api/` — a dnes to nič
-  nerobí.** `location /admin/` nastavuje len `Host` a `X-Real-IP`, kým `/api/`
-  (a od `f4b822a` aj `@backend_static`) posiela navyše `X-Forwarded-For`
-  a `X-Forwarded-Proto`. Je to **predchádzajúci** stav, ktorý som nemenil.
-  Overené 2026-09-17: `settings.py` nemá ani `SECURE_PROXY_SSL_HEADER`, ani
-  `SECURE_SSL_REDIRECT`, takže `X-Forwarded-Proto` dnes **nikto nečíta** —
-  žiadna slučka presmerovaní, žiadny zlý absolutný odkaz. Následok je len ten,
-  že Django vidí pri `/admin/` adresu nginx kontajnera namiesto klienta.
-  **Kedy to začne bolieť:** v momente, keď pribudne `SECURE_PROXY_SSL_HEADER`
-  alebo `SECURE_SSL_REDIRECT` — vtedy `/admin/` začne o sebe tvrdiť, že beží
-  cez `http`, a to je presne tá chyba, ktorá sa hľadá ťažko, lebo sa prejaví
-  len na admin ceste. Vtedy doplniť rovnaký blok ako `/api/`.
+- ✅ **`/admin/` posielalo o dve hlavičky menej než `/api/` — doplnené
+  2026-09-17.** `location /admin/` nastavovalo len `Host` a `X-Real-IP`, kým
+  `/api/` (a od `f4b822a` aj `@backend_static`) posiela navyše `X-Forwarded-For`
+  a `X-Forwarded-Proto`. Dnes to bolo inertné a overené: `settings.py` nemá ani
+  `SECURE_PROXY_SSL_HEADER`, ani `SECURE_SSL_REDIRECT`, `USE_X_FORWARDED_HOST`
+  je nenastavené, a Django admin nie je DRF-throttlovaný (DRF `NUM_PROXIES`
+  číta `X-Forwarded-For` len na throttlovanie `/api/`, ktoré ho už posiela).
+  Bola to ale pasca: s `SECURE_PROXY_SSL_HEADER` a TLS terminovaným v nginx by
+  `/admin/` o sebe tvrdilo `http`, kým `/api/` správne `https` — a so
+  `SECURE_SSL_REDIRECT` je z toho slučka presmerovaní presne na tej stránke,
+  ktorú operátor potrebuje, keď je pokazené niečo iné. Doplnené rovnaké štyri
+  hlavičky ako v `/api/`.
+
+  **Overené renderom a `nginx -t`, nie čítaním diffu.** Šablóna sa vyrenderovala
+  oficiálnym image `nginx:1.27.5-alpine` (ten istý, aký pinuje `Dockerfile.prod`)
+  cez jeho vlastný `/docker-entrypoint.d/20-envsubst-on-templates.sh`
+  s `NGINX_ENVSUBST_FILTER=BACKEND_`: v hotovom configu je `proxy_set_header
+  X-Forwarded-For` aj `X-Forwarded-Proto` **trikrát** (`/api/`, `/admin/`,
+  `@backend_static`), blok `/admin/` má všetky štyri, `resolver 127.0.0.11`
+  a `server backend:8000 resolve max_fails=0` sú dosadené, `nginx -t` prejde
+  (`syntax is ok` / `test is successful`).
+
+  > **Prvý pokus o to overenie bol falošne zelený a stojí za zapísanie.**
+  > `docker run … nginx:1.27.5-alpine sh -c 'nginx -t'` nevyrenderuje **nič**:
+  > `/docker-entrypoint.sh` púšťa `20-envsubst-on-templates.sh` len vtedy, keď
+  > je prvý argument `nginx` (alebo `nginx-debug`), takže `sh -c …` render
+  > preskočí a `nginx -t` skontroluje **stock** `/etc/nginx/conf.d/default.conf`
+  > z image. Kontrola hlásila `syntax is ok` a o zmene nevedela nič — presne tá
+  > trieda poruchy, ktorú tu celý čas hľadáme, len tentoraz v mojom vlastnom
+  > overení. Preto sa šablóna renderuje explicitným volaním toho skriptu.
+- ✅ **IP GitLabu bola ručne na troch miestach a nikto ju neporovnával —
+  odteraz je na dvoch a kontrolovaná.** `100.120.104.84` stála
+  v `deploy/ci/docker-compose.yml:86` (`extra_hosts` runner kontajnera),
+  v `deploy/ci/setup-config.sh:23` (`GITLAB_IP`, dosadzovaná do `config.toml`
+  pre job kontajnery) a v `deploy/ci/README.md:119` (vysvetlenie, prečo dnsmasq
+  na tailnet IP z docker bridge neodpovedá). Dve konfiguračné miesta sú
+  **nevyhnutné**, nie nedopatrenie: runner a job kontajnery sú dva kontajnery
+  s dvoma vlastnými `/etc/hosts`. Tretie bolo len opisné a vypadlo — README
+  teraz odkazuje na `GITLAB_IP` v skripte. `setup-config.sh` navyše pri každom
+  spustení overí, že `docker-compose.yml` vedľa neho nesie tú istú IP, a skončí
+  s `exit 1`, keď nie.
+
+  Overené v troch stavoch, nie len v tom, ktorý má prejsť: zhoda → skript
+  pokračuje na kontrolu tokenu (`chýba …absent`); rozchod (v compose
+  `100.99.99.99`) → `CHYBA: … nemá extra_hosts "gitlab.home.arpa:100.120.104.84"`
+  s vypísaním nájdenej hodnoty a `exit 1`; chýbajúci `docker-compose.yml` →
+  viditeľné `POZOR: … zhoda GITLAB_IP sa nedá overiť` (ticho preskočená kontrola
+  je na nerozoznanie od tej, ktorá prešla). To isté proti **skutočnému**
+  `/home/sam/gitlab-runner/docker-compose.yml` na lenovo, so skriptom spusteným
+  s falošným `TOKENFILE`, takže sa nič nezapísalo — `config.toml` si drží mtime
+  `2026-09-15 23:31:59`. Nové kópie oboch súborov (aj README) sú na lenovo
+  nasadené a `sha256sum` sedí s repom na bajt; pôvodné sú zálohované ako
+  `*.bak-20260917-182705`. IP samotná je overená naživo:
+  `getent hosts gitlab.home.arpa` → `100.120.104.84`.
+- ✅ **Adresa lokálneho registra bola v runbooku iná, než akú používajú values
+  — a nebola to ani adresa registra.** `docs/K8S_LOCAL_RUNBOOK.md:23` tvrdil
+  `172.18.0.10:5000`, kým `deploy/helm/cistafirma/values-dev.yaml` má
+  `172.18.0.2:5000`. Namerané 2026-09-17 na Macu: kontajner `kind-registry`
+  beží (`Up 42 hours`, `127.0.0.1:5001->5000/tcp`) a na sieti `kind` má
+  **`172.18.0.2`** — values teda boli správne a runbook nie. Navyše `172.18.0.10`
+  na tej istej sieti **nie je voľná adresa**: patrí kontajneru
+  `kind-cloud-provider`. Runbook preto odteraz neuvádza číslo, ale postup
+  („prečítaj ju z `scripts/k8s/local_registry.sh`"), lebo IP prideľuje Docker
+  a mení sa s rekreaáciou kontajnera či siete — druhá kópia je presne to, čo sa
+  rozíde ticho a prejaví sa až `ImagePullBackOff` v podoch. To isté platí pre
+  komentár vo `values-dev.yaml`.
+
+  Runbook zároveň vysvetľuje, prečo `localhost:5001` v jeho príkazoch
+  a `172.18.0.2:5000` vo values nie sú rozpor: `-p 127.0.0.1:5001:5000`
+  sprístupňuje ten istý register na hoste, kým kontajnery v klastri ho vidia na
+  svojej sieti. Overené proti registru samotnému — `GET /v2/_catalog` vracia
+  `{"repositories":["cistafirma-backend","cistafirma-frontend"]}`, teda mená
+  **bez hosta aj portu**, a `tags/list` má na oboch `local` aj `v2`.
+
+  > **Čo tento nález nevyriešil a je na rozhodnutie.** Bežiace pody v namespace
+  > `cistafirma` majú obrazy `localhost:5050/web/cistafirma/*` — z GitLab
+  > registra na Macu, ktorý už neexistuje (kontajner je preč, `~/gitlab`
+  > s 1,6 GB dát ostal). Obrazy sú zakešované na uzloch, takže pody bežia, ale
+  > nový pod by potreboval pull. Nie je to teda len „osud klastra" z §8 nižšie,
+  > ale aj to, že runbook opisuje pull z lokálneho registra, ktorý dnes **nič
+  > nepoužíva**. Zámerne to neprepisujem na niečo, čo som neoveril — čo s
+  > klastrom, je rozhodnutie pre človeka.
 - ⚠️ **„Plná sada testov" z koreňa repa nespustí nič a vráti 0.** `make test`
   robí `cd backend` a až potom `manage.py test`; spustenie
   `python backend/manage.py test` z koreňa vypíše `Ran 0 tests ... NO TESTS
