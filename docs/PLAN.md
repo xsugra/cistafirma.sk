@@ -52,6 +52,7 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 93 | Jedna funkcia rozsekaná na intervaly podľa dokumentov registra je **jedna funkcia** — spája sa pri čítaní, v jednej zdieľanej funkcii pre detail osoby aj hľadanie; 34-dňová diera zostáva dvoma obdobiami | `973d6d7` |
 | 95 | História funkcií z RPO je doplnená — `--dry-run` hlási **0 z 27 427**; plánovací záznam aj riadok `PeriodicTask` zmazané, beat reštartovaný | `a789555` |
 | 98 | Kruh okolo sídla bol tvrdenie o presnosti — tvar zobrazenia teraz nesie presnosť namiesto neho | `3e7d11a` |
+| — | **Výpadok API na 3 h 43 min (2026-09-17)** — nginx si adresu backendu preložil raz pri štarte; odvtedy prekladá za behu (`resolve` + `resolver`) | `96c601b`, `6f722bc`, `a845414` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -1084,6 +1085,74 @@ zdieľaná fronta s ORSR rotáciou je caveat, ktorý treba zvážiť spolu s tý
 > firme, ktorá sa presťahovala, kreslíme mapu na starú adresu natrvalo. Je
 > výslovne mimo schválenej prírastky #98 a sú v ňom dve možné podoby opravy,
 > takže patrí do samostatného rozhodnutia — nie do tohto nadpisu.
+
+### Výpadok API na 3 h 43 min — nginx si adresu backendu preložil raz pri štarte — ✅ hotové (`96c601b`, `6f722bc`, `a845414`)
+
+**Hlásenie Samuela (2026-09-17):** „po zadani nazvu firmy do vyhladavacieho pola
+mi napisalo toto: 502 Bad Gateway … to iste po pokuse o prihlasenie: … **treba
+analyzovat preco sa to deje a opravit, inak web nie je funkcny!**"
+
+**Príčina.** nginx v produkčnom frontend image mal `proxy_pass
+http://${BACKEND_UPSTREAM};` — teda **statické meno**, ktoré nginx prekladá
+**raz, pri načítaní configu**, a potom sa naň už nikdy nepozrie. Nameraná časová
+os:
+
+| čas (UTC) | čo sa stalo |
+|---|---|
+| 06:36:54 | frontend naštartoval a preložil si `backend` → `172.18.0.5` |
+| 06:37:16 | backend bol rekreovaný a vrátil sa na `172.18.0.11` |
+| — | `172.18.0.5` medzitým dostal `celery_beat`, ktorý na `:8000` nepočúva nič |
+| 06:37:27 → 10:20:00 | **každý** API request `connect() failed (111: Connection refused)` → 502 |
+
+To je **3 h 43 min**, a je to presne trieda `#148`: hodnota odvodená z iného
+zdroja, zapísaná presne jednou cestou, a **žiadna cesta ju neznehodnotí, keď sa
+zdroj zmení**.
+
+**Prečo to nemôže vyriešiť poradie nasadenia.** `depends_on` nehovorí nič o tom,
+ktorý kontajner compose prekreuje *potom*, a samotné
+`docker compose up -d --build backend` adresu posunie rovnako dobre.
+
+**Oprava.** `upstream backend_upstream { server ${BACKEND_UPSTREAM} resolve
+max_fails=0; }` + `resolver ${BACKEND_RESOLVER} valid=10s ipv6=off;`, a všetky tri
+miesta (`/api/`, `/admin/`, `@backend_static`) menujú **skupinu**. `proxy_pass`
+si drží statický tvar bez URI, takže sémantika URI je bajt na bajt tá istá.
+`max_fails=0` je zámer: pri skupine o jednom prvku by zapnutá pasívna kontrola
+označila jediného peer-a za mŕtveho a začala odpovedať 503 na všetko.
+
+**Dôkaz — a jedno meranie, ktoré nevyšlo.** Prvý pokus na produkcii
+(`docker compose up -d --force-recreate backend`) **nebol rozlišujúci**: Docker
+pridelil backendu **rovnakú** IP `172.18.0.11`, takže nginx držal platnú adresu
+a všetko odpovedalo 200. To je tá istá chyba, akú som predtým spravil
+v laboratóriu. Skript to rozpoznal a postavil na uvoľnenú adresu **squatter** —
+to, čo v skutočnom výpadku spravil `celery_beat`. Až potom sa adresa skutočne
+posunula (backend → `172.18.0.14`) a meranie niečo dokazovalo:
+
+| | stará statická forma (lab) | nová forma (lab) | nová forma (produkcia) |
+|---|---|---|---|
+| pred rekreáciou | 200 | 200 | 200 |
+| t+0 | **502** | 502 | 502 |
+| t+3 … t+9 | **502** | — | 502, 502, 502 |
+| t+12 a ďalej | **502 navždy** | 200 | **200** — frontend sa nikdy nerestartoval |
+
+**Druhá oprava toho istého dňa: môj vlastný komentár.** Do template som
+z laboratórneho behu napísal, že zlyhané spojenie na držanú adresu vyvolá
+**skoré re-preloženie**. Produkčný log to vyvrátil — nginx dialoval starú
+`172.18.0.11` ešte v `10:54:25`, teda ~7 s po rekreovaní backendu (`10:54:18Z`),
+a na správnu `172.18.0.14` prešiel až `10:54:28`. Tie dva pokusy boli **tiež**
+odmietnuté, lebo backend ešte neotváral `:8000`. Okno teda viažu **dve** veci:
+DNS lifetime (`valid=10s`) a štart samotnej aplikácie — `valid=` posúva len prvú.
+Je to tá istá chyba ako pri náleze A nižšie: z jedného hrubého vzorku som vyvodil
+mechanizmus. Opravené v `a845414`.
+
+**Čo tým vyriešené NIE je** — dve veci, obe v §7: `deploy/k8s` a `deploy/helm`
+`BACKEND_RESOLVER` **nenastavujú**, a **nič v zostave výpadok API nezachytí**
+(`/healthz` je zámerne slepé voči backendu, `prometheus.yml` nemá ani jedno
+pravidlo a `ops_check.sh` nesondážuje frontend vôbec).
+
+**Overené naživo po nasadení** (`a845414`): `/` 200, `/api/stats/landing/` 200,
+`/api/companies/search/?q=ecoklima` 200 s reálnymi dátami (ECOKLIMA s.r.o.,
+Piešťany), `POST /api/auth/token/` 401 — teda **obe akcie, ktoré Samuel hlásil
+ako 502, fungujú**.
 
 ### #98 — Kruh okolo sídla je tvrdenie o presnosti; dá sa nahradiť skutočnou budovou — ✅ hotové (`3e7d11a`)
 
@@ -2623,6 +2692,28 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
 
 ## 7. Prevádzkové nálezy (mimo kódu)
 
+- ⚠️ **`deploy/k8s` a `deploy/helm` nenastavujú `BACKEND_RESOLVER`, takže nový
+  frontend image tam nenabehne.** Image ju zámerne deklaruje **prázdnu** (nie
+  vynechanú), aby zlyhanie menovalo samo seba: envsubst vyrenderuje
+  `resolver  valid=10s ipv6=off;` a nginx odmietne štart s
+  `no name servers defined`. Overené na zahodenom kontajneri 2026-09-17.
+  Compose vetva ju nastavuje na `127.0.0.11` (Docker embedded DNS), ale
+  **adresa sa odvodiť nedá** — je pre každý klaster iná: kubeadm `10.96.0.10`,
+  k3s `10.43.0.10`, Docker Desktop svoju vlastnú. **Preto to nie je doplnenie
+  hodnoty, ale rozhodnutie** (a `deploy/k8s` je aj tak označené DEPRECATED
+  s otvoreným osudom). Dôsledok, kým sa nerozhodne: frontend image nasadený do
+  klastra **nenabehne** — čo je hlasité, a teda lepšie než tichých 502, ale
+  treba o tom vedieť **pred** nasadením, nie po ňom.
+- ⚠️ **Nič v zostave nezachytí výpadok API — tých 3 h 43 min bolo pre všetky
+  kontroly neviditeľných.** `/healthz` je zámerne slepé voči backendu, a to je
+  správne: reštart nginx backend nevráti a probe, ktorý by tu zlyhal, by počas
+  každého reštartu backendu reštartoval všetky frontend pody. Lenže to isté
+  platí o zvyšku: `deploy/monitoring/prometheus/prometheus.yml` nemá **ani
+  jedno** pravidlo („No alerting rules are provisioned — dashboards only")
+  a `scripts/local/ops_check.sh` nesondážuje frontend **vôbec** — nemá ani
+  zmienku o `frontend`/`5173`/`curl`/`probe`. Celý ten čas kontajner hlásil
+  `healthy`. Zachytiť ďalší výskyt chce kontrolu, ktorá prejde **cez `/api/`
+  zvonka** — nie zmenu `/healthz`.
 - ⚠️ **„Plná sada testov" z koreňa repa nespustí nič a vráti 0.** `make test`
   robí `cd backend` a až potom `manage.py test`; spustenie
   `python backend/manage.py test` z koreňa vypíše `Ran 0 tests ... NO TESTS
