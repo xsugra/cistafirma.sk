@@ -5151,6 +5151,9 @@ nebolo.** Cez sedem nezávislých protivníkov, ktorých úlohou bolo môj záve
    a `gitlab/gitlab-runner:latest` sú pinované v `~/gitlab/docker-compose.yml`
    vedľa 1,6 GB dátového adresára — mazať sa dá len `:latest`.
 
+   → **Uložené 2026-09-17** ako `deploy/ci/gitlab-ci.yml.new`. Overenie toho
+   tvrdenia — aj to, čo sa pri ňom našlo — je v poslednej podsekcii §7.
+
 **Ponaučenie.** `docker ps -a` **nie je inventúra stroja.** Zoznam „čo nič
 nepoužíva" je na tomto hoste nesprávny dvakrát: raz pre skrytý klaster, raz pre
 históriu ReplicaSetov, ktorá drží rollback cieľ, aj keď nič nebeží.
@@ -5215,10 +5218,10 @@ s `exit 1` skončí.
   po zmazaní už nedá stiahnuť; dáta sú host bind mount a prežijú.
 - **Rotácia runner tokenu** a **`sudo rm -rf /etc/gitlab-runner`** — bez zmeny,
   oboje z 15. 9.
-- **`/home/sam/gitlab-runner-setup/gitlab-ci.yml.new` skopírovať do repa** vedľa
-  `deploy/ci/README.md`, ktorý už jeho súrodencov verzionuje. Jediná kópia
-  pripravenej záložnej cesty je presne tá chyba, ktorú tento projekt raz už
-  opravil pri configu runnera.
+- ~~**`/home/sam/gitlab-runner-setup/gitlab-ci.yml.new` skopírovať do repa**~~
+  — **spravené 2026-09-17**, pozri nižšie. Otvorené ostáva len to, čo sa pri tom
+  našlo: `main` na GitHube je sedem commitov pozadu a `gitlab-home/main` nesie
+  starý `build`/`deploy` stage s `tags:`.
 - **Prístup na čítanie produkčnej DB.** Zaznamenávam, čo som **pozoroval**, nie
   diagnózu: auto mode classifier odmietol `SELECT count(*)` nad produkčnou
   databázou na `dell` s dôvodom `[Production Reads]` — príkaz neprebehol.
@@ -5234,6 +5237,70 @@ s `exit 1` skončí.
   chceš v reporte, treba Bash pravidlo, ktoré read-only dotaz na `dell` povolí;
   inak ich spustíš ty (alebo sa na to vykašleme — ani jedno z tých čísel nie je
   podmienkou opravy).
+
+### `.gitlab-ci.yml` existuje vo viac kópiách, než dokumentácia priznáva (2026-09-17)
+
+Podnet bol malý: dorovnať do repozitára `gitlab-ci.yml.new` z lenovo. Pri
+overovaní sa ale ukázalo, že o kópiách tohto jedného súboru platí niečo iné, než
+tvrdia dve kanonické dokumenty — a že jedna z tých kópií je živá.
+
+**Artefakt je uložený.** `deploy/ci/gitlab-ci.yml.new` je bajt na bajt kópia
+`/home/sam/gitlab-runner-setup/gitlab-ci.yml.new` (`cmp` + `sha256sum`,
+`eff4edb3…`, 239 riadkov, 6971 B). Je to pripravená záložná cesta z 11. 9. 2026:
+`.gitlab-ci.yml` s explicitnými `tags:` na ôsmich joboch. Prečo sa nesmie
+nasadiť tak, ako je, a prečo sa napriek tomu nedá aplikovať omylom, je
+v `deploy/ci/README.md`.
+
+**„Jediná kópia" sedí — ale je to osem riadkov.** Tu stálo, že jeho `sha256` sa
+nezhoduje so žiadnym commitom `.gitlab-ci.yml` v histórii. Overené prechodom
+**všetkých** commitov, ktoré ten súbor kedy menili, na všetkých refoch: **nula
+zhôd**. Zároveň `diff` proti `ab3138e:.gitlab-ci.yml` je **osem čistých vložení
+a nula zmien**, a všetkých osem je riadok `tags:`. Ten súbor je teda
+`gitlab-ci.yml.original` plus osem riadkov. Formulácia „jediná kópia" bola
+pravdivá, ale zvádzala k predstave o samostatnom súbore; rozdiel je osem riadkov,
+ktoré sa z histórie vyzdvihnúť nedajú (a poskladať ručne znamená rozhodnúť pri
+ôsmich joboch, ktorý dostane `lenovo` a ktorý `macos` — a `macos` má jediný).
+
+**`main` na GitHube je sedem commitov pozadu — a nikde to nebolo.** Zmerané:
+`origin/main` stojí na `ab3138e` z **25. 7. 2026**, `gitlab-home/main` na
+`8ea1e50` z **11. 9. 2026**; `main` lokálne je `ab3138e`, teda presne to, čo má
+GitHub. `origin/main` je pritom **predok** `gitlab-home/main`, takže nejde
+o rozchod, len o oneskorenie — a tých sedem commitov sú CI zmeny (tagy pre
+runnera, DinD, `FF_NETWORK_PER_BUILD`, zápis do docker configu). Nebezpečné to
+nie je: GitLab je kanonický a GitHub z tohto repa nič nespúšťa ani nenasadzuje
+(`.github/workflows` neexistuje nikde, ani lokálne, ani na ňom). Ale je to
+**druhá kópia `main`, ktorá sa rozišla ticho** — trieda chyby, ktorú tento
+projekt rieši inde — a nikde nebola zapísaná.
+
+**A to najpodstatnejšie: `gitlab-home/main` má `tags:` aj staré stages.**
+`DEVOPS_CICD.md` tvrdí, že „žiadny job v histórii repa nemal `tags:`", a
+`deploy/ci/README.md`, že sa tagy „do `.gitlab-ci.yml` necommitli". Obe tvrdenia
+sú **nepravdivé pre kanonický remote**. `d8fd936` (`ci: tagy pre runner na
+sam-lenovo + oprava neexistujuceho kubectl image`, 11. 9. 2026 **19:55**, vetva
+`ci/runner-tags-and-kubectl-image`) pridáva osem `tags:` riadkov a je predok
+`gitlab-home/main`; ten ich má dodnes, spolu s celým stage `build` aj `deploy`
+a s `bitnamilegacy/kubectl:1.30` — ten istý commit opravil aj ten obraz, takže
+`gitlab-home/main` je v tomto bode **ďalej**, než hovorí dokumentácia. Pravda je
+užšia: do 19:55 toho dňa nemal `tags:` ani jeden job, a vetva, na ktorej sa CI
+robilo 13.–15. 9., ich tiež nemá (zmizli v `4731a620`, 13. 9. 17:27).
+
+Obe tvrdenia sú v tých dokumentoch **opravené na mieste** — nie prepísané,
+pôvodné znenie tam ostáva — s odkazom sem.
+
+**Čo z toho vyplýva a čo nie.** Isté je, že `gitlab-home/main` dnes nesie stav,
+ktorý oba dokumenty opisujú ako odstránený, a že `build_backend_image` aj
+`build_frontend_image` majú `rules` na `$CI_COMMIT_BRANCH == "main"` — pipeline
+na `main` by ich teda spustila, a tie potrebujú DinD, ktoré runner na lenovo
+nemá. **Nezmeral som však, či taká pipeline od 11. 9. vôbec niekedy bežala**; na
+to treba záznamy jobov z GitLabu (`gitlab-psql`, nie `git log`) a to je
+samostatná otázka. Preto tu nestojí „hlavná vetva je červená", ale presne to, čo
+je zmerané.
+
+**Nerobil som s tým nič.** Posunúť `main` na GitHube alebo na GitLabe je
+rozhodnutie o zdieľanej vetve, nie mechanika — a `feat/ai-ready-baseline` ten
+stav aj tak celý nahradí. Ak sa to má zavrieť hneď, je to jeden fast-forward
+(`origin/main` je predok `gitlab-home/main`) a jedna otázka na GitLab: bežala od
+11. 9. na `main` nejaká pipeline?
 
 ---
 

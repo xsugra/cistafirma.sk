@@ -99,6 +99,19 @@ ssh lenovo 'docker exec gitlab-server gitlab-rails runner \
 > s `run_untagged = true` v configu ostal v GitLabe stav `false`
 > (`ci_runners.updated_at` sa nepohol).
 
+> **Oprava 17. 9. 2026 — „žiadny job v histórii repa nemal `tags:`" nie je
+> pravda.** Zmerané na refoch: commit `d8fd936` (`ci: tagy pre runner na
+> sam-lenovo + oprava neexistujuceho kubectl image`, 11. 9. 2026 **19:55**)
+> pridáva do `.gitlab-ci.yml` osem `tags:` riadkov a je predok
+> `gitlab-home/main`, ktorý ich má dodnes. Pravda je teda užšia: **do 19:55
+> toho dňa** nemal `tags:` ani jeden job — a vetva, na ktorej sa CI robilo
+> 13.–15. 9., ich nemá tiež (zmizli v `4731a620`, 13. 9. 17:27). Či to
+> vysvetľuje celé „štyri dni ticha", touto opravou **zodpovedané nie je**: na to
+> treba záznamy jobov z GitLabu, nie `git log`. Istý je ale dôsledok:
+> **`gitlab-home/main` dnes nesie `tags:` aj celý starý `build` a `deploy`
+> stage** — teda presne ten stav, ktorý tento dokument o pár odsekov nižšie
+> opisuje ako odstránený. Podrobnosti a zvyšok: `docs/PLAN.md` §7.
+
 Bezpečnostný model runnera (socket proxy, neprivilegované job kontajnery,
 `allowed_images`, pamäťové limity) je v [`deploy/ci/README.md`](../deploy/ci/README.md)
 — `config.toml` je **generovaný** skriptom [`deploy/ci/setup-config.sh`](../deploy/ci/setup-config.sh),

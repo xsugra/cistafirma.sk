@@ -3,10 +3,15 @@
 Nasadené 11. 9. 2026 ako **dva kontajnery** cez `docker compose`.
 
 > **Toto je verzionovaná kópia.** Súbory v `deploy/ci/` sú bajt na bajt totožné
-> s tými na lenovo (`sha256sum` overené 16. 9. 2026). Zdrojom pravdy pre
-> **bežiaci** runner je naďalej `/home/sam/gitlab-runner/` na lenovo — sem sa
-> kopírujú preto, aby konfigurácia CI runnera mala históriu, diff a zálohu:
-> predtým existovala len na jednom stroji a nikde v repozitári.
+> s tými na lenovo (`sha256sum` overené 16. 9. 2026, znovu 17. 9. 2026).
+> Zdrojom pravdy pre **bežiaci** runner je naďalej `/home/sam/gitlab-runner/` na
+> lenovo — sem sa kopírujú preto, aby konfigurácia CI runnera mala históriu,
+> diff a zálohu: predtým existovala len na jednom stroji a nikde v repozitári.
+>
+> Jedna výnimka: **`gitlab-ci.yml.new` nie je zrkadlová kópia.** Pochádza z iného
+> adresára na lenovo (`/home/sam/gitlab-runner-setup/`) a je to archív, nie kópia
+> bežiacej konfigurácie — prečo tu je a prečo sa nesmie nasadiť, je na konci
+> v časti „Archivovaný artefakt".
 >
 > **`config/config.toml` sa sem NIKDY nekopíruje.** Je to generovaný výstup
 > a obsahuje živý runner token (v `setup-config.sh` je len placeholder
@@ -189,6 +194,15 @@ dni to nikto nevidel.
   ako pripravená alternatíva, keby raz bolo treba runner presunúť inam —
   explicitný `tags:` je viditeľnejší a prežije prenos projektu.
 
+  > **Oprava 17. 9. 2026 — to tvrdenie platí len pre túto vetvu.** Napísal som
+  > ho ako fakt o repozitári a je to fakt len o `feat/ai-ready-baseline`.
+  > Zmerané: `gitlab-home/main` (kanonický remote) má v `.gitlab-ci.yml`
+  > **osem `tags:` riadkov** — od commitu `d8fd936` z 11. 9. 2026 19:55, ktorý
+  > ich pridáva ručne na vetve `ci/runner-tags-and-kubectl-image`. Ten istý
+  > commit v ňom opravil aj `bitnami/kubectl` na `bitnamilegacy/kubectl`, takže
+  > `gitlab-home/main` je v tomto bode **ďalej**, než tvrdí odsek vyššie.
+  > Podrobnosti a dôsledky: `docs/PLAN.md` §7.
+
 ## História: prečo nie natívny balík
 
 Prvý pokus bol nainštalovať `gitlab-runner` ako natívny deb. Zlyhalo to:
@@ -201,3 +215,55 @@ výsledok inštalácie.** Skript je preto premenovaný na
 
 Kontajnerová cesta je lepšia aj tak: image už bol na disku (489 MB),
 nepotrebuje 538 MB závislosť ani žiadne rozšírenie sudo práv.
+
+## Archivovaný artefakt: `gitlab-ci.yml.new`
+
+V tomto adresári je súbor, ktorý **nie je** kópia bežiacej konfigurácie:
+`gitlab-ci.yml.new`. Je to bajt na bajt kópia
+`/home/sam/gitlab-runner-setup/gitlab-ci.yml.new` z lenovo — 239 riadkov,
+6971 B, `sha256 eff4edb3…`, overené 17. 9. 2026 (`cmp` + `sha256sum`).
+
+**Čo to je.** Pripravená záložná cesta z 11. 9. 2026: to isté `.gitlab-ci.yml`,
+ale s **explicitnými `tags:`** na každom jobe — `lenovo` na validate/test/deploy,
+`macos` na build. Keby runner ostal s `run_untagged = false`, tento súbor by ho
+donútil joby prevziať. Jeho dokumentovaným konzumentom je `commit-ci-tags.rb`,
+ktorý ho vie commitnúť na `main`; ten sa sem zámerne nekopíruje. Tento súbor
+**napokon použitý nebol** — tagy sa 11. 9. 2026 commitli ručne na vetve
+`ci/runner-tags-and-kubectl-image` (`d8fd936`) a 15. 9. sa celá otázka vyriešila
+serverovým prepínačom. Je to teda návrh, ktorý ho predbehol; čo pri tom
+v dokumentácii nesedí, je zmerané v `docs/PLAN.md` §7.
+
+**Prečo tu je, keď sa nepoužil.** Overené 17. 9. 2026 prechodom **všetkých**
+commitov, ktoré kedy menili `.gitlab-ci.yml`, na všetkých refoch: ani jeden nemá
+tento hash. Súvisí to s tým, čím ten súbor vlastne je — `diff` proti
+`ab3138e:.gitlab-ci.yml` je **osem čistých vložení a nula zmien**, a všetkých
+osem je riadok `tags:`. Jeho súrodenec `gitlab-ci.yml.original` je naproti tomu
+doslova `ab3138e:.gitlab-ci.yml` (`sha256 247169a2…`), takže sa z histórie dá
+vyzdvihnúť kedykoľvek a v repozitári byť nemusí. Tých osem riadkov sa z histórie
+nevyzdvihne — a poskladať ich ručne znamená rozhodnúť pri ôsmich joboch, ktorý
+dostane `lenovo` a ktorý `macos` (a `macos` má jediný z nich).
+
+`ci-tags.md` (odôvodnenie a patch k tomuto súboru) na lenovo ostáva. Jeho
+podstatný obsah je odteraz odvoditeľný odtiaľto: tabuľka tagov je v archívovanom
+súbore a patch je presne ten rozdiel proti `ab3138e:.gitlab-ci.yml`.
+
+**Nesmie sa nasadiť tak, ako je.** Nie je to novšia verzia, je to **staršia** —
+stav pred 15. 9. 2026, ktorý vracia štyri veci odstránené zámerne, každú
+s dôvodom:
+
+| Vracia | Prečo to nemôže prejsť |
+|---|---|
+| celý stage `build` (`.build_template` s `docker:27.1.2-dind`, `build_backend_image`, `build_frontend_image`) | DinD potrebuje `privileged`, čo runner na lenovo zámerne nevie; a obrazy, ktoré vyrábal, nikto nečíta |
+| celý stage `deploy` (`.deploy_template`, `deploy_dev`, `deploy_main_to_dev`, `deploy_prod`) | `echo "$KUBE_CONFIG" \| base64 -d` — `KUBE_CONFIG` nie je definovaná nikde: ani v projekte, ani v skupine, ani v inštancii |
+| `helm_k8s_validate` | obraz `bitnami/kubectl:1.30` na Docker Hube **neexistuje** (Bitnami presunul free obrazy do `bitnamilegacy`) — padne už na pull |
+| `backend_tests` bez `services:` a bez `collectstatic` | spadne na tom istom, na čom padal predtým: bez `DATABASE_URL` sa schéma postaví na SQLite a `companies/0014` tam neprejde (`text_pattern_ops`) — červený vždy, nech je kód akýkoľvek |
+
+Navrch `tags: [macos]` na `.build_template` menuje stroj, ktorý už neexistuje —
+Mac prišiel o runner 15. 9. 2026.
+
+**Nedá sa aplikovať omylom.** `commit-ci-tags.rb` má poistku
+`EXPECTED_SHA = '247169a23b7b5e40'`: zahashuje `.gitlab-ci.yml` na `main`
+v GitLabe a odmietne zapísať, ak nesedí. GitLab `main` dnes drží `8ea1e50`
+(`sha256 3307ee99…`), takže skript **skončí skôr, než čokoľvek zapíše**. Presne
+preto je bezpečné ten súbor tu mať — je inertný, kým ho niekto nepoužije ručne
+a vedome.
