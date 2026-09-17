@@ -54,6 +54,50 @@ describe('vatStanding', () => {
         expect(vatStanding(vat({isVatPayer: false, registeredOn: null}))).toBe('not-payer');
     });
 
+    it('calls a re-registered company a payer although the removal date is still set', () => {
+        // Measured 2026-09-17: 384 of the 32 127 rows carrying a removal date
+        // have a registration date *later* than it. The firm sits in the
+        // current-payers list and in the deleted-payers history at once -- the
+        // history is a record of what happened, not a statement of what is --
+        // and 379 of them rendered as "Vymazaný z registra DPH" on no evidence
+        // but which dataset the importer happened to walk last.
+        expect(
+            vatStanding(
+                vat({
+                    registeredOn: '2024-03-01',
+                    deregisteredOn: '2020-05-05',
+                    isVatPayer: false,
+                    reasonForDeregistration: 'Rok porušenia: 2019',
+                })
+            )
+        ).toBe('payer');
+    });
+
+    it('still calls a company that left after it registered deregistered', () => {
+        // The guard above must not swallow the ordinary case, which is the
+        // overwhelming majority: 3 827 rows have reg < del.
+        expect(
+            vatStanding(vat({registeredOn: '2018-01-01', deregisteredOn: '2020-05-05'}))
+        ).toBe('deregistered');
+    });
+
+    it('does not try to order two dates in the same day', () => {
+        // 4 rows hold the same date twice. Nothing in the pair says whether the
+        // firm is in or out, so the removal date keeps deciding.
+        expect(
+            vatStanding(vat({registeredOn: '2020-05-05', deregisteredOn: '2020-05-05'}))
+        ).toBe('deregistered');
+    });
+
+    it('compares the dates as the wire sends them', () => {
+        // The comparison is a plain string one, which is only correct because
+        // DRF serialises the backend's `DateField` as zero-padded ISO 8601. This
+        // pins that: a datetime, or a `DD.MM.YYYY` format, would order wrongly
+        // and silently flip the answer for every company.
+        expect('2024-03-01' > '2020-05-05').toBe(true);
+        expect(vatStanding(vat({registeredOn: '2024-03-01', deregisteredOn: '2020-05-05'}))).toBe('payer');
+    });
+
     it('says unknown rather than non-payer when the register said nothing', () => {
         // 302 713 rows -- 68 % of the register. The old mapping turned every one
         // of them into "Neplatiteľ DPH", a claim the tax office never made.

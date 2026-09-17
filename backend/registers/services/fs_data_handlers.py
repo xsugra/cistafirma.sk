@@ -99,24 +99,54 @@ class FSDataHandlers:
         return False
 
     def handle_vat_deleted(self, company: Company, item: dict) -> bool:
-        """Handler pre vymazaných platiteľov DPH."""
+        """Handler pre vymazaných platiteľov DPH.
+
+        `vat_deleted_date` a `vat_deleted_reason` sú **história** — zapisujú sa
+        vždy, keď dataset nesie iný údaj, a nikdy sa nečistia. `vat_payer` je
+        ale **súčasný stav**, a ten sa z histórie odvodiť nedá: kto sa po výmaze
+        znovu zaregistroval, je dnes platiteľ.
+
+        `FS_DATASET_URLS` púšťa `vat_payers` **pred** `vat_deleted`, takže v
+        jednom priechode bežal tento handler druhý a vždy prepísal verdikt toho
+        prvého — aj keď firma bola v oboch datasetoch súčasne. Merané na
+        produkcii 2026-09-17: z 32 127 riadkov s `vat_deleted_date` má **384**
+        `datum_reg_dph` *neskôr* než výmaz, a **379** z nich malo
+        `vat_payer = False`. To je zlý stav: firma sa vykresľovala ako
+        „Vymazaný z registra DPH", hoci register ju vedie ako platiteľa.
+
+        Preto sa pri takom riadku flag **neprepína**, ale dátum a dôvod sa
+        zapíšu ďalej — `ROK_PORUSENIA` hovorí, prečo bol človek vymazaný, a to
+        platí aj po opätovnej registrácii. Nie je to strata údaja: porušenie
+        zostáva v `vat_deleted_date`/`vat_deleted_reason` ako záznam.
+        """
         updated = False
 
-        if company.vat_payer:
-            company.vat_payer = False
-            updated = True
-
         dat_vymazu = item.get('DAT_VYMAZU')
+        parsed_date = None
         if dat_vymazu:
             try:
                 parsed_date = datetime.strptime(dat_vymazu, '%d.%m.%Y').date()
-                if company.vat_deleted_date != parsed_date:
-                    company.vat_deleted_date = parsed_date
-                    updated = True
             except ValueError:
                 self.stderr_write(
                     self.style_error(f"Could not parse deletion date '{dat_vymazu}' for {company.nazov_UJ}")
                 )
+
+        # Registrácia *po* výmaze znamená, že firma je v oboch datasetoch naraz.
+        # `>` a nie `>=`: keď je to ten istý deň, poradie sa z dvoch dátumov
+        # vyčítať nedá a ostáva pôvodné správanie (flag sa prepne).
+        superseded = (
+            parsed_date is not None
+            and company.datum_reg_dph is not None
+            and company.datum_reg_dph > parsed_date
+        )
+
+        if company.vat_payer and not superseded:
+            company.vat_payer = False
+            updated = True
+
+        if parsed_date is not None and company.vat_deleted_date != parsed_date:
+            company.vat_deleted_date = parsed_date
+            updated = True
 
         rok_porusenia = item.get('ROK_PORUSENIA')
         if rok_porusenia:

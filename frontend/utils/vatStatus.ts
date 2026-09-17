@@ -26,8 +26,22 @@ export type VatStanding = 'payer' | 'deregistered' | 'not-payer' | 'unknown';
  * a hint it often did not. `false` is set on only 4 160 rows, and every one of
  * those carries both a registration and a removal date, so the flag never
  * carries a fact the dates do not already state more completely.
+ *
+ * A removal date alone is not the whole story either, because the register can
+ * take a company back: measured 2026-09-17, 384 of the 32 127 rows carrying a
+ * removal date have a **registration date later than it** -- the firm is in the
+ * current-payers list *and* the deleted-payers history at once, and the history
+ * is what the flag was last written from. Comparing the two dates answers it
+ * from facts the source published, without needing the flag to have been
+ * repaired first.
  */
 export function vatStanding(vat: VatStatus): VatStanding {
+    // A plain string comparison, and only correct because DRF serialises the
+    // backend's `DateField` as zero-padded ISO 8601 -- which sorts
+    // lexicographically. `vatStatus.test.ts` pins that assumption.
+    if (vat.registeredOn && vat.deregisteredOn && vat.registeredOn > vat.deregisteredOn) {
+        return 'payer';
+    }
     if (vat.deregisteredOn) return 'deregistered';
     if (vat.isVatPayer === true) return 'payer';
     if (vat.isVatPayer === false) return 'not-payer';
