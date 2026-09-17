@@ -112,8 +112,10 @@ server {
     # The URI is the only thing that carries over by itself. `$proxy_host` -- the
     # Host sent when a location sets no proxy_set_header -- is the name as written
     # in proxy_pass, so renaming it changes the Host the backend sees. That is not
-    # theoretical: it broke @backend_static the moment this shipped (400 to every
-    # fall-through). If you add a fourth location here, set Host explicitly.
+    # theoretical: it changed what @backend_static sent the moment this shipped.
+    # The blast radius is narrower than it first appears -- see that location
+    # below, where it is written down exactly. If you add a fourth location here,
+    # set Host explicitly.
     location /api/ {
         proxy_pass http://backend_upstream;
         proxy_set_header Host $host;
@@ -146,15 +148,32 @@ server {
     }
 
     # The fallback for anything under /static/ the built image does not carry --
-    # Django's own admin/DRF assets, typically. It needs an explicit Host, and
-    # that is not a detail: with no `proxy_set_header`, nginx sends
-    # `$proxy_host`, which is the name as written in proxy_pass. That used to be
-    # `backend:8000` (Django accepts it: ALLOWED_HOSTS holds `backend`, the port
-    # is stripped), and naming the GROUP changed it to `backend_upstream`, which
-    # is not in ALLOWED_HOSTS at all. Every fall-through request then answered
-    # `400 Bad Request` -- measured on production 2026-09-17, right after the
-    # upstream change shipped, and it is why the three locations now carry the
-    # same header block instead of only two of them. Same headers as /api/.
+    # Django's own admin/DRF assets, typically. It carries an explicit Host
+    # because with no `proxy_set_header` nginx sends `$proxy_host`, the name as
+    # written in proxy_pass: that used to be `backend:8000` (Django accepts it --
+    # ALLOWED_HOSTS holds `backend` and the port is stripped) and naming the GROUP
+    # changed it to `backend_upstream`, which ALLOWED_HOSTS does not hold.
+    #
+    # What that actually broke, measured on production 2026-09-17, is narrower
+    # than "every fall-through", and worth writing down exactly, because the
+    # wrong version of this sentence was here first. WhiteNoiseMiddleware sits
+    # ABOVE CommonMiddleware in `settings.MIDDLEWARE`, so an asset whitenoise
+    # holds is served before Django ever validates the host: /static/admin/css/base.css
+    # answered 200 under Host `backend`, `backend_upstream` and the real public
+    # host alike, and no admin asset was ever affected. Host validation only
+    # decides the requests whitenoise does NOT hold -- the misses. There the
+    # difference is real and reproducible against the backend directly:
+    #
+    #     GET /static/definitely-missing-98765.css
+    #       Host: backend           -> 404
+    #       Host: backend_upstream  -> 400 Bad Request (DisallowedHost)
+    #
+    # So the regression was a wrong status code on a miss, not a broken admin:
+    # a missing static asset answered 400 instead of 404, and the 400 was the
+    # one answer that tells a client "your request was malformed" when the truth
+    # was "no such file". The explicit Host restores 404, which is what the
+    # backend itself answers for the same path -- verified through the published
+    # URL after this shipped. Same headers as /api/.
     location @backend_static {
         proxy_pass http://backend_upstream;
         proxy_set_header Host $host;

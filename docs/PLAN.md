@@ -52,7 +52,7 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 | 93 | Jedna funkcia rozsekaná na intervaly podľa dokumentov registra je **jedna funkcia** — spája sa pri čítaní, v jednej zdieľanej funkcii pre detail osoby aj hľadanie; 34-dňová diera zostáva dvoma obdobiami | `973d6d7` |
 | 95 | História funkcií z RPO je doplnená — `--dry-run` hlási **0 z 27 427**; plánovací záznam aj riadok `PeriodicTask` zmazané, beat reštartovaný | `a789555` |
 | 98 | Kruh okolo sídla bol tvrdenie o presnosti — tvar zobrazenia teraz nesie presnosť namiesto neho | `3e7d11a` |
-| — | **Výpadok API na 3 h 43 min (2026-09-17)** — nginx si adresu backendu preložil raz pri štarte; odvtedy prekladá za behu (`resolve` + `resolver`) | `96c601b`, `6f722bc`, `a845414` |
+| — | **Výpadok API na 3 h 43 min (2026-09-17)** — nginx si adresu backendu preložil raz pri štarte; odvtedy prekladá za behu (`resolve` + `resolver`) | `96c601b`, `6f722bc`, `a845414`, `f4b822a` |
 
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
@@ -1086,7 +1086,7 @@ zdieľaná fronta s ORSR rotáciou je caveat, ktorý treba zvážiť spolu s tý
 > výslovne mimo schválenej prírastky #98 a sú v ňom dve možné podoby opravy,
 > takže patrí do samostatného rozhodnutia — nie do tohto nadpisu.
 
-### Výpadok API na 3 h 43 min — nginx si adresu backendu preložil raz pri štarte — ✅ hotové (`96c601b`, `6f722bc`, `a845414`)
+### Výpadok API na 3 h 43 min — nginx si adresu backendu preložil raz pri štarte — ✅ hotové (`96c601b`, `6f722bc`, `a845414`, `f4b822a`)
 
 **Hlásenie Samuela (2026-09-17):** „po zadani nazvu firmy do vyhladavacieho pola
 mi napisalo toto: 502 Bad Gateway … to iste po pokuse o prihlasenie: … **treba
@@ -1153,6 +1153,37 @@ pravidlo a `ops_check.sh` nesondážuje frontend vôbec).
 `/api/companies/search/?q=ecoklima` 200 s reálnymi dátami (ECOKLIMA s.r.o.,
 Piešťany), `POST /api/auth/token/` 401 — teda **obe akcie, ktoré Samuel hlásil
 ako 502, fungujú**.
+
+**Regresia, ktorú som zaviedol ja — a potom jej dopad prehnal** (`f4b822a`,
+plus oprava tohto zápisu nižšie). `proxy_pass` nesie URI sám, ale **Host nie**: keď location
+nemá `proxy_set_header Host`, nginx pošle `$proxy_host`, teda meno presne tak,
+ako je napísané v `proxy_pass`. Premenovanie na GROUP teda ticho zmenilo Host,
+ktorý backend vidí. `location @backend_static` hlavičku nemal, takže z `backend:8000`
+(prijímané — `ALLOWED_HOSTS` drží `backend` a port sa odreže) sa stalo
+`backend_upstream`, čo v `ALLOWED_HOSTS` nie je vôbec. Našiel som to tak, že som
+po zmene netestoval len `/api/`, ale **dosah zmeny**: `/static/<neexistujúce>`
+vrátilo 400. Opravené tak, že `@backend_static` má teraz rovnaký blok hlavičiek
+ako `/api/` — čo je striktne lepšie než pôvodný stav, kde Host `backend:8000`
+fungoval len náhodou.
+
+**A potom som z jedného chýbajúceho súboru vyvodil dopad na celý admin** — čo
+bola tretia chyba tej istej triedy v tento deň. Overenie na produkcii ukázalo, že
+`WhiteNoiseMiddleware` stojí v `MIDDLEWARE` **nad** `CommonMiddleware`, takže
+existujúci statický súbor obslúži **skôr**, než Django vôbec validuje hostiteľa:
+
+```
+GET /static/admin/css/base.css          Host: backend -> 200, backend_upstream -> 200
+GET /static/definitely-missing-98765.css Host: backend -> 404, backend_upstream -> 400
+```
+
+Reálne admin assety teda **nikdy zasiahnuté neboli**; regresia bola nesprávny
+**status na miss** — chýbajúci súbor odpovedal 400 („tvoja požiadavka je
+pokažená") namiesto 404 („taký súbor nie je"). Po nasadení `f4b822a` vracia tá
+istá cesta cez publikovanú URL **404** a `/static/admin/css/base.css` **200**
+s 23 100 B CSS, čiže fall-through cesta je živá a odpovedá rovnako ako backend
+priamo. Že všetky `DisallowedHost` záznamy v logu sú **moje vlastné sondy** (4 → 6,
+presne koľko som ich poslal), je súčasť toho istého merania — reálna prevádzka
+žiadny nevyrobila.
 
 ### #98 — Kruh okolo sídla je tvrdenie o presnosti; dá sa nahradiť skutočnou budovou — ✅ hotové (`3e7d11a`)
 
