@@ -2206,12 +2206,71 @@ z troch vrstiev zápisu. Druhú os (verzia datasetu) navrhujem viesť ako
 7. Po nasadení jeden plný beh matchera, ktorý **dorovná dnešný dlh** — adresy,
    ktoré sa pohli od 13. 9.
 
-#### Zablokované meranie
+#### Nález po nasadení: príkaz neopečiatkoval riadok, ktorý neumiestni (2026-09-17)
 
-Koľko firiem je dnes naozaj zle, **neviem zmerať**: dotaz na produkčnú databázu
-mi permission vrstva odmietla (`[Production Reads]`) a obchádzať to nebudem.
-Presné dotazy sú na tebe (alebo na Bash pravidlo, ktoré ich povolí). Otázky sú
-zámerne tri, lebo každá odpovedá na iné rozhodnutie:
+Krok 5 platí, ale prvá polovica #148 sa nasadila skôr, než sa ukázalo, že
+**tretí stav sa nikdy nedokonverguje**. `match_seat_addresses` zapisoval riadok
+len vtedy, keď sa mu zmenili `seat_*` — a `_wanted(None)` je presne to, čo
+neumiestnený riadok už má. Každá firma, ktorú register umiestniť nevie, teda
+zostala bez `seat_matched_at`, a `pending` číta len ten. Karta o takej adrese
+ďalej tvrdila „register adries sme na ňu ešte nepustili" — pri každom priechode,
+navždy.
+
+Merané na produkcii 2026-09-17:
+
+| | počet |
+|---|---|
+| riadkov spolu | 449 780 |
+| `seat_matched_at` nastavené | 393 171 |
+| `seat_precision` prázdne (neumiestnené) | 56 609 |
+| neumiestnené **a** opečiatkované | **0** |
+| neumiestnené **a** bez pečiatky | **56 609** |
+| umiestnené bez pečiatky | 0 |
+
+Dokonalé rozdelenie: pečiatka padala presne na riadky, ktoré sa zmenili. To nie
+je nález o okraji — to je najhoršia tretina populácie, ktorá sa neumiestni.
+
+Oprava (95c47a9) číta aj `seat_matched_at` a zapisuje, keď sa umiestnenie
+zmenilo **alebo** keď riadok pečiatku nemá. Hlásenie tie dva počty rozlišuje:
+prvý je dlh, ktorý viaže šesťhodinový interval, druhý je backlog, ktorý sa
+vyčerpá jediným priechodom — a krok 7 sa tak dá **odpovedať**, nie len spustiť.
+
+Testy: `MatcherRunTests` príkaz naozaj **spustí**. Dovtedy ho nespúšťal nikto:
+`_wanted` sa len importoval a porovnával, a práve preto mohla tá chyba sedieť
+v repe so zelenou sadou a s dvoma docstringami, ktoré tvrdili opak
+(`models.py:375`, `serializers.py:155`).
+
+#### `options: {'expires': …}` je pre riadok inertné — príčina je názov kľúča
+
+Vedľajší nález z toho istého čítania. `ModelEntry._unpack_options` berie
+`expire_seconds`, **nie** `expires` (`django_celery_beat/schedulers.py:217-218`),
+takže `expires` spadne do `**kwargs` a zahodí sa; expiry riadka pochádza
+výhradne z `model.expires_`. Komentár v `settings.py` to vysvetľoval tým, že
+`options` sa nedostane do riadka, ktorý už existuje — lenže `queue` je tiež
+`options` a v riadku **je** (overené na riadku vytvorenom z tohto dictu).
+Zámer teda do riadka nedorazí vôbec a tri vrstvy sa v tomto bode nezhodujú.
+
+Nepremenoval som to na `expire_seconds`: tým by sa „beh sa oneskorí" zmenilo na
+„beh nenastane", čo je horšia vlastnosť než tá, ktorú to má opraviť. Je to
+rozhodnutie o sémantike plánovania, nie preklep — **na teba**.
+
+#### Čítanie produkčnej DB: čo permission vrstva odmietla a čo prešlo
+
+Permission vrstva na `dell` odmietla tri **široké** akcie: `docker compose up -d`
+(celý stack), `docker compose exec -T backend python manage.py shell` (ľubovoľný
+kód v produkčnom kontajneri) a priamy dotaz na produkčnú databázu
+(`[Production Reads]`). Neobchádzal som to — ale **zúženie na jedinú agregáciu
+prešlo**: `docker compose exec -T db sh -c 'psql …'` s `count(*) FILTER (…)` nad
+`"Companies and SZCO"`, a rovnako `manage.py match_seat_addresses --dry-run
+--limit 2000`. Rozdiel nie je v tom, že by čítanie bolo zakázané a teraz
+povolené — je v tvare dotazu. Obe strany tu nechávam preto, aby ďalšia session
+nehľadala povolenie, ktoré netreba, a zároveň sa nepokúšala obísť odmietnutie,
+ktoré stále platí.
+
+Z troch otázok nižšie je **prvá zodpovedaná** meraním o sekciu vyššie (393 171
+riadkov má pin). Druhá a tretia nie — a tretia po #148 stráca zmysel: pečiatka
+už nie je „kedy naposledy", ale „či sme sa na túto adresu vôbec pýtali", takže
+porovnávať ju s `Dátum a čas kontroly RUZ` už nič neznamená.
 
 ```sql
 -- 1) Horná hranica dosahu: koľko riadkov má vôbec pin, ktorý sa dá pokaziť.
