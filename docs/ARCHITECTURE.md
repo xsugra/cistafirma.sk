@@ -150,6 +150,18 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 > hovorí „ešte nedopočítané", nie „register to neumiestni" — rozlíšiť tie dva
 > stavy sa nedá bez `seat_matched_at`, a to je dôvod, prečo je v zneplatnení.
 >
+> Ten rozdiel však drží **len vtedy, keď príkaz naozaj opečiatkuje aj riadok,
+> ktorý neumiestni** — a to bola druhá polovica #148, ktorá chýbala. Príkaz
+> zapisuje riadok, keď sa umiestnenie zmenilo **alebo** keď riadok nemá
+> pečiatku; testovať len hodnoty nestačí, lebo `_wanted(None)` je presne to, čo
+> neumiestnený riadok už má, takže by sa každá firma, ktorú register umiestniť
+> nevie, preskočila a zostala bez pečiatky **navždy** — karta by o adrese, na
+> ktorú sme sa pýtali pri každom priechode, ďalej tvrdila, že sme register
+> „ešte nepustili". Merané na produkcii 2026-09-17: 393 171 umiestnených
+> riadkov, všetky opečiatkované, a 56 609 neumiestnených, **ani jeden**
+> opečiatkovaný — pečiatka padala presne na tie riadky, ktoré sa zmenili, čo je
+> celá tá chyba.
+>
 > Interval **6 h je zámerne rovnaký ako `fetch-ruz-data-every-6-hours`**: adresu
 > mení ten sync, takže tento interval je to, ako dlho smie byť presťahovaná
 > firma bez sídla. Queue `celery` — na `ruz_full` drží sync svoj kurzor a na

@@ -8,7 +8,7 @@ circle, which is a weaker claim but a true one. This command never writes
 `postal_code` — copying `PostalCodeArea` onto 400 000 rows would give the circle
 a second source that goes stale independently of the first.
 
-Three things keep the *reading* half cheap:
+Three things keep it cheap:
 
 - **One query per tier per chunk, not one per company.** The keys are passed as
   arrays and joined with `unnest`, so 5 000 companies cost six queries instead
@@ -17,10 +17,20 @@ Three things keep the *reading* half cheap:
 - **Keys are deduplicated before they are sent.** `unnest` over a repeated key
   would emit its points twice and quietly double every count, so the arrays
   hold distinct values by construction.
-- **A row is written only when its placement changes.** The current `seat_*`
-  values are read alongside the address and compared, so re-running against
-  unchanged data writes nothing at all — which matters, because the address
-  register is reloaded quarterly and this command is the second half of it.
+- **A row is written only when its placement changes, or when it carries no
+  stamp.** The current `seat_*` values and `seat_matched_at` are read alongside
+  the address and compared, so re-running against unchanged data writes nothing
+  at all — which matters, because the address register is reloaded quarterly and
+  this command is the second half of it. The stamp is half of that test on
+  purpose, and it is not an optimisation: an unplaced row's six columns already
+  equal `_wanted(None)`, so a test on values alone skips **every** company the
+  register cannot place and leaves its stamp unset for ever. `seat_matched_at`
+  is the only thing `pending` reads, so the card would go on saying "register
+  adries sme na ňu ešte nepustili" about an address we had asked about on every
+  pass — a state that never converges, which is worse than the stale pin this
+  command exists to replace. Measured on 2026-09-17: 56 609 unplaced rows,
+  **none** of them stamped, and 393 171 placed rows, all of them stamped — the
+  stamp was landing exactly on the rows that changed, which is the whole bug.
 
 Where the time actually goes, measured over a 5 000-company chunk: reading the
 chunk and matching it is **0.8 s**, of which the six tier queries are 0.73 s and
@@ -63,13 +73,24 @@ CHUNK_SIZE = 5_000
 # it, and the shape of the curve is what matters: it rises steeply at the top.
 BULK_UPDATE_BATCH_SIZE = 500
 
-# The address fields decide the placement; the seat fields are read so an
-# unchanged row can be skipped rather than rewritten.
+# The address fields decide the placement; the seat fields and the stamp are
+# read so an unchanged, already-stamped row can be skipped rather than
+# rewritten.
 SOURCE_FIELDS = ('id', 'psc', 'mesto', 'ulica')
 # From the model, not a second copy: `Company.save()` clears the same set when
 # the address changes, and a column added here but not there would be left
 # stale on a company that moved.
 SEAT_FIELDS = Company.SEAT_FIELDS
+# The stamp travels with them because "the values are already what I would
+# write" is only a reason to skip when the row also says *when* it was written.
+STAMP_FIELD = 'seat_matched_at'
+
+# Where the read columns land in a row returned by `values_list` below. Named
+# rather than written out, so adding a source field cannot silently make the
+# comparison include the stamp (which would rewrite all 449 780 rows every run)
+# or drop a seat column from it (which would stop the invalidation converging).
+_STORED_SEAT = slice(len(SOURCE_FIELDS), len(SOURCE_FIELDS) + len(SEAT_FIELDS))
+_STORED_STAMP = len(SOURCE_FIELDS) + len(SEAT_FIELDS)
 
 
 def _chunks(iterable, size):
@@ -132,7 +153,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--dry-run',
             action='store_true',
-            help='Report what would change, but write nothing.',
+            help='Report what would change or be stamped, but write nothing.',
         )
         parser.add_argument(
             '--limit',
@@ -152,7 +173,9 @@ class Command(BaseCommand):
         dry_run = options['dry_run']
         limit = options['limit']
 
-        queryset = Company.objects.values_list(*SOURCE_FIELDS, *SEAT_FIELDS).order_by('id')
+        queryset = Company.objects.values_list(
+            *SOURCE_FIELDS, *SEAT_FIELDS, STAMP_FIELD
+        ).order_by('id')
         # `is not None`, not truth: `--limit 0` slices to nothing, and a truth
         # test would silently drop the slice and walk the whole table instead.
         if limit is not None:
@@ -161,6 +184,7 @@ class Command(BaseCommand):
         now = timezone.now()
         seen = 0
         changed = 0
+        stamped = 0
         by_precision = {BUILDING: 0, STREET: 0}
         by_tier = {}
         unplaced = 0
@@ -197,9 +221,22 @@ class Command(BaseCommand):
                     by_tier[placement.tier] = by_tier.get(placement.tier, 0) + 1
 
                 wanted = _wanted(placement)
-                if wanted == tuple(row[4:]):
+                same = wanted == tuple(row[_STORED_SEAT])
+                # Unchanged **and** already stamped, or nothing to do. Both
+                # halves are load-bearing; see the module docstring for what
+                # dropping the second one does to the 12,6 % of rows the
+                # register cannot place.
+                if same and row[_STORED_STAMP] is not None:
                     continue
-                changed += 1
+                # Counted apart, because they answer different questions: how
+                # many companies this pass moved, and how many rows had simply
+                # never been stamped. The second number is a backlog that
+                # clears once; the first is the debt the six-hour interval
+                # exists to bound.
+                if same:
+                    stamped += 1
+                else:
+                    changed += 1
                 if dry_run:
                     continue
                 updates.append(Company(
@@ -217,18 +254,25 @@ class Command(BaseCommand):
                 with transaction.atomic():
                     Company.objects.bulk_update(
                         updates,
-                        list(SEAT_FIELDS) + ['seat_matched_at'],
+                        list(SEAT_FIELDS) + [STAMP_FIELD],
                         batch_size=BULK_UPDATE_BATCH_SIZE,
                     )
 
             self.stdout.write(f'  {seen:,} companies considered…', ending='\r')
 
         self.stdout.write(' ' * 40, ending='\r')
-        self._report(seen, changed, by_precision, by_tier, unplaced, dry_run)
+        self._report(seen, changed, stamped, by_precision, by_tier, unplaced, dry_run)
 
-    def _report(self, seen, changed, by_precision, by_tier, unplaced, dry_run):
+    def _report(self, seen, changed, stamped, by_precision, by_tier, unplaced, dry_run):
         verb = 'would change' if dry_run else 'changed'
         self.stdout.write(f'Considered {seen:,} companies; {changed:,} {verb}.')
+        if stamped:
+            written = 'would be stamped' if dry_run else 'stamped'
+            self.stdout.write(
+                f'  {stamped:,} already matched the register and {written} without '
+                f'a rewrite — the stamp is how a reader tells "we asked and the '
+                f'register cannot place this" from "we have not asked yet".'
+            )
 
         placed = by_precision[BUILDING] + by_precision[STREET]
         if seen:
@@ -246,7 +290,7 @@ class Command(BaseCommand):
             for name in sorted(by_tier, key=lambda k: -by_tier[k]):
                 self.stdout.write(f'    {name:22s} {by_tier[name]:,}')
 
-        if changed == 0 and not dry_run:
+        if not changed and not stamped and not dry_run:
             self.stdout.write(
                 'Nothing changed — the stored placements already match the register.'
             )

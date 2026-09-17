@@ -22,6 +22,7 @@ starej adrese najviac šesť hodín, nie navždy.
 import importlib
 
 from django.conf import settings
+from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
@@ -362,6 +363,89 @@ class UnplacedStateTests(_PlacedFixtures):
             set(Company.SEAT_FIELDS) | {'seat_matched_at'},
             set(Company.SEAT_INVALIDATION_FIELDS),
         )
+
+
+class MatcherRunTests(_PlacedFixtures):
+    """The command itself, run — because reading `_wanted` is not the same act.
+
+    Every other test here asks what the matcher *would* write. That is why the
+    defect below could sit in the repository with two docstrings asserting the
+    opposite and a passing suite: `_wanted(None)` is exactly what a never-matched
+    unplaced row already holds, so a command that skipped on values alone was
+    indistinguishable from one that stamped, as long as nothing ran it.
+
+    It was not a corner. On production 2026-09-17 the split was total: 393 171
+    placed rows, every one stamped, and 56 609 unplaced rows, not one stamped.
+    `pending` reads the stamp and nothing else, so for those 56 609 the card
+    said "register adries sme na ňu ešte nepustili" — on an address the matcher
+    had been asked about on every pass, and would go on being asked for ever,
+    because the write that would clear it was the write being skipped.
+    """
+
+    def _run(self):
+        call_command('match_seat_addresses', verbosity=0)
+
+    def test_a_company_the_register_cannot_place_comes_back_stamped(self):
+        """The regression. `pending` has to stop being true once we have looked.
+
+        No `AddressPoint` rows exist, so every address here is one the register
+        cannot place — which is the whole population at issue. The six columns
+        must stay `_wanted(None)`: the answer is "we cannot place this", and the
+        PSČ circle is what the serializer falls back to.
+        """
+        self._area(psc='82108')
+        company = self._company(psc='82108', mesto='Bratislava', ulica='Neznáma 1')
+
+        self._run()
+
+        company.refresh_from_db()
+        self.assertEqual(
+            tuple(getattr(company, f) for f in Company.SEAT_FIELDS),
+            _wanted(None),
+        )
+        self.assertIsNotNone(company.seat_matched_at)
+        self.assertFalse(self._seat(company)['pending'])
+
+    def test_a_moved_company_converges_instead_of_staying_pending(self):
+        """The end-to-end #148 story, which is what a reader of the card sees.
+
+        Before: a building pin on the old address. The move clears it, and the
+        card honestly says we have not computed the new one. After the matcher
+        runs, the card must be able to say the register cannot place it — the
+        state has to *end*, or "pending" is not a state but a permanent excuse.
+        """
+        self._area(psc='82108')
+        company = self._placed()
+
+        Company.objects.update_or_create(
+            ruz_id=company.ruz_id, defaults={'ulica': 'Neznáma 1'}
+        )
+        company.refresh_from_db()
+        self.assertTrue(self._seat(company)['pending'])
+
+        self._run()
+
+        company.refresh_from_db()
+        seat = self._seat(company)
+        self.assertEqual(seat['precision'], 'postal_code')
+        self.assertFalse(seat['pending'])
+
+    def test_a_row_it_has_already_answered_is_not_rewritten(self):
+        """The stamp is part of the skip test, not a licence to write every run.
+
+        The other half of the same line: a row that carries a stamp and whose
+        placement still matches is left alone, so the quarterly address-register
+        reload is the only thing that makes this command write again. Asserted
+        on the stamp rather than on a query count because `bulk_update` would
+        move it to now — an unchanged microsecond is the write not happening.
+        """
+        answered_at = timezone.now() - timezone.timedelta(days=30)
+        company = self._company(psc='82108', seat_matched_at=answered_at)
+
+        self._run()
+
+        company.refresh_from_db()
+        self.assertEqual(company.seat_matched_at, answered_at)
 
 
 class PendingSeatTests(_PlacedFixtures):
