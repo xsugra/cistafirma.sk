@@ -124,10 +124,28 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Same four headers as /api/ and @backend_static. This location used to set
+    # only the first two, which is inert today and a trap tomorrow -- and it is
+    # worth writing down exactly why, because "missing headers" sounds harmless.
+    #
+    # Inert today: `settings.py` sets neither SECURE_PROXY_SSL_HEADER nor
+    # SECURE_SSL_REDIRECT, USE_X_FORWARDED_HOST is unset, and Django admin is not
+    # DRF-throttled, so nothing on this path reads X-Forwarded-Proto or
+    # X-Forwarded-For. DRF's NUM_PROXIES does read X-Forwarded-For, but only for
+    # throttle identity on /api/, which already sends it.
+    #
+    # What would make it bite: adding SECURE_PROXY_SSL_HEADER on a deployment
+    # that terminates TLS in nginx. Django would then decide /admin/ requests
+    # arrived over `http` while /api/ correctly reports `https` -- and with
+    # SECURE_SSL_REDIRECT that is a redirect loop on the admin alone, the one
+    # page an operator needs when something else is already wrong. Two headers
+    # on a working location are cheaper than that diagnosis.
     location /admin/ {
         proxy_pass http://backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # Django admin owns /admin/ -- the whole subtree, so it has to stay a prefix
