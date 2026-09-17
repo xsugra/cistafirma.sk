@@ -256,7 +256,7 @@ s dôvodom:
 | celý stage `build` (`.build_template` s `docker:27.1.2-dind`, `build_backend_image`, `build_frontend_image`) | DinD potrebuje `privileged`, čo runner na lenovo zámerne nevie; a obrazy, ktoré vyrábal, nikto nečíta |
 | celý stage `deploy` (`.deploy_template`, `deploy_dev`, `deploy_main_to_dev`, `deploy_prod`) | `echo "$KUBE_CONFIG" \| base64 -d` — `KUBE_CONFIG` nie je definovaná nikde: ani v projekte, ani v skupine, ani v inštancii |
 | `helm_k8s_validate` | obraz `bitnami/kubectl:1.30` na Docker Hube **neexistuje** (Bitnami presunul free obrazy do `bitnamilegacy`) — padne už na pull |
-| `backend_tests` bez `services:` a bez `collectstatic` | spadne na tom istom, na čom padal predtým: bez `DATABASE_URL` sa schéma postaví na SQLite a `companies/0014` tam neprejde (`text_pattern_ops`) — červený vždy, nech je kód akýkoľvek |
+| `backend_tests` bez `services:` a bez `collectstatic` | bez `DATABASE_URL` sa schéma postaví na SQLite a `companies/0014` tam neprejde — je to `RunSQL` s `text_pattern_ops` a bez vendor guardu (Postgres-only syntax) — červený vždy, nech je kód akýkoľvek; `collectstatic` chýba zase preto, že testy bežia s `CompressedManifestStaticFilesStorage` |
 
 „Prečo to bolo odstránené **tu**" nie je to isté ako „prečo to nemôže prejsť
 inde" — a pri `build` stage to nie je pravda ani omylom. Na `gitlab-home/main`
@@ -264,14 +264,17 @@ majú tie dva build joby `tags: [macos]`, teda iný stroj než lenovo, a **preš
 pipeline `8ea1e509` z 11. 9. 2026 19:53 UTC ich má oba `success`. DinD je teda
 prekážkou runnera na lenovo, nie projektového CI ako takého.
 
-Pri `backend_tests` je to naopak a je dobre vedieť prečo: ten istý job (bez
-`services:`) **na `main` prechádza** — 11. 9. 2026 `success` v pipelines 11 aj
-12, a to bez jedinej projektovej, skupinovej či inštančnej CI premennej
-(`ci_variables` je prázdna, takže `DATABASE_URL` neexistuje nikde). Dôvod je
-v migráciách: `main` končí na `companies/0008`, kým táto vetva ich má po `0023`
-a `companies/0014_add_pattern_ops_structured_indexes` je Postgres-only (odtiaľ
-aj `services:` v tejto verzii). SQLite teda na `main` stačí a tu nestačí —
-rovnaký job, iný strom migrácií.
+Pri `backend_tests` je to naopak a je dobre vedieť prečo. Definícia toho jobu je
+v `.new` a na `gitlab-home/main` **identická** (`diff`), a na `main` **prechádza**
+— 11. 9. 2026 `success` v pipelines 11 aj 12, a to bez jedinej CI premennej:
+projektových, skupinových aj inštančných je presne **nula** (`ci_variables`,
+`ci_group_variables`, `ci_instance_variables` pre projekt `web/cistafirma.sk`,
+id 2), takže `DATABASE_URL` neexistuje nikde a `settings.py` ide do SQLite
+vetvy. Rozdiel je v kóde, nie v jobe: `main` končí na `companies/0008`, kým táto
+vetva ich má po `0023` a `companies/0014_add_pattern_ops_structured_indexes` je
+`RunSQL` s `text_pattern_ops` bez vendor guardu — Postgres-only. SQLite teda na
+`main` stačí a tu nestačí: rovnaká definícia jobu, iný strom migrácií (a iné
+testy, ktoré si pýtajú `collectstatic`).
 
 Navrch `tags: [macos]` na `.build_template` menuje stroj, ktorý sa už neozve.
 `mac-runner` (id 2) je v GitLabe **stále registrovaný, `active`, s tagom
