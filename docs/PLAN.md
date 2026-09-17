@@ -1,7 +1,8 @@
 # Plán prác — CistaFirma
 
-**Aktualizované:** 2026-09-17
-**Vetva:** `feat/ai-ready-baseline` (celá lokálna, bez upstreamu)
+**Aktualizované:** 2026-09-18
+**Vetva:** `main` — na oboch remotech (`gitlab-home` aj GitHub), lokálne na tom
+istom commite
 **Autor:** Samuel Šugra + Claude Code
 
 Toto je živý dokument. Hovorí, čo je hotové, čo sa práve robí a čo ešte
@@ -5395,7 +5396,8 @@ sa ozval **15. 9. 2026 20:21:48 UTC** a odvtedy mlčí — smrť je medzi tými 
 
 **Pipeline 12 stojí ďalej.** Je `manual`, `finished_at` prázdne, a visí na nej
 jediný ručný job `deploy_main_to_dev` (id 94), ktorý sa nikdy nespustil — na
-commite `8ea1e50`, ktorý už `main` nie je. Je to neškodný pozostatok, ale je to
+commite `8ea1e50`, ktorý je v histórii `main` (336 commitov za jeho tipom), ale
+`main` na ňom už nestojí. Je to neškodný pozostatok, ale je to
 zbytočne stojaca vec. **Zrušiť som ju nedokázal**: klasifikátor auto-módu to
 odmietol ako `[External System Writes]`. Nijako som to neobišiel — príkaz je
 tvoj:
@@ -5403,6 +5405,24 @@ tvoj:
 ```
 docker exec gitlab-server gitlab-rails runner 'Ci::Pipeline.find(12).cancel!'
 ```
+
+**A je to naozaj posledná taká vec — domerané 18. 9.** Prešel som celý projekt
+a hľadal **všetko**, čo nie je v terminálnom stave. Vyšli presne tri riadky:
+pipeline 149 a 150 (obe legitímne bežiace) a pipeline 12 — **6,1 dňa** stará.
+Nič ďalšie nikde nestojí.
+
+> **Vlastná chyba v tej kontrole.** Prvý sweep som napísal ako
+> `status in ('running','pending','created')` — teda **vymenoval som stavy,
+> ktoré čakám**, namiesto toho, aby som vylúčil terminálne. `manual` medzi nimi
+> nebol, takže mi pipeline 12 unikla a mohol som napísať „fronta je čistá".
+> GitLab má nonterminálnych stavov osem (`created`, `waiting_for_resource`,
+> `preparing`, `pending`, `running`, `manual`, `scheduled`, `cancelling`).
+> Vymenovať vylúčené, nie očakávané — inak filter nemôže nájsť to, čo hľadám.
+
+**Tá brána sa už nikdy neodomkne sama.** `422addf` (15. 9. 2026 20:59:35 UTC) zmazal
+z `.gitlab-ci.yml` celú líniu `build` + `deploy`, takže `deploy_main_to_dev`
+nevznikne ani v jednej budúcej pipeline. Zrušenie pipeline 12 teda nie je
+kozmetika — je to jediná cesta, ako ju uzavrieť.
 
 **Predmet `d113a67` je pozadu.** Znie `Merge branch 'main' into
 feat/ai-ready-baseline`, čo opisuje operáciu, ktorá sa stala na *inej* vetve —
@@ -5524,6 +5544,17 @@ Pre každú vetvu som zmeral `git rev-list --count main..<vetva>`:
   `chore/gitignore-config` (1), `chore/project-config` (2), `feat/admin-dashboard` (1),
   `dev` (8), `docs/licence-and-readme-update` (8), `fix/code-review-improvements` (8).
 
+**Jedna vetva má na `gitlab-home` iný SHA — a správne je nechať ju tak.**
+`ci/runner-tags-and-kubectl-image` je lokálne `8ea1e50`, na `gitlab-home`
+`35a9a36`; lokálna je o 5 commitov napred a tá vzdialená je jej **predok**
+(`lokalna..gitlab-home` = 0), takže obe sú v `main`. Vyzeralo to ako „niečo
+je pozadu", ale dorovnať sa to **nesmie**: `.gitlab-ci.yml` na `8ea1e50` má
+ešte celú líniu `build` + `deploy` a `.build_template` v nej nesie
+`tags: [macos]` — runner s tým tagom je od 17. 9. `active = false`, takže push
+by vyrobil pipeline, ktorej `build_backend_image` a `build_frontend_image`
+ostanú `pending` navždy. Presne ten druh vecí, ktorý sa tu upratuje. Obsah
+nechýba — obe vetvy sú v `main` — zaostáva len popisok, a to je neškodné.
+
 **Nič som nezmazal** — je to nevratné a nie je to moja vec. Ale tú najpodstatnejšiu
 som preveril, aby sa „8 nezlúčených commitov" nečítalo ako 8 stratených vecí.
 `fix/code-review-improvements` vyzerá najhodnotnejšie (k8s init kontajner,
@@ -5560,6 +5591,76 @@ nebolo nič: tie refs boli kópie `gitlab-home/*`, ktoré tam ostali.
 **timeoutuje**. `tailscale status` vidí `dell` na **`100.79.47.4`**, a odtiaľto
 funguje. Je to tá istá trieda ako `gitlab.home.arpa` — adresa v configu
 predpokladá sieť, v ktorej práve nie sme ([[always-name-the-device]]).
+
+**A `dell` na `gitlab-home` vidí**, takže deploy cesta nie je pokazená:
+`getent hosts gitlab.home.arpa` tam vracia `100.120.104.84` (lenovo) a
+`git ls-remote --heads gitlab-home main` vráti `e1bb67d` — teda to, čo je na
+`main` naozaj, nie to, čo tam bolo pri prvom meraní. `fetch.all = true`
+v jeho globálnom configu je problém len pre *holý* `git pull` (ten navyše
+fetchuje `origin` cez https bez credentials) — viď
+`dell-git-pull-exits-nonzero` v pamäti.
+
+#### Dôkaz, že `main` beží ďalej aj bez runnera 2
+
+Nie je to tvrdenie z konfigurácie, je to odmerané na **štyroch** pipeline:
+
+| Pipeline | Commit | Výsledok |
+|---|---|---|
+| 147 | `d113a670` | `success`, 7/7 jobov — **všetky na runneri 1** |
+| 148 | `7d97d669` | `success`, 7/7 jobov — **všetky na runneri 1** |
+| 149 | `945fce28` | `success`, 7/7 jobov — **všetky na runneri 1** |
+| 150 | `e1bb67df` | `success`, 7/7 jobov — **všetky na runneri 1** |
+
+**Dvadsaťosem jobov, dvadsaťosem na runneri 1, ani jeden na runneri 2.** Runner 2
+je pritom od 17. 9. `active = false`; v žiadnej z tých pipeline sa nevyskytuje
+ani raz. Keďže `.gitlab-ci.yml` na `main` nemá **žiadne `tags:`** (overené
+`git grep`), runner 2 s tagom `macos` a `run_untagged = false` sa ani nemohol
+chytiť — jeho vypnutie teda nemohlo nič zobrať.
+
+**Pipeline 148 to potvrdila ako prvá:** `backend_validate` (1040),
+`frontend_validate` (1041), `docs_audit` (1042), `helm_render_validate` (1043),
+`helm_runtime_validate` (1044), `frontend_tests` (1045) aj `backend_tests` (1046)
+majú **`runner_id = 1`**, `failure_reason` prázdny, a bežali 22:04:02 → 22:13:27.
+
+> **A tu som si opravil vlastnú vetu.** Stálo tu, že 149 je `running` a 150
+> `pending` „čaká za 149, `concurrent = 1`". **To je nesprávne.** 149 a 150
+> bežali **súčasne** — runner 1 berie vždy ďalší *job*, nie ďalšiu *pipeline*,
+> a berie ho z tej pipeline, ktorá má čo ponúknuť. Prestriedanie je vidieť
+> v sekundách odovzdania:
+>
+> | kedy | čo skončilo | čo sa v tej istej sekunde chytilo |
+> |---|---|---|
+> | 22:15:38 | 149 `helm_render_validate` | 150 `backend_validate` |
+> | 22:16:33 | 150 `backend_validate` | 149 `helm_runtime_validate` |
+> | 22:16:40 | 149 `helm_runtime_validate` | 150 `frontend_validate` |
+> | 22:17:42 | 150 `frontend_validate` | 149 `frontend_tests` |
+> | 22:24:36 | 149 `backend_tests` | 150 `docs_audit` |
+>
+> Štyri odovzdania medzi pipeline, každé v tej istej sekunde, a medzi tým
+> 149 `frontend_tests` → 149 `backend_tests` (22:19:38 → 22:19:39). 150 teda
+> **nečakala za 149** — bežala *v* nej. `concurrent = 1` obmedzuje **joby, nie
+> pipeline**, a pipeline status je odvodený z jobov, takže o poradí medzi
+> pipeline nehovorí nič. ([[querying-gitlab-ci-state]])
+>
+> Záver o runneri 2 to nemení — naopak, je to silnejší dôkaz: 150 nemohla
+> preskočiť na iný runner, lebo žiadny iný neexistuje.
+
+**Za 48 hodín nemá projekt ani jeden `failed` job.** Celkovo 280 jobov: 224
+`success`, 56 `canceled`, **0 `failed`** — a tých 56 `canceled` sú
+predbehnuté `pending` pipeline z pushov 16.–17. 9., ktoré GitLab zruší sám
+([[querying-gitlab-ci-state]]); `runner_id` majú NULL, lebo ich nikto nikdy
+nevzal. To je tá istá trieda ako `failure_reason = 26` z 10.–15. 9., len
+s opačným znamienkom.
+
+**A jedna vec, ktorú som mal v pamäti zle.** `backend_tests` **nebeží** na
+SQLite — beží na Postgrese. `.gitlab-ci.yml` na `main` mu dáva
+`services: postgres:16-alpine` (a `redis:7-alpine`) s `DATABASE_URL`
+medzi **jobovými** premennými, nie medzi CI/CD premennými projektu; preto sa
+„žiadne CI premenné" a „beží na SQLite" dali zlúčiť do jednej vety. Opravil to
+`6e219e5` (15. 9. 2026 23:19) a jeho vlastný komentár v CI to aj vysvetľuje.
+Živý dôkaz z jobu 1060: `Ran 934 tests in 210.298s`, `Creating test database for
+alias 'default'` → `Destroying test database`. **Stav je overený z tracu jobu,
+ktorý práve bežal** — a to je jediné okno, kedy sa trace dá vôbec prečítať.
 
 ---
 
