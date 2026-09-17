@@ -2762,6 +2762,18 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   zmienku o `frontend`/`5173`/`curl`/`probe`. Celý ten čas kontajner hlásil
   `healthy`. Zachytiť ďalší výskyt chce kontrolu, ktorá prejde **cez `/api/`
   zvonka** — nie zmenu `/healthz`.
+- ℹ️ **`/admin/` posiela o dve hlavičky menej než `/api/` — a dnes to nič
+  nerobí.** `location /admin/` nastavuje len `Host` a `X-Real-IP`, kým `/api/`
+  (a od `f4b822a` aj `@backend_static`) posiela navyše `X-Forwarded-For`
+  a `X-Forwarded-Proto`. Je to **predchádzajúci** stav, ktorý som nemenil.
+  Overené 2026-09-17: `settings.py` nemá ani `SECURE_PROXY_SSL_HEADER`, ani
+  `SECURE_SSL_REDIRECT`, takže `X-Forwarded-Proto` dnes **nikto nečíta** —
+  žiadna slučka presmerovaní, žiadny zlý absolutný odkaz. Následok je len ten,
+  že Django vidí pri `/admin/` adresu nginx kontajnera namiesto klienta.
+  **Kedy to začne bolieť:** v momente, keď pribudne `SECURE_PROXY_SSL_HEADER`
+  alebo `SECURE_SSL_REDIRECT` — vtedy `/admin/` začne o sebe tvrdiť, že beží
+  cez `http`, a to je presne tá chyba, ktorá sa hľadá ťažko, lebo sa prejaví
+  len na admin ceste. Vtedy doplniť rovnaký blok ako `/api/`.
 - ⚠️ **„Plná sada testov" z koreňa repa nespustí nič a vráti 0.** `make test`
   robí `cd backend` a až potom `manage.py test`; spustenie
   `python backend/manage.py test` z koreňa vypíše `Ran 0 tests ... NO TESTS
