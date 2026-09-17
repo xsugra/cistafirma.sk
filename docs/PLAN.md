@@ -2584,21 +2584,23 @@ druhé z nich je zároveň jediné, ktoré vie regresiu z pasce 2 kvantifikovať
 
 ---
 
-### Nové nálezy tej istej triedy ako #148 — overené, čakajú na tvoje rozhodnutie (2026-09-17)
+### Nové nálezy tej istej triedy ako #148 — A a B opravené, C a D čakajú na tvoje rozhodnutie (2026-09-17)
 
 Po uzavretí `#148` som nechal prejsť celý repozitár **jednou otázkou**: ktoré
 ďalšie pole je *odvodené* z iných stĺpcov, zapisuje ho **presne jedna cesta** a
 **nič ho neznehodnotí, keď sa zdroj zmení**? To je presne tvar chyby, ktorú mal
 `#148` — a hľadanie vrátilo štyri rodiny. Sweep vrátil 6 potvrdení a **0
-vyvrátení**, čo je samo o sebe podozrivé číslo, tak som každý nález overoval
+vyvrátaní**, čo je samo o sebe podozrivé číslo, tak som každý nález overoval
 zvlášť proti kódu **a proti ostrej databáze na `dell`**. Dva z nich sa pritom
 meraním **vecne zmenili** — to je dôvod, prečo tu nie sú odpísané zo sweepu.
 
-**Nič z toho som neopravil.** Každá oprava je nová prírastka (mení zápis alebo
-pridáva úlohu), takže podľa pravidiel čaká na tvoje slovo. Nasleduje stav
-a cena, nie hotová vec.
+**Pôvodne som nič z toho neopravil** — každá oprava je nová prírastka (mení
+zápis alebo pridáva úlohu), takže podľa pravidiel čakala na tvoje slovo. To
+slovo prišlo, takže **A aj B sú implementované, otestované a nasadené** (stav
+je vždy v podsekcii `✅` na konci príslušného nálezu). **C a D na rozhodnutie
+naozaj čakajú** — C je produktová otázka, nie chyba.
 
-#### A. `SectorBenchmark` — počíta sa len pre **jediný** rok, takže 1 586 firiem nemá porovnanie vôbec
+#### A. `SectorBenchmark` — počíta sa len pre **jediný** rok, takže 1 703 firiem nemá porovnanie vôbec — ✅ opravené 2026-09-17
 
 | | |
 |---|---|
@@ -2629,24 +2631,32 @@ rok od 2013 po 2025.
 roku `break`-ne. Prah 500 vysvetľuje len to, prečo je tým rokom 2025 a nie 2026;
 chýbajúce roky 2013–2024 s prahom nemajú nič.
 
-Rozdelenie firiem podľa **ich vlastného najnovšieho roka** (merané 2026-09-17):
+Rozdelenie firiem podľa **ich vlastného najnovšieho roka** (merané 2026-09-17).
+Pozor: tabuľka, ktorá tu bola predtým, bola **nesprávna** — nesčítavala sa na
+populáciu (14 065 namiesto 15 467) a číslo „1 506" pre rok 2024 a staršie
+nezodpovedalo žiadnemu meraniu. Nahradil som ju týmto, ktoré sedí na jednotku
+(`98 + 13 666 + 469 + 1 234 = 15 467`):
 
 | najnovší rok firmy | firiem | riadkov benchmarku pre ten rok |
 |---|---|---|
-| 2026 | 80 | **0** |
-| 2025 | 12 479 | 19 |
-| **2024 a staršie** | **1 506** | **0** |
+| 2026 | 98 | **0** — správne, rok sa ešte podáva (98 vykazov < prah 500) |
+| 2025 | 13 666 | 19 |
+| 2024 | 469 | **0** |
+| 2023 a staršie | 1 234 | **0** |
 
 **Dôsledok — dve rôzne veci, obe zlé:**
 
-1. **1 506 firiem** (tie, ktorých najnovšia závierka je z 2024 a staršia) nemá
+1. **1 703 firiem** (najnovší rok 2013–2025, teda **mimo** 2026) nemá
    porovnanie so sektorom **bez akéhokoľvek dôvodu** — benchmark pre ich rok sa
-   dal dávno spočítať z 12–13 tisíc firiem, ktoré ten rok majú. Toto je
-   prevládajúca časť nálezu a v sweepu **nebola**.
-2. **80 firiem, a rastie:** firma, ktorá **zverejní novšiu závierku**, sa posunie
+   dal dávno spočítať z 12–14 tisíc firiem, ktoré ten rok majú (2024: 469,
+   2023: 179, 2013–2022: 1 055). Toto je prevládajúca časť nálezu a v sweepu
+   **nebola**.
+2. **98 firiem, a rastie:** firma, ktorá **zverejní novšiu závierku**, sa posunie
    na 2026, `get_benchmark` vráti `None` a o porovnanie **príde** — teda presne
    opačná motivácia, než akú má produkt: čerstvejšie dáta = horšia stránka. Toto
    je tá **rastúca hrana** a s každou ďalšou závierkou za 2026 sa zväčšuje.
+   (Táto druhá časť opravou nezmizne a ani zmiznúť nemá — 2026 je pod prahom
+   oprávnene. Je to cena za to, že prah existuje.)
 
 Nikde na to nie je kontrola; API vráti `null` a PDF sekciu ticho vynechá.
 
@@ -2658,7 +2668,37 @@ ponechá jedinú poistku, ktorá naozaj chráni pred mediánom z pár firiem. Ce
 malá a ohraničená: ~14 rokov × najviac 19 NACE sekcií, teda **rádovo 250 riadkov**
 namiesto dnešných 19.
 
-#### B. `vat_deleted_date` / `vat_deleted_reason` — výmaz z DPH sa nikdy nezruší
+##### ✅ Opravené 2026-09-17 (`8621da7`) — odporúčanie (1), presne ako stálo
+
+`year=None` teraz znamená **každý** rok nad prahom; `year=<int>` ostáva jeden
+konkrétny rok. Návratový typ je `{rok: {sekcia: počet firiem}}` — pri viacerých
+rokoch bol pôvodný tvar nejednoznačný. Popri tom sa našla **druhá chyba v tej
+istej funkcii**: `only()` neuvádzal `liabilities_accruals`, hoci ho
+`_compute_section_metrics` číta pre každý riadok — a vynechané pole nie je len
+chýbajúce, je *odložené*, takže to bol jeden dotaz navyše **na riadok**
+(13 999 na rok). Rozšírenie na trinásť rokov by to znamenalo trinásťkrát.
+
+Namerané na produkcii po nasadení:
+
+| | pred | po |
+|---|---|---|
+| riadkov v `Sector Benchmarks` | 19 (všetky 2025) | **247** (13 rokov × 19 sekcií) |
+| firiem bez benchmarku pre svoj rok (2013–2025) | **1 703** z 15 467 | **0** |
+| trvanie jedného behu (všetkých 13 rokov) | — | **13,6 s** |
+
+Zvyšných **98** firiem bez benchmarku sú tie, ktorých najnovší výkaz je 2026 —
+rok, ktorý sa ešte podáva a prah 500 preň zámerne neplatí. To je filter, nie
+diera: oprava ich necháva tak a nemá ich meniť.
+
+Overené aj to, že prah **nebol** príčinou: všetkých trinásť rokov 2013–2025 ho
+prejde (13 999 – 14 790 vykazov každý), takže vysvetľoval jeden rok z trinástich
+a skutočná príčina bol `break` v cykle, ktorý mal byť filter.
+
+Testy: 4 nové v `companies/tests_benchmarking.py`, z toho jeden overený v stave,
+ktorý má odmietnuť (s `liabilities_accruals` vyhodeným z `only()` padá a vo
+výpise sú vidieť odložené SELECT-y po riadkoch). Sada: **927 testov OK**.
+
+#### B. `vat_deleted_date` / `vat_deleted_reason` — výmaz z DPH sa nikdy nezruší — ✅ opravené 2026-09-17
 
 | | |
 |---|---|
@@ -2698,6 +2738,57 @@ vyčistiť; (2) vo `vatStanding()` uprednostniť `isVatPayer === true` pred dát
 27 857 riadkom, ktoré majú dátum a žiadny príznak; (3) viesť výmaz ako históriu
 namiesto dvojice polí. **Odporúčam (1)** — opravuje zdroj a poradie v čítaní
 necháva tak, ako je odôvodnené.
+
+##### ✅ Opravené 2026-09-17 — ale inak, než odporúčanie (1) hovorilo
+
+Meranie pred písaním kódu odporúčanie **vyvrátilo** a zároveň zmenilo číslo.
+Pôvodných „33" bolo *„má dátum výmazu **a** príznak `True`"*; skutočný rozsah je
+daný porovnaním dvoch dátumov:
+
+| merané na `dell` | počet |
+|---|---|
+| riadkov s `vat_deleted_date` | 32 127 |
+| z toho `datum_reg_dph` **neskôr** než výmaz | **384** |
+| z tých 384 `vat_payer = False` | **379** |
+| `vat_payer = True` | 5 |
+| `reg == del` | 4 · `reg < del` 3 827 · `reg` NULL 27 912 |
+
+Prečo (1) nešlo: `FS_DATASET_URLS` púšťa `vat_payers` (riadok 6) **pred**
+`vat_deleted` (riadok 9), takže vyčistenie v `handle_vat_payers` by ten druhý
+handler v **tom istom priechode** hneď prepísal — a `UPDATE_FIELDS_MAP` pre
+`vat_payers` tie dva stĺpce ani neobsahuje, takže by sa tiché vyčistenie
+neuložilo vôbec. To je tá istá dvojitá brána, akú má #148.
+
+Opravené teda na **oboch** miestach, kde sa to rozhoduje:
+
+- **Zdroj** (`fs_data_handlers.py`): `handle_vat_deleted` pri riadku, ktorého
+  `datum_reg_dph > DAT_VYMAZU`, príznak **neprepne** — a `vat_deleted_date`
+  aj `vat_deleted_reason` zapíše ďalej. Výmaz je **história** (a `ROK_PORUSENIA`
+  je dôvod, ktorý platí aj po návrate), kým `vat_payer` je **súčasný stav**.
+  `>` a nie `>=`: dva dátumy v ten istý deň (4 riadky) sa zoradiť nedajú, tam
+  ostáva pôvodné správanie.
+- **Čítanie** (`vatStatus.ts`): `vatStanding()` vráti `payer`, keď je
+  `registeredOn > deregisteredOn` — z faktov, ktoré zdroj publikoval, takže
+  **displej je správny hneď**, bez čakania na ďalší priechod FS. Poradie
+  „dátum prvý" tým zostáva nedotknuté; pribudla len presnejšia otázka na tie
+  dva dátumy.
+
+**Dátumová polovica je oprava na ďalší priechod FS**, nie migrácia: 379 riadkov
+s `vat_payer = False` sa prepíše, keď `vat_payers` (ktorý beží prvý) nastaví
+`True` a `vat_deleted` ho už nevráti. Do vtedy ich vykresľuje správne frontend.
+
+Testy: `VatRemovalIsHistoryNotStandingTests` (7, `tests_fs_data_integrity.py`),
+z toho jeden ide **cez oba datasety v poradí FS** a cez `bulk_update` — teda
+reprodukuje presne pôvodnú chybu; a 4 nové vo `vatStatus.test.ts` (vrátane
+jedného, ktorý pinuje predpoklad, že DRF posiela dátum ako ISO 8601, lebo
+porovnanie je reťazcové). Obe strany sú overené v stave, ktorý majú odmietnuť:
+bez opravy padajú práve 2 backendové a 2 frontendové a nič iné.
+
+Bez zmeny schémy, bez migrácie. Celá sada: **934 testov backendu OK** (predtým
+927) a 352 frontendových, `typecheck` aj `build` zelené.
+
+Dôsledok pre používateľa: **384 firiem** sa na stránke firmy premenuje z
+„Vymazaný z registra DPH" na „Platiteľ DPH".
 
 #### C. `CompanyScore` — celá plocha je mŕtva; a keby nebola, skóre by nezostarlo len tak
 
