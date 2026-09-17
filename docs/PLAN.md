@@ -1144,10 +1144,12 @@ DNS lifetime (`valid=10s`) a štart samotnej aplikácie — `valid=` posúva len
 Je to tá istá chyba ako pri náleze A nižšie: z jedného hrubého vzorku som vyvodil
 mechanizmus. Opravené v `a845414`.
 
-**Čo tým vyriešené NIE je** — dve veci, obe v §7: `deploy/k8s` a `deploy/helm`
-`BACKEND_RESOLVER` **nenastavujú**, a **nič v zostave výpadok API nezachytí**
-(`/healthz` je zámerne slepé voči backendu, `prometheus.yml` nemá ani jedno
-pravidlo a `ops_check.sh` nesondážuje frontend vôbec).
+**Čo tým vyriešené NIE je** — v §7 boli dve veci: `deploy/k8s` a `deploy/helm`
+`BACKEND_RESOLVER` **nenastavujú** (✅ opravené 2026-09-17, `eb22b41` a sprievodné
+commity) a **nič v zostave výpadok API nezachytí** — `/healthz` je zámerne slepé
+voči backendu a `prometheus.yml` nemá ani jedno pravidlo (✅ opravené 2026-09-17:
+`ops_check.sh` má sekciu „API availability", ktorá ide cez `/api/` zvonka; detail
+aj namerané stavy sú v §7).
 
 **Overené naživo po nasadení** (`a845414`): `/` 200, `/api/stats/landing/` 200,
 `/api/companies/search/?q=ecoklima` 200 s reálnymi dátami (ECOKLIMA s.r.o.,
@@ -2983,16 +2985,51 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   na chýbajúcu hodnotu padá pred `kubectl apply` a vypíše príkaz, ktorým sa
   adresa zistí. Nahradenie overené na kópii súboru, po sed-e nezostal ani jeden
   placeholder.
-- ⚠️ **Nič v zostave nezachytí výpadok API — tých 3 h 43 min bolo pre všetky
-  kontroly neviditeľných.** `/healthz` je zámerne slepé voči backendu, a to je
-  správne: reštart nginx backend nevráti a probe, ktorý by tu zlyhal, by počas
-  každého reštartu backendu reštartoval všetky frontend pody. Lenže to isté
-  platí o zvyšku: `deploy/monitoring/prometheus/prometheus.yml` nemá **ani
-  jedno** pravidlo („No alerting rules are provisioned — dashboards only")
-  a `scripts/local/ops_check.sh` nesondážuje frontend **vôbec** — nemá ani
-  zmienku o `frontend`/`5173`/`curl`/`probe`. Celý ten čas kontajner hlásil
-  `healthy`. Zachytiť ďalší výskyt chce kontrolu, ktorá prejde **cez `/api/`
-  zvonka** — nie zmenu `/healthz`.
+- ✅ **Nič v zostave nezachytilo výpadok API — tých 3 h 43 min bolo pre všetky
+  kontroly neviditeľných. Opravené 2026-09-17.** `/healthz` **ostáva** zámerne
+  slepé voči backendu, a to je správne: reštart nginx backend nevráti a probe,
+  ktorý by tu zlyhal, by počas každého reštartu backendu reštartoval všetky
+  frontend pody. Opravené je teda to, čo v náleze stálo — pribudla **druhá
+  sonda na inom mieste**, nie zmena tejto.
+
+  `scripts/local/ops_check.sh` má sekciu **„API availability"**, ktorá spraví
+  `GET /api/stats/landing/` **z hostiteľa** na **publikovaný port frontendu**.
+  Je to tá istá cesta, akou ide prehliadač — vrátane nginx, teda práve toho
+  komponentu, ktorého zastaraná adresa výpadok spôsobila. Adresu berie
+  z `docker compose ps --format '{{.Ports}}' frontend`, nie z `.env`: `BIND_HOST`
+  a `FRONTEND_PORT` sú v súbore, ktorý tento skript zámerne nečíta, a obe
+  compose varianty publikujú **iný kontajnerový port** (5173 pre Vite dev server,
+  80 pre produkčný nginx), takže ani pravá strana nie je konštanta. Wildcard
+  bind (`0.0.0.0`, `[::]`) sa normalizuje na loopback; mapping bez `->` (teda
+  kontajnerový port, ktorý sa nikdy nepublikoval — compose ich vypisuje rovnako,
+  ako pri každom workerovi vyššie) sa **odmietne**, nie prevedie na vymyslenú
+  URL. `/api/stats/landing/` je vybrané preto, že je `AllowAny`, lacné (tri
+  COUNT-y; nameraných **0,26 s** na produkcii) a leží za všetkým: nginx →
+  gunicorn → Django → Postgres. `CISTAFIRMA_API_TIMEOUT` (default 10 s) drží
+  medzu.
+
+  **Overené na ôsmich stavoch, nie tvrdené** — a to vrátane tých, v ktorých
+  kontrola musí odmietnuť. Beží to na delle proti **skutočnému** kontajneru
+  (prvé dva riadky), zvyšok proti `docker` shimu, ktorý predstiera zvolené
+  mapovanie portov; 502 vyrába lokálny listener, nie výpadok produkcie:
+
+  | stav | publikované porty | výsledok |
+  |---|---|---|
+  | wildcard bind, za ním živý frontend | `0.0.0.0:5173->80/tcp, [::]:5173->80/tcp` | `OK … answered 200` |
+  | dev variant (iný kontajnerový port) | `127.0.0.1:5173->5173/tcp` | `OK … answered 200` |
+  | na porte nič nepočúva | `127.0.0.1:59999->80/tcp` | `FAIL … did not complete (curl exit 7), so nothing answered` |
+  | frontend beží, upstream vracia 502 | `127.0.0.1:59998->80/tcp` | `FAIL … answered 502 -- the frontend is up but cannot reach the backend, which is the 2026-09-17 outage exactly` |
+  | frontend beží, backend vracia 500 | `127.0.0.1:59997->80/tcp` | `FAIL … answered 500, not 200` |
+  | compose nehlási publikovaný port | *(prázdne)* | `FAIL … reports no published port` |
+  | port len vystavený, nikdy publikovaný | `8000/tcp` | `FAIL … reports no published port` |
+  | frontend medzi bežiacimi chýba | `127.0.0.1:5173->80/tcp` | `FAIL … the frontend is not running` |
+
+  Na hostiteľovi **bez** stacku (retired Mac) sekcia vypíše `SKIP` — viditeľne,
+  lebo ticho preskočená kontrola je na nerozoznanie od tej, ktorá prešla. Beží
+  aj na Macu: `SKIP  no stack on this host, so there is no published port to
+  probe`. Beží aj na delle v rámci celej brány: `OK  GET
+  http://127.0.0.1:5173/api/stats/landing/ answered 200 through the published
+  frontend port`.
 - ℹ️ **`/admin/` posiela o dve hlavičky menej než `/api/` — a dnes to nič
   nerobí.** `location /admin/` nastavuje len `Host` a `X-Real-IP`, kým `/api/`
   (a od `f4b822a` aj `@backend_static`) posiela navyše `X-Forwarded-For`
