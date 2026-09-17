@@ -2698,6 +2698,28 @@ Testy: 4 nové v `companies/tests_benchmarking.py`, z toho jeden overený v stav
 ktorý má odmietnuť (s `liabilities_accruals` vyhodeným z `only()` padá a vo
 výpise sú vidieť odložené SELECT-y po riadkoch). Sada: **927 testov OK**.
 
+**Overené zvonka, nie len v databáze** (2026-09-17). Samotný počet riadkov
+dokazuje, že sa dáta zapísali; nedokazuje, že sa k nim firma cez API dostane —
+`get_benchmark` medzi tým robí `get_nace_section(nace)` a `objects.get(...)`,
+teda dve miesta, kde sa to môže rozísť. Preto kontrola obchádza backend aj
+databázu a pýta sa **hotového webu** (`https://dell.taildb03cf.ts.net`, Tailscale
+Serve → frontend → `/api/`, žiadny tunel do contajnera):
+
+| firma (IČO) | NACE | najnovší výkaz | `benchmark` v odpovedi |
+|---|---|---|---|
+| `00047244` | 84110 | 2024 | `year 2024`, 2 939 firiem |
+| `00222348` | 01410 | 2013 | `year 2013`, 486 firiem |
+| `00594547` | 68200 | 2013 | `year 2013`, 712 firiem |
+| `00633496` | 47300 | 2013 | `year 2013`, 2 713 firiem |
+
+Obe strany rozsahu teda vracajú porovnanie; pred opravou boli všetky štyri
+`null`. **Druhá polovica vecí, ktorú číslo riadkov nechytá:** úloha je denná a
+beží na workeri, ktorý bol v tom čase hore šesť hodín — teda so *starým kódom
+v pamäti*, hoci nový už bol na disku (bind mount). Preto bol
+`celery_worker_default` restartovaný a až potom úloha poslaná raz cez frontu:
+worker ju prevzal a vrátil **`succeeded in 13,96 s`** so všetkými trinástimi
+rokmi. To je zároveň dôkaz, že beží nový kód — starý by vrátil jediný rok.
+
 #### B. `vat_deleted_date` / `vat_deleted_reason` — výmaz z DPH sa nikdy nezruší — ✅ opravené 2026-09-17
 
 | | |
