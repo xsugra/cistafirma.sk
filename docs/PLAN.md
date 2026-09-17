@@ -5636,11 +5636,16 @@ majú **`runner_id = 1`**, `failure_reason` prázdny, a bežali 22:04:02 → 22:
 > | 22:17:42 | 150 `frontend_validate` | 149 `frontend_tests` |
 > | 22:24:36 | 149 `backend_tests` | 150 `docs_audit` |
 >
-> Štyri odovzdania medzi pipeline, každé v tej istej sekunde, a medzi tým
-> 149 `frontend_tests` → 149 `backend_tests` (22:19:38 → 22:19:39). 150 teda
-> **nečakala za 149** — bežala *v* nej. `concurrent = 1` obmedzuje **joby, nie
-> pipeline**, a pipeline status je odvodený z jobov, takže o poradí medzi
-> pipeline nehovorí nič. ([[querying-gitlab-ci-state]])
+> V tabuľke je päť odovzdaní a **všetky prechádzajú medzi 149 a 150, striedavo**
+> — 149→150, 150→149, 149→150, 150→149, 149→150 — každé v tej istej sekunde,
+> v akej predošlý job skončil. (V tých istých dvoch pipeline sú aj dve
+> odovzdania v tej istej sekunde *vnútri* jednej z nich — 149 `docs_audit` →
+> 149 `helm_render_validate` o 22:15:31 a 150 `docs_audit` → 150
+> `helm_render_validate` o 22:24:42 — takže striedanie dvoch pipeline nie je
+> jediné, čo runner robí; je to však to, čo dokazuje, že bežali súčasne.)
+> 150 teda **nečakala za 149** — bežala *v* nej. `concurrent = 1` obmedzuje
+> **joby, nie pipeline**, a pipeline status je odvodený z jobov, takže o poradí
+> medzi pipeline nehovorí nič. ([[querying-gitlab-ci-state]])
 >
 > Záver o runneri 2 to nemení — naopak, je to silnejší dôkaz: 150 nemohla
 > preskočiť na iný runner, lebo žiadny iný neexistuje.
