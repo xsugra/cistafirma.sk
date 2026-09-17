@@ -25,13 +25,37 @@
 # says nothing about which container compose recreates afterwards, and a lone
 # `docker compose up -d --build backend` moves the address just as well.
 #
-# Measured on a throwaway pair of containers reproducing exactly that sequence
-# (target started first, both proxy forms started, target recreated, a squatter
-# taking the freed address): the old static form answered 502 to every request
-# after the recreate and never recovered. This form answers 502 to the first
-# request only and recovers on its own within ~5 seconds -- bounded by `valid=`
-# below, and reaching it sooner because a failed connection to the held address
-# triggers an early re-resolve. Seconds of degradation instead of hours.
+# Measured twice, and the second measurement corrected the first.
+#
+# On a throwaway pair of containers reproducing exactly this sequence (target
+# started first, both proxy forms started, target recreated, a squatter taking
+# the freed address), the old static form answered 502 to every request after the
+# recreate and never recovered, while this form recovered within one sampling
+# interval. That interval was too coarse to say WHY it recovered, and the note
+# first written here claimed the failed connection to the held address triggered
+# an early re-resolve. It does not. Production says so.
+#
+# Re-run on production itself, 2026-09-17, with the frontend container left
+# running the whole time and the backend moved off its address (a squatter took
+# 172.18.0.11; the backend came back at 172.18.0.14), sampled every 3s through
+# the published port:
+#
+#     t+0s   502        t+9s   502
+#     t+3s   502        t+12s  200   <- recovered; frontend never restarted
+#     t+6s   502        t+15s  200
+#
+# The frontend's own log splits that window in two, which is why a single number
+# would have been the wrong thing to write down. The backend container was
+# recreated at 10:54:18Z; nginx went on dialling the STALE 172.18.0.11 until
+# 10:54:25 (nine attempts) and dialled the correct 172.18.0.14 from 10:54:28
+# (two attempts). Those last two were refused as well, because the recreated
+# backend had not yet opened :8000 -- it was still starting. So the window is
+# bounded by TWO things, not one: the DNS lifetime below, which is what held
+# nginx on the stale address for ~7s, and then the backend's own start-up, which
+# no amount of DNS tuning touches. `valid=` moves only the first. Lower it if a
+# shorter outage on backend recreate is ever worth the extra lookups; the lab
+# run's faster recovery was this same mechanism landing at a luckier point in
+# the DNS window, not an early re-resolve on the failed connection.
 #
 # Two mistakes stay LOUD, at container start, which is the property the old
 # comment here was protecting: omitting the resolver fails with "no resolver
@@ -60,8 +84,16 @@ upstream backend_upstream {
 
     # max_fails=0 disables the passive health check, so nginx never marks this
     # lone peer down and never answers "no live upstreams": every request tries
-    # whatever address nginx currently holds. Reaching a stale address is what
-    # triggers the early re-resolve, which is the recovery measured above.
+    # whatever address nginx currently holds. That is the right trade for a group
+    # of one -- with the check on, the only peer failing would take the whole
+    # group down and answer 503 to everything rather than retry.
+    #
+    # Its cost is measured, not assumed: because the check is off, a failed
+    # connect does NOT trigger a fresh lookup, so a moved address is picked up
+    # only when the `valid=` lifetime below expires -- ~7s of stale dialling on
+    # production, measured (see the header). Raising max_fails
+    # would shorten that and break the group for every request in between, so it
+    # stays 0 and `valid=` carries the window.
     server ${BACKEND_UPSTREAM} resolve max_fails=0;
 }
 
