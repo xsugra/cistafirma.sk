@@ -5220,8 +5220,11 @@ s `exit 1` skončí.
   oboje z 15. 9.
 - ~~**`/home/sam/gitlab-runner-setup/gitlab-ci.yml.new` skopírovať do repa**~~
   — **spravené 2026-09-17**, pozri nižšie. Otvorené ostáva len to, čo sa pri tom
-  našlo: `main` na GitHube je sedem commitov pozadu a `gitlab-home/main` nesie
-  starý `build`/`deploy` stage s `tags:`.
+  našlo, a sú to tri veci: `main` na GitHube je sedem commitov pozadu;
+  `gitlab-home/main` nesie starý `build`/`deploy` stage s `tags:` a jeho posledná
+  pipeline tam stojí od 11. 9. na manuálnej bráne; a **`mac-runner` (id 2)** je
+  v GitLabe stále `active` s tagom `macos`, hoci sa od 15. 9. neozval — takže
+  job s tým tagom by ostal `pending`, nie spadol.
 - **Prístup na čítanie produkčnej DB.** Zaznamenávam, čo som **pozoroval**, nie
   diagnózu: auto mode classifier odmietol `SELECT count(*)` nad produkčnou
   databázou na `dell` s dôvodom `[Production Reads]` — príkaz neprebehol.
