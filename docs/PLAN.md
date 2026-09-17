@@ -5448,8 +5448,16 @@ zmazaním `~/gitlab` zmizne bez kópie, a je zapísaná v `README.md` archívu.
 nižšie tvrdili, že Mac má „zamrznutú záložnú" databázu. **Nemá.**
 `docker volume ls` ju neuvádza a `docker volume inspect` vracia `no such volume`;
 `cistafirma_postgres_data` aj ostatné cistafirma a GitLab volumes zmizli
-**2026-09-17** pri purge. Ostávajú **dumpy** (2,4 GB, 44 súborov, najnovší
-2026-09-15 12:31) — archív, nie databáza. Obe miesta sú opravené na mieste.
+**2026-09-17** pri purge. Ostávajú **dumpy** (2,4 GB, 70 súborov — 35 `.dump`
+a 35 `.json` manifestov, rozsah **2026-09-08 → 2026-09-15**) — archív, nie
+databáza. Obe miesta sú opravené na mieste.
+
+> **Tretia nepresnosť tej istej triedy, dodatočne domeraná.** Napísal som, že
+> archív dumpov „reaches back only to 2026-09-15". Najstarší je
+> `cistafirma_20260908T174923Z.dump` — archív siaha **o týždeň ďalej**, po
+> 8. 9. (a `44 súborov` bolo tiež zlé číslo; je ich 70). Nebolo to nebezpečné
+> v tom smere, ktorým som sa bál — podhodnotil som pokrytie, nie prehnal —
+> ale bola to tá istá chyba: číslo z jedného `ls | tail`, vydané za rozsah.
 
 **A hneď druhá korekcia, tej istej triedy — tentoraz moja vlastná, o pár minút
 neskôr.** Napísal som, že pri purge zmizli **všetky** volumes na Macu. Keď som

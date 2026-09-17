@@ -16,7 +16,8 @@ untouched (`~/Library/Application Support/CistaFirma/backups`, newest
 `cistafirma_postgres_data` and the other cistafirma and GitLab volumes were
 purged on **2026-09-17** (not *every* volume on that host: six unrelated ones
 survive) — so what survives on the Mac is a fallback *archive*, not a fallback
-*database*, and it reaches back only to 2026-09-15. `make ops-check` therefore *fails* on the Mac by design — no stack,
+*database*: **35 `.dump` + 35 `.json` (2,4 GB), 2026-09-08 → 2026-09-15**, the
+week before the host was retired. `make ops-check` therefore *fails* on the Mac by design — no stack,
 no weekly job — and that is not a fault to repair.
 
 ## Data safety rules (non-negotiable)
