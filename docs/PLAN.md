@@ -2735,6 +2735,23 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   s otvoreným osudom). Dôsledok, kým sa nerozhodne: frontend image nasadený do
   klastra **nenabehne** — čo je hlasité, a teda lepšie než tichých 502, ale
   treba o tom vedieť **pred** nasadením, nie po ňom.
+  **A za tým zlyhaním číha druhé, tichšie — overené renderom 2026-09-17.**
+  Helm menuje backend Service ako `<release>-cistafirma-backend`
+  (`_helpers.tpl`: `printf "%s-%s" .Release.Name "cistafirma"`), a dokumentácia
+  aj CI inštalujú release `cistafirma-dev` / `cistafirma-prod` / `cistafirma`.
+  `helm template cistafirma-dev …` to vyrenderuje doslovne ako
+  `cistafirma-dev-cistafirma-backend` a configmap backendu rovnako — kým obraz
+  má zabudované `ENV BACKEND_UPSTREAM=cistafirma-backend:8000`, čo je meno
+  **kustomize** Service (`deploy/k8s/base/backend-service.yaml`). Ani jedno
+  z tých mien sa nestretá s druhým. Dnes to neublíži, lebo chýbajúci
+  `BACKEND_RESOLVER` zastaví nginx skôr — ale práve preto je to pasca:
+  **kto doplní len resolver, dostane tiché 502 na každej požiadavke.** Pred
+  touto zmenou by ho nginx zastavil pri štarte (`host not found in upstream`);
+  s `resolve` už nie — a frontend probe má na `/healthz`, ktoré je voči
+  backendu slepé, takže pod by sa hlásil ako zdravý. To je presne tvar, ktorý
+  tento výpadok odstránil, len prenesený na Helm vetvu. Doplniť treba **oboje**
+  naraz: `BACKEND_RESOLVER` *aj* `BACKEND_UPSTREAM` s menom, ktoré chart naozaj
+  vytvára (alebo chart nech ho nastaví z `fullname` sám).
 - ⚠️ **Nič v zostave nezachytí výpadok API — tých 3 h 43 min bolo pre všetky
   kontroly neviditeľných.** `/healthz` je zámerne slepé voči backendu, a to je
   správne: reštart nginx backend nevráti a probe, ktorý by tu zlyhal, by počas
