@@ -105,11 +105,20 @@ Bezpečnostný model runnera (socket proxy, neprivilegované job kontajnery,
 ktorý je jediným zdrojom pravdy.
 
 Obe sú **verzionované kópie**; bežiaci runner číta `/home/sam/gitlab-runner/` na
-lenovo a obsah tých dvoch adresárov je totožný (`sha256sum`, overené 16. 9. 2026).
+lenovo a obsah tých dvoch adresárov je totožný (`sha256sum`, overené 16. 9. 2026
+a znovu 17. 9. 2026 po zmene nižšie).
 Dovtedy existoval celý runner — vrátane `setup-config.sh`, ktorý tento dokument
 označuje za jediný zdroj pravdy — **len na jednom stroji a nikde v repozitári**:
 žiadny diff, žiadna história, žiadna záloha. `config/config.toml` sa zámerne
 nekopíruje, lebo obsahuje živý token; v skripte je zaň len placeholder.
+
+Jedna výnimka z toho „jediného zdroja pravdy": **IP GitLabu je zapísaná aj
+v `docker-compose.yml`** (`extra_hosts` runner kontajnera), a je to minimum, nie
+nedopatrenie — runner a job kontajnery sú dva kontajnery s dvoma vlastnými
+`/etc/hosts`, takže jeden spoločný zdroj tu neexistuje. Aby sa nemohli ticho
+rozísť, `setup-config.sh` pri každom spustení overí, že `docker-compose.yml`
+vedľa neho nesie jeho `GITLAB_IP`, a skončí s `exit 1`, keď nie. Kópia, ktorá
+sa nemôže rozísť, je lepšia než komentár, ktorý to sľubuje.
 
 ## Prečo tu nie je `build` ani `deploy`
 

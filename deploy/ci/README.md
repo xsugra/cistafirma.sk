@@ -116,11 +116,18 @@ Sú tam komentáre, ktoré to hovoria.
   `companies/0014` (`text_pattern_ops` je Postgres-only), takže job bol
   červený vždy a nekontroloval nič.
 - **DNS v joboch.** Kontajnery dostávajú DNS z routera (`192.168.1.1`),
-  ktorý o `home.arpa` nevie. dnsmasq na tailnet IP (`100.120.104.84:53`)
-  z docker bridge **neodpovedá** — Tailscale to blokuje (overené:
-  `connection timed out`). Preto statický `extra_hosts` v `config.toml`
+  ktorý o `home.arpa` nevie. dnsmasq na tailnet IP GitLabu (`GITLAB_IP`
+  v `setup-config.sh`) z docker bridge **neodpovedá** — Tailscale to blokuje
+  (overené: `connection timed out`). Preto statický `extra_hosts` v `config.toml`
   (pre joby) aj v `docker-compose.yml` (pre runner). Overené: `git ls-remote`
   z kontajnera funguje. **Ďalší `*.home.arpa` hostname treba pridať na obe miesta.**
+
+  IP GitLabu je preto zapísaná presne dvakrát — raz v `setup-config.sh`, raz
+  v `docker-compose.yml` — a je to minimum, nie nedopatrenie: sú to dva
+  kontajnery s dvoma vlastnými `/etc/hosts`. Aby sa nemohli ticho rozísť,
+  `setup-config.sh` pri každom spustení overí, že `docker-compose.yml` nesie
+  jeho `GITLAB_IP`, a skončí s `exit 1`, keď nie. Tento odsek ju zámerne
+  neopisuje, aby nebol tretím miestom.
 
 ## Ako na tomto runneri závisí CI
 

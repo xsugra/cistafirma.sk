@@ -82,6 +82,11 @@ services:
     # dnsmasq na tailnet IP z docker bridge neodpovedá (Tailscale to blokuje),
     # preto statický záznam. Rovnaký dôvod ako extra_hosts v config.toml
     # pre job kontajnery.
+    #
+    # POZOR: tá istá IP je aj v setup-config.sh (GITLAB_IP) a musí sa rovnať —
+    # sú to dva kontajnery s dvoma /etc/hosts, takže jeden zdroj tu nie je možný.
+    # setup-config.sh preto pri každom spustení kontroluje, že tento riadok
+    # nesie jeho hodnotu, a skončí s exit 1, keď sa rozídu.
     extra_hosts:
       - "gitlab.home.arpa:100.120.104.84"
     networks:

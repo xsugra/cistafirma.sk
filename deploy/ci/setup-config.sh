@@ -23,6 +23,32 @@ GITLAB_URL="http://gitlab.home.arpa:8088"
 GITLAB_IP="100.120.104.84"
 RUNNER_NAME="sam-lenovo"
 
+# ---------------------------------------------------------------------------
+#  Tá istá IP je na DVOCH miestach a musia sa rovnať.
+#
+#  Tu — dosadí sa cez __GITLAB_IP__ do config.toml, teda do prostredia, v ktorom
+#  bežia JOB kontajnery. A v docker-compose.yml vedľa tohto skriptu — extra_hosts
+#  samotného RUNNER kontajnera. Zlúčiť sa nedajú: sú to dva rôzne kontajnery s
+#  dvoma rôznymi /etc/hosts, a oba potrebujú gitlab.home.arpa preto, že DNS z
+#  docker bridge o home.arpa nevie (viď README).
+#
+#  Preto sa zhoda overuje, nie predpokladá. Keď sa IP zmení, zmeň ju tu, spusť
+#  tento skript a táto kontrola povie, ak si zabudol druhú polovicu — namiesto
+#  toho, aby to o dva týždne našel až červený job.
+# ---------------------------------------------------------------------------
+COMPOSE_FILE="$(dirname "$0")/docker-compose.yml"
+if [ ! -f "$COMPOSE_FILE" ]; then
+  echo "POZOR: $COMPOSE_FILE neexistuje, zhoda GITLAB_IP sa nedá overiť." >&2
+elif ! grep -q "gitlab\.home\.arpa:${GITLAB_IP}\"" "$COMPOSE_FILE"; then
+  {
+    echo "CHYBA: $COMPOSE_FILE nemá extra_hosts \"gitlab.home.arpa:${GITLAB_IP}\"."
+    echo "       Nájdené v $COMPOSE_FILE:"
+    grep -n 'gitlab\.home\.arpa:' "$COMPOSE_FILE" || echo "       (nič)"
+    echo "       Zmeň obe miesta naraz — tu aj tam."
+  } >&2
+  exit 1
+fi
+
 [ -f "$TOKENFILE" ] || { echo "chýba $TOKENFILE" >&2; exit 1; }
 TOKEN=$(tr -d '\r\n' < "$TOKENFILE")
 [ -n "$TOKEN" ] || { echo "token je prázdny" >&2; exit 1; }
