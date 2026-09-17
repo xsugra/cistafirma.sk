@@ -42,9 +42,10 @@ services:
       - "${BIND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
 
     # The dev service is handed the whole root .env so Vite can read BACKEND_HOST
-    # and friends. nginx reads none of it -- BACKEND_UPSTREAM above is the only
-    # variable this container needs -- and a container that serves static files
-    # has no business holding SECRET_KEY and the database password.
+    # and friends. nginx reads none of it -- the two variables above, the upstream
+    # name and the resolver address, are everything this container needs -- and a
+    # container that serves static files has no business holding SECRET_KEY and
+    # the database password.
     env_file: !override []
 
     # Asks the app to serve its own liveness endpoint, which now fails when there
