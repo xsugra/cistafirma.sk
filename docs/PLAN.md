@@ -56,6 +56,16 @@ zhodnúť navigácia, routa aj telo sekcie. Typecheck nedovolí označiť sekciu
 **Overené naživo:** výpis dokumentov pre ECKLIMA s.r.o. (IČO 48097781)
 a stiahnutie reálneho 852 417-bajtového PDF so slovenským názvom.
 
+> **Táto tabuľka nie je úplný index a nesmie sa tak čítať (overené
+> 2026-09-17).** Končí na `#98`, hoci hotových je aj `#99`–`#147`. Per-úlohový
+> záznam v tomto dokumente existuje len pre `#83`, `#85`, `#89`, `#90`, `#93`,
+> `#95`, `#98`, `#100` (ako `###` nadpisy v §2 a §3) a pre `#95`, `#99`
+> v §7. **Pre `#101`–`#147` tu nie je per-úlohový záznam vôbec** — čísla
+> `#123`, `#137`, `#140`, `#146` a `#147` sa v celom dokumente nevyskytujú ani
+> raz. Autoritatívny záznam o nich je git história, nie tento plán. Nechal som
+> to tak naschvál: doplniť 50 riadkov s commit hashmi po pamäti by znamenalo
+> vyrobiť si index, ktorý sa tvári overene, a to je horšie než priznaná diera.
+
 ---
 
 ## 2. Hotové — odôvodnenie a merania
@@ -2050,6 +2060,13 @@ nie je to klasifikácia textu, ako sme si najprv mysleli.
 meno z textu konkrétnej firme tak, aby sa dalo obhájiť. To je samostatný
 projekt, nie úloha do sekcie.
 
+> **Poznámka k umiestneniu (2026-09-17):** `#148` nižšie **už medzi blokované
+> nepatrí** — čakal len na tvoje slovo, dostal ho a je hotový a uzavretý.
+> Nechávam ho tu na mieste, kde jeho analýza vznikla, aby sa nepretrhali
+> odkazy; čítať ho treba ako záznam, nie ako otvorenú položku. Nové nálezy
+> tej istej triedy, ktoré na rozhodnutie **naozaj** čakajú, sú v sekcii
+> *„Nové nálezy tej istej triedy ako #148"* na konci tejto časti.
+
 ---
 
 ### #148 — Sídlo sa presunie, mapa zostane na starej adrese — ✅ hotové a uzavreté na produkcii (2026-09-17)
@@ -2388,6 +2405,145 @@ Ani jedno z tých čísel **nie je podmienkou opravy** — (A) funguje bez nich.
 Sú odpoveďou na „aké veľké to je a čo tým rozbijeme", teda do reportu;
 druhé z nich je zároveň jediné, ktoré vie regresiu z pasce 2 kvantifikovať
 **pred** nasadením namiesto po ňom.
+
+---
+
+### Nové nálezy tej istej triedy ako #148 — overené, čakajú na tvoje rozhodnutie (2026-09-17)
+
+Po uzavretí `#148` som nechal prejsť celý repozitár **jednou otázkou**: ktoré
+ďalšie pole je *odvodené* z iných stĺpcov, zapisuje ho **presne jedna cesta** a
+**nič ho neznehodnotí, keď sa zdroj zmení**? To je presne tvar chyby, ktorú mal
+`#148` — a hľadanie vrátilo štyri rodiny. Sweep vrátil 6 potvrdení a **0
+vyvrátení**, čo je samo o sebe podozrivé číslo, tak som každý nález overoval
+zvlášť proti kódu **a proti ostrej databáze na `dell`**. Dva z nich sa pritom
+meraním **vecne zmenili** — to je dôvod, prečo tu nie sú odpísané zo sweepu.
+
+**Nič z toho som neopravil.** Každá oprava je nová prírastka (mení zápis alebo
+pridáva úlohu), takže podľa pravidiel čaká na tvoje slovo. Nasleduje stav
+a cena, nie hotová vec.
+
+#### A. `SectorBenchmark` — firma príde o porovnanie práve tým, že zverejní novšiu závierku
+
+| | |
+|---|---|
+| **Odvodené z** | `CompanyFinancialResult` danej NACE sekcie a roka |
+| **Zapisuje** | `companies/services/benchmarking.py:104` (`update_or_create`), denne cez `compute-sector-benchmarks-daily` |
+| **Číta** | `companies/serializers.py:324`, `companies/services/pdf_report.py:323` — **obidva kľúčujú rokom firmy, nie rokom benchmarku** |
+| **Zmerané na `dell`** | `"Sector Benchmarks"` = **19 riadkov, všetky za rok 2025** |
+
+Pri `year=None` (a beat tú úlohu púšťa **bez `args`**, takže `year` je vždy
+`None`) funkcia prejde roky od najnovšieho a vybere **prvý, ktorý má aspoň 500
+výsledkov** (`benchmarking.py:47-63`). Beatin riadok je pritom jediný spúšťač —
+je v tabuľke `PeriodicTask` (`runs=3`, naposledy 2026-09-16 18:34), takže sa to
+naozaj deje.
+
+Rozdelenie firiem podľa **ich vlastného najnovšieho roka** (merané 2026-09-17):
+
+| najnovší rok firmy | firiem | riadkov benchmarku pre ten rok |
+|---|---|---|
+| **2026** | **80** | **0** |
+| 2025 | 12 479 | 19 |
+| 2024 a staršie | 1 506 | 0 |
+
+**Dôsledok, ktorý je horší než „chýbajúce dáta":** firma, ktorá **zverejnila
+novšiu závierku**, o porovnanie so sektorom **príde** — posunie sa na 2026,
+pre ktorý riadok neexistuje, a `get_benchmark` vráti `None`. Je to presne
+opačná motivácia, než akú má produkt: čerstvejšie dáta = horšia stránka.
+A je to **monotónne** — s každou ďalšou firmou, ktorá podá závierku za 2026,
+tých 80 rastie. Nikde na to nie je kontrola; API vráti `null` a PDF sekciu
+ticho vynechá.
+
+**Koreň:** prah 500 je **globálny**, takže zastaví obsluhovaný rok dovtedy, kým
+cez neho neprelezie celý rok — kým čitateľ sa posunie okamžite. Per-sekciová
+poistka `company_count < 5` v tom istom súbore (`:100-102`) už existuje a je tá
+čestná; globálna 500 je navyše a práve ona mrazí rok.
+
+**Možnosti:** (1) počítať pre **každý rok, ktorý má dáta**, a nechať rozhodovať
+len per-sekciovú poistku `>= 5`; (2) čítať fallbackom na najnovší
+benchmarkovaný rok sekcie; (3) znížiť/odstrániť globálny prah. **Odporúčam
+(1)** — je to najmenšia zmena, ktorá odstráni mrazenie a ponechá jedinú
+poistku, ktorá naozaj chráni pred mediánom z pár firiem.
+
+#### B. `vat_deleted_date` / `vat_deleted_reason` — výmaz z DPH sa nikdy nezruší
+
+| | |
+|---|---|
+| **Zapisujú** | presne dve cesty, obe v `handle_vat_deleted` (`registers/services/fs_data_handlers.py:114`, `:125`) |
+| **Číta** | `frontend/utils/vatStatus.ts:31` — `vatStanding()` sa pýta **najprv dátumu**, až potom príznaku |
+| **Zmerané na `dell`** | 32 127 riadkov má dátum výmazu · 140 906 je označených ako platiteľ · **33 má oboje** |
+
+`handle_vat_payers` (`fs_data_handlers.py:46-77`) pri firme v **aktuálnom**
+zozname platiteľov nastaví `vat_payer=True`, `ic_dph`, `datum_reg_dph`
+a skončí — **dvojicu nikdy nevyčistí**. Firma, ktorá bola z registra vyčiarknutá
+a neskôr sa doň vrátila, si teda navždy nesie dátum výmazu.
+
+Prečo to vidno: `vatStanding()` rozhoduje **dátumom prvým** a má na to
+zdokumentovaný dôvod (príznak je nullable a 302 713 riadkov nemá hodnotu, kým
+dátum je fakt, ktorý zdroj zapísal). Takže tých **33 firiem sa vykreslí ako
+„Vymazaný z registra DPH"**, hoci register ich práve teraz vedie ako platiteľov
+— teda **v opačnom smere, než aký je pravda**, a v tom alarmujúcejšom. A opäť
+monotónne: nič ten dátum nevyčistí, takže číslo môže len rásť.
+
+**Možnosti:** (1) v `handle_vat_payers` pri firme v aktuálnom zozname obe polia
+vyčistiť; (2) vo `vatStanding()` uprednostniť `isVatPayer === true` pred dátumom
+— to však rozbije dokumentovaný dôvod, prečo je dátum prvý, a vráti chybu
+27 857 riadkom, ktoré majú dátum a žiadny príznak; (3) viesť výmaz ako históriu
+namiesto dvojice polí. **Odporúčam (1)** — opravuje zdroj a poradie v čítaní
+necháva tak, ako je odôvodnené.
+
+#### C. `CompanyScore` — celá plocha je mŕtva; a keby nebola, skóre by nezostarlo len tak
+
+Toto je nález, ktorý sa **meraním otočil**. Sweep ho opísal ako „odvodená
+hodnota, ktorú nič neznehodnotí". Na ostrej databáze je pravda tvrdšia:
+
+| kontrola | výsledok |
+|---|---|
+| `lead_scoring_companyscore` na `dell` | **0 riadkov** |
+| riadok v `PeriodicTask` pre scoring | **neexistuje** (prečítané všetkých 10 riadkov tabuľky) |
+| `score_single_company` (`lead_scoring/tasks.py:59`) | **nemá v repozitári žiadneho volajúceho** |
+| jediný dosiahnuteľný spúšťač | `POST /api/lead-scoring/scores/calculate/` (`views.py:95`, personál) alebo ručné `manage.py score_companies` |
+
+Takže latentná polovica nálezu (skóre nezostarlo, keď sa zmenia financie či
+dlhy firmy) **dnes nemôže nastať, lebo sa neskóruje vôbec**. `CompanyScore`
+nemá ani len plán, ktorý by ho obnovoval. Zároveň to znamená, že endpointy
+`top` a `report` vracajú prázdno a model, admin a viewset sú mŕtva váha —
+**pokiaľ to nie je Zámer**.
+
+**Toto nie je chyba na tiché opravenie, ale produktové rozhodnutie:** má byť
+lead scoring živá funkcia? Ak áno → potrebuje plán **aj** zneplatnenie (inak sa
+prvá vec, ktorú spraví, je to, že bude klamať). Ak nie → patrí do *„Vedome
+vynechané"* a jeho plocha má zmiznúť. **Nechávam na teba.**
+
+#### D. `SyncFocusModeState.snapshot` — najslabší zo štyroch, ale tej istej triedy
+
+`snapshot` sa zapíše raz, v `enter_focus_mode` (`focus_mode.py:180`), a pri
+východe sa z neho obnovuje `enabled`. **Nič ho neznehodnotí, keď sa riadky
+`PeriodicTask` počas focus mode zmenia:**
+
+- riadok **vytvorený** počas focus mode v snapshote nie je → `exit` ho nechá
+  tak. Beat ho pritom vytvoril z `CELERY_BEAT_SCHEDULE` s `enabled=True`, takže
+  **beží aj počas focus mode** a ruší jeho deklarovanú záruku.
+- **vedomá úprava** vykonaná počas focus mode sa pri `exit` **prepíše** späť na
+  hodnotu z času vstupu.
+
+Oboje chce ale buď nasadenie (nová položka v `CELERY_BEAT_SCHEDULE`) alebo
+administrátorský zásah **presne počas** focus mode, takže výskyt je úzky.
+**Označujem to ako najslabší nález** a neodporúčam naň siahať skôr než na A–C.
+
+> **Aby to nikto „neopravil":** `revoke_non_focus_tasks` a `purge_broker_queues`
+> sú v `focus_mode.py` definované, ale **nikto ich nevolá** — a
+> `registers/tests_focus_mode_safety.py:42-43` to **explicitne testuje**
+> (`assert_not_called`). Je to zámerná, otestovaná invariantná záruka, že focus
+> mode nikdy nesiaha na broker správy, **nie mŕtvy kód**. Zapisujem to sem, aby
+> ich niekto nezapojil v dobrej viere.
+
+#### Čo z toho plynie
+
+- **A a B** sú ozajstné chyby s merateľným, rastúcim dopadom (80 firiem; 33
+  firiem) a s malou, dobre ohraničenou opravou. Vedia čakať, ale sú to
+  kandidáti na ďalší cyklus.
+- **C** je rozhodnutie o produkte, nie oprava — patrí tebe.
+- **D** je záznam, nie úloha.
 
 ---
 
