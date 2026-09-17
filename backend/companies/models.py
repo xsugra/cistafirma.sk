@@ -324,6 +324,24 @@ class Company(
         db_column="PSČ",
     )
 
+    # Ktoré stĺpce `seat_*` odvodzuje, ktoré z nich sú samotné `seat_*`, a čo
+    # sa zneplatní, keď sa adresa zmení. Mená stĺpcov patria modelu, preto sú
+    # tu a nie v `registers`: `match_seat_addresses` ich odtiaľto číta, takže
+    # pridaný stĺpec sa nedá zabudnúť v jednej z dvoch kópií zoznamu.
+    SEAT_SOURCE_ADDRESS_FIELDS = ('psc', 'mesto', 'ulica')
+    SEAT_FIELDS = (
+        'seat_lat',
+        'seat_lon',
+        'seat_precision',
+        'seat_radius_m',
+        'seat_point_count',
+        'seat_tier',
+    )
+    # `seat_matched_at` je v zneplatnení preto, že nesie informáciu, ktorú sa
+    # inam uložiť nedá: či boli `seat_*` počítané z adresy, ktorá je v riadku
+    # teraz. Bez toho by vyčistené a „register to neumiestni" vyzerali rovnako.
+    SEAT_INVALIDATION_FIELDS = SEAT_FIELDS + ('seat_matched_at',)
+
     # Sídlo umiestnené na skutočný adresný bod, nad rámec `PostalCodeArea`.
     #
     # `postal_code` je to, čo mapa kreslila doteraz — kruh okolo stredu PSČ,
@@ -345,8 +363,18 @@ class Company(
     # pomenoval.
     #
     # Stĺpce sú odvodené a prepočítateľné (`match_seat_addresses`); zdrojom
-    # pravdy zostáva `ulica`/`mesto`/`psc` vyššie. Nepíše ich synchronizácia
-    # z RUZ, takže import firmy ich neprepíše.
+    # pravdy zostáva `ulica`/`mesto`/`psc` vyššie. Synchronizácia z RUZ ich
+    # **neprepíše** — ale keď zapíše inú adresu, `save()` nižšie ich
+    # **zneplatní**: vyčistí `seat_*` a `seat_matched_at` vráti na `None`.
+    # Dovtedy tu stálo, že import firmy ich nechá na pokoji, a to bola pravda
+    # o polovici veci: nechal ich na pokoji aj firme, ktorá sa presťahovala,
+    # takže pin zostal na starej adrese navždy. Prepočíta ich najbližší beh
+    # `match_seat_addresses` (naplánovaný každých 6 h).
+    #
+    # Rozdiel medzi vyčisteným riadkom a riadkom, ktorý register umiestniť
+    # nevie, je **len `seat_matched_at`**: matcher opečiatkuje každý riadok,
+    # ktorý spracuje, aj ten neumiestnený. `None` preto znamená „ešte
+    # nespočítané" a serializátor to tak aj číta.
     seat_lat = models.FloatField(blank=True, null=True, verbose_name='Sídlo — zemepisná šírka')
     seat_lon = models.FloatField(blank=True, null=True, verbose_name='Sídlo — zemepisná dĺžka')
     seat_precision = models.CharField(
@@ -630,7 +658,162 @@ class Company(
 
     def __str__(self):
         return self.nazov_UJ
-    
+
+    # Adresa tak, ako je v databáze — jediné, s čím sa `save()` dá porovnať.
+    # `None` znamená „nevieme", a vtedy sa nezneplatňuje nič.
+    _stored_address = None
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        """Zapamätá si adresu z riadku, aby `save()` rozoznal zmenu od zápisu.
+
+        Bez toho by `save()` videl len to, čo je v pamäti, a každý zápis by
+        vyzeral ako zmena adresy — teda by zneplatnil sídlo aj firme, ktorá sa
+        nepresťahovala.
+
+        Pri `only()`/odložených stĺpcoch príde `field_names` len ako
+        **podmnožina** a `getattr` na vynechaný stĺpec by potiahol dotaz do DB
+        (alebo vrátil `DeferredAttribute`). Preto sa vtedy zapamätá `None`
+        a `save()` radšej nič nezneplatní, než by zneplatnil naslepo.
+        """
+        instance = super().from_db(db, field_names, values)
+        if all(f in field_names for f in cls.SEAT_SOURCE_ADDRESS_FIELDS):
+            instance._stored_address = tuple(
+                getattr(instance, f) for f in cls.SEAT_SOURCE_ADDRESS_FIELDS
+            )
+        else:
+            instance._stored_address = None
+        return instance
+
+    def refresh_from_db(self, using=None, fields=None, from_queryset=None):
+        """Prečíta adresu aj do pamäte `save()`, nielen do stĺpcov.
+
+        Bez tohto by `_stored_address` zostal z pôvodného načítania a `save()`
+        po `refresh_from_db()` by cudziu zmenu adresy prehlásil za svoju —
+        a vyčistil sídlo, ktoré medzitým niekto pre tú novú adresu spočítal.
+
+        Keď sa obnovuje len časť stĺpcov, adresa v pamäti je zmes starého
+        a nového, a to sa porovnávať nedá; vtedy je `_stored_address` `None`
+        a `save()` nič nezneplatní.
+        """
+        super().refresh_from_db(using=using, fields=fields, from_queryset=from_queryset)
+        if fields is None or set(fields) >= set(self.SEAT_SOURCE_ADDRESS_FIELDS):
+            self._stored_address = tuple(
+                getattr(self, f) for f in self.SEAT_SOURCE_ADDRESS_FIELDS
+            )
+        else:
+            self._stored_address = None
+
+    @staticmethod
+    def _is_blank(value):
+        """Prázdno v tom zmysle, v akom ho zapisuje register: `None` aj `''`."""
+        return value is None or not str(value).strip()
+
+    def _seat_address_changed(self, written):
+        """Či sa adresa, z ktorej je `seat_*` odvodené, mení na inú neprázdnu.
+
+        `written` je `update_fields` ako množina, alebo `None` pre zápis
+        všetkých stĺpcov; pole, ktoré sa nezapíše, sa neporovnáva — inak by
+        `save(update_fields=['nazov_UJ'])` vyčistil sídlo firme, ktorej adresa
+        v databáze zostáva tá istá.
+
+        Porovnávajú sa **hodnoty**, nie prítomnosť kľúčov. Synchronizácia
+        skladá `defaults` cez `data.get(...)`, takže chýbajúci kľúč zapíše
+        `None`; keby sa za zmenu počítal aj prechod na prázdno, vyprázdnil by
+        sa pin firme, ktorej niekto poslal neúplnú adresu — a to je presne ten
+        smer, ktorý sa nedá vrátiť späť.
+        """
+        stored = self._stored_address
+        if stored is None:
+            return False
+        for field, old in zip(self.SEAT_SOURCE_ADDRESS_FIELDS, stored):
+            if written is not None and field not in written:
+                continue
+            new = getattr(self, field)
+            if self._is_blank(new):
+                continue
+            if new != old:
+                return True
+        return False
+
+    def _clear_seat(self):
+        """Vráti `seat_*` do stavu „nepárované".
+
+        Hodnoty musia sedieť s tým, čo `match_seat_addresses` zapíše firme,
+        ktorú umiestniť nevie (`_wanted(None)`) — líši sa len `seat_matched_at`,
+        ktorý matcher po behu **vždy** opečiatkuje a tu zostáva `None`. Presne
+        ten rozdiel nesie informáciu „ešte nespárované" vs. „register to
+        neumiestni", ktorú číta serializátor aj karta na mape.
+        """
+        self.seat_lat = None
+        self.seat_lon = None
+        self.seat_precision = ''
+        self.seat_radius_m = None
+        self.seat_point_count = None
+        self.seat_tier = ''
+        self.seat_matched_at = None
+
+    def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
+        """Zneplatní `seat_*`, keď sa adresa zmenila.
+
+        Sídlo je odvodené z `ulica`/`mesto`/`psc`, ale odvodenina sa nedá
+        prepočítať sama: bez tohto háku sa firma presťahuje a pin zostane na
+        starej adrese, kým si niekto nevšimne. Tu sa staré umiestnenie zhodí
+        a `seat_matched_at` sa vráti na `None`, takže ďalší beh
+        `match_seat_addresses` ho spočíta z novej adresy.
+
+        Signatúra je rozpísaná zámerne: `update_fields` sa tak nedá poslať
+        pozične a minúť sa s hákom.
+
+        Tri cesty tento hák obchádzajú — `QuerySet.update()`, `bulk_update()`
+        a `refresh_from_db(fields=<podmnožina>)` — a testy ich menovite
+        priznávajú namiesto tichého pokrytia. Žiadna z nich dnes `Company`
+        adresu nepíše; `seat_*` áno, a to je v poriadku, lebo tie sa nemenia
+        bez toho, aby sa zmenila adresa. Aj keby jedna z nich adresu prepísala,
+        zmeškané zneplatnenie už nie je trvalé: `match_seat_addresses` je
+        naplánovaný každých 6 h a prepočíta každý riadok z uloženej adresy.
+        """
+        written = None if update_fields is None else set(update_fields)
+
+        if self._seat_address_changed(written):
+            self._clear_seat()
+            # Toto je hlavný prípad, nie okrajový: `update_or_create` volá
+            # `save(update_fields=set(defaults))` (`django/db/models/query.py`),
+            # a `update_fields` je presne to, čo sa zapíše. Bez doplnenia by
+            # sa vyčistenie **neuložilo** — v pamäti by bolo, v databáze nie.
+            if written is not None:
+                written |= set(self.SEAT_INVALIDATION_FIELDS)
+
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=written,
+        )
+
+        # Adresa, ktorá je teraz v databáze — čo musí porovnať nasledujúci
+        # `save()`.
+        #
+        # Keď sa zapísali všetky tri stĺpce, je to tá v pamäti, a je jedno, či
+        # objekt prišiel z `from_db` alebo ho niekto postavil cez
+        # `Company(...)`: riadok teraz drží presne tieto hodnoty. Bez tejto
+        # vetvy by objekt vytvorený v pamäti (`create()` → `save()`) nemal
+        # snapshot nikdy, a jeho druhý `save()` by zmenu adresy nezachytil.
+        #
+        # Pri čiastočnom zápise si nezapísaný stĺpec drží to, čo už v riadku
+        # bolo; ak sme ho nikdy nečítali, snapshot zostáva `None` (nevieme)
+        # a radšej sa nezneplatní nič.
+        stored = self._stored_address
+        if written is None or set(self.SEAT_SOURCE_ADDRESS_FIELDS) <= written:
+            self._stored_address = tuple(
+                getattr(self, f) for f in self.SEAT_SOURCE_ADDRESS_FIELDS
+            )
+        elif stored is not None:
+            self._stored_address = tuple(
+                getattr(self, f) if f in written else old
+                for f, old in zip(self.SEAT_SOURCE_ADDRESS_FIELDS, stored)
+            )
+
     def get_legal_form_display(self):
         """Vráti ľudsky čitateľný názov právnej formy"""
         if not self.pravna_forma:

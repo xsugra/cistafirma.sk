@@ -134,6 +134,14 @@ const precisionNote = (seat: SeatLocation): string => {
  * the opposite of what the map beside the sentence was drawing. A building has
  * no ring at all, and a street's ring is that street's own spread rather than
  * the PSČ's.
+ *
+ * The PSČ branch then splits again on `pending`, because "the register knows
+ * only the PSČ centre" is a claim about the register and there are two ways to
+ * end up drawing this circle: it was asked and could not do better, or it was
+ * never asked about the address the record now carries. The second happens to
+ * every company that moves — the stale pin is dropped and this circle is what
+ * is left until the next matching run — and telling that reader the register
+ * cannot place them would be inventing a fact about a database nobody queried.
  */
 const explanation = (seat: SeatLocation): React.ReactNode => {
     switch (seat.precision) {
@@ -154,12 +162,34 @@ const explanation = (seat: SeatLocation): React.ReactNode => {
                     umiestniť nevieme.
                 </>
             );
-        default:
+        case 'postal_code':
             return (
                 <>
                     Kruh je <strong className="font-semibold text-gray-700 dark:text-gray-300">presnosť, nie veľkosť firmy</strong>:
-                    v tomto kruhu leží 90 % adries s PSČ {seat.psc}. Register adries pozná
-                    len stred PSČ, takže bližšie sídlo umiestniť nevieme.
+                    v tomto kruhu leží 90 % adries s PSČ {seat.psc}.{' '}
+                    {seat.pending ? (
+                        <>
+                            Presnejšie sídlo pre <strong className="font-semibold text-gray-700 dark:text-gray-300">túto adresu</strong> ešte
+                            dopočítané nemáme, takže netvrdíme, že sa bližšie umiestniť
+                            nedá — register adries sme na ňu ešte nepustili.
+                        </>
+                    ) : (
+                        <>
+                            Register adries pozná len stred PSČ, takže bližšie sídlo
+                            umiestniť nevieme.
+                        </>
+                    )}
+                </>
+            );
+        default:
+            // `precision` is a closed union on the backend and `SeatMap` refuses
+            // an unknown one outright, so this is only reachable if the API grows
+            // a fourth level: say the least that is still true of any of them
+            // rather than falling through to a branch that claims a measurement.
+            return (
+                <>
+                    Kruh je <strong className="font-semibold text-gray-700 dark:text-gray-300">presnosť, nie veľkosť firmy</strong>:
+                    v tomto kruhu leží 90 % adries, ktoré náš zdroj nerozlišuje bližšie.
                 </>
             );
     }

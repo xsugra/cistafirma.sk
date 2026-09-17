@@ -140,6 +140,25 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 > opakovane. Všetky tri vrstvy (`CELERY_TASK_ROUTES`, `CELERY_BEAT_SCHEDULE`,
 > riadok `PeriodicTask`) musia súhlasiť; na živom systéme rozhoduje **riadok**.
 
+> `match-seat-addresses-every-6-hours` je druhá polovica #148. `seat_*` je
+> **odvodená** hodnota — počíta ju `match_seat_addresses` z `Company.{psc,mesto,
+> ulica}` a z `AddressPoint` — a do #148 ju nič neprepočítavalo: príkaz sa dal
+> spustiť len ručne a v žiadnom pláne nebol, takže firma, ktorá sa presťahovala,
+> si držala pin na starej adrese **natrvalo**. `Company.save()` teraz pri zmene
+> adresy vyčistí všetkých šesť `seat_*` aj `seat_matched_at`; tento záznam je
+> priechod, ktorý ich z novej adresy spočíta znova. Kým neprebehne, karta firmy
+> hovorí „ešte nedopočítané", nie „register to neumiestni" — rozlíšiť tie dva
+> stavy sa nedá bez `seat_matched_at`, a to je dôvod, prečo je v zneplatnení.
+>
+> Interval **6 h je zámerne rovnaký ako `fetch-ruz-data-every-6-hours`**: adresu
+> mení ten sync, takže tento interval je to, ako dlho smie byť presťahovaná
+> firma bez sídla. Queue `celery` — na `ruz_full` drží sync svoj kurzor a na
+> `orsr`/`insurance` sa čaká na cudzí server; tento príkaz číta len našu
+> databázu. Záznam nemá `args`, takže riadok `PeriodicTask` sa od neho nemôže
+> rozísť v dávke — ale pri založení potrebuje `last_run_at` v minulosti, inak
+> riadok bez neho dostane `date_changed` a prvý beh príde až o celý interval
+> (`django_celery_beat/schedulers.py:95-96`).
+
 ### `SyncJob` vs `SyncProgress`
 
 Dva záznamy, ktoré vyzerajú podobne, ale majú iný životný cyklus:

@@ -66,14 +66,10 @@ BULK_UPDATE_BATCH_SIZE = 500
 # The address fields decide the placement; the seat fields are read so an
 # unchanged row can be skipped rather than rewritten.
 SOURCE_FIELDS = ('id', 'psc', 'mesto', 'ulica')
-SEAT_FIELDS = (
-    'seat_lat',
-    'seat_lon',
-    'seat_precision',
-    'seat_radius_m',
-    'seat_point_count',
-    'seat_tier',
-)
+# From the model, not a second copy: `Company.save()` clears the same set when
+# the address changes, and a column added here but not there would be left
+# stale on a company that moved.
+SEAT_FIELDS = Company.SEAT_FIELDS
 
 
 def _chunks(iterable, size):

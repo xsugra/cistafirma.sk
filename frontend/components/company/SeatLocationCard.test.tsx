@@ -26,6 +26,7 @@ const seat: SeatLocation = {
     radiusM: 737,
     psc: '82109',
     precision: 'postal_code',
+    pending: false,
 };
 
 const address: Address = {
@@ -85,6 +86,47 @@ describe('SeatLocationCard', () => {
         expect(precision).toHaveTextContent('±4,1 km');
         expect(screen.getByText(/90 % adries s PSČ 04001/)).toBeInTheDocument();
         expect(screen.queryByText(/82109/)).not.toBeInTheDocument();
+    });
+
+    it('does not tell a moved company the register cannot place it', () => {
+        // The failure this guards against is a sentence inventing a fact about
+        // a database nobody queried. When a company moves, the stale pin is
+        // dropped and this PSČ circle is what is left until the next matching
+        // run -- so `pending` is set. "The register knows only the PSČ centre"
+        // would be a claim about the register; the truth is about us: we have
+        // not asked it about this address yet. The circle itself is right and
+        // the sentence must still say what it covers.
+        render(<SeatLocationCard seat={{...seat, pending: true}} address={address} />);
+
+        expect(screen.getByText(/90 % adries s PSČ 82109/)).toBeInTheDocument();
+        expect(screen.queryByText(/umiestniť nevieme/)).not.toBeInTheDocument();
+        expect(screen.getByText(/ešte\s+dopočítané nemáme/)).toBeInTheDocument();
+    });
+
+    it('keeps saying the register cannot place it when it really cannot', () => {
+        // The other half of the same distinction, and the one that was already
+        // correct: the matcher ran against this address and the register does
+        // not know the building or the street. Saying "we are still computing"
+        // here would promise a precision that is never coming.
+        render(<SeatLocationCard seat={seat} address={address} />);
+
+        expect(screen.getByText(/Register adries pozná len stred PSČ/)).toBeInTheDocument();
+        expect(screen.queryByText(/dopočítané nemáme/)).not.toBeInTheDocument();
+    });
+
+    it('claims no measurement at all for a precision it does not know', () => {
+        // `precision` is a closed union, so this is unreachable through the API
+        // today -- which is exactly why it is worth pinning. The bug this file
+        // was fixed for was a `default:` branch carrying the PSČ sentence to
+        // every other precision, so a fourth level added on the backend would
+        // silently inherit a claim about 90 % of a PSČ that means nothing here.
+        const unknown = {...seat, precision: 'region' as SeatLocation['precision']};
+        render(<SeatLocationCard seat={unknown} address={address} />);
+
+        expect(screen.getByText('presnosť, nie veľkosť firmy')).toBeInTheDocument();
+        expect(screen.queryByText(/90 % adries s PSČ/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/umiestniť nevieme/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/dopočítané nemáme/)).not.toBeInTheDocument();
     });
 
     it('hands the whole seat to the map, radius included', async () => {

@@ -264,6 +264,7 @@ describe('CompanyHeader — sídlo na mape', () => {
         radiusM: 737,
         psc: '82109',
         precision: 'postal_code' as const,
+        pending: false,
     };
 
     it('leaves the card out entirely when the seat cannot be placed', () => {

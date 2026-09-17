@@ -24,6 +24,7 @@ export const mockCompanyData: Company = {
     radiusM: 737,
     psc: '82109',
     precision: 'postal_code',
+    pending: false,
   },
   lastUpdatedFromSource: new Date().toISOString(),
   insuranceCheckedOn: '2026-09-10T00:00:00Z',

@@ -148,6 +148,26 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         address register does not list (post-office PSČ with no address point),
         plus three rows with no PSČ at all. The map is omitted for those rather
         than drawn from a guess.
+
+        `pending` says that the fallback to the PSČ circle is *not* a statement
+        about the register: nothing has been computed for the address the row
+        carries now. It is the one thing `seat_matched_at` can say that the
+        `seat_*` columns cannot, because the matcher stamps **every** row it
+        processes, placed or not, and a cleared pin carries no stamp at all:
+
+        - `seat_precision` empty, `seat_matched_at` set -- the matcher ran
+          against this address and the register does not place it. 14,5 % of
+          rows, and the circle is the honest answer.
+        - `seat_precision` empty, `seat_matched_at` `None` -- either the row was
+          imported after the last run, or `Company.save()` cleared the pin when
+          the address moved. The circle is the same, but the sentence under the
+          map must not claim the register cannot do better, because it may.
+
+        On a placed row there is no fallback, so `pending` is always `False`
+        there -- including the rows matched before migration 0022 added
+        `seat_matched_at`, whose stamp is missing but whose pin is not. The
+        column was never backfilled, so those rows do read as `pending` when
+        they fall back; the matcher stamps them the next time it touches them.
         """
         if obj.seat_precision in (BUILDING, STREET) and obj.seat_lat is not None:
             return {
@@ -158,6 +178,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 'radiusM': obj.seat_radius_m or 0,
                 'psc': obj.psc or '',
                 'precision': obj.seat_precision,
+                'pending': False,
             }
 
         psc = PostalCodeArea.normalize_psc(obj.psc)
@@ -172,6 +193,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'radiusM': area.radius_m,
             'psc': area.psc,
             'precision': POSTAL_CODE,
+            'pending': obj.seat_matched_at is None,
         }
 
     def get_financials(self, obj):

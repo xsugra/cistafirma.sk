@@ -162,6 +162,22 @@ export interface SeatLocation {
    * this is the sentence the reader gets.
    */
   precision: 'building' | 'street' | 'postal_code';
+  /**
+   * Why this seat is a PSČ circle — the two reasons are not the same claim.
+   *
+   * `false`: either there is no fallback to explain (`precision` is `building`
+   * or `street`), or the register was asked about this address and cannot place
+   * it more precisely. The circle is the answer.
+   *
+   * `true`: nothing has been computed for the address the record now carries —
+   * either the company was imported after the last matching run, or it moved and
+   * the stale pin was dropped. The circle is right, but "the register knows only
+   * the PSČ centre" would be a claim about the register that nobody has checked.
+   *
+   * Carried from the API rather than inferred: it is a fact about our own work,
+   * and only the backend knows whether that work has been done.
+   */
+  pending: boolean;
 }
 
 export interface Debt {

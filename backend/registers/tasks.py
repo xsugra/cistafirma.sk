@@ -1354,3 +1354,36 @@ def detect_stuck_sync_jobs():
     else:
         logger.info("Watchdog found no stuck sync jobs.")
     return flipped
+
+
+@shared_task(queue='celery')
+def match_company_seats():
+    """Re-place every company's seat from the address the row carries now.
+
+    `seat_*` is derived from `Company.{psc,mesto,ulica}`, and until #148 nothing
+    recomputed it: `match_seat_addresses` had only ever been run by hand and was
+    in no schedule, so a company that moved kept a pin on its old address for
+    good. `Company.save()` now clears the derived columns when the address
+    changes; this task is the other half -- the pass that computes them again.
+
+    Six-hourly, matching `fetch-ruz-data-every-6-hours`, because that sync is
+    what moves the addresses. Between the two the coupling is the point: the
+    invalidation is immediate but the replacement is not, so the interval is how
+    long a moved company is allowed to be blank instead of wrong -- and a pass
+    every 6 h never has more than one sync's worth of debt to clear.
+
+    On the `celery` queue, and it belongs on none of the others. `ruz_full`
+    holds the sync cursor, so a minutes-long full-table sweep in that lane would
+    delay a data import behind something that is not an import; `orsr` and
+    `insurance` are rate-limited against somebody else's server, while this
+    command reads only our own database.
+
+    No lock, and the margin is the reason rather than an oversight: a full pass
+    over 449 764 companies is minutes (the command's own docstring measures the
+    chunks), so two runs overlap only if one takes far longer than a six-hour
+    interval -- and even then both compute their placements from the same
+    `AddressPoint` rows, so they would write the same values.
+    """
+    logger.info("Triggering match_seat_addresses command...")
+    call_command('match_seat_addresses')
+    logger.info("match_seat_addresses command finished.")

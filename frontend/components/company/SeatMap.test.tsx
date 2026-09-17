@@ -177,6 +177,7 @@ const seat: SeatLocation = {
     radiusM: 737,
     psc: '82109',
     precision: 'postal_code',
+    pending: false,
 };
 
 /** A second real row, far enough away that a wrong coordinate cannot pass. */
@@ -186,6 +187,7 @@ const other: SeatLocation = {
     radiusM: 4118,
     psc: '04001',
     precision: 'postal_code',
+    pending: false,
 };
 
 /** How many overlay layers the component puts on the base style. */

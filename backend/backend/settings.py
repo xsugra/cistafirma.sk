@@ -542,6 +542,33 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 21600.0,
         'options': {'expires': 21000.0, 'queue': 'ruz_full'},
     },
+    # The second half of #148. When a sync writes a new address, `Company.save()`
+    # clears the six derived `seat_*` columns; this is the pass that computes
+    # them again from the new address. Until it runs, the company's card says the
+    # seat has not been computed yet instead of pointing at the old one.
+    #
+    # Six hours, deliberately the same as `fetch-ruz-data-every-6-hours` above --
+    # that sync is what moves the addresses, so this interval is how long a moved
+    # company may be blank rather than wrong. A shorter one would re-read the
+    # whole table faster than addresses can change; a longer one would leave a
+    # company seatless for longer than the window that moved it.
+    #
+    # `queue: celery`, and it belongs on none of the others: `ruz_full` holds the
+    # sync cursor, and `orsr`/`insurance` are rate-limited against somebody
+    # else's server while this command reads only our own database. The task's
+    # own docstring carries the rest.
+    #
+    # As with every entry here, `DatabaseScheduler` runs the `PeriodicTask` row
+    # of the same name and not this dict. This entry carries no `args`, which is
+    # what makes it safe: the row cannot drift from it by holding stale
+    # arguments. It does need `last_run_at` set in the past on a live instance --
+    # a row created with none gets `date_changed`, so its first run would land a
+    # full interval after the deploy (see docs/ARCHITECTURE.md §4).
+    'match-seat-addresses-every-6-hours': {
+        'task': 'registers.tasks.match_company_seats',
+        'schedule': 21600.0,
+        'options': {'expires': 21000.0, 'queue': 'celery'},
+    },
     'update-fs-data-daily': {
         'task': 'registers.tasks.update_fs_data_task',
         'schedule': 86400.0,
