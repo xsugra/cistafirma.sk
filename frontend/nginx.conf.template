@@ -108,6 +108,12 @@ server {
     # declared upstreams before any DNS is involved. proxy_pass keeps its static
     # no-URI form, so the original request URI is passed upstream unchanged --
     # byte for byte what the three separate literal proxy_pass lines did before.
+    #
+    # The URI is the only thing that carries over by itself. `$proxy_host` -- the
+    # Host sent when a location sets no proxy_set_header -- is the name as written
+    # in proxy_pass, so renaming it changes the Host the backend sees. That is not
+    # theoretical: it broke @backend_static the moment this shipped (400 to every
+    # fall-through). If you add a fourth location here, set Host explicitly.
     location /api/ {
         proxy_pass http://backend_upstream;
         proxy_set_header Host $host;
@@ -139,8 +145,22 @@ server {
         try_files $uri @backend_static;
     }
 
+    # The fallback for anything under /static/ the built image does not carry --
+    # Django's own admin/DRF assets, typically. It needs an explicit Host, and
+    # that is not a detail: with no `proxy_set_header`, nginx sends
+    # `$proxy_host`, which is the name as written in proxy_pass. That used to be
+    # `backend:8000` (Django accepts it: ALLOWED_HOSTS holds `backend`, the port
+    # is stripped), and naming the GROUP changed it to `backend_upstream`, which
+    # is not in ALLOWED_HOSTS at all. Every fall-through request then answered
+    # `400 Bad Request` -- measured on production 2026-09-17, right after the
+    # upstream change shipped, and it is why the three locations now carry the
+    # same header block instead of only two of them. Same headers as /api/.
     location @backend_static {
         proxy_pass http://backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location / {
