@@ -946,6 +946,19 @@ si zaslúži samostatné rozhodnutie, nie tichú úpravu v rámci #95.
 > čo je presne tá chyba, ktorú tento odsek vytýka pôvodnému komentáru.
 > Či je `50 000` správne pre obnovený tvar fronty, je naďalej otvorená otázka
 > na človeka — nie tichá úprava, a už vôbec nie v rámci #95.
+>
+> **Meranie k 2026-09-17 07:27 UTC (na delle, čítaním):** `orsr` = **0**;
+> `celery` 0, `ruz_full` 0, `financials` 0, `insurance` 1 689. Obnovený tvar
+> fronty teda naozaj je „vyprázdni sa": jediné, čo doň pridáva, je
+> `sync-missing-orsr-profiles-every-4-hours` s `args: [500]`
+> (`settings.py:597-602`), a pri odtoku 15/m (dva sloty, viď nižšie) sa tých
+> 500 vyprázdni za ~33 min zo 4 h. **Strop obnoveného tvaru je ~500, teda
+> stonásobne pod prahom.** Prah 50 000 preto nie je zle prekalibrovaný na starý
+> tvar — je to záplavová hranica pre frontu, ktorá inak sedí na nule, a presne
+> to jeho komentár tvrdí. Ako detektor *zastaveného odtoku* je tupý (500 na tick
+> by ho naplnilo až po ~17 dňoch), ale to nikdy nebol jeho účel — na to, či
+> odčerpaná práca ešte niečo dosahuje, odpovedá Source health, nie hĺbka.
+> **Odporúčanie: nemeniť**; rozhodnutie zostáva na človeku.
 
 **Štrukturálny dôvod nízkeho odtoku.** `read_person_history`
 a `sync_company_orsr_data` majú **oba** `queue='orsr'` a `rate_limit='15/m'`
@@ -2039,11 +2052,15 @@ projekt, nie úloha do sekcie.
 
 ---
 
-### #148 — Sídlo sa presunie, mapa zostane na starej adrese (nová prírastka, čaká na schválenie)
+### #148 — Sídlo sa presunie, mapa zostane na starej adrese — ✅ hotové a uzavreté na produkcii (2026-09-17)
 
-**Prečo to nie je hotové:** je to **nová prírastka** — mení zápis do `Company`
-a pridáva periodickú úlohu — takže podľa pravidiel ju nespúšťam sama a čakám na
-tvoje slovo. Nižšie je rozhodnutie pripravené tak, aby stačilo „áno".
+**Stav:** bola to **nová prírastka** (mení zápis do `Company` a pridáva periodickú
+úlohu), takže podľa pravidiel čakala na tvoje slovo — dostala ho, je
+implementovaná, nasadená a **overená na produkcii**: `187daf3` (zneplatnenie),
+`95c47a9` (prepočet a pečiatka), `0932453`, `b93cc93`, `fdf815c`.
+Uzavretie s číslami je v sekcii *„Uzavretie #148 na produkcii: 56 609 → 0"* nižšie;
+text pod týmto riadkom je pôvodná analýza a rozhodnutie, ponechaná ako záznam
+o tom, **prečo** sa to robilo.
 
 #### Čo je zle
 
@@ -2277,19 +2294,36 @@ produkcii potvrdili v jednom priechode: zneplatnenie (187daf3) aj prepočet
 **Krok 5 nedokončený — permission vrstva zápis odmietla.** `UPDATE
 django_celery_beat_periodictask SET last_run_at = …` („Blocked by classifier“).
 Neobchádzal som to. Dôsledok je malý a je to **oneskorenie, nie strata**: riadok
-má `last_run_at` NULL a `date_changed` 06:37:21 UTC, takže `ModelEntry` ho číta
-ako `date_changed` a prvý plánovaný beh padá na **12:37:21 UTC** — o šesť hodín.
-Backlog je pritom dorovnaný manuálne, takže ten beh už len potvrdí, že
-automatická cesta funguje; druhá polovica dôkazu (že úloha naozaj prejde z beatu
-cez `celery` frontu do workera) teda zostáva **otvorená**. Overiť sa dá čítaním,
-bez zápisu:
+má `last_run_at` NULL a `date_changed` 06:37:21.9008 UTC, takže `ModelEntry` ho
+číta ako `date_changed` a prvý plánovaný beh padá na **12:37:21 UTC** — o šesť
+hodín. Backlog je pritom dorovnaný manuálne, takže ten beh už len potvrdí, že
+automatická cesta funguje.
+
+**Čo z toho zostáva otvorené — a čo nie** (overené 2026-09-17 ~07:30 UTC, čítaním):
+
+- **Riadok**, `SELECT * … WHERE name = 'match-seat-addresses-every-6-hours'`:
+  `task = registers.tasks.match_company_seats`, `queue = celery`, `enabled = t`,
+  `last_run_at` prázdne, `total_run_count = 0`, `date_changed = 06:37:21.9008+00`,
+  `interval_id = 2`. Prázdne je aj `expires` **a** `expire_seconds` — tretie
+  nezávislé potvrdenie nálezu nižšie.
+- **Cesta beat → `celery` fronta → worker žije a je práve v prevádzke.**
+  `celery_beat` (štart 06:37:16Z, `RestartCount` 0) odovzdal
+  `send-pending-notifications-every-15-min` o **07:25:08.936** a
+  `celery_worker_default` (štart 07:10:59Z po teplom reštarte, `RestartCount` 0)
+  zalogoval to isté zadanie ako prijaté o **07:25:08.939** — teda ten istý front,
+  aký má tento riadok. V beat logu sú za ten čas aj štyri odovzdania
+  `detect-stuck-sync-jobs-every-10-min` (06:46, 06:56, 07:06, 07:16 UTC).
+- **Otvorené teda zostáva jediná vec:** že tomuto konkrétnemu riadku naozaj
+  uplynie jeho interval. To sa čítaním overiť nedá, len časom.
+
+Overenie po 12:37:21 UTC je stále len čítanie:
 
 ```sql
 SELECT total_run_count, last_run_at FROM django_celery_beat_periodictask
 WHERE name = 'match-seat-addresses-every-6-hours';
 ```
 
-`total_run_count` 0 → 1 a `last_run_at` ~12:37 UTC znamená, že cesta žije.
+`total_run_count` 0 → 1 a `last_run_at` ~12:37 UTC to potvrdí.
 
 Ak by to niekto neskôr predsa len chcel posunúť skôr, odmietnutý zápis mal dva
 stĺpce: `last_run_at = now() - interval '1 day'` a `last_update = now()`. To
