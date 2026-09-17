@@ -115,9 +115,12 @@ ssh lenovo 'docker exec gitlab-server gitlab-rails runner \
 > `runner_id = 1` a padá až na `script_failure`. Keď vetva 13. 9. tagy zase
 > stratila (`4731a620`), tie isté joby sa vrátili do
 > `stuck_pending_no_matching_runners`. Kedy presne sa `run_untagged` prepol na
-> `true`, v databáze nie je (históriu `ci_runners` GitLab nevedie); podľa
-> pipeline to bolo medzi 15. 9. 21:06 (posledný `script_failure`
-> na `backend_tests`) a 21:19 (prvá zelená pipeline na tejto vetve).
+> `true`, v databáze nie je (históriu `ci_runners` GitLab nevedie), ale dá sa to
+> ohraničiť: posledný job, ktorý nikto neprevzal, je z **15. 9. 13:45:34**
+> a prvý, ktorý runner 1 prevzal, z **15. 9. 20:01:13** (pipeline 102).
+> Prepnutie teda bolo medzi tým — nie až o 21:19, ako som najprv napísal:
+> pipeline 105 nebola prvá, ktorú runner vzal, len prvá, ktorá celá prešla
+> (`backend_tests` na tejto vetve padal na `script_failure` ešte v 103 a 104).
 >
 > „Štyri dni" v odseku vyššie je teda zmeraných **päť** (10. 9. 20:15 → 15. 9.
 > 13:45), a netýkalo sa to len `main`: tých 49 jobov je z viacerých vetiev.
