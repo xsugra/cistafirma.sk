@@ -156,8 +156,9 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         processes, placed or not, and a cleared pin carries no stamp at all:
 
         - `seat_precision` empty, `seat_matched_at` set -- the matcher ran
-          against this address and the register does not place it. 14,5 % of
-          rows, and the circle is the honest answer.
+          against this address and the register does not place it. 12,6 % of
+          rows (56 605 of 449 780, measured 2026-09-17), and the circle is the
+          honest answer.
         - `seat_precision` empty, `seat_matched_at` `None` -- either the row was
           imported after the last run, or `Company.save()` cleared the pin when
           the address moved. The circle is the same, but the sentence under the
@@ -168,6 +169,12 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         `seat_matched_at`, whose stamp is missing but whose pin is not. The
         column was never backfilled, so those rows do read as `pending` when
         they fall back; the matcher stamps them the next time it touches them.
+        That last clause is what the whole distinction rests on, and it was
+        false until 2026-09-17: the matcher skipped a row whose six `seat_*`
+        values already matched what it would write, and an unplaced row's values
+        *always* match, so it never stamped them -- 56 609 rows read `pending`
+        for ever while claiming to mean "we have not asked yet". The command now
+        also writes when the row carries no stamp; see its module docstring.
         """
         if obj.seat_precision in (BUILDING, STREET) and obj.seat_lat is not None:
             return {

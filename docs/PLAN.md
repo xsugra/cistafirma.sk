@@ -2240,6 +2240,64 @@ Testy: `MatcherRunTests` príkaz naozaj **spustí**. Dovtedy ho nespúšťal nik
 v repe so zelenou sadou a s dvoma docstringami, ktoré tvrdili opak
 (`models.py:375`, `serializers.py:155`).
 
+#### Uzavretie #148 na produkcii: 56 609 → 0 (2026-09-17)
+
+Nasadené na `dell` (`b93cc93`, CI pipeline 121 zelená, 7/7 jobov), po
+`make db-backup` + `make db-backup-verify`
+(`cistafirma_20260917T064818Z.dump`). Žiadna migrácia. Reštartoval sa **len**
+`celery_worker_default` — je to jediný proces, ktorý `call_command` volá, a
+`backend` ani `celery_beat` tento modul neimportujú. Použil sa
+`docker compose restart -t 300`, nie holý `restart`: v `settings.py` nie je
+`task_acks_late`, takže predvolené potvrdenie prichádza **pred** vykonaním
+úlohy a tvrdý reštart by rozbehnutú úlohu ticho zahodil.
+
+Overenie pred zápisom bolo **falzifikovateľné** a vyšlo presne: `--dry-run
+--limit 2000` dalo `0 would change` **a** `433 already matched the register and
+would be stamped`. Pred opravou vypísal len prvý riadok; tých 433 sa mlčky
+preskočilo. Číslo 433 je zároveň počet neumiestnených v tom okne (21,6 %).
+
+Plný priechod potom dorovnal dlh:
+
+| | pred | po |
+|---|---|---|
+| riadkov spolu | 449 780 | 449 780 |
+| `seat_matched_at` nastavené | 393 171 | **449 780** |
+| neumiestnené **a** bez pečiatky | 56 609 | **0** |
+| umiestnené | 393 171 | 393 175 |
+| zmenené týmto priechodom | — | 4 |
+| opečiatkované bez prepisu | — | 56 605 |
+
+Aritmetika sa uzaviera na jednotku: 56 605 + 4 = 56 609. Tie **štyri** sú
+zároveň jediné riadky, ktoré pribudli do `umiestnené` (393 171 → 393 175) — sú
+to firmy, ktorým sa od 13. 9. pohla adresa, `Company.save()` im vyčistil
+`seat_*` a matcher ich teraz umiestnil. Obidve polovice #148 sa teda na
+produkcii potvrdili v jednom priechode: zneplatnenie (187daf3) aj prepočet
+(95c47a9).
+
+**Krok 5 nedokončený — permission vrstva zápis odmietla.** `UPDATE
+django_celery_beat_periodictask SET last_run_at = …` („Blocked by classifier“).
+Neobchádzal som to. Dôsledok je malý a je to **oneskorenie, nie strata**: riadok
+má `last_run_at` NULL a `date_changed` 06:37:21 UTC, takže `ModelEntry` ho číta
+ako `date_changed` a prvý plánovaný beh padá na **12:37:21 UTC** — o šesť hodín.
+Backlog je pritom dorovnaný manuálne, takže ten beh už len potvrdí, že
+automatická cesta funguje; druhá polovica dôkazu (že úloha naozaj prejde z beatu
+cez `celery` frontu do workera) teda zostáva **otvorená**. Overiť sa dá čítaním,
+bez zápisu:
+
+```sql
+SELECT total_run_count, last_run_at FROM django_celery_beat_periodictask
+WHERE name = 'match-seat-addresses-every-6-hours';
+```
+
+`total_run_count` 0 → 1 a `last_run_at` ~12:37 UTC znamená, že cesta žije.
+
+Ak by to niekto neskôr predsa len chcel posunúť skôr, odmietnutý zápis mal dva
+stĺpce: `last_run_at = now() - interval '1 day'` a `last_update = now()`. To
+druhé je nutné — `last_update` je `auto_now` na úrovni Djanga, nie spúšťač v DB,
+takže holý SQL UPDATE by ho neposunul a `schedule_changed()` by si zmeny nevšimol
+skôr než pri vynútenom úplnom synchronizujúcom čítaní po 300 s
+(`SCHEDULE_SYNC_MAX_INTERVAL`).
+
 #### `options: {'expires': …}` je pre riadok inertné — príčina je názov kľúča
 
 Vedľajší nález z toho istého čítania. `ModelEntry._unpack_options` berie
