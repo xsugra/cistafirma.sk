@@ -30,6 +30,20 @@ backend:
 
 frontend:
   replicaCount: 2
+  # Adresa clusterového DNS, ktorú nginx potrebuje na `resolver` (pozri
+  # frontend/nginx.conf.template). Zámerne **prázdna**, a to je rozhodnutie,
+  # nie vynechanie: odvodiť sa nedá, pretože každý klaster má inú, a nginx sa
+  # pri preklade za behu na /etc/resolv.conf neobracia.
+  #
+  # Prázdna hodnota zlyhá **hlasito** — nginx odmietne štart s
+  # `no name servers defined`. Nesprávna hodnota zlyhá **ticho** — 502 na
+  # každej požiadavke, a frontend pod sa pritom hlási ako zdravý, lebo jeho
+  # probe je voči backendu zámerne slepý. Preto tu nie je predvolená hodnota.
+  #
+  # Typické hodnoty: kubeadm a kind `10.96.0.10`, k3s `10.43.0.10`.
+  # Over si ju pre svoj klaster:
+  #   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+  backendResolver: ""
   resources:
     requests:
       cpu: 100m

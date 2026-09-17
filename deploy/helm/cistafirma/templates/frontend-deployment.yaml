@@ -23,6 +23,20 @@ spec:
           imagePullPolicy: {{ .Values.global.frontendImage.pullPolicy | default "IfNotPresent" }}
           ports:
             - containerPort: 80
+          env:
+            # The upstream name is derived from `fullname` (see _helpers.tpl), so
+            # whatever this release is called, the frontend asks for the Service
+            # this chart actually creates.
+            - name: BACKEND_UPSTREAM
+              value: {{ include "cistafirma.backendUpstream" . | quote }}
+            # Empty on purpose, and empty is a *loud* failure rather than a
+            # quiet one: nginx never falls back to /etc/resolv.conf for run-time
+            # resolution, so it refuses to start with "no name servers defined".
+            # The address is per-cluster and cannot be derived -- kubeadm and
+            # kind use 10.96.0.10, k3s 10.43.0.10 -- so guessing one here would
+            # trade that message for a 502 on every request. See values.yaml.
+            - name: BACKEND_RESOLVER
+              value: {{ .Values.frontend.backendResolver | quote }}
           readinessProbe:
             httpGet:
               path: /healthz

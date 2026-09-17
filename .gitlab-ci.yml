@@ -92,6 +92,12 @@ helm_runtime_validate:
   script:
     - python3 scripts/k8s/validate_helm_runtime.py deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
     - python3 scripts/k8s/validate_helm_runtime.py deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+    # A kontrola, ktorá sa nikdy nemusela nič odmietnuť, je len tvrdenie.
+    # `--selftest` rozbije manifest v pamäti tak, ako by musel byť rozbitý, aby
+    # na kontrole záležalo, a vyžaduje, aby ho kontrola odmietla. Bez tohto
+    # kroku by vypnutá kontrola (napr. predčasný `return`) prechádzala zelená.
+    - python3 scripts/k8s/validate_helm_runtime.py --selftest deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+    - python3 scripts/k8s/validate_helm_runtime.py --selftest deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
 
 frontend_tests:
   extends: .frontend_ci

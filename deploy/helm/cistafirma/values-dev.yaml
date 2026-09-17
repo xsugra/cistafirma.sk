@@ -32,6 +32,11 @@ backend:
 
 frontend:
   replicaCount: 1
+  # kind je kubeadm pod kapotou, takže jeho CoreDNS sedí na zvyčajnej adrese.
+  # Toto je jediná hodnota v tomto súbore, ktorá sa nedá odvodiť z ničoho
+  # v repozitári — je vlastnosť klastra, nie chartu. Overená pre lokálny kind:
+  #   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+  backendResolver: "10.96.0.10"
   resources:
     requests:
       cpu: 50m

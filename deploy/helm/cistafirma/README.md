@@ -25,6 +25,36 @@ Mal by obsahovať minimálne:
 
 Celery pody používajú backend image a očakávajú rovnakú app konfiguráciu plus Redis broker/backend cez premenné ako `REDIS_URL`, `CELERY_BROKER_URL` alebo `CELERY_RESULT_BACKEND`.
 
+## `frontend.backendResolver` — jediná hodnota, ktorá sa nedá odvodiť
+
+Frontend má nginx, ktorý prekladá meno backendu **za behu** (`resolve` +
+`resolver` v `frontend/nginx.conf.template`). To je oprava výpadku z 17. 9. 2026,
+keď si nginx preložil adresu raz pri štarte a po rekreovaní backendu na ňu
+ukazoval ešte 3 h 43 min.
+
+Meno backendu si chart počíta sám (`cistafirma.backendUpstream` z `fullname`),
+takže sa nemôže rozísť s Service, ktorý naozaj vytvára. **Adresu resolvera ale
+odvodiť nevie** — je vlastnosť klastra, nie chartu:
+
+| klaster | adresa |
+|---|---|
+| kubeadm, kind | `10.96.0.10` |
+| k3s | `10.43.0.10` |
+
+Over si ju pre svoj klaster:
+
+```bash
+kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+```
+
+`values-dev.yaml` ju má vyplnenú (lokálny kind). `values-prod.yaml` ju **nemá**,
+a to je zámer: neexistuje klaster, ktorému by patrila. Kým sa nedoplní, frontend
+pod do produkcie nenabehne — nginx odmietne štart s `no name servers defined`.
+To je hlasité zlyhanie, ktoré menuje samo seba; vymyslená adresa by vracala 502
+na každej požiadavke a pod by sa pritom hlásil ako zdravý, lebo jeho probe je
+voči backendu zámerne slepý. Rozdiel medzi tými dvoma je celý zmysel tohto
+nastavenia.
+
 ## Inštalačné príklady
 
 ### Dev

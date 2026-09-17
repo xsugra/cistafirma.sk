@@ -2912,8 +2912,8 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
 
 ## 7. Prevádzkové nálezy (mimo kódu)
 
-- ⚠️ **`deploy/k8s` a `deploy/helm` nenastavujú `BACKEND_RESOLVER`, takže nový
-  frontend image tam nenabehne.** Image ju zámerne deklaruje **prázdnu** (nie
+- ✅ **`deploy/k8s` a `deploy/helm` nenastavovali `BACKEND_RESOLVER`, takže nový
+  frontend image tam nenabehol — opravené 2026-09-17.** Image ju zámerne deklaruje **prázdnu** (nie
   vynechanú), aby zlyhanie menovalo samo seba: envsubst vyrenderuje
   `resolver  valid=10s ipv6=off;` a nginx odmietne štart s
   `no name servers defined`. Overené na zahodenom kontajneri 2026-09-17.
@@ -2941,6 +2941,48 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   tento výpadok odstránil, len prenesený na Helm vetvu. Doplniť treba **oboje**
   naraz: `BACKEND_RESOLVER` *aj* `BACKEND_UPSTREAM` s menom, ktoré chart naozaj
   vytvára (alebo chart nech ho nastaví z `fullname` sám).
+
+  **Rozhodnuté a spravené 2026-09-17 — obe polovice, každá iným spôsobom.**
+  Meno backendu sa **už neopisuje**: pribudol helper
+  `cistafirma.backendUpstream`, ktorý ho počíta z toho istého `fullname`, akým
+  sa menuje backend Service chartu. Dve mená, ktoré sa musia stretnúť, sa teda
+  odvádzajú jedno z druhého a nemajú ako sa rozísť. Resolver **doplnený ako
+  hodnota s vedomým rozhodnutím**, nie odhadom: `values-dev.yaml` má
+  `10.96.0.10` (lokálny kind je kubeadm, takže CoreDNS sedí na zvyčajnej
+  adrese), `values-prod.yaml` ju **nemá** — neexistuje klaster, ktorému by
+  patrila, a vymyslená adresa by zlyhala ticho (502 na každej požiadavke, pod
+  zdravý) namiesto hlasito. Kým sa nedoplní, prod frontend pod nenabehne;
+  to je správne.
+
+  Overené renderom oboch sád (`helm v4.1.3`, chart lint čistý):
+
+  | | `BACKEND_UPSTREAM` | `BACKEND_RESOLVER` |
+  |---|---|---|
+  | `cistafirma-dev` | `cistafirma-dev-cistafirma-backend:8000` | `10.96.0.10` |
+  | `cistafirma-prod` | `cistafirma-prod-cistafirma-backend:8000` | `""` (zámerne) |
+
+  A hlavne: **dvojica mien je odteraz kontrolovaná v CI**, nie len v komentári.
+  `scripts/k8s/validate_helm_runtime.py` (job `helm_runtime_validate`) porovná
+  `BACKEND_UPSTREAM` frontendu proti Service menám v tom istom renderi. Overené
+  v stave, ktorý má odmietnuť: s menom z obrazu (`cistafirma-backend:8000`,
+  presne tá pôvodná drift) padá s vypísaním, ktoré Service v renderi naozaj sú;
+  s vynechaným `BACKEND_UPSTREAM` padá tiež. To je tá kontrola, ktorá v tomto
+  náleze chýbala — „tiché 502" sa už nedostane do klastra bez červeného CI.
+
+  A aby to nebola len kontrola, ktorú nikto nevidel odmietnuť, skript má
+  `--selftest`: rozbije manifest **v pamäti** (posunuté meno, chýbajúca
+  premenná) a vyžaduje, aby ho kontrola odmietla. CI ho spúšťa na oboch
+  renderoch. Overené aj to, že nie je prázdny: s vypnutou kontrolou
+  (predčasný `return` v kópii skriptu) `--selftest` padne, kým bežný beh tej
+  istej kópie prejde zelený — čiže sám sebe nič nezaručuje.
+
+  `deploy/k8s` (DEPRECATED, ale menovaná v tomto náleze) má to isté:
+  `BACKEND_UPSTREAM` uvedený aj napriek tomu, že sa rovná predvolenej hodnote
+  obrazu — je to závislosť, ktorú nič iné nevidí — a `BACKEND_RESOLVER` cez
+  placeholder `__BACKEND_RESOLVER__`, ktorý `scripts/k8s/deploy.sh` **vyžaduje**:
+  na chýbajúcu hodnotu padá pred `kubectl apply` a vypíše príkaz, ktorým sa
+  adresa zistí. Nahradenie overené na kópii súboru, po sed-e nezostal ani jeden
+  placeholder.
 - ⚠️ **Nič v zostave nezachytí výpadok API — tých 3 h 43 min bolo pre všetky
   kontroly neviditeľných.** `/healthz` je zámerne slepé voči backendu, a to je
   správne: reštart nginx backend nevráti a probe, ktorý by tu zlyhal, by počas
