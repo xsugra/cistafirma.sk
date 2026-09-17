@@ -1,5 +1,8 @@
 global:
-  # Lokálny registry beží na kind sieti (172.18.0.2:5000, pozri scripts/k8s/local_registry.sh).
+  # Lokálny registry beží na kind sieti. Adresa nižšie (172.18.0.2:5000) je
+  # to, čo práve drží kontajner `kind-registry` — ale prideľuje ju Docker, takže
+  # po rekreaácii kontajnera alebo siete `kind` sa zmení. Aktuálnu vypíše
+  # scripts/k8s/local_registry.sh; keď sa zmení, zmeň ju tu aj tam.
   # Používame IP kvôli tomu, že DD k8s registry-mirror môže byť rozbitý a IP obchádza DNS.
   backendImage:
     repository: 172.18.0.2:5000/cistafirma-backend

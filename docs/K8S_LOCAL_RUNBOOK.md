@@ -20,7 +20,32 @@ cistafirma namespace
 └── postgres-backup (CronJob 0 3 * * *, 5 Gi PVC)
 ```
 
-Image-y sa pullujú z lokálneho registra `172.18.0.10:5000` (kontajner `kind-registry` na `kind` sieti).
+Image-y sa pullujú z lokálneho registra (kontajner `kind-registry` na `kind`
+sieti). Jeho adresa **nie je konštanta** — prideľuje ju Docker pri vytvorení
+kontajnera, takže po jeho rekreaácii alebo po znovuvytvorení siete `kind` sa
+zmení. Aktuálnu vypíše `scripts/k8s/local_registry.sh` a musí sedieť s
+`global.backendImage.repository` / `frontendImage.repository` v
+`deploy/helm/cistafirma/values-dev.yaml` (dnes `172.18.0.2:5000`).
+
+Táto hodnota tu bola uvedená ako `172.18.0.10:5000`, čo **nebola adresa
+registra** — na `kind` sieti patrí kontajneru `kind-cloud-provider`. Presne to
+je dôvod, prečo tu odteraz stojí postup („prečítaj ju zo skriptu"), a nie
+číslo: druhá kópia sa rozíde ticho a prejaví sa až `ImagePullBackOff` v podoch.
+
+Host `localhost:5001` v príkazoch nižšie a adresa registra vo values nie sú
+rozpor. `-p 127.0.0.1:5001:5000` sprístupňuje ten istý register na hoste
+(vidí ho `docker push`), kým kontajnery v klastri ho vidia na svojej sieti pod
+jeho priradenou IP. Register v mene repozitára host neuchováva, takže
+`localhost:5001/cistafirma-backend:local` a `172.18.0.2:5000/cistafirma-backend:local`
+je ten istý manifest.
+
+> **Stav 2026-09-17, prečítaj pred `kubectl rollout restart`.** Pody v namespace
+> `cistafirma` dnes bežia z obrazov `localhost:5050/web/cistafirma/*` — z GitLab
+> registra na Macu, ktorý už neexistuje. Držia sa zakešované na uzloch, ale nový
+> pod by potreboval pull. Postup s lokálnym registrom nižšie je teda cesta pre
+> **nové** nasadenie, nie opis toho, čo v klastri práve beží. Prečo sa tie obrazy
+> nedajú jednoducho zmazať (držia rollback cieľ pre `scripts/k8s/rollback.sh`)
+> a čo je s klastrom otvorené, je v `docs/PLAN.md` §7.
 
 ## Prerekvizity
 
