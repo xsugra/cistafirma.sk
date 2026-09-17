@@ -10,7 +10,8 @@ interface FinancialChartProps {
     data: Financials[];
 }
 
-const formatCurrency = (value: number) => {
+const formatCurrency = (value: number | null) => {
+    if (value == null) return '—';
     if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M €`;
     if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(0)}k €`;
     return `${value} €`;
@@ -69,7 +70,14 @@ const CustomTooltip = ({ active, payload, label, colors }: any) => {
             </p>
             {entries.map((entry: any) => {
                 const nameMap: Record<string, string> = {
-                    revenue: 'Tržby', profit: 'Zisk', incomeTax: 'Daň z príjmu', incomeTaxPaid: 'Splatná daň',
+                    revenue: 'Tržby',
+                    // The series is `profit`, which is the operating result --
+                    // it was labelled "Zisk" while the field held the after-tax
+                    // row for the loss-makers, so the tooltip named a figure the
+                    // bar beside it did not always carry.
+                    profit: 'VH z hosp. činnosti',
+                    incomeTax: 'Daň z príjmu',
+                    incomeTaxPaid: 'Splatná daň',
                 };
                 const colorVal = entry.dataKey === 'profit'
                     ? (entry.value >= 0 ? colors.profitPositive : colors.profitNegative)
@@ -97,21 +105,30 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
 
     const latestYear = sorted.at(-1);
     const prevYear = sorted.at(-2);
-    const revenueChange = latestYear && prevYear && prevYear.revenue !== 0
+    // A change needs both years to have filed the line. Letting an absent figure
+    // through as 0 prints a confident "−100 %" for a year whose statement was
+    // simply read as carrying no revenue.
+    const revenueChange = latestYear?.revenue != null && prevYear?.revenue != null && prevYear.revenue !== 0
         ? ((latestYear.revenue - prevYear.revenue) / Math.abs(prevYear.revenue)) * 100
         : null;
-    const profitChange = latestYear && prevYear && prevYear.profit !== 0
+    const profitChange = latestYear?.profit != null && prevYear?.profit != null && prevYear.profit !== 0
         ? ((latestYear.profit - prevYear.profit) / Math.abs(prevYear.profit)) * 100
         : null;
-    const lastProfit = latestYear?.profit ?? 0;
+    // The colour of the profit line follows the most recent year that actually
+    // filed one: painting the whole history from a year that reported nothing
+    // would call a loss a gain.
+    const lastFiledProfit = [...sorted].reverse().find(d => d.profit != null)?.profit ?? null;
+    const profitIsPositive = lastFiledProfit == null || lastFiledProfit >= 0;
 
     const showRevenue = view === 'both' || view === 'revenue';
     const showProfit = view === 'both' || view === 'profit';
     const showTax = view === 'tax';
 
-    const hasTaxData = sorted.some(d => d.incomeTax !== 0 || d.incomeTaxPaid !== 0);
+    // `!== 0` alone would be true for every unfiled tax line, so the tab would
+    // offer a chart of two flat gaps.
+    const hasTaxData = sorted.some(d => (d.incomeTax ?? 0) !== 0 || (d.incomeTaxPaid ?? 0) !== 0);
 
-    const profitAreaColor = lastProfit >= 0 ? colors.profitArea : colors.profitAreaNeg;
+    const profitAreaColor = profitIsPositive ? colors.profitArea : colors.profitAreaNeg;
 
     return (
         <div className="space-y-5">
@@ -142,13 +159,15 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
                             <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border"
                                  style={{ borderColor: colors.cardBorder, backgroundColor: colors.cardBg }}>
                                 <span className="w-2.5 h-2.5 rounded-full"
-                                      style={{ backgroundColor: lastProfit >= 0 ? colors.profitPositive : colors.profitNegative }}></span>
+                                      style={{ backgroundColor: profitIsPositive ? colors.profitPositive : colors.profitNegative }}></span>
                                 <div>
                                     <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                        Zisk {latestYear.year}
+                                        VH z hosp. činnosti {latestYear.year}
                                     </p>
                                     <div className="flex items-baseline gap-1.5">
-                                        <span className={`text-base font-bold ${lastProfit >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
+                                        <span className={`text-base font-bold ${latestYear.profit == null
+                                            ? 'text-gray-400 dark:text-gray-500'
+                                            : profitIsPositive ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
                                             {formatCurrency(latestYear.profit)}
                                         </span>
                                         {profitChange !== null && (
@@ -169,7 +188,7 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
                     {([
                         { id: 'both', label: 'Všetko' },
                         { id: 'revenue', label: 'Tržby' },
-                        { id: 'profit', label: 'Zisk' },
+                        { id: 'profit', label: 'VH z hosp. č.' },
                         ...(hasTaxData ? [{ id: 'tax' as const, label: 'Daň' }] : []),
                     ] as const).map(v => (
                         <button
@@ -189,7 +208,24 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
 
             {/* Chart */}
             <div className="w-full h-[320px] sm:h-[380px]">
-                <ResponsiveContainer width="100%" height="100%">
+                {/* `initialDimension` is what the container measures before its
+                    own ResizeObserver has answered, and its default is
+                    `{width: -1, height: -1}` -- which makes Recharts log "The
+                    width(-1) and height(-1) of chart should be greater than 0"
+                    once per chart. That warning is not dev-only: Recharts 3
+                    ships `isDev = true` hardcoded, so it reaches a production
+                    console. A positive height alone satisfies it.
+
+                    The width stays 0 because the real one comes from `w-full`
+                    and no honest number exists before measurement; with a
+                    non-positive width the chart draws nothing on the first
+                    frame, which is invisible, where a guessed width would paint
+                    once at the wrong size and then jump. */}
+                <ResponsiveContainer
+                    width="100%"
+                    height="100%"
+                    initialDimension={{ width: 0, height: 320 }}
+                >
                     <ComposedChart data={sorted} margin={{ top: 20, right: 12, left: 0, bottom: 4 }}>
                         <defs>
                             <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
@@ -242,11 +278,11 @@ export const FinancialChart: React.FC<FinancialChartProps> = ({ data }) => {
                                 type="monotone"
                                 dataKey="profit"
                                 fill="url(#profitAreaGrad)"
-                                stroke={lastProfit >= 0 ? colors.profitPositive : colors.profitNegative}
+                                stroke={profitIsPositive ? colors.profitPositive : colors.profitNegative}
                                 strokeWidth={2.5}
                                 dot={{ r: 4, strokeWidth: 2, fill: isDark ? '#0f172a' : '#ffffff' }}
                                 activeDot={{ r: 6, strokeWidth: 2 }}
-                                name="Zisk"
+                                name="VH z hosp. činnosti"
                             />
                         )}
 

@@ -1,11 +1,53 @@
 #       - "${WEB_PORT:-8000}:8000"  # Expose web port for direct access if needed, nginx will use this
 # Configuration is loaded from root .env file
 # Copy from .env.default: cp .env.default .env
+
+# Docker json-file log rotation for every long-running service. Changing
+# `logging:` recreates containers -> take a fresh verified DB backup before
+# `docker compose up -d` (see Makefile db-backup / db-backup-verify).
+x-logging: &logging-default
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+# Shared Celery template for every worker + beat. Lives at the TOP level so the
+# `x-` key is an extension field = anchor ONLY, not a runnable service. (An `x-`
+# key *inside* `services:` is an ordinary service name — before this fix that
+# silently spawned a stray duplicate gunicorn container,
+# cistafirma-x-celery-worker-1.)
+x-celery-worker: &celery-worker
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  # Log rotation inherited by every *celery-worker service + beat.
+  logging: *logging-default
+  env_file:
+    - ./.env
+  environment:
+    - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+    - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+  volumes:
+    - ./backend:/app
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  # The backend image carries a gunicorn HEALTHCHECK; workers/beat don't run
+  # gunicorn, so disable it here (inherited by every *celery-worker + beat).
+  healthcheck:
+    disable: true
+
 services:
   db:
     image: postgres:16-alpine
     container_name: cistafirma_db
     restart: unless-stopped
+    logging: *logging-default
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cistafirma}
       POSTGRES_USER: ${POSTGRES_USER:-cistafirma}
@@ -13,7 +55,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"  # localhost only; DB never exposed to LAN
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cistafirma}"]
       interval: 10s
@@ -24,12 +66,21 @@ services:
     image: redis:7-alpine
     container_name: cistafirma_redis
     restart: unless-stopped
+    logging: *logging-default
+    # Auth is required (defence in depth even though the port is localhost-only).
+    # REDIS_PASSWORD must be URL-safe (A-Za-z0-9 _ - .); percent-encode specials.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-cistafirma_redis_secret}"]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-cistafirma_redis_secret}
+      - REDISCLI_AUTH=${REDIS_PASSWORD:-cistafirma_redis_secret}
     ports:
-      - "${REDIS_PORT:-6380}:6379"  # Use 6380 externally to avoid conflict with local Redis
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"  # localhost only; broker never exposed to LAN
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # redis-cli in redis:7 reads REDISCLI_AUTH from the container env, so the
+      # probe stays secret-free.
+      test: ["CMD", "redis-cli", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -40,15 +91,28 @@ services:
       dockerfile: Dockerfile
     container_name: cistafirma_backend
     restart: unless-stopped
+    logging: *logging-default
     env_file:
       - ./.env  # Load from root .env (centralized config)
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      # prometheus_client multiprocess mode. With >1 worker each process would
+      # otherwise export its own counters and a scrape would alternate between
+      # them, breaking rate(). Set on the backend only: Celery containers have
+      # no scrape target and must not share this directory. Wiped at gunicorn
+      # startup by backend/gunicorn.conf.py.
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus-multiproc
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      # Loopback only, like db and redis. Nothing in the stack needs this on the
+      # LAN: the frontend container reaches the backend over the compose network
+      # as `backend:8000`. While it was published on 0.0.0.0 the whole API, the
+      # Django admin and /metrics (whose guard trusts any private address) were
+      # reachable from every machine on the network. Override BIND_HOST only if
+      # you deliberately want that -- this host holds production data.
+      - "${BIND_HOST:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
       - static_volume:/app/staticfiles
@@ -57,10 +121,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Migrations are NOT auto-run here anymore — apply them via the one-shot
+    # `migrate` service (make docker-migrate). collectstatic stays (dev uses a
+    # bind mount, so this is cheap); celery_beat waits for migrations via
+    # `migrate --check`.
     command: >
-      sh -c "python manage.py migrate --settings=backend.settings &&
-             python manage.py collectstatic --noinput --settings=backend.settings &&
-             gunicorn --bind 0.0.0.0:8000 --workers ${BACKEND_WORKERS:-2} --threads ${BACKEND_THREADS:-4} --timeout 120 --worker-class gthread --worker-tmp-dir /dev/shm backend.wsgi:application"
+      sh -c "python manage.py collectstatic --noinput --settings=backend.settings &&
+             gunicorn --config /app/gunicorn.conf.py --bind 0.0.0.0:8000 --workers ${BACKEND_WORKERS:-2} --threads ${BACKEND_THREADS:-4} --timeout 120 --worker-class gthread --worker-tmp-dir /dev/shm backend.wsgi:application"
 
   frontend:
     build:
@@ -68,6 +135,7 @@ services:
       dockerfile: Dockerfile
     container_name: cistafirma_frontend
     restart: unless-stopped
+    logging: *logging-default
     env_file:
       - ./.env
     environment:
@@ -75,7 +143,11 @@ services:
       - BACKEND_PORT=8000
       - FRONTEND_PORT=${FRONTEND_PORT:-5173}
     ports:
-      - "${FRONTEND_PORT:-5173}:5173"
+      # Loopback only (see the backend service). The Vite dev server proxies
+      # `/api/` to the backend, so while this was on 0.0.0.0 a LAN client could
+      # reach the entire API through the proxy even with the backend port bound
+      # to loopback -- both ports have to be bound for the exposure to close.
+      - "${BIND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5173}:5173"
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
@@ -83,26 +155,6 @@ services:
       backend:
         condition: service_started
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
-
-  x-celery-worker: &celery-worker
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    env_file:
-      - ./.env
-    environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    volumes:
-      - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   celery_worker_ruz:
     <<: *celery-worker
@@ -147,8 +199,80 @@ services:
              echo 'Migrations ready, starting beat...' &&
              celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
 
+  # One-shot migration runner — NOT part of plain `docker compose up`
+  # (profile keeps it out). Run via `make docker-migrate` (docker compose run).
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles: ["migrate"]
+    restart: "no"
+    env_file:
+      - ./.env  # Load from root .env (centralized config)
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["python", "manage.py", "migrate", "--settings=backend.settings"]
+
+  # ---------------------------------------------------------------------------
+  # Opt-in observability stack. Both services sit in the `monitoring` profile,
+  # so a plain `docker compose up` stays completely inert and neither container
+  # is created. Start them explicitly with:
+  #   docker compose --profile monitoring up -d prometheus grafana
+  # Both UIs bind to loopback only — nothing here is reachable from the LAN.
+  # Neither service declares `networks:`, matching every other service in this
+  # file: they join the compose default network, so `backend` resolves via
+  # Docker DNS.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: cistafirma_prometheus
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./deploy/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - cistafirma_prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"  # loopback only; UI never exposed to LAN
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    container_name: cistafirma_grafana
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    environment:
+      # Sane non-secret default; override via GRAFANA_ADMIN_PASSWORD in .env.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-cistafirma}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - cistafirma_grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"  # loopback only; UI never exposed to LAN
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   redis_data:
   static_volume:
   frontend_node_modules:
+  cistafirma_prometheus_data:
+  cistafirma_grafana_data:

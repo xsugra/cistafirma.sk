@@ -4,7 +4,6 @@ from registers.models import (
     AuditLog,
     CompanySyncStatus,
     SyncJob,
-    SyncJobItem,
 )
 
 
@@ -43,25 +42,6 @@ class SyncJobSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class SyncJobItemSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SyncJobItem
-        fields = [
-            "id",
-            "job",
-            "company",
-            "item_key",
-            "status",
-            "attempts",
-            "error_message",
-            "error_type",
-            "duration_ms",
-            "created_at",
-            "completed_at",
-        ]
-        read_only_fields = fields
-
-
 class SyncJobTriggerSerializer(serializers.Serializer):
     """Body of POST /api/admin/sync/jobs/."""
 
@@ -86,6 +66,7 @@ class CompanySyncStatusSerializer(serializers.ModelSerializer):
             "last_succeeded_at",
             "last_error",
             "last_error_type",
+            "last_detail",
             "consecutive_failures",
             "next_retry_at",
             "is_blocked",
@@ -99,6 +80,7 @@ class CompanySyncStatusSerializer(serializers.ModelSerializer):
             "last_succeeded_at",
             "last_error",
             "last_error_type",
+            "last_detail",
             "consecutive_failures",
             "next_retry_at",
             "updated_at",

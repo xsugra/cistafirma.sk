@@ -6,33 +6,174 @@ Uses weasyprint to render an HTML template into a PDF document.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from datetime import datetime
 from io import BytesIO
 from typing import Any
 
+from django.core.cache import cache
+from django.core.exceptions import ObjectDoesNotExist
 from django.template.loader import render_to_string
 from django.utils import timezone
 
 from ..models import Company, SectorBenchmark
-from .financial_analysis import FinancialAnalysisService
+from .financial_analysis import (
+    FinancialAnalysisService,
+    _amount,
+    _ratio_present,
+    _sum_present,
+)
 from .nace import get_nace_info
+from .risk_score import compute_risk_score
 
 logger = logging.getLogger(__name__)
 
-# Ratio display configuration for PDF
+REPORT_CACHE_TIMEOUT = 300
+REPORT_CACHE_LOCK_TIMEOUT = 120
+REPORT_CACHE_POLL_INTERVAL = 0.1
+
+# Ratio display configuration for PDF.
+#
+# `key` is the name `FinancialAnalysisService.to_dict` publishes -- camelCase,
+# from `RATIO_WIRE_KEYS`. It used to be the snake_case attribute name, and
+# because a dict lookup for an absent key returns `None` and `if val is not
+# None` skips the row, this table quietly rendered three of its ten rows: both
+# liquidity pairs, both activity rows and both debt rows were dropped for every
+# company. `roa`, `roe` and `ros` are spelled the same in both vocabularies,
+# which is exactly why nobody noticed.
+#: The three profitability rows divide `profit`, which is "VH z hospodárskej
+#: činnosti" -- the operating result, before tax -- and not the net result the
+#: labels alone would be read as. `RATIO_BASIS_NOTE` says so once under the
+#: table rather than lengthening three labels.
 RATIO_ROWS = [
     {'key': 'roa', 'label': 'ROA (Rentabilita aktív)', 'unit': '%'},
     {'key': 'roe', 'label': 'ROE (Rentabilita vlastného kapitálu)', 'unit': '%'},
     {'key': 'ros', 'label': 'ROS (Rentabilita tržieb)', 'unit': '%'},
-    {'key': 'current_ratio', 'label': 'L3 — Bežná likvidita', 'unit': '×'},
-    {'key': 'quick_ratio', 'label': 'L2 — Pohotová likvidita', 'unit': '×'},
-    {'key': 'cash_ratio', 'label': 'L1 — Okamžitá likvidita', 'unit': '×'},
-    {'key': 'asset_turnover', 'label': 'Obrat aktív', 'unit': '×'},
-    {'key': 'receivables_collection', 'label': 'Doba inkasa pohľadávok', 'unit': 'dní'},
-    {'key': 'debt_to_equity', 'label': 'Zadĺženosť (D/E)', 'unit': '×'},
-    {'key': 'self_financing_ratio', 'label': 'Miera samofinancovania', 'unit': '%'},
+    {'key': 'currentRatio', 'label': 'L3 — Bežná likvidita', 'unit': '×'},
+    {'key': 'quickRatio', 'label': 'L2 — Pohotová likvidita', 'unit': '×'},
+    {'key': 'cashRatio', 'label': 'L1 — Okamžitá likvidita', 'unit': '×'},
+    {'key': 'assetTurnover', 'label': 'Obrat aktív', 'unit': '×'},
+    {'key': 'receivablesCollection', 'label': 'Doba inkasa pohľadávok', 'unit': 'dní'},
+    {'key': 'debtToEquity', 'label': 'Zadĺženosť (D/E)', 'unit': '×'},
+    {'key': 'selfFinancingRatio', 'label': 'Miera samofinancovania', 'unit': '%'},
 ]
+
+#: Rendered under the ratio table, and the same sentence the company page shows
+#: above its own. A bare "ROA" reads as the net return; this one is the
+#: operating result, and ROS divides it by the operating revenue rather than
+#: the total -- the same activity scope on both sides of the fraction.
+RATIO_BASIS_NOTE = (
+    'Ukazovatele rentability sú počítané z výsledku hospodárenia z hospodárskej '
+    'činnosti (pred zdanením); ROS ho delí výnosmi z hospodárskej činnosti.'
+)
+
+
+def _report_cache_key(company: Company) -> str:
+    """Return an opaque, data-versioned cache key for a company report."""
+    financial_versions = sorted(
+        (
+            result.pk,
+            result.updated_at.isoformat() if result.updated_at else '',
+        )
+        for result in company.financial_results.all()
+    )
+    try:
+        profile = company.orsr_profile
+    except ObjectDoesNotExist:
+        profile = None
+
+    fingerprint = repr(
+        (
+            company.pk,
+            company.datum_poslednej_upravy.isoformat()
+            if company.datum_poslednej_upravy
+            else '',
+            financial_versions,
+            profile.pk if profile else None,
+            profile.last_synced_at.isoformat()
+            if profile and profile.last_synced_at
+            else '',
+        )
+    )
+    digest = hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()
+    return f'company-report:v1:{digest}'
+
+
+def _get_cached_report(cache_key: str) -> bytes | None:
+    """Return a valid cached PDF, or None for a miss."""
+    cached_report = cache.get(cache_key)
+    if cached_report is None:
+        return None
+    if isinstance(cached_report, bytes):
+        return cached_report
+
+    logger.warning('Ignoring a malformed cached company report.')
+    return None
+
+
+def get_company_report(company: Company) -> bytes:
+    """Return a cached PDF report or generate one under a cache-miss lock.
+
+    ``cache.add()`` is atomic for Django's Redis cache backend, so only one
+    Gunicorn worker normally renders a report for the same cache key. Cache
+    failures deliberately fall back to direct generation; they are logged, but
+    never turn an otherwise successful report into a cache error.
+    """
+    cache_key = _report_cache_key(company)
+    lock_key = f'{cache_key}:lock'
+
+    try:
+        cached_report = _get_cached_report(cache_key)
+        if cached_report is not None:
+            return cached_report
+        has_generation_lock = cache.add(
+            lock_key,
+            True,
+            timeout=REPORT_CACHE_LOCK_TIMEOUT,
+        )
+    except Exception:
+        logger.warning(
+            'Company report cache is unavailable; generating report without caching.',
+            exc_info=True,
+        )
+        return generate_company_report(company)
+
+    if has_generation_lock:
+        report = generate_company_report(company)
+        try:
+            cache.set(cache_key, report, timeout=REPORT_CACHE_TIMEOUT)
+        except Exception:
+            logger.warning(
+                'Company report was generated but could not be cached.',
+                exc_info=True,
+            )
+        return report
+
+    # Another worker owns the atomic Redis lock. Wait for its result instead of
+    # rendering a duplicate PDF. The lock expiry bounds this wait if that worker
+    # exits before filling the cache.
+    deadline = time.monotonic() + REPORT_CACHE_LOCK_TIMEOUT
+    while time.monotonic() < deadline:
+        time.sleep(REPORT_CACHE_POLL_INTERVAL)
+        try:
+            cached_report = _get_cached_report(cache_key)
+        except Exception:
+            logger.warning(
+                'Company report cache became unavailable while waiting for a report.',
+                exc_info=True,
+            )
+            return generate_company_report(company)
+        if cached_report is not None:
+            return cached_report
+
+    # The lock has expired without a result. Generate the response so a failed
+    # worker cannot make the report endpoint unavailable indefinitely.
+    logger.warning(
+        'Timed out waiting for a cached company report; generating it directly.'
+    )
+    return generate_company_report(company)
 
 
 def _fmt(value: float | None, unit: str) -> str:
@@ -43,6 +184,11 @@ def _fmt(value: float | None, unit: str) -> str:
         return f'{value:.1f} %'
     if unit == 'dní':
         return f'{value:.0f}'
+    # A euro row in the benchmark table is an amount, not a ratio, and without
+    # this branch it printed a bare number -- `1 234.00` beside a sector median
+    # that carries its unit. `_fmt_eur` is the one place that spells an amount.
+    if unit == '€':
+        return _fmt_eur(value)
     return f'{value:.2f}'
 
 
@@ -50,7 +196,11 @@ def _fmt_eur(value: float | None) -> str:
     """Format a euro amount with thousands separator."""
     if value is None:
         return '—'
-    return f'{value:,.0f}'
+    try:
+        from core.formatting import format_currency_eur
+        return format_currency_eur(value)
+    except Exception:
+        return f'{value:,.0f}'
 
 
 def generate_company_report(company: Company) -> bytes:
@@ -84,31 +234,14 @@ def generate_company_report(company: Company) -> bytes:
         debts.append({'source': 'Finančná správa', 'amount_eur': float(company.tax_debt)})
         total_debt += float(company.tax_debt)
 
-    # Risk score (same formula as frontend)
-    if total_debt > 0:
-        risk_score = max(5, 70 - min(total_debt / 5000, 50))
-        risk_summary = 'Spoločnosť vykazuje riziko z dôvodu existujúcich nedoplatkov.'
-    else:
-        risk_score = 100
-        risk_summary = 'Spoločnosť vyzerá byť v dobrom finančnom zdraví.'
-
-    # Enhance with analysis data
-    if analysis and analysis.get('latest'):
-        zs = analysis['latest'].get('zScore')
-        roa = analysis['latest']['ratios'].get('roa')
-        if zs is not None:
-            if zs < 1.23:
-                risk_score = max(5, risk_score - 20)
-                risk_summary = 'Vysoké riziko — Altman Z-score v pásme bankrotu.'
-            elif zs < 2.90:
-                risk_score = max(5, risk_score - 10)
-                if total_debt == 0:
-                    risk_summary = 'Zvýšená opatrnosť — Z-score v šedej zóne.'
-            else:
-                if total_debt == 0:
-                    risk_summary = 'Spoločnosť je finančne zdravá (Z-score v bezpečnej zóne).'
-        if roa is not None and roa < 0:
-            risk_score = max(5, risk_score - 10)
+    # Risk score. This carried a comment saying "same formula as frontend",
+    # which was true of the line below and false of every adjustment under it:
+    # the ladder was spelled here, in `WatchlistSerializer` and in
+    # `frontend/api.ts`, and the three disagreed. It comes from one place now,
+    # and `risk_score` is deliberately not rounded here -- it already is.
+    risk = compute_risk_score(company, analysis)
+    risk_score = risk['score']
+    risk_summary = risk['summary']
 
     # NACE info
     nace_info = get_nace_info(company.sk_NACE)
@@ -152,18 +285,32 @@ def generate_company_report(company: Company) -> bytes:
                 ratio_rows.append({
                     'label': row_def['label'],
                     'display': _fmt(val, row_def['unit']),
-                    'interpretation': interp.get(key, 'bad'),
+                    'interpretation': interp.get(key, 'unknown'),
                 })
 
-    # Financial history rows
+    # Financial history rows. Every amount goes through `_amount`, which is None
+    # for a line the filing did not carry -- `float(x or 0)` printed a confident
+    # "0 €" for a line nobody filed, and it did so on the document a reader is
+    # most likely to take at face value.
     financial_history = []
     for fr in financial_results[-6:]:  # Last 6 years
         financial_history.append({
             'year': fr.year,
-            'revenue': _fmt_eur(float(fr.revenue or 0)),
-            'profit': _fmt_eur(float(fr.profit or 0)),
-            'assets': _fmt_eur(float(fr.assets_total or 0)),
-            'equity': _fmt_eur(float(fr.equity or 0)),
+            'revenue': _fmt_eur(_amount(fr.revenue)),
+            'profit': _fmt_eur(_amount(fr.profit)),
+            'profit_after_tax': _fmt_eur(_amount(fr.profit_after_tax)),
+            'assets': _fmt_eur(_amount(fr.assets_total)),
+            'equity': _fmt_eur(_amount(fr.equity)),
+            # The sign is decided here, on the raw value. A template cannot do
+            # it: `_fmt_eur` returns a string, and Django swallows the TypeError
+            # a string-vs-number comparison raises and calls the comparison
+            # False -- so every profit cell rendered red, dashes included.
+            'profit_is_filed': fr.profit is not None,
+            'profit_is_positive': fr.profit is not None and fr.profit >= 0,
+            'profit_after_tax_is_filed': fr.profit_after_tax is not None,
+            'profit_after_tax_is_positive': (
+                fr.profit_after_tax is not None and fr.profit_after_tax >= 0
+            ),
         })
 
     # Benchmark rows
@@ -184,13 +331,50 @@ def generate_company_report(company: Company) -> bytes:
                     'company_count': bm.company_count,
                 }
                 company_ratios = analysis['latest']['ratios']
+                # The row is labelled with a percentage and the sector side is
+                # a percentage, so the company side has to be one too. It used
+                # to be `debt_to_equity` -- a multiple, printed with a '%' sign
+                # beside a percentage median, which flattered almost every
+                # company. The filed debt ratio for the analysed year is the
+                # figure the sector median is a median *of*.
+                # `company_ratios` comes from `FinancialAnalysisService.to_dict`
+                # and is camelCase. Three of the six rows here asked for
+                # `current_ratio`, `self_financing_ratio` and `debt_to_equity`
+                # instead, which resolved to None every single time -- the
+                # company half of those rows printed "—" beside a real median,
+                # with no error anywhere. `roa`/`roe`/`ros` are spelled the same
+                # in both, which is what kept it invisible.
+                latest_fr = financial_results[-1]
+                filed_debt_ratio = _ratio_present(
+                    _sum_present(
+                        _amount(latest_fr.liabilities_total),
+                        _amount(latest_fr.liabilities_accruals),
+                    ),
+                    _amount(latest_fr.assets_total),
+                )
+                # The same two expressions the API computes `debtRatio` and
+                # `grossMargin` with, so the printed figure and the one on the
+                # company page cannot drift apart.
+                filed_gross_margin = _ratio_present(
+                    _amount(latest_fr.added_value), _amount(latest_fr.revenue)
+                )
                 bench_metrics = [
-                    ('ROA', company_ratios.get('roa'), float(bm.median_roa) if bm.median_roa else None, '%'),
-                    ('ROE', company_ratios.get('roe'), float(bm.median_roe) if bm.median_roe else None, '%'),
-                    ('ROS', company_ratios.get('ros'), float(bm.median_ros) if bm.median_ros else None, '%'),
-                    ('Zadĺženosť', company_ratios.get('debt_to_equity'), float(bm.median_debt_ratio) if bm.median_debt_ratio else None, '%'),
-                    ('L3 Likvidita', company_ratios.get('current_ratio'), float(bm.median_current_ratio) if bm.median_current_ratio else None, '×'),
-                    ('Samofinancovanie', company_ratios.get('self_financing_ratio'), float(bm.median_self_financing_ratio) if bm.median_self_financing_ratio else None, '%'),
+                    # The two size medians first, because every ratio below is
+                    # read against the size of the firm that produced it, and
+                    # both were stored and never printed -- the table showed
+                    # nine ratios with no hint of the balance sheet they came
+                    # from.
+                    ('Aktíva', _amount(latest_fr.assets_total), _amount(bm.median_assets_total), '€'),
+                    ('Vlastný kapitál', _amount(latest_fr.equity), _amount(bm.median_equity), '€'),
+                    ('ROA', company_ratios.get('roa'), _amount(bm.median_roa), '%'),
+                    ('ROE', company_ratios.get('roe'), _amount(bm.median_roe), '%'),
+                    ('ROS', company_ratios.get('ros'), _amount(bm.median_ros), '%'),
+                    ('Zadĺženosť', filed_debt_ratio, _amount(bm.median_debt_ratio), '%'),
+                    # Was missing from the export entirely while the company page
+                    # carried it -- the one row a trade reader looks for first.
+                    ('Hrubá marža', filed_gross_margin, _amount(bm.median_gross_margin), '%'),
+                    ('L3 Likvidita', company_ratios.get('currentRatio'), _amount(bm.median_current_ratio), '×'),
+                    ('Samofinancovanie', company_ratios.get('selfFinancingRatio'), _amount(bm.median_self_financing_ratio), '%'),
                 ]
                 for label, cv, sv, unit in bench_metrics:
                     benchmark_rows.append({
@@ -225,8 +409,14 @@ def generate_company_report(company: Company) -> bytes:
         'risk_score': {'score': risk_score, 'summary': risk_summary},
         'debts': debts,
         'total_debt': total_debt,
+        # The report is downloaded, so a green "no arrears" line in it is a
+        # claim somebody keeps. Sociálna poisťovňa lists companies it publishes
+        # no sum for, and for those the money really is zero and the listing
+        # really is not -- the template needs both facts to say so.
+        'social_listed_without_amount': bool(company.social_listed_without_amount),
         'analysis': analysis,
         'ratio_rows': ratio_rows,
+        'ratio_basis_note': RATIO_BASIS_NOTE,
         'financial_history': financial_history,
         'executives': executives,
         'benchmark': benchmark_data,

@@ -9,6 +9,7 @@ from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 
 from companies.views import landing_stats, WatchlistViewSet, SearchHistoryViewSet
+from core.metrics import metrics_view
 
 
 def frontend_or_api_info(request):
@@ -31,7 +32,61 @@ def frontend_or_api_info(request):
 
 
 def healthz(request):
-    return JsonResponse({'status': 'ok'})
+    """Readiness probe: verifies the DB and Redis, not just the WSGI process.
+
+    Returns HTTP 503 when a critical dependency is unreachable so that
+    orchestrators (Docker healthchecks, K8s probes) treat a degraded app as
+    unhealthy instead of reporting a healthy process against a dead datastore.
+
+    The body names *which* dependency is down and nothing more, unless the
+    caller is on a private or loopback address. It used to interpolate the
+    exception itself, and a Redis connection error's text carries the DSN it
+    failed to reach -- `redis://:password@host:6379/0`. No probe reads this
+    body; a human debugging a degraded stack reads the container log, where
+    `logger.exception` has already put the traceback. So the detail cost
+    nothing to withhold here and had a credential in it. In-cluster probes and
+    the Docker healthcheck both arrive from private addresses, so they keep the
+    full text; see `core.metrics.is_internal_client`.
+    """
+    import logging
+    import time
+
+    from django.core.cache import cache
+
+    from core.metrics import is_internal_client
+
+    logger = logging.getLogger(__name__)
+    verbose = is_internal_client(request.META.get("REMOTE_ADDR"))
+    status_code = 200
+    health = {"status": "ok", "db": "unknown", "redis": "unknown"}
+
+    try:
+        from django.db import connection
+
+        with connection.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        health["db"] = "ok"
+    except Exception as exc:
+        logger.exception("healthz: database check failed")
+        health["db"] = f"error: {exc}" if verbose else "error"
+        status_code = 503
+
+    try:
+        start = time.monotonic()
+        # Round-trip through the configured Django Redis cache backend.
+        cache.set("__healthz__", "1", timeout=5)
+        cache.get("__healthz__")
+        health["redis"] = f"ok ({time.monotonic() - start:.0f}ms)"
+    except Exception as exc:
+        logger.exception("healthz: redis check failed")
+        health["redis"] = f"error: {exc}" if verbose else "error"
+        status_code = 503
+
+    if status_code != 200:
+        health["status"] = "degraded"
+
+    return JsonResponse(health, status=status_code)
 
 
 watchlist_list = WatchlistViewSet.as_view({'get': 'list', 'post': 'create'})
@@ -41,6 +96,12 @@ history_list = SearchHistoryViewSet.as_view({'get': 'list'})
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("healthz/", healthz),
+    # Prometheus scrape target. Internal-only — see core/metrics.py: private and
+    # loopback clients, or a bearer METRICS_TOKEN when one is configured;
+    # everyone else gets the same 404 as an unknown URL. Both spellings are
+    # registered so a scrape never depends on an APPEND_SLASH redirect.
+    path("metrics", metrics_view),
+    path("metrics/", metrics_view),
     path('api/auth/', include('users.urls')),
     path('api/registers/', include('registers.urls')),
     path('api/stats/landing/', landing_stats),

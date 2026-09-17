@@ -1,4 +1,4 @@
-.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge
+.PHONY: help venv runserver migrations migrate superuser freeze clean clean-pre-push clean-pre-push-dry clean-pre-push-commit docs-audit db-backup db-backup-verify db-backup-replicate db-backup-prune db-offsite-status db-offsite-configure db-offsite-key-drill db-restore-drill db-backup-schedule-install db-backup-schedule-uninstall db-backup-schedule-status ops-check run-celery-worker run-celery-worker-sync run-celery-worker-insurance run-celery-beat celery-down celery-purge metrics docker-metrics-up docker-metrics-down
 
 # ====================================================================================
 # HELP
@@ -67,8 +67,14 @@ migrate: venv
 superuser: venv
 	@$(PYTHON) $(DJANGO_MANAGE_DIR) createsuperuser
 
+# Run from inside backend/: unittest discovery starts at the working directory
+# and cannot descend into a directory that is not a package, so from the repo
+# root `backend/` (which has no __init__.py) was invisible and this target found
+# 0 tests while still exiting 0 -- a silent false green. CI already does the
+# equivalent with `cd backend`. The labelled targets below (users, registers, …)
+# are unaffected: a label is an importable module, not a discovery root.
 test: venv
-	@$(PYTHON) $(DJANGO_MANAGE_DIR) test
+	@cd $(BACKEND_DIR) && $(CURDIR)/$(PYTHON) manage.py test
 
 users: venv
 	@$(PYTHON) $(DJANGO_MANAGE_DIR) test users
@@ -113,12 +119,105 @@ docs-audit:
 	@echo "Running Markdown link audit..."
 	@python3 scripts/docs/check_markdown_links.py
 
+db-backup:
+	@scripts/local/backup_postgres.sh
+
+db-backup-verify:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
+	@scripts/local/verify_postgres_backup.sh "$(BACKUP_FILE)"
+
+# CISTAFIRMA_OFFSITE_BACKUP_DIR is optional here: when omitted, the script reads
+# it from the machine-local config written by `make db-offsite-configure`. An
+# empty value is forwarded as an empty string, which the loader treats as unset.
+# Same for the OpenPGP recipient, which replication refuses to run without.
+db-backup-replicate:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
+	@CISTAFIRMA_OFFSITE_BACKUP_DIR="$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" CISTAFIRMA_OFFSITE_GPG_RECIPIENT="$(CISTAFIRMA_OFFSITE_GPG_RECIPIENT)" CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP="$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" scripts/local/replicate_postgres_backup.sh "$(BACKUP_FILE)"
+
+db-restore-drill:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required" >&2; exit 2)
+	@scripts/local/restore_postgres_drill.sh "$(BACKUP_FILE)"
+
+# Retention: keeps the newest N local backups (default 7). Dry-run unless
+# applied, e.g. make db-backup-prune PRUNE_ARGS="--apply" (add --offsite to
+# mirror the retention onto CISTAFIRMA_OFFSITE_BACKUP_DIR).
+db-backup-prune:
+	@scripts/local/prune_postgres_backups.sh $(PRUNE_ARGS)
+
+# Off-site readiness report. Read-only; exits non-zero when a control is unmet.
+db-offsite-status:
+	@scripts/local/offsite_status.sh
+
+# Aggregate operational gate: stack, queues, backups, off-site controls and the
+# weekly job's own firing record. Read-only; exits non-zero when a control is
+# unmet. NOTE: the off-site *mount* is required here (a deliberate check wants
+# the truth), unlike in the unattended run, which treats a disconnected volume
+# as the documented normal state.
+ops-check:
+	@scripts/local/ops_check.sh
+
+# Record where the off-site backup volume lives on *this* machine, so the weekly
+# launchd job (which inherits almost no environment) can find it. Writes
+# ~/.config/cistafirma/backup.env; the repository stays free of machine paths.
+#
+# CISTAFIRMA_OFFSITE_GPG_RECIPIENT is the other half of that record: the public
+# key every replica is encrypted to. It is per-machine for the same reason the
+# path is — the host that replicates needs the public key, the host that would
+# restore needs the private one — and leaving it out is not a softer setting but
+# a stopped backup: replication refuses to write an unencrypted replica.
+db-offsite-configure:
+	@test -n "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" || (echo "ERROR: CISTAFIRMA_OFFSITE_BACKUP_DIR is required, e.g. make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR=/Volumes/Verbatim/cistafirmaBackups CISTAFIRMA_OFFSITE_GPG_RECIPIENT=<fingerprint>" >&2; exit 2)
+	@scripts/local/configure_offsite.sh "$(CISTAFIRMA_OFFSITE_BACKUP_DIR)" "$(CISTAFIRMA_ALLOW_UNENCRYPTED_OFFSITE_BACKUP)" "$(CISTAFIRMA_OFFSITE_GPG_RECIPIENT)"
+
+# The backup keypair. Two halves, two machines: the PUBLIC key goes to every host
+# that *writes* a replica, the PRIVATE key stays where a *restore* would be run
+# (plus an offline copy in the password manager). A host holding only the public
+# key can write and verify replicas and can never read one — which is why the
+# recovery drill has to run where the private key is, and doubles as the only
+# check that the key still exists.
+db-offsite-key-generate:
+	@scripts/local/gpg_backup_key.sh generate
+
+db-offsite-key-export:
+	@scripts/local/gpg_backup_key.sh export "$(PUBLIC_KEY_FILE)"
+
+db-offsite-key-import:
+	@test -n "$(PUBLIC_KEY_FILE)" || (echo "ERROR: PUBLIC_KEY_FILE is required, e.g. make db-offsite-key-import PUBLIC_KEY_FILE=~/cistafirma-backup-public.asc" >&2; exit 2)
+	@scripts/local/gpg_backup_key.sh import "$(PUBLIC_KEY_FILE)"
+
+db-offsite-key-status:
+	@scripts/local/gpg_backup_key.sh status
+
+# Prove that an EXPORTED private key can still read an off-site replica.
+# `db-offsite-key-status` answers "does this machine hold the key"; this answers
+# "would the copy I stored actually work" — a different question, and the only
+# one whose answer survives losing the machine. Pass KEY_FILE to test the copy
+# kept in the password manager (the point of the command); omit it to test a
+# fresh export, which proves the export format is complete but says nothing
+# about whether any copy was ever stored.
+#
+#   make db-offsite-key-drill BACKUP_FILE=<replica.dump.gpg> [KEY_FILE=<exported secret key>]
+db-offsite-key-drill:
+	@test -n "$(BACKUP_FILE)" || (echo "ERROR: BACKUP_FILE is required, e.g. make db-offsite-key-drill BACKUP_FILE=<replica.dump.gpg> [KEY_FILE=<exported secret key>]" >&2; exit 2)
+	@CISTAFIRMA_KEY_DRILL_KEY_FILE="$(KEY_FILE)" scripts/local/offsite_key_drill.sh "$(BACKUP_FILE)"
+
+# Weekly unattended backup via launchd (backup -> verify -> replica if mounted).
+db-backup-schedule-install:
+	@scripts/local/install_backup_schedule.sh
+
+db-backup-schedule-uninstall:
+	@scripts/local/uninstall_backup_schedule.sh
+
+db-backup-schedule-status:
+	@scripts/local/backup_schedule_status.sh
+
 celery-down: venv
 	@echo "Turning off all backend Celery tasks..."
 	@pkill -f "celery -A backend" || true
 
 celery-purge: venv
-	@echo "Purging all pending Celery tasks from Redis..."
+	@test "$(CONFIRM_CELERY_PURGE)" = "DELETE_PENDING_MESSAGES" || (echo "ERROR: celery-purge permanently removes queued work. Re-run only with CONFIRM_CELERY_PURGE=DELETE_PENDING_MESSAGES." >&2; exit 2)
+	@echo "DANGER: Purging all pending Celery tasks from Redis..."
 	@cd $(BACKEND_DIR) && $(PYTHON) -c "from backend.celery import app; app.control.purge(); print('All pending tasks purged!')"
 
 run-celery-worker: venv
@@ -176,16 +275,29 @@ docker-logs-backend:
 	@docker compose logs -f backend
 
 docker-logs-celery:
-	@echo "Showing Celery worker logs..."
-	@docker compose logs -f celery_worker celery_beat
+	@echo "Showing Celery worker + beat logs..."
+	@docker compose logs -f --tail=200 celery_worker_ruz celery_worker_orsr celery_worker_financials celery_worker_insurance celery_worker_default celery_beat
 
 docker-shell:
 	@echo "Opening shell in backend container..."
 	@docker compose exec backend bash
 
+metrics:
+	@echo "Fetching /metrics from inside the backend container (loopback client)..."
+	@docker compose exec -T backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=5).read().decode())"
+
+docker-metrics-up:
+	@echo "Starting optional Prometheus + Grafana (monitoring profile)..."
+	@docker compose --profile monitoring up -d prometheus grafana
+	@echo "  Prometheus: http://127.0.0.1:9090   Grafana: http://127.0.0.1:3000"
+
+docker-metrics-down:
+	@echo "Stopping Prometheus + Grafana (volumes are kept)..."
+	@docker compose --profile monitoring stop prometheus grafana
+
 docker-migrate:
-	@echo "Running migrations in Docker..."
-	@docker compose exec backend python manage.py migrate --settings=backend.settings
+	@echo "Running migrations in Docker (one-shot migrate service)..."
+	@docker compose run --rm -T --build migrate
 
 docker-superuser:
 	@echo "Creating superuser in Docker..."
@@ -203,8 +315,13 @@ docker-fetch-ruz-full:
 	@echo "Running full RUZ resync in Docker..."
 	@docker compose exec backend python manage.py fetch_ruz_data --full-resync --settings=backend.settings
 
+# docker-reset permanently deletes ALL volumes, including the PostgreSQL data
+# volume cistafirma_postgres_data. It is an emergency-only recovery tool, not a
+# routine command. Token-gated like celery-purge so an accidental or scripted
+# run fails closed. Never use it while your only backup is unverified.
 docker-reset:
-	@echo "Resetting Docker environment (removes volumes)..."
+	@test "$(CONFIRM_DOCKER_RESET)" = "DESTROY_VOLUMES_AND_REBUILD" || (echo "ERROR: docker-reset permanently removes ALL Docker volumes, including PostgreSQL data (cistafirma_postgres_data). This is emergency-only. Re-run only after a verified backup (make db-backup && make db-backup-verify) with CONFIRM_DOCKER_RESET=DESTROY_VOLUMES_AND_REBUILD." >&2; exit 2)
+	@echo "DANGER: Destroying all Docker volumes, including PostgreSQL data. This is final."
 	@docker compose down -v
 	@docker compose build --no-cache
 	@docker compose up -d

@@ -10,9 +10,11 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'fa-th-large', group: 'Prehľad' },
-  { id: 'companies', label: 'Firmy', icon: 'fa-building', group: 'Dáta' },
+  { id: 'data', label: 'Data (Firmy/SZCO)', icon: 'fa-database', group: 'Dáta' },
+  { id: 'companies', label: 'Firmy - Detaily', icon: 'fa-building', group: 'Dáta' },
   { id: 'users', label: 'Používatelia', icon: 'fa-users', group: 'Dáta' },
   { id: 'sync-jobs', label: 'Sync Joby', icon: 'fa-sync-alt', group: 'Synchronizácia' },
+  { id: 'sync-status', label: 'Stav synchronizácie', icon: 'fa-heartbeat', group: 'Synchronizácia' },
   { id: 'scheduled-tasks', label: 'Periodické úlohy', icon: 'fa-clock', group: 'Synchronizácia' },
   { id: 'audit-log', label: 'Audit Log', icon: 'fa-scroll', group: 'Systém' },
   { id: 'system', label: 'Systém', icon: 'fa-server', group: 'Systém' },

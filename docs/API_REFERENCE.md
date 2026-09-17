@@ -199,6 +199,7 @@ Detail firmy podľa IČO. Obsahuje finančné dáta, exekutívu, ORSR profil, dl
 | `year` | number |
 | `revenue` | number |
 | `profit` | number |
+| `profitAfterTax` | number\|null |
 | `totalRevenue` | number |
 | `costs` | number |
 | `incomeTax` | number |
@@ -223,6 +224,13 @@ Detail firmy podľa IČO. Obsahuje finančné dáta, exekutívu, ORSR profil, dl
 | `debtRatio` | number\|null |
 | `grossMargin` | number\|null |
 
+`profit` je **výsledok hospodárenia z hospodárskej činnosti** (pred zdanením);
+`profitAfterTax` je výsledok za účtovné obdobie po zdanení. Bývalý jediný riadok
+`profit` niesol podľa okolností jeden alebo druhý, preto sa obe veličiny už
+nespájajú. `profitAfterTax` je `null` pre každý záznam, ktorý nebol znovu
+načítaný od rozdelenia (2026-09-12) — `null` tu znamená „riadok nebol prečítaný“,
+nie nulu.
+
 **`orsr_profile.structured` objekt:**
 
 | Pole | Typ | Popis |
@@ -241,6 +249,116 @@ Detail firmy podľa IČO. Obsahuje finančné dáta, exekutívu, ORSR profil, dl
 | `dalsie_pravne_skutocnosti` | OrsrPredmet[] | Ďalšie právne skutočnosti |
 | `vyska_zakladneho_imania` | OrsrCapital | Základné imanie + splatenie |
 | `konanie` | string | Spôsob konania menom spoločnosti |
+
+---
+
+### `GET /api/companies/<ico>/report/`
+
+Celý firemný report ako PDF (`application/pdf`), vykreslený na serveri cez
+WeasyPrint zo šablóny `backend/companies/templates/company_report.html`.
+Nevyžaduje JWT.
+
+**Response `200`:** binárne PDF, `Content-Disposition: attachment;
+filename="<ico>_<názov>.pdf"`.
+
+**Response `404`:** `{"detail": "Firma s týmto IČO nebola nájdená."}`
+
+**Response `500`:** `{"detail": "Report sa nepodarilo vygenerovať. Skúste to
+prosím znova."}` — obstarané tak, aby odpoveď pre anonymného volajúceho
+neobsahovala text podkladovej výnimky (cesta k modulu, stopa WeasyPrintu).
+
+Report obsahuje to, čo klientský export v prehliadači nemá: rizikové skóre,
+evidované nedoplatky, tabuľku ukazovateľov s uvedeným základom rentability,
+Altmanov a Tafflerov model, prehľad hospodárskych výsledkov, štatutárov a
+sektorové porovnanie. Naopak **neobsahuje graf prepojení** — ten kreslí
+`frontend/utils/pdfExport.ts`, ktorý si prehliadač skladá sám a používa ho
+tlačidlo „Stiahnuť PDF“ na stránke firmy. Dve cesty k reportu sa teda
+neprekrývajú v obsahu, ale ani jedna nie je nadmnožinou tej druhej; zlúčenie
+je otvorené rozhodnutie, nie hotová vec.
+
+**Frontend volajúci:** žiadny. Endpoint je dnes verejné API pre tretie strany,
+nie to, čo obsluhuje tlačidlo v aplikácii — pozri `docs/SOURCE_DATA_INTEGRITY.md`.
+
+**Spotreba:** vykreslenie je CPU-náročné a endpoint je `AllowAny`, preto je
+naň nasadený throttle — `REPORT_THROTTLE_RATE` (predvolene `30/hour`) čítaný v
+`backend/backend/settings.py` a priradený v `CompanyViewSet.get_throttles`.
+Limit je na účet, ak je volajúci prihlásený, inak na adresu.
+
+---
+
+### `GET /api/companies/<ico>/peers/?scope=<scope>`
+
+Firmy zoradené vedľa tejto — podklad pre štyri sekcie firemnej stránky
+(Podobné spoločnosti, Firmy v kraji, Firmy v odvetví, Firmy podľa tržieb).
+Nevyžaduje JWT.
+
+| `scope` | Otázka | Zoradené podľa |
+|---|---|---|
+| `podobne` | ktorá firma je veľkosťou najbližšie | `similarity` (pozri nižšie) |
+| `kraj` | kto je najväčší v kraji sídla | `revenue` |
+| `odvetvie` | kto je najväčší v odvetví (divízia NACE, 2 číslice) | `revenue` |
+| `trzby` | kto je najväčší v celom registri | `revenue` |
+
+**Response `200`:**
+
+```json
+{
+  "scope": "kraj",
+  "subject": "SK010",
+  "subject_label": "Bratislavský kraj",
+  "reason": null,
+  "ranked_by": "revenue",
+  "total_ranked": 199,
+  "total_in_scope": 105760,
+  "results": [
+    {"ico": "31333532", "name": "ESET, spol. s r.o.", "city": "Bratislava",
+     "nace_code": "62010", "nace_name": "Počítačové programovanie…",
+     "year": 2021, "revenue": "571637176.00", "profit": "…"}
+  ]
+}
+```
+
+**Dvojica počtov je podstatná.** `total_ranked` je počet firiem, ktoré sa dali
+zaradiť — teda majú uloženú závierku s tržbami. `total_in_scope` je počet
+firiem, na ktoré sa otázka vôbec pýtala. V celom registri sú to zatiaľ
+necelé dve tisíc z 325 000, takže „najväčšie firmy“ znamená „najväčšie firmy,
+ktoré zverejnili závierku“. Sekcia musí zobrazovať obe čísla; jedno bez
+druhého je nepodložené tvrdenie.
+
+Čísla v príklade vyššie sú odmerané, nie zaručené: synchronizácia závierok
+beží, takže `total_ranked` rastie rádovo o stovky za deň. Zámerne preto nie je
+nikde v kóde ani v texte sekcie zapísané ako konštanta — sekcia vypisuje to,
+čo práve vrátila tá istá query, a komentár so zamrznutým číslom by jej začal
+odporovať na tej istej stránke.
+
+**`reason`** je `null`, alebo `no_region` / `no_nace` — firma nemá v registri
+kraj sídla, respektíve čitateľný kód NACE, takže ju v tom rozsahu nemožno
+zaradiť. Kód, nie veta: slovenské texty skladá frontend, rovnako ako pri
+`financialsState`.
+
+**Zoradenie `similarity`** je `|ln(tržby) − ln(tržby subjektu)|`, teda blízkosť
+v pomere a nie v eurách — 10 000 € od firmy s obratom 50 000 € je iná firma
+než 10 000 € od firmy s obratom 50 000 000 €. Zahŕňa len riadky s kladnými
+tržbami (`ln(0)` v Postgrese zlyhá, nie vráti `null`). Ak subjekt sám závierku
+nemá alebo má nulové tržby, rozsah sa namiesto zlyhania prepne na `revenue`
+a `ranked_by` to povie.
+
+**Každý rozsah vynecháva subjekt** — firma nie je svojím vlastným susedom.
+
+**Response `400`:** `{"detail": "Neznámy rozsah \"\". Povolené: podobne, kraj,
+odvetvie, trzby."}` — neznámy `scope` je chyba, nie predvolená hodnota; každý
+rozsah odpovedá na inú otázku a tichý výber by dal jedno poradie pod druhý
+nadpis.
+
+**Response `404`:** `{"detail": "Firma s týmto IČO nebola nájdená."}`
+
+**Response `500`:** `{"detail": "Podobné firmy sa nepodarilo načítať…"}`
+
+**Frontend volajúci:** `frontend/components/company/sections/PeerListSection.tsx`
+cez `api.getPeers()`.
+
+**Spotreba:** počty nad 445 000 riadkov; throttle `PEERS_THROTTLE_RATE`
+(predvolene `120/hour`).
 
 ---
 
@@ -384,8 +502,25 @@ Prístup obmedzený na `is_staff` používateľov. Vyžaduje JWT.
 | Endpoint | Metóda | Popis |
 |---|---|---|
 | `/api/admin/companies/` | GET | Zoznam firiem (paginovaný) |
+| `/api/admin/companies/presets/` | GET | Dostupné preset filtre |
+| `/api/admin/companies/report/` | GET | Súhrn nad filtrovaným querysetom |
+| `/api/admin/companies/report/?export=csv` | GET | Export reportu do CSV |
+| `/api/admin/companies/report/?export=xlsx` | GET | Export reportu do XLSX |
+| `/api/admin/company-filters/` | GET/POST | Uložené filtre používateľa |
+| `/api/admin/company-filters/<id>/` | PATCH/DELETE | Úprava alebo zmazanie filtra |
 
-**Query parametre:** Štandardné DRF filtrovanie a pagination.
+**Query parametre:** Štandardné DRF filtrovanie a pagination + `preset`, `filter_builder`, `saved_filter`.
+
+**Report režimy:**
+
+- `mode=light` (**default**): rýchly report bez ťažkých agregácií; vracia základné počty a ostatné sumy/priemery sú `0`.
+- `mode=full`: plný report vrátane súm (`revenue_sum`, `profit_sum`, debt sums), priemerov a `top_companies`.
+
+Svetlý režim je predvolený zámerne — `_is_light_mode`
+(`adminapi/views/companies.py`) vráti `True` pre všetko okrem `mode=full`, aby
+zostal zoznamový endpoint použiteľný nad veľkými dátami. `light=1` je len
+ďalší spôsob, ako si vyžiadať to isté; `mode=full` je jediná hodnota, ktorá
+agregácie naozaj spustí.
 
 ### Používatelia
 

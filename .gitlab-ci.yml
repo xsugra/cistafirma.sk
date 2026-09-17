@@ -1,21 +1,9 @@
 stages:
   - validate
   - test
-  - build
-  - deploy
 
 variables:
-  # TLS medzi job kontajnerom a DinD je VYPNUTE NASCHVAL. Vysvetlenie je
-  # v .build_template nizsie — kratka verzia: certy sa nemaju ako zdielat,
-  # takze zapnute TLS znamena, ze sa klient a demon nikdy nenajdu.
-  DOCKER_TLS_CERTDIR: ""
-  DOCKER_DRIVER: overlay2
   GIT_STRATEGY: clone  # Add this line to force a fresh clone
-  BACKEND_IMAGE: "$CI_REGISTRY_IMAGE/backend"
-  FRONTEND_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
-  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
-  K8S_NAMESPACE: "cistafirma"
-  STRICT_K8S_VALIDATION: "false"
 
 workflow:
   rules:
@@ -24,7 +12,6 @@ workflow:
 
 backend_validate:
   stage: validate
-  tags: [lenovo]
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -35,13 +22,9 @@ backend_validate:
   script:
     - python -m compileall backend
 
-frontend_validate:
-  stage: validate
-  tags: [lenovo]
+# Shared frontend CI setup (node + deps from the committed lockfile).
+.frontend_ci:
   image: node:20-alpine
-  rules:
-    - if: '$CI_COMMIT_BRANCH'
-    - if: '$CI_COMMIT_TAG'
   before_script:
     - cd frontend
     - |
@@ -50,12 +33,18 @@ frontend_validate:
       else
         npm install
       fi
+
+frontend_validate:
+  extends: .frontend_ci
+  stage: validate
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
   script:
     - npm run build
 
 docs_audit:
   stage: validate
-  tags: [lenovo]
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
@@ -64,9 +53,13 @@ docs_audit:
     - python scripts/docs/check_markdown_links.py
 
 # Helm: lint and render templates for dev + prod (dry-run validation).
+#
+# Tento job zámerne NEOBSAHUJE python3 krok. `alpine/helm` je holé Alpine
+# s helmom a python3 v ňom NIE JE — `python3 scripts/k8s/...` preto padalo
+# na `exit 127 (command not found)`. Kontrola vyrenderovaného manifestu je
+# preto samostatný job nižšie, v obraze, ktorý python3 naozaj má.
 helm_render_validate:
   stage: validate
-  tags: [lenovo]
   image:
     name: alpine/helm:3.17.2
     entrypoint: [""]
@@ -84,235 +77,145 @@ helm_render_validate:
       - deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
     expire_in: 1 day
 
-# Helm+kubectl: validate rendered manifests against cluster schema (dry-run).
-helm_k8s_validate:
+# Kontrola, že vyrenderovaný release vôbec obsahuje async workery pre všetky
+# fronty. Chráni Helm chart ako budúci deploy kontrakt — je to jediná vec,
+# ktorá overuje, že nasadenie by naozaj spustilo všetkých päť workerov.
+helm_runtime_validate:
   stage: validate
-  tags: [lenovo]
-  image:
-    name: bitnamilegacy/kubectl:1.30
-    entrypoint: [""]
+  image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
   needs:
     - job: helm_render_validate
       artifacts: true
-  before_script:
-    - |
-      if [ -n "$KUBE_CONFIG" ]; then
-        mkdir -p ~/.kube
-        echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
-      fi
   script:
-    # Pozor: `kubectl apply --dry-run=client` NIE je offline operacia. RESTMapper
-    # si pred spracovanim manifestu vyziada discovery z API servera (kind ->
-    # resource). Bez klastra teda skonci na
-    #   unable to recognize ... dial tcp [::1]:8080: connection refused
-    # a to aj s --validate=false. Preto sa cele kubectl volanie spusta len
-    # vtedy, ked je klaster skutocne dosiahnutelny.
-    - |
-      if kubectl cluster-info >/dev/null 2>&1; then
-        kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
-        kubectl apply --dry-run=client -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
-        kubectl apply --dry-run=server -f deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
-        kubectl apply --dry-run=server -f deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
-      elif [ "$STRICT_K8S_VALIDATION" = "true" ]; then
-        echo "STRICT_K8S_VALIDATION=true but no usable cluster context is available."
-        exit 1
-      else
-        echo "No reachable cluster -> skipping kubectl validation."
-        echo "Rendered manifests are still checked by 'helm lint' + 'helm template' in helm_render_validate."
-      fi
+    - python3 scripts/k8s/validate_helm_runtime.py deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+    - python3 scripts/k8s/validate_helm_runtime.py deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
+    # A kontrola, ktorá sa nikdy nemusela nič odmietnuť, je len tvrdenie.
+    # `--selftest` rozbije manifest v pamäti tak, ako by musel byť rozbitý, aby
+    # na kontrole záležalo, a vyžaduje, aby ho kontrola odmietla. Bez tohto
+    # kroku by vypnutá kontrola (napr. predčasný `return`) prechádzala zelená.
+    - python3 scripts/k8s/validate_helm_runtime.py --selftest deploy/helm/cistafirma/.rendered/cistafirma-dev-render.yaml
+    - python3 scripts/k8s/validate_helm_runtime.py --selftest deploy/helm/cistafirma/.rendered/cistafirma-prod-render.yaml
 
+frontend_tests:
+  extends: .frontend_ci
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - npm test
+    - npm run typecheck
+
+# Testy MUSIA bežať na Postgrese — a dovtedy tento job neurobil ani jeden test.
+#
+# Bez `DATABASE_URL` sa `settings.py` ticho prepne na SQLite. Lenže migrácia
+# `companies/0014_add_pattern_ops_structured_indexes.py` vytvára index s
+# `text_pattern_ops`, čo je Postgres-only trieda operátorov. Na SQLite teda
+# spadne už `create_test_db` — ešte pred prvým testom — hlásením
+# `near "text_pattern_ops": syntax error`, a job je červený vždy, nech je kód
+# akýkoľvek. Nebol to slabý test, bol to test s nulovým výpovedným obsahom.
+# (Index nie je ozdobný: `companies/services/peers.py` sa oň opiera pri
+# prefixovom hľadaní, takže „spravme migráciu prenosnou" by znamenalo ničiť
+# produkčný index kvôli CI.)
+#
+# Preto service kontajner s tou istou verziou, akú prevádzkuje produkcia
+# (`docker-compose.yml` → `postgres:16-alpine`).
 backend_tests:
   stage: test
-  tags: [lenovo]
   image: python:3.12-slim
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+    # Redis je tu z toho istého dôvodu: bez neho padne šesť testov na
+    # `ConnectionError` (päť v hľadaní osôb, jeden admin dashboard) a healthz
+    # test čaká 200, ale dostane 503 — spolu sedem výsledkov. Aj to je dôkaz,
+    # že job predtým nič nekontroloval: v CI nie je `.env`, takže `REDIS_URL`
+    # ostal na predvolenom `localhost` a na tom nič nebeží.
+    - name: redis:7-alpine
+      alias: redis
   variables:
+    # Jednorazové prihlasovacie údaje efemérneho service kontajnera. Nie sú to
+    # secrets a nemajú nič spoločné s produkčnou databázou na delle.
+    POSTGRES_USER: cistafirma
+    POSTGRES_PASSWORD: cistafirma
+    POSTGRES_DB: cistafirma
+    DATABASE_URL: "postgres://cistafirma:cistafirma@postgres:5432/cistafirma"
+    # `CACHE_REDIS_URL` sa z tohto odvodí sám (databáza broker + 1), takže
+    # stačí jediná premenná — viď `_default_cache_redis_url` v settings.py.
+    REDIS_URL: "redis://redis:6379/0"
     DEBUG: "true"
   before_script:
     - pip install --no-cache-dir --retries 3 --timeout 120 -r backend/requirements.txt
+    # Runner na otvorenie portu service kontajnera čaká sám; táto slučka je
+    # poistka, ktorá z prípadných pretekov spraví zrozumiteľnú vetu namiesto
+    # `connection refused` z prostriedku testovacej sady.
+    - |
+      python - <<'PY'
+      import socket, sys, time
+      for pokus in range(60):
+          try:
+              socket.create_connection(("postgres", 5432), timeout=2).close()
+              print(f"Postgres prijima spojenia (pokus {pokus + 1}).")
+              break
+          except OSError:
+              time.sleep(1)
+      else:
+          sys.exit("Postgres service sa nerozbehol do 60 s.")
+      PY
   script:
     - cd backend
+    # Produkcia pred štartom púšťa `collectstatic && gunicorn`
+    # (docker-compose.yml) a testy ho potrebujú z toho istého dôvodu.
+    #
+    # `DiscoverRunner` má `debug_mode=False`, takže si Django `settings.DEBUG`
+    # počas testov prepne na False sám — `DEBUG: "true"` vyššie to nezmení.
+    # A `HashedFilesMixin.url` skracuje na obyčajné meno len keď je DEBUG True,
+    # takže v testoch je `CompressedManifestStaticFilesStorage` striktná.
+    # Bez manifestu padne šesť testov admin dashboardov na
+    # `Missing staticfiles manifest entry for 'unfold/fonts/inter/styles.css'`.
+    #
+    # Vypnúť tú striktnosť (`WHITENOISE_MANIFEST_STRICT = False`) by bolo
+    # nesprávne: je to tá istá vec, ktorá v produkcii odhalí chýbajúci
+    # statický súbor.
+    - python manage.py collectstatic --noinput
     - python manage.py test --verbosity=1
 
-.build_template:
-  stage: build
-  tags: [macos]
-  # Staci samotne CLI. Plny `docker:27.1.2` obsahuje aj dockerd a jeho
-  # entrypoint by sa pokusil spustit druhy demon v job kontajneri.
-  image: docker:27.1.2-cli
-  services:
-    # Registry bezi na HTTP (gitlab.home.arpa:5050), takze DinD musí vedieť,
-    # že je "insecure". Týka sa to push/pull — tie idú cez démona.
-    # (Na `docker login` to nestačí, viď before_script nižšie.)
-    - name: docker:27.1.2-dind
-      command: ["--insecure-registry=gitlab.home.arpa:5050"]
-  variables:
-    # TRETIA chyba, a bola to ta, ktora to drzala pokope. Bez tohto flagu
-    # runner pouzije defaultny "bridge" a spolieha sa na legacy `--link`.
-    # V tomto prostredi sa ale service kontajneru NEPRIDELI ziadny alias,
-    # takze sa neresolvuje ani v job kontajneri, ani v health-check
-    # kontajneri. Prejavy, ktore to sposobuje:
-    #   * health check 30 s dialuje <id>:2375 a <id>:2376 a nikdy sa
-    #     nepripoji -> "Service ... probably didn't start properly",
-    #   * v jobe padne `docker version` na
-    #       dial tcp: lookup docker on 192.168.65.7:53: no such host
-    #     (192.168.65.7 je DNS Docker Desktopu, nie embedded DNS — dokaz,
-    #      ze kontajner je na default bridge a ziadny alias neexistuje).
-    # S flagom runner vytvori pre job vlastnu user-defined siet, kde ma
-    # Docker embedded DNS (127.0.0.11) a service dostane alias "docker".
-    FF_NETWORK_PER_BUILD: "true"
-    #
-    # DRUHA chyba. Obe strany (klient aj DinD) sa riadia vylucne touto
-    # premennou a kazda si ju vyklada sama:
-    #
-    #  * DinD: ak je nastavena, vygeneruje certy do /certs/server a pocuva
-    #    LEN na 2376 s TLS. Ak je prazdna, pocuva na 2375 bez TLS.
-    #  * Klient (docker-entrypoint.sh v docker image): DOCKER_HOST nastavi
-    #    na 2376 IBA ked funkcia _should_tls() najde vsetky tri subory
-    #    $DOCKER_TLS_CERTDIR/client/{ca,cert,key}.pem. Inak na 2375.
-    #
-    # Tie tri .pem subory ale vznikaju v DinD kontajneri, a runner medzi
-    # job a service kontajner tento adresar NEZDiela (v binarke runnera nie
-    # je ani jeden vyskyt "certs/client" ci "DOCKER_TLS_CERTDIR"). Vysledok
-    # pri zapnutom TLS: DinD na 2376, klient na 2375, a build vzdy spadne na
-    #   error during connect: ... dial tcp ...: connect: connection refused
-    #
-    # Preto je TLS vypnute a DOCKER_HOST je nastaveny natvrdo. Obe strany
-    # hovoria na 2375. Demon je pritom efemerny, zije len pocas jobu a je
-    # dosiahnutelny vyhradne z privatnej siete toho-ktorého jobu.
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_HOST: "tcp://docker:2375"
-  before_script:
-    # POZOR: `docker login` tu NEMOZE byt. Je to klientska operacia — ide
-    # PRIAMO na registry a demona vobec nepouzije, takze --insecure-registry
-    # na DinD mu nepomoze. Na HTTP registry skonci vzdy na
-    #   Get "https://gitlab.home.arpa:5050/v2/": http: server gave HTTP
-    #   response to HTTPS client
-    # (overene: chyba je bez prefixu "Error response from daemon").
-    # Zapiseme credentials rovno do docker configu. CLI ich pri pushi odovzda
-    # demonovi a ten HTTP zvladne — ma --insecure-registry.
-    #
-    # Diagnostika: nech je z trace rovno vidiet, ci sa service "docker"
-    # resolvne a na aku IP. `|| true` je tu preto, aby diagnostika sama
-    # nikdy nezhodila job — padnut ma az `docker version` nizsie.
-    - |
-      echo "--- /etc/hosts ---"; cat /etc/hosts
-      echo "--- /etc/resolv.conf ---"; cat /etc/resolv.conf
-      echo "--- getent hosts docker ---"
-      getent hosts docker || nslookup docker || echo "NEREZOLVUJE SA"
-    - docker version
-    - docker info >/dev/null
-    - mkdir -p ~/.docker
-    - |
-      AUTH=$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')
-      printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$AUTH" > ~/.docker/config.json
-
-build_backend_image:
-  extends: .build_template
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
-  script:
-    - docker build -f backend/Dockerfile -t "$BACKEND_IMAGE:$IMAGE_TAG" backend
-    - docker push "$BACKEND_IMAGE:$IMAGE_TAG"
-    - |
-      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        docker tag "$BACKEND_IMAGE:$IMAGE_TAG" "$BACKEND_IMAGE:main"
-        docker push "$BACKEND_IMAGE:main"
-      fi
-    - |
-      if [ "$CI_COMMIT_BRANCH" = "dev" ]; then
-        docker tag "$BACKEND_IMAGE:$IMAGE_TAG" "$BACKEND_IMAGE:dev"
-        docker push "$BACKEND_IMAGE:dev"
-      fi
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker tag "$BACKEND_IMAGE:$IMAGE_TAG" "$BACKEND_IMAGE:$CI_COMMIT_TAG"
-        docker push "$BACKEND_IMAGE:$CI_COMMIT_TAG"
-      fi
-
-build_frontend_image:
-  extends: .build_template
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
-    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
-  script:
-    - docker build -f frontend/Dockerfile.prod -t "$FRONTEND_IMAGE:$IMAGE_TAG" frontend
-    - docker push "$FRONTEND_IMAGE:$IMAGE_TAG"
-    - |
-      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
-        docker tag "$FRONTEND_IMAGE:$IMAGE_TAG" "$FRONTEND_IMAGE:main"
-        docker push "$FRONTEND_IMAGE:main"
-      fi
-    - |
-      if [ "$CI_COMMIT_BRANCH" = "dev" ]; then
-        docker tag "$FRONTEND_IMAGE:$IMAGE_TAG" "$FRONTEND_IMAGE:dev"
-        docker push "$FRONTEND_IMAGE:dev"
-      fi
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker tag "$FRONTEND_IMAGE:$IMAGE_TAG" "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
-        docker push "$FRONTEND_IMAGE:$CI_COMMIT_TAG"
-      fi
-
-# Deploy using raw kubectl + kustomize overlays (not Helm).
-.deploy_template:
-  stage: deploy
-  tags: [lenovo]
-  image:
-    name: bitnamilegacy/kubectl:1.30
-    entrypoint: [""]
-  before_script:
-    - mkdir -p ~/.kube
-    - echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config
-    - kubectl version --client
-  script:
-    - sh scripts/k8s/deploy.sh
-
-# DEV deploy on dev branch — ZATIAL VYPNUTY.
-# Klaster neexistuje (na sam-lenovo nie je kubectl ani ~/.kube, minikube na
-# Macu nebezi) a KUBE_CONFIG nie je definovana. Tento job sa spustal
-# AUTOMATICKY na branchi dev, takze kazdy push na dev robil cervenu pipeline.
-# Ked budes mat klaster, vrat sem povodne pravidlo:
-#     - if: '$CI_COMMIT_BRANCH == "dev"'
-deploy_dev:
-  extends: .deploy_template
-  environment:
-    name: dev
-  rules:
-    - when: never
-  variables:
-    DEPLOY_ENV: dev
-    DEPLOY_IMAGE_TAG: "$IMAGE_TAG"
-    RUN_DB_BACKUP: "false"
-
-# DEV deploy from main (manual gate — use after MR merge)
-deploy_main_to_dev:
-  extends: .deploy_template
-  environment:
-    name: dev
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      when: manual
-  variables:
-    DEPLOY_ENV: dev
-    DEPLOY_IMAGE_TAG: "$IMAGE_TAG"
-    RUN_DB_BACKUP: "false"
-
-# PROD deploy on version tags (v*).
-deploy_prod:
-  extends: .deploy_template
-  environment:
-    name: production
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
-      when: manual
-  variables:
-    DEPLOY_ENV: prod
-    DEPLOY_IMAGE_TAG: "$CI_COMMIT_TAG"
-    RUN_DB_BACKUP: "true"
+# ---------------------------------------------------------------------------
+# Čo tu ZÁMERNE už nie je a prečo (15. 9. 2026)
+#
+# Stages `build` a `deploy` boli odstránené aj s celým svojím obsahom
+# (.build_template, build_backend_image, build_frontend_image,
+# .deploy_template, deploy_dev, deploy_main_to_dev, deploy_prod)
+# a spolu s nimi job helm_k8s_validate a premenné, ktoré obsluhovali.
+#
+# `build` — obrazy sa pushovali do GitLab registra, ktorý NIČ NEČÍTA.
+#   Produkcia na delle stavia sama z `build:` kontextu v docker-compose
+#   (overené: v celom docker-compose.yml je `image:` len pri cudzích
+#   obrazoch — postgres, redis, prometheus, grafana — a dell v .env nemá
+#   ani jednu zmienku o registri). Jediný konzument bol Helm chart, ktorého
+#   values ukazujú na `registry.example.com` — placeholder, ktorý neexistuje.
+#   Navyše build potrebuje `docker:dind`, teda privileged, čo runner na
+#   sam-lenovo zámerne nevie a Mac, ktorý to ako jediný vedel, už runner
+#   nie je. Bol to job, ktorý vyrábal niečo, čo nikto nečíta.
+#
+# `deploy` — `.deploy_template` nepodmienene robí
+#   `echo "$KUBE_CONFIG" | base64 -d > ~/.kube/config`, ale KUBE_CONFIG nie
+#   je definovaná nikde (projekt, skupina, inštancia). K8s klaster nemáme.
+#   Job teda nemal ako prejsť — a job, ktorý nemôže prejsť, učí ľudí
+#   ignorovať červenú. Presne to je trieda chyby, ktorá 11. 9. 2026
+#   nechala CI štyri dni mŕtve bez toho, aby si to niekto všimol.
+#
+# `helm_k8s_validate` — `kubectl apply --dry-run=client` aj tak robí
+#   discovery voči API serveru, takže bez klastra neprejde. A jeho obraz
+#   `bitnami/kubectl:1.30` na Docker Hube neexistuje (Bitnami presunul free
+#   obrazy do `bitnamilegacy`) — padal by na pull image na akomkoľvek runneri.
+#
+# Validate + test ostávajú: to sú joby, ktoré naozaj prejdú a naozaj niečo
+# chránia. Bežia na sam-lenovo (projektový runner, `run_untagged = true`).
+# ---------------------------------------------------------------------------

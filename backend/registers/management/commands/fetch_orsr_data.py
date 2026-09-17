@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand
 from companies.models import Company
 from registers.scrapers.orsr_scraper import OrsrScraperError
 from registers.services.orsr_sync import OrsrSyncService
+from registers.services.sync_engine import record_orsr_failure, record_orsr_outcome
 
 
 class Command(BaseCommand):
@@ -50,6 +51,14 @@ class Command(BaseCommand):
         for company in companies:
             try:
                 profile = service.sync_company(company)
+                # Recorded here as well as in the Celery task, because this is
+                # a real ORSR driver and not a diagnostic: an attempt that
+                # leaves no `CompanySyncStatus` row is invisible to
+                # `source_health` and enters no retry lane, which is the whole
+                # reason ORSR had no writer.
+                record_orsr_outcome(
+                    company, fetch_ok=profile.fetch_ok, error=profile.last_error
+                )
                 ok += 1
                 self.stdout.write(
                     self.style.SUCCESS(
@@ -58,11 +67,20 @@ class Command(BaseCommand):
                 )
             except OrsrScraperError as exc:
                 failed += 1
+                record_orsr_failure(company, exc)
                 self.stdout.write(
                     self.style.WARNING(
                         f"[{ok + failed}/{total}] FAIL {company.ico}: {exc}"
                     )
                 )
+            except Exception as exc:
+                # Not caught before, so it aborted the batch -- and still does.
+                # Recorded on the way out for the same reason the task does:
+                # otherwise the company leaves no trace of having been
+                # attempted, and this command is one of the paths that can put
+                # it there.
+                record_orsr_failure(company, exc)
+                raise
 
         self.stdout.write(
             self.style.SUCCESS(

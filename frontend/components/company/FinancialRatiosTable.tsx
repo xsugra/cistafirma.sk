@@ -15,10 +15,45 @@ interface RatioRow {
     inverse?: boolean;
 }
 
-const SECTIONS: { title: string; icon: string; rows: RatioRow[] }[] = [
+// One entry per zone the backend can return, so the banner is painted from the
+// verdict rather than from the score. The ladder used to be written out here
+// three times -- banner, chip and caption -- as `> 2.90` / `> 1.23`, which is
+// the same rule `financial_analysis` applies, so nothing here was ever the
+// wrong colour. The problem was that it was a copy: `api.ts` and the PDF
+// renderer held two more, both the *mirror* (`< 1.23` / `< 2.90`), and at
+// exactly 1.23 or exactly 2.90 that is a different verdict. So this file's
+// banner and the risk summary printed beside it could disagree with each other
+// and with the paper. One zone from the backend leaves nothing to disagree.
+const ZONE_STYLES = {
+    safe: {
+        banner: 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20',
+        chip: 'text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30',
+        caption: 'Nízke riziko bankrotu',
+    },
+    grey: {
+        banner: 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20',
+        chip: 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/30',
+        caption: 'Nejednoznačná situácia',
+    },
+    distress: {
+        banner: 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20',
+        chip: 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30',
+        caption: 'Zvýšené riziko bankrotu',
+    },
+} as const;
+
+const SECTIONS: { title: string; icon: string; note?: string; rows: RatioRow[] }[] = [
     {
         title: 'Rentabilita',
         icon: 'fa-chart-line',
+        // The basis, named once for the three rows under it rather than
+        // repeated inside each label. All three divide `profit`, which is
+        // "VH z hospodárskej činnosti" -- the operating result, before tax --
+        // and not the net result a reader would otherwise assume from a bare
+        // "ROA". ROS divides it by the operating revenue for the same reason:
+        // a numerator and a denominator from different activity scopes are not
+        // a ratio. See `companies/services/financial_analysis.py`.
+        note: 'Počítané z výsledku hospodárenia z hospodárskej činnosti (pred zdanením); ROS ho delí výnosmi z hospodárskej činnosti.',
         rows: [
             { section: 'Rentabilita', key: 'roa', label: 'ROA (Rentabilita aktív)', unit: '%' },
             { section: 'Rentabilita', key: 'roe', label: 'ROE (Rentabilita vlastného kapitálu)', unit: '%' },
@@ -56,12 +91,15 @@ const INTERPRETATION_LABELS: Record<string, string> = {
     good: 'Priaznivá',
     warning: 'Uspokojivá',
     bad: 'Riziková',
+    unknown: '—',
 };
 
 const INTERPRETATION_COLORS: Record<string, string> = {
     good: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20',
     warning: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20',
     bad: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20',
+    // Not judged: the statement did not carry the line.
+    unknown: 'text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-slate-800',
 };
 
 const TrendArrowMini: React.FC<{ current: number; previous: number; inverse?: boolean }> = ({
@@ -104,16 +142,8 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
     return (
         <InfoCard title={`Pomerové ukazovatele — ${analysis.year}`} icon="fa-calculator">
             {/* Altman Z-score banner */}
-            {analysis.zScore != null && (
-                <div
-                    className={`mb-4 p-4 rounded-xl border ${
-                        analysis.zScore > 2.90
-                            ? 'border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20'
-                            : analysis.zScore > 1.23
-                              ? 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20'
-                              : 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20'
-                    }`}
-                >
+            {analysis.zScore != null && analysis.zScoreZone != null && (
+                <div className={`mb-4 p-4 rounded-xl border ${ZONE_STYLES[analysis.zScoreZone].banner}`}>
                     <div className="flex items-center justify-between">
                         <div>
                             <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -125,23 +155,45 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                         </div>
                         <div className="text-right">
                             <span
-                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${
-                                    analysis.zScore > 2.90
-                                        ? 'text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/30'
-                                        : analysis.zScore > 1.23
-                                          ? 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/30'
-                                          : 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/30'
-                                }`}
+                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${ZONE_STYLES[analysis.zScoreZone].chip}`}
                             >
                                 {analysis.zScoreLabel}
                             </span>
                             <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">
-                                {analysis.zScore > 2.90
-                                    ? 'Nízke riziko bankrotu'
-                                    : analysis.zScore > 1.23
-                                      ? 'Nejednoznačná situácia'
-                                      : 'Zvýšené riziko bankrotu'}
+                                {ZONE_STYLES[analysis.zScoreZone].caption}
                             </p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Taffler model. Same shape as the banner above and no ladder of its
+                own: the chip is the backend's `tafflerLabel`, so the words and
+                the colour cannot disagree -- which is how the Altman banner
+                above printed a verdict the risk summary beside it did not
+                share. The colour comes from the token, never from the score.
+
+                No caption line, because the Altman caption is a second spelling
+                of a verdict the backend already sends. Where the caption earns
+                its place is as a plain-language gloss on a zone name; here the
+                backend's label *is* the plain language. */}
+            {analysis.tafflerScore != null && analysis.tafflerZone != null && (
+                <div className={`mb-4 p-4 rounded-xl border ${ZONE_STYLES[analysis.tafflerZone].banner}`}>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                Tafflerov model
+                            </p>
+                            <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">
+                                {analysis.tafflerScore.toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="text-right">
+                            <span
+                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${ZONE_STYLES[analysis.tafflerZone].chip}`}
+                            >
+                                {analysis.tafflerLabel}
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -151,10 +203,17 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
             <div className="space-y-5">
                 {SECTIONS.map((section) => (
                     <div key={section.title}>
-                        <h4 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                            <i className={`fas ${section.icon} text-blue-500 dark:text-blue-400 text-xs`}></i>
-                            {section.title}
-                        </h4>
+                        <div className="mb-2">
+                            <h4 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <i className={`fas ${section.icon} text-blue-500 dark:text-blue-400 text-xs`}></i>
+                                {section.title}
+                            </h4>
+                            {section.note && (
+                                <p className="mt-1 ml-5 text-xs text-gray-400 dark:text-gray-500">
+                                    {section.note}
+                                </p>
+                            )}
+                        </div>
                         <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-slate-800">
                             <table className="w-full text-sm">
                                 <thead>
@@ -177,7 +236,12 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                                     {section.rows.map((row) => {
                                         const ratios = analysis.ratios as unknown as Record<string, number | null>;
                                         const value = ratios[row.key];
-                                        const interp = analysis.interpretation[row.key] || 'bad';
+                                        // One source of truth: the backend's token.
+                                        // It answers `unknown` for a ratio the
+                                        // statement did not support, so a row with no
+                                        // figure gets no verdict -- it used to get
+                                        // `bad`, a red "Riziková" beside a dash.
+                                        const interp = analysis.interpretation[row.key] ?? 'unknown';
                                         const prevVal = getPrevValue(row.key);
 
                                         return (

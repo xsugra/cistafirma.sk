@@ -143,7 +143,8 @@ export function SyncJobs() {
                 <tr><td colSpan={8} className="text-center py-12 text-slate-400">Žiadne joby</td></tr>
               ) : (
                 jobs.map(job => (
-                  <tr key={job.id} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                  <React.Fragment key={job.id}>
+                  <tr className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">#{job.id}</td>
                     <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{JOB_TYPE_LABELS[job.job_type] || job.job_type}</td>
                     <td className="px-4 py-3"><StatusBadge status={job.status} /></td>
@@ -176,6 +177,33 @@ export function SyncJobs() {
                       </div>
                     </td>
                   </tr>
+                  {(job.last_error || job.notes) && (
+                    <tr className="border-b border-slate-100 dark:border-slate-700/50">
+                      <td colSpan={8} className="px-4 pb-3 pt-0">
+                        <div className="space-y-1.5">
+                          {job.last_error && (
+                            <div className="rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2">
+                              <p className="text-[11px] font-semibold text-red-700 dark:text-red-300 uppercase tracking-wider">
+                                <i className="fas fa-exclamation-triangle mr-1.5" />Chyba
+                              </p>
+                              {/* A traceback is long and its line breaks are part of
+                                  the meaning, so it wraps and scrolls rather than
+                                  being clipped. */}
+                              <p className="mt-0.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-red-700 dark:text-red-300">
+                                {job.last_error}
+                              </p>
+                            </div>
+                          )}
+                          {job.notes && (
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              <i className="fas fa-note-sticky mr-1.5" />{job.notes}
+                            </p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))
               )}
             </tbody>

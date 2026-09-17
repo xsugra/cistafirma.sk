@@ -1,11 +1,38 @@
 import type { OrsrPerson, OrsrContribution, OrsrCapital } from '../../types';
 
-export const formatDate = (value?: string): string => {
+/**
+ * A date to `DD.MM.YYYY`, from either a date or a timestamp.
+ *
+ * The two are handled differently on purpose, and both differences matter:
+ *
+ * - A **date-only** value (`2015-01-30`, which is what most register fields
+ *   hold) is reformatted as a string and never goes near `Date`. `new
+ *   Date('2015-01-30')` is parsed as UTC midnight, so for any reader west of
+ *   Greenwich it renders as the 29th -- a date moved by the viewer's timezone is
+ *   a date that disagrees with the register.
+ * - A **timestamp** (`2026-09-12T18:23:36.428310Z`, which is what the two
+ *   "when did we last read this source" fields hold) is a moment, and the day it
+ *   fell on is the reader's day, so it goes through the local clock. This is
+ *   also what the debt rows already did before they were routed through here.
+ *
+ * Anything unparseable is returned unchanged, which is what the ORSR free-text
+ * fields need.
+ */
+export const formatDate = (value?: string | null): string => {
     if (!value) return '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        const [y, m, d] = value.split('-');
+
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (dateOnly) {
+        const [, y, m, d] = dateOnly;
         return `${d}.${m}.${y}`;
     }
+
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${pad(parsed.getDate())}.${pad(parsed.getMonth() + 1)}.${parsed.getFullYear()}`;
+    }
+
     return value;
 };
 

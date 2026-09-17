@@ -1,5 +1,8 @@
 global:
-  # Lokálny registry beží na kind sieti (172.18.0.2:5000, pozri scripts/k8s/local_registry.sh).
+  # Lokálny registry beží na kind sieti. Adresa nižšie (172.18.0.2:5000) je
+  # to, čo práve drží kontajner `kind-registry` — ale prideľuje ju Docker, takže
+  # po rekreaácii kontajnera alebo siete `kind` sa zmení. Aktuálnu vypíše
+  # scripts/k8s/local_registry.sh; keď sa zmení, zmeň ju tu aj tam.
   # Používame IP kvôli tomu, že DD k8s registry-mirror môže byť rozbitý a IP obchádza DNS.
   backendImage:
     repository: 172.18.0.2:5000/cistafirma-backend
@@ -32,6 +35,11 @@ backend:
 
 frontend:
   replicaCount: 1
+  # kind je kubeadm pod kapotou, takže jeho CoreDNS sedí na zvyčajnej adrese.
+  # Toto je jediná hodnota v tomto súbore, ktorá sa nedá odvodiť z ničoho
+  # v repozitári — je vlastnosť klastra, nie chartu. Overená pre lokálny kind:
+  #   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+  backendResolver: "10.96.0.10"
   resources:
     requests:
       cpu: 50m

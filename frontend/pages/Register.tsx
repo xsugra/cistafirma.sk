@@ -1,11 +1,13 @@
 import React, {useState} from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {AuthLayout} from '../components/AuthLayout';
 import {ROUTES} from '../constants';
+import {postAuthDestination} from '../utils/postAuthDestination';
 
 export const Register: React.FC = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const [formData, setFormData] = useState({
         firstName: '',
         lastName: '',
@@ -37,7 +39,7 @@ export const Register: React.FC = () => {
         setError('');
         try {
             await api.register(formData);
-            navigate(ROUTES.HOME);
+            navigate(postAuthDestination(location.state), {replace: true});
         } catch (error: any) {
             setError(error.message || 'Registrácia zlyhala. Skúste to prosím znova.');
         } finally {
@@ -152,7 +154,7 @@ export const Register: React.FC = () => {
                                 required
                                 value={formData.confirmPassword}
                                 onChange={handleChange}
-                                className={`app-input pr-10 ${isTypingConfirm ? (passwordsMatch ? 'border-green-500 focus:border-green-500 focus:ring-green-200' : 'border-red-500 focus:border-red-500 focus:ring-red-200') : ''}`}
+                                className={`app-input pr-10 ${isTypingConfirm ? (passwordsMatch ? 'border-green-500 focus:border-green-500 focus:ring-green-200 dark:focus:ring-green-900/40' : 'border-red-500 focus:border-red-500 focus:ring-red-200 dark:focus:ring-red-900/40') : ''}`}
                                 placeholder="••••••••"
                             />
                             <button

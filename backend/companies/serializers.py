@@ -4,9 +4,29 @@ from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
 from core.constants import PERSON_SKIP_PREFIXES
-from .models import Company, Watchlist, SectorBenchmark, SearchHistory
-from .services.financial_analysis import FinancialAnalysisService
+from registers.models import CompanySyncStatus
+from .models import Company, Watchlist, SectorBenchmark, SearchHistory, PostalCodeArea
+from .seat_matching import BUILDING, POSTAL_CODE, STREET
+from .services.financial_analysis import (
+    FinancialAnalysisService,
+    _amount,
+    _ratio_present,
+    _sum_present,
+)
 from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
+from .services.risk_score import compute_risk_score, risk_score_for_company
+
+
+#: The closed vocabulary `financialsState` answers with -- a token, not a
+#: sentence. The words belong to the screen (`frontend/companySections.ts`
+#: already owns every other "why this section is thin" note), and the
+#: operator-facing reason stays on the admin page, where
+#: `CompanySyncStatus.last_detail` is written for someone who can act on it.
+FINANCIALS_STATE_READY = "ready"
+FINANCIALS_STATE_NOT_FETCHED = "not_fetched"
+FINANCIALS_STATE_BLOCKED = "blocked"
+FINANCIALS_STATE_FAILED = "failed"
+FINANCIALS_STATE_NOTHING_RECORDED = "nothing_recorded"
 
 
 class CompanyListSerializer(serializers.ModelSerializer):
@@ -36,84 +56,256 @@ class WatchlistSerializer(serializers.ModelSerializer):
         return 'Vymazaná' if obj.company.datum_zrusenia else 'Aktívna'
 
     def get_riskScore(self, obj):
-        c = obj.company
-        total_debt = float(c.debt_vszp or 0) + float(c.debt_soc_poist or 0) + float(c.tax_debt or 0)
-        if total_debt > 0:
-            return max(5, int(70 - min(total_debt / 5000, 50)))
-        return 100
+        """The same score the company's own page shows.
+
+        It used to read the three debts and nothing else, so a company in the
+        Altman bankruptcy zone with no debt was 100/100 here and 80/100 on its
+        page -- the list and the detail disagreeing about the same company,
+        with nothing on either screen to suggest which one was wrong.
+        """
+        return risk_score_for_company(obj.company)['score']
 
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
     legal_form = serializers.CharField(source='get_legal_form_display', read_only=True)
     financials = serializers.SerializerMethodField()
+    financialsState = serializers.SerializerMethodField()
     analysis = serializers.SerializerMethodField()
+    riskScore = serializers.SerializerMethodField()
     benchmark = serializers.SerializerMethodField()
     executives = serializers.SerializerMethodField()
     connections = serializers.SerializerMethodField()
     orsr_profile = serializers.SerializerMethodField()
     ruz_portal_url = serializers.SerializerMethodField()
+    ruz_statements = serializers.SerializerMethodField()
+    ruz_annual_reports = serializers.SerializerMethodField()
+    seatLocation = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
-        fields = '__all__'
+        # Everything except the two raw ID lists, which are counts to every
+        # consumer this project has and arrays of up to 372 integers on the
+        # wire (measured: Tatra Asset Management holds 372 statement IDs, and
+        # the detail response is already 42 kB). `fields = '__all__'` published
+        # them because they are fields on the model, not because anything read
+        # them -- the two counts below are what a section can actually use.
+        exclude = ['id_uctovnych_zavierok', 'id_vyrocnych_sprav']
+
+    def get_financialsState(self, obj):
+        """Why the financial sections are empty, when they are.
+
+        The page used to answer every one of these with "nie sú k dispozícii",
+        which is one sentence for four different facts -- and a reader cannot
+        tell from it whether waiting would help, or whether asking again is
+        pointless. The sync engine already knows which one it is, so it is
+        named here rather than collapsed again one layer further out.
+
+        Deliberately coarse in one place: the registry answering "this company
+        has no statements" and the registry answering with statements, none of
+        which could be read, both store zero rows, and the only thing that
+        separates them is the wording of `last_detail` -- a sentence written
+        for an operator. Both are `nothing_recorded`, which is the part that is
+        certainly true of both, and the exact reason is one click away on the
+        admin Stav synchronizácie page.
+        """
+        if obj.financial_results.exists():
+            return FINANCIALS_STATE_READY
+
+        status = obj.sync_statuses.filter(
+            source=CompanySyncStatus.SOURCE_FINANCIALS
+        ).first()
+        if status is None:
+            return FINANCIALS_STATE_NOT_FETCHED
+        if status.is_blocked:
+            return FINANCIALS_STATE_BLOCKED
+        if status.consecutive_failures > 0:
+            return FINANCIALS_STATE_FAILED
+        return FINANCIALS_STATE_NOTHING_RECORDED
+
+    def get_seatLocation(self, obj):
+        """The seat on the map at whatever precision we can honestly claim.
+
+        Three levels, tried best first, and the order is the policy:
+
+        1. **`building`** — the register's own address point for this house
+           number, in `seat_lat`/`seat_lon`, matched offline by
+           `match_seat_addresses`. `radiusM` is 0 and the map draws a bare point,
+           because there is no uncertainty left to draw. Measured 2026-09-13:
+           78,6 % of our rows.
+        2. **`street`** — the centroid of the company's street, with `radiusM`
+           being the 90th-percentile distance to that street's own points, so the
+           circle is a measured spread rather than a constant. 6,9 %.
+        3. **`postal_code`** — the `PostalCodeArea` circle, unchanged. 14,5 %.
+
+        The two sources are deliberately *not* merged. `seat_*` and
+        `PostalCodeArea` are computed at different times from different levels of
+        the same register, so a single blended answer would be a claim with two
+        independent ways to go stale and no way to say which one moved. The
+        fallback is chosen once, here, and each level names itself.
+
+        `None` is a real answer and means "we cannot place this seat at all", not
+        "the company has no seat": 1,92 % of our rows carry a PSČ the MV SR
+        address register does not list (post-office PSČ with no address point),
+        plus three rows with no PSČ at all. The map is omitted for those rather
+        than drawn from a guess.
+
+        `pending` says that the fallback to the PSČ circle is *not* a statement
+        about the register: nothing has been computed for the address the row
+        carries now. It is the one thing `seat_matched_at` can say that the
+        `seat_*` columns cannot, because the matcher stamps **every** row it
+        processes, placed or not, and a cleared pin carries no stamp at all:
+
+        - `seat_precision` empty, `seat_matched_at` set -- the matcher ran
+          against this address and the register does not place it. 12,6 % of
+          rows (56 605 of 449 780, measured 2026-09-17), and the circle is the
+          honest answer.
+        - `seat_precision` empty, `seat_matched_at` `None` -- either the row was
+          imported after the last run, or `Company.save()` cleared the pin when
+          the address moved. The circle is the same, but the sentence under the
+          map must not claim the register cannot do better, because it may.
+
+        On a placed row there is no fallback, so `pending` is always `False`
+        there -- including the rows matched before migration 0022 added
+        `seat_matched_at`, whose stamp is missing but whose pin is not. The
+        column was never backfilled, so those rows do read as `pending` when
+        they fall back; the matcher stamps them the next time it touches them.
+        That last clause is what the whole distinction rests on, and it was
+        false until 2026-09-17: the matcher skipped a row whose six `seat_*`
+        values already matched what it would write, and an unplaced row's values
+        *always* match, so it never stamped them -- 56 609 rows read `pending`
+        for ever while claiming to mean "we have not asked yet". The command now
+        also writes when the row carries no stamp; see its module docstring.
+        """
+        if obj.seat_precision in (BUILDING, STREET) and obj.seat_lat is not None:
+            return {
+                'lat': obj.seat_lat,
+                'lon': obj.seat_lon,
+                # The column is nullable and `street` is never 0, so the `or 0`
+                # only ever fires for a building -- which is the value it wants.
+                'radiusM': obj.seat_radius_m or 0,
+                'psc': obj.psc or '',
+                'precision': obj.seat_precision,
+                'pending': False,
+            }
+
+        psc = PostalCodeArea.normalize_psc(obj.psc)
+        if not psc:
+            return None
+        area = PostalCodeArea.objects.filter(psc=psc).first()
+        if area is None:
+            return None
+        return {
+            'lat': area.lat,
+            'lon': area.lon,
+            'radiusM': area.radius_m,
+            'psc': area.psc,
+            'precision': POSTAL_CODE,
+            'pending': obj.seat_matched_at is None,
+        }
 
     def get_financials(self, obj):
+        """Year rows with absent figures as `None`, never as 0.
+
+        Every field used to be `float(r.X or 0)`, which made "the statement did
+        not carry this line" and "the line reads zero" the same value. They are
+        not the same fact, and the difference is now common rather than rare: the
+        write gate stores a balance sheet on its own, so a row may legitimately
+        have `revenue` and `profit` unset. `None` is the only representation that
+        survives to the screen as `—` instead of `0 €`.
+
+        The two ratios are computed by the same expressions the sector medians
+        are computed by (`companies/services/benchmarking.py`), on purpose: the
+        benchmark prints them side by side, and a comparison between two
+        different formulas is not a comparison. That means an absent input
+        yields no ratio here too -- a company that filed a balance sheet with no
+        liabilities line has an unknown debt ratio, not a debt-free one.
+        """
         results = obj.financial_results.all().order_by('year')
         out = []
         for r in results:
-            assets_total = float(r.assets_total or 0)
-            liabilities_total = float(r.liabilities_total or 0)
-            liabilities_accruals = float(r.liabilities_accruals or 0)
-            revenue = float(r.revenue or 0)
-            added_value = float(r.added_value or 0)
+            revenue = _amount(r.revenue)
+            added_value = _amount(r.added_value)
+            assets_total = _amount(r.assets_total)
+            liabilities_total = _amount(r.liabilities_total)
+            liabilities_accruals = _amount(r.liabilities_accruals)
 
-            debt_ratio = None
-            if assets_total:
-                debt_ratio = round((liabilities_total + liabilities_accruals) / assets_total * 100, 2)
-
-            gross_margin = None
-            if revenue:
-                gross_margin = round(added_value / revenue * 100, 2)
+            debt_ratio = _ratio_present(
+                _sum_present(liabilities_total, liabilities_accruals), assets_total
+            )
+            gross_margin = _ratio_present(added_value, revenue)
 
             out.append({
                 'year': r.year,
                 'revenue': revenue,
-                'profit': float(r.profit or 0),
-                'totalRevenue': float(r.total_revenue or 0),
-                'costs': float(r.costs or 0),
-                'incomeTax': float(r.income_tax or 0),
-                'incomeTaxPaid': float(r.income_tax_paid or 0),
+                'profit': _amount(r.profit),
+                # The after-tax row, which `profit` used to be mistaken for. A
+                # row that has not been re-read since the two were split carries
+                # no value here, and `None` -- a dash on the screen -- is the
+                # honest answer for it.
+                'profitAfterTax': _amount(r.profit_after_tax),
+                'totalRevenue': _amount(r.total_revenue),
+                'costs': _amount(r.costs),
+                'incomeTax': _amount(r.income_tax),
+                'incomeTaxPaid': _amount(r.income_tax_paid),
                 'assetsTotal': assets_total,
-                'assetsIntangible': float(r.assets_intangible or 0),
-                'assetsTangible': float(r.assets_tangible or 0),
-                'assetsFinancial': float(r.assets_financial or 0),
-                'assetsInventory': float(r.assets_inventory or 0),
-                'assetsReceivablesLong': float(r.assets_receivables_long or 0),
-                'assetsReceivablesShort': float(r.assets_receivables_short or 0),
-                'assetsFinancialAccounts': float(r.assets_financial_accounts or 0),
-                'assetsAccruals': float(r.assets_accruals or 0),
-                'equity': float(r.equity or 0),
-                'equityBasic': float(r.equity_basic or 0),
-                'equityCapitalFunds': float(r.equity_capital_funds or 0),
-                'equityProfitFunds': float(r.equity_profit_funds or 0),
-                'equityRetained': float(r.equity_retained or 0),
+                'assetsIntangible': _amount(r.assets_intangible),
+                'assetsTangible': _amount(r.assets_tangible),
+                'assetsFinancial': _amount(r.assets_financial),
+                'assetsCurrent': _amount(r.assets_current),
+                'assetsInventory': _amount(r.assets_inventory),
+                'assetsReceivablesLong': _amount(r.assets_receivables_long),
+                'assetsReceivablesShort': _amount(r.assets_receivables_short),
+                'assetsFinancialShort': _amount(r.assets_financial_short),
+                'assetsFinancialAccounts': _amount(r.assets_financial_accounts),
+                'assetsAccruals': _amount(r.assets_accruals),
+                'equity': _amount(r.equity),
+                'equityBasic': _amount(r.equity_basic),
+                'equityCapitalFunds': _amount(r.equity_capital_funds),
+                'equityProfitFunds': _amount(r.equity_profit_funds),
+                'equityRetained': _amount(r.equity_retained),
                 'liabilitiesTotal': liabilities_total,
-                'liabilitiesReserves': float(r.liabilities_reserves or 0),
-                'liabilitiesLong': float(r.liabilities_long or 0),
-                'liabilitiesShort': float(r.liabilities_short or 0),
+                'liabilitiesReserves': _amount(r.liabilities_reserves),
+                'liabilitiesLong': _amount(r.liabilities_long),
+                'liabilitiesShort': _amount(r.liabilities_short),
                 'liabilitiesAccruals': liabilities_accruals,
-                'addedValue': float(r.added_value or 0),
+                'addedValue': added_value,
                 'debtRatio': debt_ratio,
                 'grossMargin': gross_margin,
             })
         return out
 
+    def _analysis_payload(self, obj):
+        """`analysis`, computed once per object.
+
+        `get_analysis` and `get_riskScore` both need it, and DRF calls method
+        fields independently -- without this the service would walk the
+        company's financial results twice for every request.
+        """
+        cache = getattr(self, '_analysis_by_pk', None)
+        if cache is None:
+            cache = self._analysis_by_pk = {}
+        if obj.pk not in cache:
+            results = list(obj.financial_results.all().order_by('year'))
+            cache[obj.pk] = (
+                FinancialAnalysisService.to_dict(
+                    FinancialAnalysisService.analyze(results)
+                )
+                if results
+                else None
+            )
+        return cache[obj.pk]
+
     def get_analysis(self, obj):
-        results = list(obj.financial_results.all().order_by('year'))
-        if not results:
-            return None
-        analysis = FinancialAnalysisService.analyze(results)
-        return FinancialAnalysisService.to_dict(analysis)
+        return self._analysis_payload(obj)
+
+    def get_riskScore(self, obj):
+        """The one risk score -- see `services/risk_score.py`.
+
+        Published here rather than derived in the client because the client's
+        copy and this one disagreed: the same company was `distress` and 80/100
+        on its page while the watchlist, reading debt alone, called it 100/100.
+        """
+        return compute_risk_score(obj, self._analysis_payload(obj))
 
     def get_benchmark(self, obj):
         """Return sector benchmark for the company's NACE section."""
@@ -156,9 +348,56 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         }
 
     def get_ruz_portal_url(self, obj):
+        """The register's own page for this entity.
+
+        **This URL was wrong for as long as it existed, and wrong in the way
+        that looks like it works.** It pointed at
+        `home/uctovna-jednotka?id=<id>`, which is a route RUZ's front end does
+        not serve: requesting it answers with the site's WAF rejection page
+        ("The requested URL was rejected. Please consult your administrator.")
+        and a support id, not a 404 and not the company. Every reader who
+        clicked through from the Účtovné závierky section hit that page.
+
+        The working route is `domain/accountingentity/show/<ruz_id>`, verified
+        against the live register for the id in that report (`1587213`): it
+        answers 200 and renders the correct entity. The id itself was never the
+        problem -- the API accepts it -- so only the path changed.
+
+        Kept as a link even though the documents are now downloadable here: it
+        is the register's own record of the filing, and a reader checking our
+        figures against the source should be able to reach it.
+        """
         if obj.ruz_id:
-            return f"https://www.registeruz.sk/cruz-public/home/uctovna-jednotka?id={obj.ruz_id}"
+            return f"https://www.registeruz.sk/cruz-public/domain/accountingentity/show/{obj.ruz_id}"
         return None
+
+    def get_ruz_statements(self, obj):
+        """How many účtovné závierky RUZ itself lists for this company.
+
+        This is the denominator the "Účtovné závierky" section needs and the one
+        number a reader cannot get from anywhere else on the page. The page
+        shows the years *we* read; without this, a company whose statements RUZ
+        holds and which the financials sync has not reached yet looks identical
+        to a company that files nothing at all. Volkswagen Slovakia is exactly
+        that case today: 37 statement IDs in RUZ, zero rows read here.
+
+        The list is already loaded with the row -- `exclude` above keeps it off
+        the *wire*, not out of memory -- so this is a `len` on it rather than a
+        second query. Every one of the 445 626 rows holds a list (measured
+        2026-09-12: 0 nulls, 0 non-arrays), so there is no other shape to
+        handle.
+        """
+        return len(obj.id_uctovnych_zavierok or [])
+
+    def get_ruz_annual_reports(self, obj):
+        """The same count for výročné správy, which we do not read at all.
+
+        Only 4 % of rows carry one and there is no endpoint here that fetches a
+        report's body, so this is published as a count for one reason: so the
+        section can say what exists and is not in this database, rather than
+        leaving a reader to conclude it does not exist.
+        """
+        return len(obj.id_vyrocnych_sprav or [])
 
     def _get_orsr_profile(self, obj):
         try:

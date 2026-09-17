@@ -23,6 +23,13 @@ backend:
 
 frontend:
   replicaCount: 3
+  # `backendResolver` tu naschvál **chýba**, hoci `values-dev.yaml` ho má.
+  # Neexistuje klaster, ktorému by patril, a vymyslená adresa by zlyhala ticho
+  # (502 na každej požiadavke, pod zdravý) namiesto hlasito. Kým sa doplní,
+  # frontend pod do produkcie nenabehne — čo je správne, lebo nasadenie do
+  # klastra si túto hodnotu musí vybrať vedome. Až klaster bude:
+  #   kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+  # a doplniť sem (kubeadm/kind 10.96.0.10, k3s 10.43.0.10).
   resources:
     requests:
       cpu: 200m

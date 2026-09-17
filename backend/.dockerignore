@@ -6,8 +6,17 @@ __pycache__
 *.so
 .git
 .gitignore
-.env.dev
-.env.local
+# Env files, without exception. `.env.docker` was the one missing from this list,
+# and because settings.py loads it whenever it exists, its presence decided two
+# things on a machine that had an untracked copy (the Mac) and not on one that
+# did not (dell): the image layer carried a real SECRET_KEY and POSTGRES_PASSWORD
+# at /app/.env.docker, and the collectstatic in the Dockerfile succeeded there
+# while `ImproperlyConfigured: SECRET_KEY must be set in production` killed it on
+# the server. The exception was invisible because that RUN ended in `|| true`.
+# An image must carry no secret, and the same commit must build the same image
+# wherever it is built.
+.env
+.env.*
 *.sqlite3
 db.sqlite3
 *.log

@@ -8,6 +8,16 @@ interface AssetsPieChartProps {
     data: Financials;
 }
 
+/**
+ * The wrapper below is `w-44 h-44`, which is 11rem -- 176px at this app's 16px
+ * root. Recharts measures at `{width: -1, height: -1}` until its ResizeObserver
+ * answers and logs a warning on the way, in production as well as in dev
+ * (Recharts 3 hardcodes `isDev = true`). Handing it the real box means the pie
+ * draws at its final size on the first frame and nothing is logged. Keep the two
+ * in step: if the class changes, this changes with it.
+ */
+const PIE_BOX = 176;
+
 const COLORS = [
     '#93c5fd', // blue-300
     '#3b82f6', // blue-500
@@ -17,6 +27,7 @@ const COLORS = [
     '#1e40af', // blue-800
     '#bfdbfe', // blue-200
     '#7dd3fc', // sky-300
+    '#0ea5e9', // sky-500
 ];
 
 const CustomTooltip = ({ active, payload }: any) => {
@@ -33,30 +44,55 @@ const CustomTooltip = ({ active, payload }: any) => {
 };
 
 export const AssetsPieChart: React.FC<AssetsPieChartProps> = ({ data }) => {
+    // A pie draws only positive slices, so a line the statement did not carry
+    // and a line it filed as zero land in the same place here. The total below
+    // keeps the distinction, because `Aktíva celkom` is a figure the statement
+    // either filed or did not.
     const segments = [
-        { name: 'Nehmotný majetok', value: data.assetsIntangible },
-        { name: 'Hmotný majetok', value: data.assetsTangible },
-        { name: 'Finančný majetok', value: data.assetsFinancial },
-        { name: 'Zásoby', value: data.assetsInventory },
-        { name: 'Dlhodobé pohľadávky', value: data.assetsReceivablesLong },
-        { name: 'Krátkodobé pohľadávky', value: data.assetsReceivablesShort },
-        { name: 'Finančné účty', value: data.assetsFinancialAccounts },
-        { name: 'Časové rozlíšenie', value: data.assetsAccruals },
+        { name: 'Nehmotný majetok', value: data.assetsIntangible ?? 0 },
+        { name: 'Hmotný majetok', value: data.assetsTangible ?? 0 },
+        { name: 'Finančný majetok', value: data.assetsFinancial ?? 0 },
+        { name: 'Zásoby', value: data.assetsInventory ?? 0 },
+        { name: 'Dlhodobé pohľadávky', value: data.assetsReceivablesLong ?? 0 },
+        { name: 'Krátkodobé pohľadávky', value: data.assetsReceivablesShort ?? 0 },
+        { name: 'Krátkodobý finančný majetok', value: data.assetsFinancialShort ?? 0 },
+        { name: 'Finančné účty', value: data.assetsFinancialAccounts ?? 0 },
+        { name: 'Časové rozlíšenie', value: data.assetsAccruals ?? 0 },
     ];
 
-    const total = data.assetsTotal || segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
+    const total = data.assetsTotal ?? segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
     const negative = segments.filter(s => s.value < 0);
     const filtered = segments
         .filter(s => s.value > 0)
         .map(s => ({ ...s, percent: total ? s.value / total : 0 }));
 
-    if (filtered.length === 0) return null;
+    // We have the total and nothing to break it into: template 1164 lists its
+    // asset lines without the "súčet" suffix the vocabulary matches on, so a
+    // filed balance sheet can arrive with no readable composition. Saying so
+    // beats an absent card, which reads as "this company filed nothing".
+    if (filtered.length === 0) {
+        if (data.assetsTotal == null) return null;
+        return (
+            <InfoCard title={`Aktíva ${data.year}`} icon="fa-chart-pie">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Celkom: <span className="text-gray-900 dark:text-white font-bold">{formatCurrency(total)}</span>
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    Rozpis na jednotlivé položky sa z tejto závierky nepodarilo prečítať.
+                </p>
+            </InfoCard>
+        );
+    }
 
     return (
         <InfoCard title={`Aktíva ${data.year}`} icon="fa-chart-pie">
             <div className="flex flex-col items-center gap-4">
                 <div className="w-44 h-44">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                        initialDimension={{ width: PIE_BOX, height: PIE_BOX }}
+                    >
                         <PieChart>
                             <Pie
                                 data={filtered}

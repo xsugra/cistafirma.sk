@@ -7,10 +7,23 @@ DEPLOY_ENV=${DEPLOY_ENV:-dev}
 DEPLOY_IMAGE_TAG=${DEPLOY_IMAGE_TAG:-latest}
 BACKEND_IMAGE=${BACKEND_IMAGE:-}
 FRONTEND_IMAGE=${FRONTEND_IMAGE:-}
+# Adresa clusterového DNS pre nginx vo frontend pody. Odvodiť sa nedá -- každý
+# klaster má inú (kubeadm a kind 10.96.0.10, k3s 10.43.0.10) -- takže sa
+# vyžaduje. Bez nej by nginx buď ne naštartoval ("no name servers defined"),
+# alebo by pri vymyslenej hodnote vracal 502 na každej požiadavke a pod by sa
+# pritom hlásil ako zdravý. Preto sa na chýbajúcu hodnotu padá tu, nie v klastri.
+BACKEND_RESOLVER=${BACKEND_RESOLVER:-}
 RUN_DB_BACKUP=${RUN_DB_BACKUP:-false}
 
 if [ -z "$BACKEND_IMAGE" ] || [ -z "$FRONTEND_IMAGE" ]; then
   echo "ERROR: BACKEND_IMAGE and FRONTEND_IMAGE must be set"
+  exit 1
+fi
+
+if [ -z "$BACKEND_RESOLVER" ]; then
+  echo "ERROR: BACKEND_RESOLVER must be set to this cluster's DNS service address."
+  echo "       Find it with:"
+  echo "         kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'"
   exit 1
 fi
 
@@ -40,6 +53,7 @@ RUN_ID=$(date +%s)
 # Inject dynamic image references and migration job run id
 sed -i.bak "s|__BACKEND_IMAGE__|$BACKEND_IMAGE_REF|g" "$TMP_DIR/deploy/k8s/base/backend-deployment.yaml"
 sed -i.bak "s|__FRONTEND_IMAGE__|$FRONTEND_IMAGE_REF|g" "$TMP_DIR/deploy/k8s/base/frontend-deployment.yaml"
+sed -i.bak "s|__BACKEND_RESOLVER__|$BACKEND_RESOLVER|g" "$TMP_DIR/deploy/k8s/base/frontend-deployment.yaml"
 sed -i.bak "s|__BACKEND_IMAGE__|$BACKEND_IMAGE_REF|g" "$TMP_DIR/deploy/k8s/base/migrate-job.yaml"
 sed -i.bak "s|__RUN_ID__|$RUN_ID|g" "$TMP_DIR/deploy/k8s/base/migrate-job.yaml"
 find "$TMP_DIR/deploy/k8s" -name '*.bak' -delete

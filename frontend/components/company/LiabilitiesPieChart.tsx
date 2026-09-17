@@ -8,6 +8,16 @@ interface LiabilitiesPieChartProps {
     data: Financials;
 }
 
+/**
+ * The wrapper below is `w-44 h-44`, which is 11rem -- 176px at this app's 16px
+ * root. Recharts measures at `{width: -1, height: -1}` until its ResizeObserver
+ * answers and logs a warning on the way, in production as well as in dev
+ * (Recharts 3 hardcodes `isDev = true`). Handing it the real box means the pie
+ * draws at its final size on the first frame and nothing is logged. Keep the two
+ * in step: if the class changes, this changes with it.
+ */
+const PIE_BOX = 176;
+
 const COLORS = [
     '#93c5fd', // blue-300 — equity basic
     '#60a5fa', // blue-400 — capital funds
@@ -33,30 +43,54 @@ const CustomTooltip = ({ active, payload }: any) => {
 };
 
 export const LiabilitiesPieChart: React.FC<LiabilitiesPieChartProps> = ({ data }) => {
+    // A pie draws only positive slices, so a line the statement did not carry
+    // and a line it filed as zero land in the same place here. What the card
+    // states in words below keeps the distinction.
     const segments = [
-        { name: 'Základné imanie', value: data.equityBasic },
-        { name: 'Kapitálové fondy', value: data.equityCapitalFunds },
-        { name: 'Fondy zo zisku', value: data.equityProfitFunds },
-        { name: 'VH minulých rokov', value: data.equityRetained },
-        { name: 'Rezervy', value: data.liabilitiesReserves },
-        { name: 'Dlhodobé záväzky', value: data.liabilitiesLong },
-        { name: 'Krátkodobé záväzky', value: data.liabilitiesShort },
-        { name: 'Časové rozlíšenie', value: data.liabilitiesAccruals },
+        { name: 'Základné imanie', value: data.equityBasic ?? 0 },
+        { name: 'Kapitálové fondy', value: data.equityCapitalFunds ?? 0 },
+        { name: 'Fondy zo zisku', value: data.equityProfitFunds ?? 0 },
+        { name: 'VH minulých rokov', value: data.equityRetained ?? 0 },
+        { name: 'Rezervy', value: data.liabilitiesReserves ?? 0 },
+        { name: 'Dlhodobé záväzky', value: data.liabilitiesLong ?? 0 },
+        { name: 'Krátkodobé záväzky', value: data.liabilitiesShort ?? 0 },
+        { name: 'Časové rozlíšenie', value: data.liabilitiesAccruals ?? 0 },
     ];
 
-    const total = data.assetsTotal || segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
+    // The sheet balances, so total assets are the pasíva total. `??`, not `||`:
+    // a filed 0 is a figure, not a reason to fall back to the parts we read.
+    const total = data.assetsTotal ?? segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
     const negative = segments.filter(s => s.value < 0);
     const filtered = segments
         .filter(s => s.value > 0)
         .map(s => ({ ...s, percent: total ? s.value / total : 0 }));
 
-    if (filtered.length === 0) return null;
+    // Nothing to break down, but the two pasíva totals may still be filed --
+    // that is the whole content of a balance-sheet-only statement.
+    if (filtered.length === 0) {
+        if (data.equity == null && data.liabilitiesTotal == null) return null;
+        return (
+            <InfoCard title={`Pasíva ${data.year}`} icon="fa-chart-pie">
+                <div className="space-y-1 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    <p>Vlastný kapitál: <span className="text-gray-900 dark:text-white font-bold">{formatCurrency(data.equity)}</span></p>
+                    <p>Záväzky celkom: <span className="text-gray-900 dark:text-white font-bold">{formatCurrency(data.liabilitiesTotal)}</span></p>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    Rozpis na jednotlivé položky sa z tejto závierky nepodarilo prečítať.
+                </p>
+            </InfoCard>
+        );
+    }
 
     return (
         <InfoCard title={`Pasíva ${data.year}`} icon="fa-chart-pie">
             <div className="flex flex-col items-center gap-4">
                 <div className="w-44 h-44">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                        initialDimension={{ width: PIE_BOX, height: PIE_BOX }}
+                    >
                         <PieChart>
                             <Pie
                                 data={filtered}

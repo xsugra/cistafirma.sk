@@ -8,9 +8,16 @@ interface RiskDonutProps {
   size?: 'sm' | 'md';
 }
 
+/**
+ * `box` is the size the class list already draws, in the pixels Recharts has to
+ * be told: `w-20` is 5rem and `w-48` is 12rem at this app's 16px root, and the
+ * two must agree or the first frame is the wrong size. See `initialDimension`
+ * below for why it is passed at all -- Recharts 3 warns at `-1` in production
+ * too, and `warn` is not stripped from the bundle.
+ */
 const SIZES = {
-  sm: { container: 'w-20 h-20', inner: 24, outer: 36, scoreText: 'text-lg', subText: 'text-[10px]' },
-  md: { container: 'w-48 h-48 mx-auto', inner: 60, outer: 80, scoreText: 'text-4xl', subText: 'text-sm' },
+  sm: { container: 'w-20 h-20', box: 80, inner: 24, outer: 36, scoreText: 'text-lg', subText: 'text-[10px]' },
+  md: { container: 'w-48 h-48 mx-auto', box: 192, inner: 60, outer: 80, scoreText: 'text-4xl', subText: 'text-sm' },
 };
 
 export const RiskDonut: React.FC<RiskDonutProps> = ({ score, size = 'md' }) => {
@@ -32,7 +39,14 @@ export const RiskDonut: React.FC<RiskDonutProps> = ({ score, size = 'md' }) => {
 
   return (
     <div className={`relative ${s.container}`}>
-      <ResponsiveContainer width="100%" height="100%">
+      {/* The box is fixed, so the initial measurement can be the real one: the
+          donut draws at its final size on the first frame and Recharts never
+          sees the `-1` it logs a warning about. */}
+      <ResponsiveContainer
+        width="100%"
+        height="100%"
+        initialDimension={{ width: s.box, height: s.box }}
+      >
         <PieChart>
           <Pie
             data={data}

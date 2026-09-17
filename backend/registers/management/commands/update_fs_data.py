@@ -9,7 +9,6 @@ from collections import defaultdict
 from registers.scrapers.scraper_links_dph import FS_DATASET_URLS
 from registers.scrapers.financna_sprava_scraper import download_and_parse_fs_data
 from registers.services.fs_data_handlers import FSDataHandlers
-from registers.services.fs_company_matcher import find_company_by_fuzzy_match
 from companies.models import Company
 
 
@@ -74,7 +73,13 @@ class Command(BaseCommand):
 
     def _process_dataset(self, key: str, url: str, handlers: FSDataHandlers, dry_run: bool) -> dict:
         """Spracuje jeden dataset z FS."""
-        stats = {'updated': 0, 'skipped': 0, 'not_found': 0, 'errors': 0}
+        stats = {
+            'updated': 0,
+            'skipped': 0,
+            'not_found': 0,
+            'unverified': 0,
+            'errors': 0,
+        }
 
         items = download_and_parse_fs_data(url)
         if not items:
@@ -94,21 +99,22 @@ class Command(BaseCommand):
 
             company = companies_by_ico.get(item.get('ICO'))
             if not company:
-                company = find_company_by_fuzzy_match(item)
-
-            if company:
-                try:
-                    if handlers.update_company(company, item, key):
-                        company.fs_update_date = timezone.now()
-                        companies_to_save[company.ico] = company
-                        stats['updated'] += 1
-                    else:
-                        stats['skipped'] += 1
-                except Exception as e:
-                    self.stderr.write(self.style.ERROR(f"Chyba: {e}"))
-                    stats['errors'] += 1
-            else:
+                # FS data without an IČO cannot be safely associated with a
+                # company. Name/address fuzzy matching may corrupt a record.
                 stats['not_found'] += 1
+                stats['unverified'] += 1
+                continue
+
+            try:
+                if handlers.update_company(company, item, key):
+                    company.fs_update_date = timezone.now()
+                    companies_to_save[company.ico] = company
+                    stats['updated'] += 1
+                else:
+                    stats['skipped'] += 1
+            except Exception as e:
+                self.stderr.write(self.style.ERROR(f"Chyba: {e}"))
+                stats['errors'] += 1
 
         # Uloženie
         if companies_to_save and not dry_run:
@@ -135,5 +141,6 @@ class Command(BaseCommand):
         self.stdout.write(
             f"  {key}: {self.style.SUCCESS(f'{stats['updated']} updated')}, "
             f"{stats['skipped']} skipped, {stats['not_found']} not found, "
+            f"{stats['unverified']} unverified, "
             f"{self.style.ERROR(f'{stats['errors']} errors') if stats['errors'] else '0 errors'}"
         )

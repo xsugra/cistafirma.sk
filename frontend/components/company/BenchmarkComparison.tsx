@@ -1,11 +1,20 @@
 import React from 'react';
-import type { CompanyBenchmark, YearAnalysis } from '../../types';
+import type { CompanyBenchmark, Financials, YearAnalysis } from '../../types';
 import { InfoCard } from '../InfoCard';
 import { formatCurrency } from '../../utils/format';
 
 interface BenchmarkComparisonProps {
     benchmark: CompanyBenchmark;
     analysis: YearAnalysis;
+    /**
+     * The statement row for `analysis.year`, when we have it.
+     *
+     * Four rows below compare a figure the ratio set does not carry, so they
+     * read it from here. Optional, because a company can have an analysis
+     * without the statement that produced it -- the rows then show `—` rather
+     * than a substitute.
+     */
+    financials?: Financials | null;
 }
 
 interface MetricDef {
@@ -22,22 +31,39 @@ const METRICS: MetricDef[] = [
     { label: 'ROS', companyKey: 'ros', benchmarkKey: 'ros', unit: '%' },
     { label: 'Aktíva', companyKey: 'assetsTotal', benchmarkKey: 'assetsTotal', unit: '€' },
     { label: 'Vlastný kapitál', companyKey: 'equity', benchmarkKey: 'equity', unit: '€' },
-    { label: 'Zadĺženosť', companyKey: 'debtToEquity', benchmarkKey: 'debtRatio', unit: '%', inverse: true },
-    { label: 'Hrubá marža', companyKey: 'selfFinancingRatio', benchmarkKey: 'grossMargin', unit: '%' },
+    { label: 'Zadĺženosť', companyKey: 'debtRatio', benchmarkKey: 'debtRatio', unit: '%', inverse: true },
+    { label: 'Hrubá marža', companyKey: 'grossMargin', benchmarkKey: 'grossMargin', unit: '%' },
     { label: 'L3 Likvidita', companyKey: 'currentRatio', benchmarkKey: 'currentRatio', unit: '×' },
     { label: 'Samofinancovanie', companyKey: 'selfFinancingRatio', benchmarkKey: 'selfFinancingRatio', unit: '%' },
 ];
 
-export const BenchmarkComparison: React.FC<BenchmarkComparisonProps> = ({ benchmark, analysis }) => {
+/**
+ * Rows that read a filed figure rather than a ratio.
+ *
+ * The ratio set carries no balance-sheet total, no gross margin and no debt
+ * ratio, so before this the two totals were hardcoded to `null` -- the rows
+ * always showed `—` -- and the other two borrowed the nearest ratio. The
+ * *Zadlzenost* row showed `debtToEquity`, a multiple whose own thresholds are
+ * 1.5 and 3.0, against a sector median that is a percentage, which flatters the
+ * company almost every time; the *Hruba marza* row showed
+ * `selfFinancingRatio`, which is equity over assets and is not gross margin.
+ *
+ * `Financials.debtRatio` is computed by the same formula the sector median is a
+ * median of, so that row now compares like with like.
+ */
+const STATEMENT_KEYS = ['assetsTotal', 'equity', 'grossMargin', 'debtRatio'];
+
+export const BenchmarkComparison: React.FC<BenchmarkComparisonProps> = ({
+    benchmark,
+    analysis,
+    financials,
+}) => {
     const companyRatios = analysis.ratios;
 
     const getCompanyValue = (key: string): number | null => {
-        if (key === 'assetsTotal') {
-            // For absolute values, we need data from the latest financials
-            return null; // We'll use ratios instead
-        }
-        if (key === 'equity') {
-            return null;
+        if (STATEMENT_KEYS.includes(key)) {
+            if (!financials) return null;
+            return (financials as unknown as Record<string, number | null>)[key] ?? null;
         }
         const ratios = companyRatios as unknown as Record<string, number | null>;
         return ratios[key] ?? null;

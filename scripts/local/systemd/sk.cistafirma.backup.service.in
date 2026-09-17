@@ -1,0 +1,29 @@
+[Unit]
+Description=CistaFirma weekly PostgreSQL backup and off-site replica
+Documentation=file://__ROOT_DIR__/docs/DATA_PROTECTION.md
+# No After=/Wants= on docker.service or network-online.target: a systemd *user*
+# unit may not take dependencies on system units. The job fires weekly at a
+# fixed wall-clock time on a host whose stack is up; if it ever fires while
+# docker is not running, scheduled_backup.sh fails loudly and writes the failure
+# marker, which is the same guarantee the macOS job has.
+
+[Service]
+Type=oneshot
+ExecStart=__ROOT_DIR__/scripts/local/scheduled_backup.sh
+# Deterministic PATH instead of whatever the user manager inherited, for the
+# same reason the launchd plist embeds one: a job that resolves python3 or rsync
+# differently from the operator's shell fails in ways nobody can reproduce.
+Environment=PATH=__PATH__
+Environment=HOME=__HOME__
+WorkingDirectory=__HOME__
+# No User= or Group=: a user unit already runs as the user who installed it, so
+# this is the counterpart of a macOS LaunchAgent, not a LaunchDaemon. That user
+# must be able to run `docker compose` for the job to do anything -- normally by
+# being in the `docker` group -- and the installer checks that before writing
+# this file rather than letting the first run discover it.
+#
+# append: rather than file:, because the status script and the operational gate
+# read the last start out of these files: a run must add to the record, never
+# replace it. Needs systemd 240+ (Ubuntu 20.04 or newer).
+StandardOutput=append:__LOG_DIR__/backup.out.log
+StandardError=append:__LOG_DIR__/backup.err.log

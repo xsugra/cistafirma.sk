@@ -18,6 +18,20 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
+          env:
+            # Tunajšie meno Service je doslova to, ktoré má obraz zabudované
+            # ako predvolené (`deploy/k8s/base/backend-service.yaml`), ale
+            # uvádza sa aj tak: je to závislosť, ktorú nič iné nevidí, a keby sa
+            # Service premenoval, nginx by ju prestal nájsť až za behu.
+            - name: BACKEND_UPSTREAM
+              value: cistafirma-backend:8000
+            # Nahradzuje `scripts/k8s/deploy.sh` z premennej `BACKEND_RESOLVER`.
+            # Placeholder tu schválne zostáva, keď sa premenná nedodá — adresa
+            # clusterového DNS sa odvodiť nedá (kubeadm/kind 10.96.0.10,
+            # k3s 10.43.0.10) a deploy skript na chýbajúcu hodnotu padá skôr,
+            # než by ju nechal prejsť do manifestu.
+            - name: BACKEND_RESOLVER
+              value: __BACKEND_RESOLVER__
           livenessProbe:
             httpGet:
               path: /healthz

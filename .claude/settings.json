@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(docker compose down -v*)",
+      "Bash(docker compose down --volumes*)",
+      "Bash(docker-compose down -v*)",
+      "Bash(docker volume rm*)",
+      "Bash(docker volume prune*)",
+      "Bash(docker system prune*)",
+      "Bash(make docker-reset*)",
+      "Bash(make celery-purge*)",
+      "Bash(venv/bin/python backend/manage.py celery_purge*)",
+      "Bash(*restore_postgres.sh*)",
+      "Bash(*pg_restore* --clean*)",
+      "Bash(*pg_restore* -c *)",
+      "Bash(*manage.py flush*)",
+      "Bash(*dropdb*)",
+      "Bash(*createdb*)",
+      "Bash(docker exec* *dropdb*)",
+      "Bash(docker exec* *psql* -c *DROP*)",
+      "Bash(docker exec* *psql* -c *TRUNCATE*)"
+    ]
+  }
+}

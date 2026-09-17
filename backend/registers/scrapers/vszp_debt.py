@@ -1,13 +1,84 @@
 import logging
-from typing import Optional
+import re
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup
-from ..utils import parse_money, is_money
+from bs4 import BeautifulSoup, Comment
+from ..utils import parse_money
+from .debt_result import DebtCheckResult
 
 logger = logging.getLogger(__name__)
+
+# VSZP renders the claim column as a bare number ("6 641,86") and the page
+# carries no currency symbol at all -- "€" appears zero times. The shared
+# is_money()/parse_money() pair requires one, so it cannot decide this column,
+# and loosening it would weaken the guard the Socialna poistovna scraper relies
+# on. The column is therefore validated against VSZP's own format here, first
+# and strictly, before parse_money() converts it.
+_VSZP_AMOUNT_RE = re.compile(r"^\d[\d \xa0]*(?:,\d{1,2})?$")
+
+# The one message that makes an absent row authoritative. An empty table
+# *without* it is ambiguous -- it can equally be a server-side error -- and per
+# docs/SOURCE_DATA_INTEGRITY.md an ambiguous response must not be written as a
+# zero.
+_VSZP_NO_RECORD_MARKER = "Nenašli sa žiadne záznamy"
+
+# The same sentence, whitespace-normalized for comparison against the rendered
+# text: VSZP's prose is full of non-breaking spaces, so the sentence has to match
+# whichever space character the page happens to use that day.
+_VSZP_NO_RECORD_MARKER_NORMALIZED = " ".join(_VSZP_NO_RECORD_MARKER.split())
+
+# Tags whose contents no reader ever sees. `requests` does not run JavaScript, so
+# a "no records" sentence inside a <script> is a template rather than the site
+# stating an absence -- and both `str(soup)` and `get_text()` would report it as
+# if it were prose.
+_NON_VISIBLE_TAGS = frozenset({"script", "style", "template"})
+
+# The first cell of a result row reads "NAME<br/>IČO: 34136088".
+_VSZP_ROW_ICO_RE = re.compile(r"IČO:\s*(\d+)")
+
+
+def _parse_vszp_amount(text: str) -> float | None:
+    """Convert VSZP's bare amount cell to a float, or None if it is not one."""
+    candidate = text.strip()
+    if not _VSZP_AMOUNT_RE.match(candidate):
+        return None
+    try:
+        return parse_money(candidate)
+    except ValueError:
+        return None
+
+
+def _is_hidden(node) -> bool:
+    """Whether a text node sits inside an element no reader ever sees."""
+    # A <template>'s text nodes hang off its descendant elements, not off the
+    # <template> itself, so the whole ancestor chain has to be walked.
+    ancestor = node.parent
+    while ancestor is not None and getattr(ancestor, "name", None):
+        if ancestor.name in _NON_VISIBLE_TAGS:
+            return True
+        ancestor = ancestor.parent
+    return False
+
+
+def _visible_text(soup: BeautifulSoup) -> str:
+    """The text a reader would actually see, whitespace-normalized.
+
+    The page is asked two different questions -- is a row listed (answered from
+    the parsed rows) and does the site state an absence (answered here) -- and
+    both have to read the same document. A substring search over the raw
+    ``response.text`` cannot tell prose from a hidden template: a "no records"
+    sentence inside a <script>, an HTML comment or a <template> would answer for
+    the site, and the price of that mistake is a confident zero written for a
+    real debtor.
+    """
+    visible = []
+    for node in soup.find_all(string=True):
+        if isinstance(node, Comment) or _is_hidden(node):
+            continue
+        visible.append(str(node))
+    return " ".join(" ".join(visible).replace("\xa0", " ").split())
 
 
 def get_session_with_retry() -> requests.Session:
@@ -24,10 +95,10 @@ def get_session_with_retry() -> requests.Session:
     return session
 
 
-def check_vszp_debt_get(ico: str) -> Optional[float]:
+def check_vszp_debt_get(ico: str) -> DebtCheckResult:
     """
     Stiahne dlh z VšZP pomocou GET requestu (simuluje vyhľadávanie v URL).
-    Vracia sumu v EUR. Ak dlh nie je nájdený alebo je nula, vracia 0.0.
+    Vracia overený výsledok. Nulu smie vrátiť iba explicitný no-record signál.
     """
 
     # 1. Konstrukcia s URL parametrami
@@ -54,39 +125,60 @@ def check_vszp_debt_get(ico: str) -> Optional[float]:
     except requests.exceptions.RequestException as e:
         # This catches ConnectionError, Timeout, HTTPError, etc.
         logger.warning(f"Network error pri VSZP pre ICO {ico}: {e}")
-        return None  # Return None to signify a network-level failure
+        return DebtCheckResult.unknown(str(e), "network")
 
-    try:
-        # 4. Parsing HTML
-        soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(response.text, "html.parser")
 
-        # Štruktúra tabuľky VšZP:
-        # Stĺpce: Obchodné meno (obsahuje IČO), Obec, Ulica, PSČ, Pohľadávka, Typ platiteľa, Rozsah ZS
-        # IČO je vnorené v prvej bunke ako "NAZOV FIRMY IČO: 12345678"
+    # A matching row is the strongest evidence available, so it is looked for
+    # first: the no-record marker must never be able to turn a company that *is*
+    # listed into a zero.
+    #
+    # Every row the results table lists is counted, not only the one searched
+    # for. A row that cannot be attributed to this ICO is not a row that says
+    # "no debt", but it does refute an absence: the table listing anybody at all
+    # means VSZP found somebody.
+    data_rows = 0
 
-        rows = soup.find_all("tr")
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if not cells or len(cells) < 5:
+            continue
+        data_rows += 1
 
-        for row in rows:
-            cells = row.find_all("td")
-            if not cells or len(cells) < 5:
-                continue
+        # The first cell holds the name and, after a <br>, "IČO: <number>".
+        # The identifier is extracted and compared numerically rather than as a
+        # substring: "IČO: 3413608" is a prefix of "IČO: 34136088", and the two
+        # may differ only in zero padding. Whitespace is normalized so a
+        # non-breaking space after the colon does not defeat the match.
+        row_text = " ".join(cells[0].get_text(" ", strip=True).split())
+        row_ico = _VSZP_ROW_ICO_RE.search(row_text)
+        if row_ico is None or row_ico.group(1).lstrip("0") != ico.strip().lstrip("0"):
+            continue
 
-            # Prvá bunka obsahuje názov firmy + IČO
-            first_cell_text = cells[0].get_text(strip=True)
+        amount = _parse_vszp_amount(cells[4].get_text(strip=True))
+        if amount is not None:
+            return DebtCheckResult.found(amount)
 
-            # Kontrola, či riadok obsahuje hľadané IČO
-            if ico in first_cell_text:
-                # Pohľadávka je v 5. stĺpci (index 4)
-                debt_text = cells[4].get_text(strip=True)
-                if debt_text and is_money(debt_text):
-                    return parse_money(debt_text)
+        message = f"VSZP result row for ICO {ico} did not contain a valid debt amount."
+        logger.warning(message)
+        return DebtCheckResult.unknown(message, "parse_error")
 
-        # If we get here, the page was loaded, but the company wasn't on the list.
-        # This is a valid "zero debt" scenario for our purpose.
-        logger.info(f"VSZP: Firma s ICO {ico} nebola najdena v zozname dlznikov.")
-        return 0.0
+    # No row matched. VSZP states the absence explicitly, and only the two
+    # signals *together* are authoritative: the sentence has to be rendered on
+    # the page, and the results table has to list nobody. Either one alone is
+    # ambiguous -- a sentence can come from a hidden template, and an empty table
+    # can equally be a server-side error -- and per
+    # docs/SOURCE_DATA_INTEGRITY.md an ambiguous response must not be written as
+    # a zero. So a page carrying both the sentence and a data row (which the live
+    # site never produced: on 2026-09-15 it put the sentence in the content area
+    # exactly once, and never on a debtor's page) stays unknown rather than
+    # picking a side.
+    if data_rows == 0 and _VSZP_NO_RECORD_MARKER_NORMALIZED in _visible_text(soup):
+        return DebtCheckResult.not_found()
 
-    except Exception as e:
-        # This will now only catch parsing errors, not network errors
-        logger.error(f"Chyba parsovania VSZP pre ICO {ico}: {e}")
-        return 0.0 # Return 0.0 as a fallback if parsing fails.
+    message = (
+        f"VSZP response did not contain a recognized result row for ICO {ico} "
+        f"(result rows listed: {data_rows})."
+    )
+    logger.warning(message)
+    return DebtCheckResult.unknown(message, "parse_error")

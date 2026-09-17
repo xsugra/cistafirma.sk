@@ -3,6 +3,7 @@ from companies.models import Company
 from registers.eligibility import ORSR_ELIGIBLE_LEGAL_FORMS
 from registers.scrapers.orsr_scraper import OrsrScraperError
 from registers.services.orsr_sync import OrsrSyncService
+from registers.services.sync_engine import record_orsr_failure, record_orsr_outcome
 
 
 
@@ -81,6 +82,16 @@ class Command(BaseCommand):
         for idx, company in enumerate(companies, 1):
             try:
                 profile = service.sync_company(company)
+                # Recorded here as well as in the Celery task: this command is
+                # a real ORSR driver, and an attempt that leaves no
+                # `CompanySyncStatus` row is invisible to `source_health` and
+                # enters no retry lane. `--stale` re-syncs companies that
+                # already have a profile, so this also refreshes their
+                # `last_succeeded_at` rather than letting the source read as
+                # quiet.
+                record_orsr_outcome(
+                    company, fetch_ok=profile.fetch_ok, error=profile.last_error
+                )
                 ok += 1
                 self.stdout.write(
                     self.style.SUCCESS(
@@ -89,6 +100,7 @@ class Command(BaseCommand):
                 )
             except OrsrScraperError as exc:
                 failed += 1
+                record_orsr_failure(company, exc)
                 self.stdout.write(
                     self.style.WARNING(
                         f"[{idx}/{total}] ✗ {company.ico}: {exc}"
@@ -96,6 +108,7 @@ class Command(BaseCommand):
                 )
             except Exception as exc:
                 skipped += 1
+                record_orsr_failure(company, exc)
                 self.stdout.write(
                     self.style.ERROR(
                         f"[{idx}/{total}] ⊘ {company.ico}: {type(exc).__name__}: {exc}"

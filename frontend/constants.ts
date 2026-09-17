@@ -8,6 +8,8 @@ export const ENABLE_MOCK_DATA = false;
 export const ROUTES = {
   HOME: '/',
   MONITORING: '/monitoring',
+  COMPANY: '/firma',
+  PERSON: '/osoba',
   BLOG: '/blog',
   ABOUT: '/about',
   PRIVACY: '/privacy',
@@ -15,7 +17,6 @@ export const ROUTES = {
   CONTACT: '/contact',
   LOGIN: '/login',
   REGISTER: '/register',
-  PRICING: '/pricing',
   PROFILE: '/profile',
   API_DOCS: '/api-docs',
   ADMIN: '/admin',
@@ -24,46 +25,23 @@ export const ROUTES = {
 
 export type RouteKey = keyof typeof ROUTES;
 
-export interface PricingPlan {
-  id: string;
-  name: string;
-  price: number;
-  features: string[];
-  isPopular: boolean;
-  buttonText: string;
-}
+/**
+ * `/firma/:ico` shows the overview, `/firma/:ico/:sekcia` a named section.
+ *
+ * Both halves of the URL are built here rather than at each call site, because
+ * a link written by hand in one place drifts from the route declared in
+ * `App.tsx` and the drift is invisible until someone clicks it.
+ */
+export const companyPath = (ico: string, section?: string): string =>
+  section ? `${ROUTES.COMPANY}/${ico}/${section}` : `${ROUTES.COMPANY}/${ico}`;
 
-export const PRICING_PLANS: PricingPlan[] = [
-  {
-    id: 'free',
-    name: 'Free',
-    price: 0,
-    features: ['Základné overenie IČO', 'Obmedzené detaily dlhov', '10 vyhľadávaní mesačne'],
-    isPopular: false,
-    buttonText: 'Začať zadarmo',
-  },
-  {
-    id: 'plus',
-    name: 'Plus',
-    price: 19,
-    features: ['Všetko z Free', 'Detailný prehľad dlhov', 'História financií (3 roky)', '50 vyhľadávaní mesačne', 'PDF Export'],
-    isPopular: true,
-    buttonText: 'Vybrať Plus',
-  },
-  {
-    id: 'pro',
-    name: 'Pro',
-    price: 49,
-    features: ['Všetko z Pro', 'Neobmedzené vyhľadávanie', 'AI Analýza rizík', 'Prepojenia osôb', 'Prioritná podpora', 'API prístup (100 volaní)'],
-    isPopular: false,
-    buttonText: 'Vybrať Pro',
-  },
-  {
-    id: 'business',
-    name: 'Business',
-    price: 99,
-    features: ['Všetko z Pro', 'API prístup (neobmedzene)', 'Hromadné overovanie', 'Vlastný account manager', 'SLA garancia'],
-    isPopular: false,
-    buttonText: 'Kontaktovať obchod',
-  },
-];
+/**
+ * `/osoba/:id` — one person from our own graph, by the id we hold for them.
+ *
+ * Built here for the same reason as `companyPath`, and one more: this is the
+ * only id that may be turned into a person link. The ORSR-derived people on a
+ * company page (`OrsrPerson`) carry no id, so there is nothing here for them --
+ * a link built from a name would point at whichever person the search happened
+ * to return first, which is a different person with the same name.
+ */
+export const personPath = (id: number | string): string => `${ROUTES.PERSON}/${id}`;

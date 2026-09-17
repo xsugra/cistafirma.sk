@@ -54,9 +54,6 @@ export const Header: React.FC = () => {
                             <button onClick={() => handleNav(ROUTES.BLOG)}
                                     className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.BLOG ? 'active' : ''}`}>BLOG
                             </button>
-                            <button onClick={() => handleNav(ROUTES.PRICING)}
-                                    className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.PRICING ? 'active' : ''}`}>CENNÍK
-                            </button>
                             <button onClick={() => handleNav(ROUTES.API_DOCS)}
                                     className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.API_DOCS ? 'active' : ''}`}>API
                             </button>
@@ -146,9 +143,6 @@ export const Header: React.FC = () => {
                     <button onClick={() => handleNav(ROUTES.BLOG)}
                             className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.BLOG ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>BLOG
                     </button>
-                    <button onClick={() => handleNav(ROUTES.PRICING)}
-                            className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.PRICING ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>CENNÍK
-                    </button>
                     <button onClick={() => handleNav(ROUTES.API_DOCS)}
                             className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.API_DOCS ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>API
                     </button>
@@ -197,7 +191,7 @@ export const Header: React.FC = () => {
                             </button>
                             <button
                                 onClick={handleLogout}
-                                className="btn btn-ghost w-full text-red-500 hover:bg-red-50"
+                                className="btn btn-ghost w-full text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
                             >
                                 Odhlásiť sa
                             </button>

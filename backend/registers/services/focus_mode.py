@@ -1,8 +1,4 @@
-"""
-Focus Mode: zastaví všetky Celery tasky a periodic beat entries,
-ktoré nepatria do ORSR + financials pipeline, aby worker výkon
-smeroval len na doplnenie chýbajúcich ORSR profilov a hospodárskych výsledkov.
-"""
+"""Focus Mode safely pauses future non-focus periodic scheduling."""
 from __future__ import annotations
 
 import logging
@@ -26,8 +22,8 @@ FOCUS_KEEP_TASKS: frozenset[str] = frozenset({
     "registers.tasks.schedule_ruz_financials_sync",
 })
 
-# Queues kde keep-tasky bežia. Pri purge ich vynechávame, aby sme nezmazali
-# už zaradenú prácu, ktorú chceme dobehnúť.
+# Queues kde keep-tasky bežia. Konstanty zostávajú dostupné pre read-only
+# queue health reporting; Focus Mode ich nikdy nepurguje.
 FOCUS_KEEP_QUEUES: frozenset[str] = frozenset({"orsr", "financials"})
 
 # Všetky queues definované v Celery config. Mimo keep-listu sa purgnú.
@@ -154,15 +150,15 @@ def enter_focus_mode(
     user=None,
     *,
     keep: frozenset[str] = FOCUS_KEEP_TASKS,
-    purge: bool = True,
 ) -> SyncFocusModeState:
     """
     Aktivuje focus mode:
       1. Disable periodic tasks mimo keep-listu.
-      2. Revokne aktívne/prefetched tasky mimo keep-listu.
-      3. (Voliteľne) selektívne purge broker queues mimo FOCUS_KEEP_QUEUES.
-         Whitelisted queues (orsr, financials) zostanú nedotknuté, takže
-         už nakopené ORSR/financial tasky nezahodíme.
+      2. Nechá aktívne, rezervované aj queued tasky dobehnúť.
+
+    Focus Mode nesmie rušiť ani mazať broker messages. Zastavenie existujúcej
+    synchronizácie bez durable replay manifestu môže stratiť údaje alebo
+    zanechať neúplný import.
     Idempotentné — druhé volanie na už aktívnom stave nerobí nič.
     """
     state = SyncFocusModeState.objects.select_for_update().filter(pk=1).first()
@@ -174,20 +170,18 @@ def enter_focus_mode(
         return state
 
     snapshot = _set_periodic_tasks_enabled(keep)
-    revoked = revoke_non_focus_tasks(keep)
-    purged = purge_broker_queues() if purge else 0
 
     state.active = True
     state.snapshot = snapshot
-    state.last_revoked = revoked
+    state.last_revoked = []
     state.activated_at = timezone.now()
     state.deactivated_at = None
     state.activated_by = user if (user and getattr(user, "is_authenticated", False)) else None
-    state.notes = f"Purged {purged} pending messages from broker queues."
+    state.notes = "Paused future non-focus periodic scheduling; existing tasks were preserved."
     state.save()
     logger.info(
-        "Focus mode activated by %s; disabled %d periodic, revoked %d running, purged %d pending.",
-        getattr(user, "username", "system"), len(snapshot), len(revoked), purged,
+        "Focus mode activated by %s; disabled %d periodic tasks and preserved existing work.",
+        getattr(user, "username", "system"), len(snapshot),
     )
     return state
 

@@ -1,9 +1,383 @@
+import logging
+from collections import defaultdict
+from datetime import date
+
+from django.conf import settings
+from django.core.cache import cache
+from django.db.models import F, Q
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.models import Company
-from .models import Person, PersonCompanyRelation
+from companies.throttles import OrsrPersonThrottle
+from .identity import PersonEvidence, base_name, cluster_evidence
+from .models import Person, PersonCompanyRelation, normalize_name
+
+logger = logging.getLogger(__name__)
+
+#: Enough to see the shape of an answer without becoming a way to enumerate
+#: the graph. A common surname matches thousands of people in this database.
+MAX_PERSON_RESULTS = 50
+MIN_QUERY_LENGTH = 2
+
+#: Rows read to find at most `MAX_PERSON_RESULTS` people.
+#:
+#: A person costs one row in the common case, so this is generous -- but it is
+#: not unbounded, because clustering does not belong in the path of a keystroke
+#: and a two-letter query matches 20 050 rows. When the window is short of the
+#: match count, the answer says how many *people* it found is unknown rather
+#: than reporting the count it saw (see `total_people`).
+CLUSTER_SCAN_LIMIT = 300
+
+#: Rows read to find the people one row belongs to, for the person page and the
+#: graphs. Also a bound, and also a disclosed under-merge: it can leave a
+#: sibling out, never pull a stranger in.
+CLUSTER_CANDIDATE_LIMIT = 500
+
+
+def _coverage() -> dict:
+    """What our own data does and does not cover.
+
+    Returned with every search rather than printed in the interface as a fixed
+    sentence, because it is a moving number: the person graph covers 19 906 of
+    445 626 companies today and grows with each ORSR sync. A hardcoded claim
+    would drift into a lie the first time it stopped being true.
+    """
+    return {
+        "companies_with_persons": Company.objects.filter(
+            person_relations__isnull=False
+        ).distinct().count(),
+        "companies_total": Company.objects.count(),
+    }
+
+
+def _relation_payload(rel) -> dict:
+    """One company, as seen from a person.
+
+    `role` is the enum code and `role_display` the words, which is the opposite
+    way round from the graph's edges -- deliberately. An edge is drawn and
+    labelled, so it carries the label in `role` and the frontend colours it by
+    that string; a row in a list is filtered and round-tripped, so it carries
+    the code in `role`, matching both the `role=` query parameter and the column
+    the code came from. `role_display` falls back to the enum's own label
+    because the register's free text is often absent (it is a separate field
+    there too), and a client should not need the mapping table to render one.
+    """
+    return {
+        "ico": rel.company.ico,
+        "name": rel.company.nazov_UJ,
+        "role": rel.role,
+        "role_display": rel.role_display or rel.get_role_display(),
+        "is_active": rel.is_active,
+        "vznik_funkcie": rel.vznik_funkcie,
+        "zanik_funkcie": rel.zanik_funkcie,
+        # How many stored relations this one row stands for. One in the common
+        # case. More once `_joined_periods` has folded a chain of them into the
+        # single office they describe -- and saying so is what keeps the fold
+        # honest, because a row that quietly replaced twelve register filings
+        # with one line reads exactly like a row that always was one line.
+        "intervals": 1,
+    }
+
+
+def _companies_by_person(person_ids):
+    """Which companies each row has a relation to, in one query rather than one
+    per row. The values are what identity resolution compares."""
+    companies = defaultdict(set)
+    for person_id, company_id in (
+        PersonCompanyRelation.objects
+        .filter(person_id__in=person_ids)
+        .values_list("person_id", "company_id")
+    ):
+        companies[person_id].add(company_id)
+    return companies
+
+
+def _cluster_persons(persons):
+    """Group rows into people.
+
+    Returns the clusters and the row objects keyed by id. Takes a materialised
+    list rather than a queryset: resolving a person reads each row several
+    times, and a queryset re-evaluated per read is how a page turns into
+    hundreds of queries.
+    """
+    by_id = {person.id: person for person in persons}
+    companies = _companies_by_person(list(by_id))
+    clusters = cluster_evidence(
+        PersonEvidence(
+            id=person.id,
+            name=person.name,
+            address=person.address,
+            person_ico=person.person_ico,
+            companies=companies.get(person.id, ()),
+            birth_date=person.birth_date,
+        )
+        for person in persons
+    )
+    return clusters, by_id
+
+
+def _cluster_for(person):
+    """The rows we believe are the same human as `person`.
+
+    Candidates are found the way search finds them -- every token of the name
+    has to appear -- and `base_name` equality then does the rest, because the
+    title is not part of a name and `name_normalized` keeps it.
+    """
+    tokens = base_name(person.name).split()
+    if not tokens:
+        return [PersonEvidence(
+            id=person.id, name=person.name, address=person.address,
+            person_ico=person.person_ico, birth_date=person.birth_date,
+        )], {person.id: person}
+
+    candidates = Person.objects.all()
+    for token in tokens:
+        candidates = candidates.filter(name_normalized__contains=token)
+    rows = list(candidates.order_by("id")[:CLUSTER_CANDIDATE_LIMIT])
+    if all(row.id != person.id for row in rows):
+        rows.append(person)
+
+    base = base_name(person.name)
+    rows = [row for row in rows if base_name(row.name) == base]
+
+    clusters, by_id = _cluster_persons(rows)
+    for members in clusters:
+        if any(m.id == person.id for m in members):
+            return members, by_id
+    return [PersonEvidence(
+        id=person.id, name=person.name, address=person.address,
+        person_ico=person.person_ico, birth_date=person.birth_date,
+    )], by_id
+
+
+def _relation_sort_key(item):
+    """Newest office first, unknown currency last.
+
+    Matches the queryset ordering these payloads come from, so a merged list
+    reads the same as an unmerged one. `date.min` stands in for a missing start
+    date, which is what `nulls_last` does in SQL.
+    """
+    return (
+        item["is_active"] is not None,
+        bool(item["is_active"]),
+        item["vznik_funkcie"] or date.min,
+    )
+
+
+def _is_richer(candidate, current) -> bool:
+    return (
+        (candidate["is_active"] is not None, len(candidate["role_display"] or ""))
+        > (current["is_active"] is not None, len(current["role_display"] or ""))
+    )
+
+
+def _relations_by_person(person_ids, role=""):
+    """Every relation of the given rows, grouped by the row it belongs to."""
+    relations = (
+        PersonCompanyRelation.objects
+        .filter(person_id__in=person_ids)
+        .select_related("company")
+        .order_by(F("is_active").desc(nulls_last=True), "-vznik_funkcie")
+    )
+    if role:
+        relations = relations.filter(role=role)
+
+    grouped = defaultdict(list)
+    for rel in relations:
+        grouped[rel.person_id].append(_relation_payload(rel))
+    return grouped
+
+
+def _merged_relations(member_ids, grouped):
+    """One person's companies, gathered from every row we believe is them.
+
+    The claim is deduplicated because the cluster's rows are held to be one
+    human: the same company in the same role from the same date, arriving twice,
+    is one fact. The richer copy wins -- an `is_active` we actually read beats
+    the `null` that means we never read that company's history, and the
+    register's own wording beats the enum's label.
+
+    A relation with no dates at all is then dropped when the same company and
+    role has one that is dated. It is not a second tenure: it states no period,
+    so it cannot be one, and it renders as "nevieme" -- which the register's own
+    legend spells out as "we have not read this company yet". Next to a dated
+    relation for the same office in the same company, that sentence is false:
+    we demonstrably did read it. Measured on 2026-09-13, this drops 4 lines in
+    the whole table, all of them created by grouping -- one row alone never
+    showed the pair.
+
+    What is left is one row per **office**, not per register filing: the periods
+    that meet are folded by `_joined_periods`. Two rows survive it only where
+    the office really did stop and start again.
+    """
+    payloads = [
+        item for person_id in member_ids for item in grouped.get(person_id, [])
+    ]
+    payloads.sort(key=_relation_sort_key, reverse=True)
+
+    best = {}
+    order = []
+    for item in payloads:
+        key = (item["ico"], item["role"], item["vznik_funkcie"])
+        current = best.get(key)
+        if current is None:
+            best[key] = item
+            order.append(key)
+        elif _is_richer(item, current):
+            best[key] = item
+
+    merged = [best[key] for key in order]
+    dated_offices = {
+        (item["ico"], item["role"])
+        for item in merged
+        if item["vznik_funkcie"] or item["zanik_funkcie"]
+    }
+    return _joined_periods([
+        item for item in merged
+        if item["vznik_funkcie"] or item["zanik_funkcie"]
+        or (item["ico"], item["role"]) not in dated_offices
+    ])
+
+
+def _continues_period(previous, item) -> bool:
+    """Two filings of one office, or one office written down twice.
+
+    The register does not keep a function; it keeps filings. Each one ends the
+    office and the next filing reopens it, so one continuous tenure from 2011
+    arrives as a chain of intervals that meet day to day. Measured on person
+    56172 (FREYSSINET CS): twelve relations, eleven of them meeting the next.
+
+    **Both dates are required**, which is the whole of the rule. An open filing
+    (`zanik_funkcie is None`) is the end of a chain by definition -- nothing can
+    follow a function that has not ended -- and a filing whose start we do not
+    know cannot be shown to meet anything, so it stands on its own. Guessing
+    there would merge two tenures into one on no evidence, which is the failure
+    this function exists to avoid; leaving them apart costs a duplicate line the
+    reader can see.
+
+    One day of slack, not zero: the register closes an office on the day it
+    files and reopens it the next, so `zanik 2013-04-10` and `vznik 2013-04-11`
+    is one tenure. It absorbs an overlap as well, and overlaps are the other
+    shape of "the same office, written twice".
+    """
+    if previous["zanik_funkcie"] is None or item["vznik_funkcie"] is None:
+        return False
+    return (item["vznik_funkcie"] - previous["zanik_funkcie"]).days <= 1
+
+
+def _join_periods(chain):
+    """One office, from the first filing that opened it to the last that closed it.
+
+    `vznik` is the earliest and `zanik` the latest, and `is_active` is taken
+    from the **newest** filing, because a joined function is current exactly
+    when its last period is. Not from the first, and not from any of them: the
+    `None` that means "we never read this company" has to survive the fold, and
+    a rule that let eleven `False`s outvote the one `True` would show a current
+    officer as a former one -- the defect #86 removed, reached from the other
+    side.
+
+    The latest end date is the maximum rather than the last one in order. The
+    chain is ordered by start date and a pair may overlap, so the filing that
+    starts last is not always the one that ends last.
+
+    The register's longest wording wins, which is the same tiebreak `_is_richer`
+    uses a few lines up: filings of one office can carry slightly different
+    labels, and the fuller one says more without claiming anything extra.
+    """
+    newest = chain[-1]
+    ends = [item["zanik_funkcie"] for item in chain if item["zanik_funkcie"]]
+    return {
+        **newest,
+        "vznik_funkcie": chain[0]["vznik_funkcie"],
+        "zanik_funkcie": max(ends) if newest["zanik_funkcie"] else None,
+        "role_display": max(
+            (item["role_display"] or "" for item in chain), key=len
+        ) or newest["role_display"],
+        "intervals": sum(item["intervals"] for item in chain),
+    }
+
+
+def _joined_periods(items):
+    """One row per office, its consecutive filings folded into one period.
+
+    Why this is read-time and not a migration: the table's unique key is
+    `(person_id, company_id, role, vznik_funkcie)`, which makes a re-import
+    idempotent -- and would undo a write-time merge, because the merged row
+    keeps the first filing's `vznik` and filings 2..12 would have nothing left
+    to match, so the next import would create them again. Merging on the way out
+    needs no bookkeeping about what has already been merged.
+
+    Only filings of the **same** `(company, role)` are candidates: `konateľ`
+    until 31 December and `prokurista` from 1 January are two offices, not one,
+    and they stay two rows.
+    """
+    by_office = defaultdict(list)
+    for item in items:
+        by_office[(item["ico"], item["role"])].append(item)
+
+    rows = []
+    for filings in by_office.values():
+        # Oldest first, so a chain is built in the direction it happened. An
+        # open filing sorts last among those that start together, which is
+        # where the chain has to end anyway.
+        filings.sort(key=lambda item: (
+            item["vznik_funkcie"] or date.min,
+            item["zanik_funkcie"] or date.max,
+        ))
+        chain = [filings[0]]
+        for item in filings[1:]:
+            if _continues_period(chain[-1], item):
+                chain.append(item)
+            else:
+                rows.append(_join_periods(chain))
+                chain = [item]
+        rows.append(_join_periods(chain))
+
+    rows.sort(key=_relation_sort_key, reverse=True)
+    return rows
+
+
+def _active_rank(is_active):
+    """Which of several readings of one edge's currency wins.
+
+    `True` (the office is current) beats `False` (it ended) beats `None` (this
+    company's history was never read -- the row's own help text). Only the first
+    is a claim about today, and collapsing the rows by any other rule -- a `set`,
+    the first row, the newest start date -- shows a current officer as a former
+    one. That is the defect #86 removed, mirrored; measured on FREYSSINET CS
+    (31798446), the same edge arrives eleven times as `False` and once as `True`.
+    """
+    if is_active is None:
+        return 0
+    return 2 if is_active else 1
+
+
+def _edges_by_identity(candidates):
+    """One edge per `(source, target, role)`, in the order they were found.
+
+    The graph has no time axis, so twelve copies of one office say nothing the
+    first one did not; the copies differ only in `vznik_funkcie`, which the edge
+    does not carry. A different role on the same pair is a different fact and
+    stays a separate edge.
+    """
+    merged = {}
+    rank = {}
+    for source, target, role, is_active in candidates:
+        key = (source, target, role)
+        if key not in merged:
+            merged[key] = {
+                "source": source,
+                "target": target,
+                "role": role,
+                "isActive": is_active,
+            }
+            rank[key] = _active_rank(is_active)
+        elif _active_rank(is_active) > rank[key]:
+            merged[key]["isActive"] = is_active
+            rank[key] = _active_rank(is_active)
+    return list(merged.values())
 
 
 class CompanyGraphView(APIView):
@@ -21,7 +395,7 @@ class CompanyGraphView(APIView):
             )
 
         nodes = {}
-        edges = []
+        candidates = []
 
         company_node_id = f"company_{company.ico}"
         nodes[company_node_id] = {
@@ -32,43 +406,64 @@ class CompanyGraphView(APIView):
             "status": "Vymazaná" if company.datum_zrusenia else "Aktívna",
         }
 
-        relations = (
+        relations = list(
             PersonCompanyRelation.objects
             .filter(company=company)
             .select_related("person")
         )
 
+        # The document this company was read from may name one person under two
+        # sections, which is two rows and one human. The graph draws people, so
+        # it draws the clusters -- one node per person, with every relation's own
+        # role still on its own edge.
+        clusters, _by_id = _cluster_persons(
+            [rel.person for rel in relations]
+        )
+        cluster_of = {row.id: members for members in clusters for row in members}
+
+        # One iteration per person, not per relation. An office arrives as many
+        # rows (#93), so the old shape drew the same edge once per period -- and
+        # read that person's other companies once per period too. Measured on
+        # FREYSSINET CS: 21 edges of which 9 distinct, one pair twelve times.
+        by_person = {}
         for rel in relations:
-            person = rel.person
-            person_node_id = f"person_{person.id}"
+            members = cluster_of[rel.person.id]
+            primary = members[0]
+            by_person.setdefault(primary.id, (members, []))[1].append(rel)
 
-            if person_node_id not in nodes:
-                company_count = (
-                    person.company_relations
-                    .values("company")
-                    .distinct()
-                    .count()
-                )
-                nodes[person_node_id] = {
-                    "id": person_node_id,
-                    "type": "person",
-                    "label": person.name,
-                    "rolesCount": company_count,
-                }
+        for members, rows in by_person.values():
+            primary = members[0]
+            person_node_id = f"person_{primary.id}"
+            member_ids = [m.id for m in members]
 
-            edges.append({
-                "source": person_node_id,
-                "target": company_node_id,
-                "role": rel.get_role_display(),
-                "isActive": rel.is_active,
-            })
+            company_count = (
+                PersonCompanyRelation.objects
+                .filter(person_id__in=member_ids)
+                .values("company")
+                .distinct()
+                .count()
+            )
+            nodes[person_node_id] = {
+                "id": person_node_id,
+                "type": "person",
+                "label": primary.name,
+                "rolesCount": company_count,
+            }
+
+            for rel in rows:
+                candidates.append((
+                    person_node_id,
+                    company_node_id,
+                    rel.get_role_display(),
+                    rel.is_active,
+                ))
 
             if len(nodes) >= self.MAX_NODES:
                 break
 
             other_relations = (
                 PersonCompanyRelation.objects
-                .filter(person=person)
+                .filter(person_id__in=member_ids)
                 .exclude(company=company)
                 .select_related("company")
             )
@@ -86,12 +481,12 @@ class CompanyGraphView(APIView):
                         "status": "Vymazaná" if other_company.datum_zrusenia else "Aktívna",
                     }
 
-                edges.append({
-                    "source": person_node_id,
-                    "target": other_node_id,
-                    "role": other_rel.get_role_display(),
-                    "isActive": other_rel.is_active,
-                })
+                candidates.append((
+                    person_node_id,
+                    other_node_id,
+                    other_rel.get_role_display(),
+                    other_rel.is_active,
+                ))
 
                 if len(nodes) >= self.MAX_NODES:
                     break
@@ -101,13 +496,111 @@ class CompanyGraphView(APIView):
 
         return Response({
             "nodes": list(nodes.values()),
-            "edges": edges,
+            "edges": _edges_by_identity(candidates),
             "meta": {
                 "center_node": company_node_id,
                 "depth": 1,
                 "total_nodes": len(nodes),
                 "truncated": len(nodes) >= self.MAX_NODES,
             },
+        })
+
+
+class PersonSearchView(APIView):
+    """`GET /api/persons/?q=` -- the question the register cannot answer well.
+
+    The register's own person search is diacritics-exact and current-records
+    only: typing `novak` there returns nothing, and a person who left a company
+    in 2019 is not in it at all. Ours searches a normalised column, so `kovac`
+    finds `Kováč`, and it reads the relations we hold with their dates.
+
+    One answer per person, not per row. The register renders the same officer
+    under two sections of one document, which our extractor stores as two rows --
+    so before this grouped them, searching `vacha` answered with the same man
+    three times. The rows are still all there and each result says how many it
+    gathered; see `connections.identity` for why they are grouped at read time
+    rather than merged.
+
+    What it does not do is pretend to be complete. Every response carries the
+    coverage counts, because 19 906 companies out of 445 626 means most names
+    return nothing -- and a search that returns an empty list without saying
+    why reads as "this person is in no company", which is a different and
+    false claim.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        query = (request.query_params.get("q") or "").strip()
+        role = (request.query_params.get("role") or "").strip()
+
+        if len(query) < MIN_QUERY_LENGTH:
+            return Response({
+                "query": query,
+                "results": [],
+                "total_matches": 0,
+                "total_people": None,
+                "truncated": False,
+                "detail": (
+                    f"Zadajte aspoň {MIN_QUERY_LENGTH} znaky."
+                    if query else "Zadajte meno na vyhľadanie."
+                ),
+                "coverage": _coverage(),
+            })
+
+        # A person with no relation is not a search result: the question is
+        # "in which companies does this name figure", and a name with no
+        # companies is an answer we have nothing to say about.
+        matches = Q(company_relations__isnull=False)
+        if role:
+            matches &= Q(company_relations__role=role)
+
+        # Every token must appear somewhere in the normalised name, in any
+        # order -- so `trnka miroslav` and `miroslav trnka` are one search, and
+        # a title the register keeps attached ("Ing.") does not hide the person
+        # from someone who leaves it out.
+        persons = Person.objects.filter(matches)
+        for token in normalize_name(query).split():
+            persons = persons.filter(name_normalized__contains=token)
+
+        persons = persons.distinct()
+
+        total = persons.count()
+        window = list(persons.order_by("name", "id")[:CLUSTER_SCAN_LIMIT])
+        clusters, by_id = _cluster_persons(window)
+        shown = clusters[:MAX_PERSON_RESULTS]
+
+        grouped = _relations_by_person(
+            [m.id for members in shown for m in members], role
+        )
+
+        results = []
+        for members in shown:
+            primary = by_id[members[0].id]
+            results.append({
+                "id": primary.id,
+                "name": primary.name,
+                "title": primary.title,
+                "person_ico": primary.person_ico,
+                # How many stored rows this one answer gathered. One for the
+                # common case; more is the register having written the same
+                # person twice, and saying so is what keeps the grouping honest.
+                "records": len(members),
+                "companies": _merged_relations([m.id for m in members], grouped),
+            })
+
+        return Response({
+            "query": query,
+            "role": role,
+            "results": results,
+            "total_matches": total,
+            # `null` when the window stopped short of the match count: how many
+            # distinct people are in the part we did not read is not something
+            # this can know, and reporting the count it saw would be a smaller
+            # number dressed as an answer. Same distinction as `coverage`.
+            "total_people": len(clusters) if len(window) == total else None,
+            "truncated": len(window) < total or len(clusters) > MAX_PERSON_RESULTS,
+            "coverage": _coverage(),
         })
 
 
@@ -123,31 +616,99 @@ class PersonDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        relations = (
-            PersonCompanyRelation.objects
-            .filter(person=person)
-            .select_related("company")
-            .order_by("-is_active", "-vznik_funkcie")
-        )
+        members, by_id = _cluster_for(person)
+        member_ids = [m.id for m in members]
 
         return Response({
             "id": person.id,
             "name": person.name,
             "title": person.title,
             "person_ico": person.person_ico,
-            "companies": [
+            "records": len(members),
+            # The rows this page merged, with the evidence each one carries. Not
+            # decoration: the grouping is a judgement about identity, and one
+            # that is wrong has to be visible to the reader it is wrong about.
+            # `birth_date` is per row rather than merged into one answer at the
+            # top, because rows that state two different dates are the one case
+            # this page must not present as one person.
+            "members": [
                 {
-                    "ico": rel.company.ico,
-                    "name": rel.company.nazov_UJ,
-                    "role": rel.get_role_display(),
-                    "role_display": rel.role_display,
-                    "is_active": rel.is_active,
-                    "vznik_funkcie": rel.vznik_funkcie,
-                    "zanik_funkcie": rel.zanik_funkcie,
+                    "id": member.id,
+                    "name": by_id[member.id].name,
+                    "address": by_id[member.id].address,
+                    "birth_date": by_id[member.id].birth_date,
                 }
-                for rel in relations
+                for member in members
             ],
+            "companies": _merged_relations(
+                member_ids, _relations_by_person(member_ids)
+            ),
+            "coverage": _coverage(),
         })
+
+
+class OrsrPersonSearchView(APIView):
+    """`GET /api/persons/orsr/?q=` -- the register's own answer, on request.
+
+    This is the one place a reader's typing reaches a third-party server, so it
+    is deliberately the narrowest thing that is still useful:
+
+    * **one** request per query (two when the query had diacritics the register
+      would have rejected), never a pagination walk;
+    * cached for `ORSR_PERSON_CACHE_SECONDS`, which removes nearly all repeat
+      traffic;
+    * rate-limited per caller, because the input is free text typed by anyone;
+    * it returns the register's answer as the register gives it, including the
+      fact that it does not say in what capacity the person is recorded --
+      that would cost one request per company, and we do not spend other
+      people's server budget to decorate a list.
+
+    The register has no API and no bulk export; this is a form. That is the
+    reason the button exists rather than a scheduled sync keyed on a name.
+    """
+
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [OrsrPersonThrottle]
+
+    def get(self, request):
+        query = (request.query_params.get("q") or "").strip()
+        if len(query) < MIN_QUERY_LENGTH:
+            return Response({
+                "query": query,
+                "hits": [],
+                "total": 0,
+                "detail": f"Zadajte aspoň {MIN_QUERY_LENGTH} znaky.",
+            })
+
+        cache_key = f"orsr_person_search:{normalize_name(query)}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response({**cached, "cached": True})
+
+        from registers.scrapers.orsr_person_search import OrsrPersonSearch
+
+        result = OrsrPersonSearch().search(query)
+
+        payload = {
+            "query": query,
+            "hits": [hit.as_dict() for hit in result.hits],
+            "total": result.total,
+            "truncated": result.truncated,
+            "source_url": result.source_url,
+            "error": result.error,
+            # Said out loud because the register's list looks like ours and is
+            # not: it names companies, never the capacity, and covers current
+            # records only.
+            "note": (
+                "Register vracia len mená firiem, nie funkciu — na to by bol "
+                "jeden výpis pre každú firmu. Ukazuje tiež len aktuálne záznamy."
+            ),
+        }
+
+        if not result.error:
+            cache.set(cache_key, payload, settings.ORSR_PERSON_CACHE_SECONDS)
+
+        return Response(payload)
 
 
 class PersonGraphView(APIView):
@@ -164,12 +725,16 @@ class PersonGraphView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        members, _by_id = _cluster_for(person)
+        member_ids = [m.id for m in members]
+
         nodes = {}
         edges = []
 
         person_node_id = f"person_{person.id}"
         company_count = (
-            person.company_relations
+            PersonCompanyRelation.objects
+            .filter(person_id__in=member_ids)
             .values("company")
             .distinct()
             .count()
@@ -183,7 +748,7 @@ class PersonGraphView(APIView):
 
         relations = (
             PersonCompanyRelation.objects
-            .filter(person=person)
+            .filter(person_id__in=member_ids)
             .select_related("company")
         )
 

@@ -4,10 +4,52 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY . .
+
+# No build args, and that is the improvement rather than an omission. Vite inlines
+# `import.meta.env.VITE_*` at build time, so the Google key and Map ID this image
+# used to take had to be threaded in from `.gitlab-ci.yml` -- because the build
+# context is `frontend/`, the root `.env` is not merely unread here, it is not in
+# the context at all. The map now draws OpenStreetMap tiles through MapLibre,
+# which needs no key of any kind, so a production image is built from the source
+# alone and there is no build-time value left to get wrong.
+
 RUN npm run build
 
 FROM nginx:1.27-alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# The nginx config is rendered from a template at container start, because the
+# backend answers to a different name in each place this image runs. The default
+# below is the Kubernetes Service that deploy/k8s/base/backend-service.yaml and
+# the ingress actually create; docker compose overrides it with `backend:8000`
+# in docker-compose.prod.yml.
+#
+# NGINX_ENVSUBST_FILTER is what keeps that rendering honest: without it the
+# entrypoint substitutes every variable name it finds in the environment, and
+# this container is handed the whole root .env. The filter narrows it to the
+# names chosen on purpose here.
+#
+# BACKEND_RESOLVER is declared EMPTY on purpose, and that is the opposite of the
+# treatment BACKEND_UPSTREAM gets. The upstream name has a correct default (the
+# k8s Service); the resolver address does not, because it is per-environment and
+# nginx never falls back to /etc/resolv.conf for run-time resolution --
+# docker-compose.prod.yml sets Docker's embedded DNS, and each Kubernetes
+# cluster has its own. Declaring it here rather than omitting it is what makes
+# the omission loud: it puts the name in the environment, so envsubst renders
+# `resolver  valid=10s ipv6=off;` and nginx refuses to start with "no name
+# servers defined". Left undeclared, the placeholder would survive into the
+# rendered config and fail as an unreadable syntax error instead. Either way the
+# container does not start; this way the message says which variable is missing.
+#
+# See nginx.conf.template for why the resolver and the upstream group exist at
+# all -- the short version is the 2026-09-17 outage, in which a statically
+# resolved upstream name kept pointing at a recycled container address for
+# 3h43m. deploy/k8s and deploy/helm must set BACKEND_RESOLVER before a new
+# frontend image is deployed there.
+ENV BACKEND_UPSTREAM=cistafirma-backend:8000 \
+    BACKEND_RESOLVER= \
+    NGINX_ENVSUBST_FILTER=BACKEND_
+
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

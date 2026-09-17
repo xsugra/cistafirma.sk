@@ -73,6 +73,7 @@ dump.rdb
 tmp/
 worktrees/
 old/
+backups/
 
 # Sensitive env files
 .env
@@ -92,16 +93,20 @@ frontend/.env.*
 deploy/k8s/local-secret.yaml
 deploy/k8s/*-secret-local.yaml
 
+# Helm rendery z `helm_render_validate` — CI ich píše do klonu a odovzdáva
+# `helm_runtime_validate` ako artefakt. Necommitovať: sú to odvodené súbory
+# (a lokálne sa renderuje do /tmp, viď docs/DEVOPS_CICD.md).
+deploy/helm/cistafirma/.rendered/
+
 # Generated FS data (local fetch artifacts)
 backend/data/fs_data/**/*.xml
 backend/data/fs_data/**/*.xsd
 backend/data/fs_data/**/*.zip
 
+# Downloaded register datasets (MV SR address register, 162 MB) — re-fetchable
+# from the URL in `registers/management/commands/import_postal_codes.py`
+backend/data/adresy/*.csv
+
 # Keep docs and source files by default (no blanket excludes below)
-CLAUDE.md
 graphify-out/
 
-# AI generated files and folders
-.claude
-.github/copilot-instructions.md
-code-reviews.md

@@ -1,12 +1,10 @@
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin
 from .models import User
 from .forms import CustomUserCreationForm, CustomUserChangeForm
 
 # Import Unfold pre moderný admin
 try:
     from unfold.admin import ModelAdmin as UnfoldModelAdmin
-    from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
     from unfold.decorators import display as unfold_display
     UNFOLD_AVAILABLE = True
 except ImportError:
@@ -16,7 +14,7 @@ except ImportError:
 
 
 @admin.register(User)
-class CustomUserAdmin(UserAdmin, UnfoldModelAdmin if UNFOLD_AVAILABLE else object):
+class CustomUserAdmin(UnfoldModelAdmin if UNFOLD_AVAILABLE else admin.ModelAdmin):
     add_form = CustomUserCreationForm
     form = CustomUserChangeForm
     model = User
@@ -32,6 +30,61 @@ class CustomUserAdmin(UserAdmin, UnfoldModelAdmin if UNFOLD_AVAILABLE else objec
 
     readonly_fields = ('created_at', 'last_login')
 
+    # Fieldsets pre vytvorenie nového používateľa
+    add_fieldsets = (
+        (
+            None,
+            {
+                'classes': ('wide',),
+                'fields': (
+                    'email',
+                    'username',
+                    'password1',
+                    'password2'
+                )
+            }
+        ),
+        (
+            'Personal info',
+            {
+                'classes': ('wide',),
+                'fields': (
+                    'first_name',
+                    'last_name'
+                )
+            }
+        ),
+        (
+            'Subscription',
+            {
+                'classes': ('wide',),
+                'fields': ('subscription_plan',)
+            }
+        ),
+        (
+            'Permissions',
+            {
+                'classes': ('wide',),
+                'fields': (
+                    'is_active',
+                    'is_staff',
+                    'is_superuser'
+                )
+            }
+        ),
+    )
+
+    def get_fieldsets(self, request, obj=None):
+        if obj is None:
+            return self.add_fieldsets
+        return self.fieldsets
+
+    def get_form(self, request, obj=None, **kwargs):
+        defaults = {"form": self.add_form if obj is None else self.form}
+        defaults.update(kwargs)
+        return super().get_form(request, obj, **defaults)
+
+    # Fieldsets pre editáciu existujúceho používateľa
     fieldsets = (
         (
             None,
@@ -57,7 +110,7 @@ class CustomUserAdmin(UserAdmin, UnfoldModelAdmin if UNFOLD_AVAILABLE else objec
             {
                 'fields': ('subscription_plan',)
             }
-        ),  # Tu admin priradí plán
+        ),
         (
             'Permissions',
             {

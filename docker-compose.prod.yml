@@ -1,0 +1,58 @@
+# Production frontend, for a host that runs the whole stack itself (dell).
+#
+# Opt-in per machine, through COMPOSE_FILE in that machine's .env:
+#
+#     COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+#
+# It is deliberately NOT called docker-compose.override.yml: compose auto-loads
+# that name, which would swap the Vite dev server for a production build on every
+# developer machine too, including the Mac this is developed on.
+#
+# Only `frontend` is overridden. Every other service keeps its single definition
+# in docker-compose.yml, so db, redis, backend and the workers are identical in
+# both stacks -- there is no second copy of the stack to drift.
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+
+    # docker compose reaches the backend by its service name, which is not the
+    # Kubernetes Service name baked into the image.
+    #
+    # BACKEND_RESOLVER is Docker's embedded DNS. nginx needs it because the
+    # upstream is resolved at run time (see nginx.conf.template): a compose
+    # service name maps to a container IP that changes whenever that container
+    # is recreated, and a name resolved once at nginx's start goes stale the
+    # moment it does. That is what took every API call down for 3h43m on
+    # 2026-09-17. The image ships this variable empty, so it must be set here.
+    environment:
+      BACKEND_UPSTREAM: backend:8000
+      BACKEND_RESOLVER: 127.0.0.11
+
+    # `!override` replaces the merged value instead of appending to it, and this
+    # is the whole reason this file exists in the form it does. A plain `ports:`
+    # or `volumes:` MERGES with docker-compose.yml's list, so the dev stack's
+    # bind mount and its 5173:5173 mapping would both survive the merge: ./frontend
+    # would be mounted over /usr/share/nginx/html (serving the source tree instead
+    # of the build) and the container would still be published on the dev port.
+    command: ["nginx", "-g", "daemon off;"]
+    volumes: !override []
+    ports: !override
+      - "${BIND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
+
+    # The dev service is handed the whole root .env so Vite can read BACKEND_HOST
+    # and friends. nginx reads none of it -- the two variables above, the upstream
+    # name and the resolver address, are everything this container needs -- and a
+    # container that serves static files has no business holding SECRET_KEY and
+    # the database password.
+    env_file: !override []
+
+    # Asks the app to serve its own liveness endpoint, which now fails when there
+    # is no built frontend to serve rather than reporting a constant `ok`.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

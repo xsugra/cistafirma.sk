@@ -9,7 +9,7 @@ export const About: React.FC = () => {
                     O projekte cistafirma.sk
                 </h1>
                 <p className="text-lg text-gray-600 dark:text-gray-400">
-                    Transparentnosť, dáta a umelá inteligencia v službách bezpečného podnikania.
+                    Transparentnosť a dáta v službách bezpečného podnikania.
                 </p>
             </div>
 

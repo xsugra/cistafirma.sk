@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 from celery import Celery
+from celery.signals import setup_logging
 
 # Add the project's 'backend' directory to the Python path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +27,26 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 app.conf.update(
     worker_lost_wait=120,
     broker_transport_options={'visibility_timeout': 43200},
+    # Keep Django settings.LOGGING (structured JSON) authoritative in worker and
+    # beat processes. Inert once the setup_logging receiver below is wired, but
+    # a belt-and-braces guard against Celery re-adding its own text handlers.
+    worker_hijack_root_logger=False,
 )
+
+
+@setup_logging.connect
+def _configure_logging(**kwargs):
+    """Re-apply settings.LOGGING in worker/beat.
+
+    Any receiver on this signal makes Celery skip its internal logger setup
+    (root-handler hijack, its own celery.task handler, forced -l level), so the
+    JSON console logging configured in Django settings stays in effect.
+    """
+    import logging.config
+    from django.conf import settings
+
+    logging.config.dictConfig(settings.LOGGING)
+
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()

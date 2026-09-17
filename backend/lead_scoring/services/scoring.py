@@ -228,9 +228,10 @@ class LeadScoringService:
         ])
 
         if total_debt > 0:
+            from core.formatting import format_currency_eur
             breakdown['has_debt'] = True
-            breakdown['debt_details'] = f'Total debt: €{total_debt:,.0f}'
-            breakdown['details'].append(f'Company has debts: €{total_debt:,.0f}')
+            breakdown['debt_details'] = f'Total debt: {format_currency_eur(total_debt)}'
+            breakdown['details'].append(f'Company has debts: {format_currency_eur(total_debt)}')
         else:
             points += 20
             breakdown['details'].append('No debts detected')
@@ -255,7 +256,12 @@ class LeadScoringService:
                         breakdown['revenue_trend'] = 'declining'
                         decline = ((prev_rev - latest_rev) / prev_rev) * 100
                         breakdown['details'].append(f'Revenue declining: -{decline:.1f}% YoY')
-            elif len(financials) == 1:
+            elif len(financials) == 1 and financials[0].revenue:
+                # `financials[0].revenue` and not just the row count: a company
+                # whose only readable statement is a balance sheet has a stored
+                # year and no revenue at all, and this branch used to hand it
+                # five points for "Revenue data available (single year)" -- a
+                # sentence that was simply false about it.
                 breakdown['revenue_trend'] = 'single_year'
                 points += 5
                 breakdown['details'].append('Revenue data available (single year)')
@@ -301,7 +307,8 @@ class LeadScoringService:
 
         if total_debt > 0:
             breakdown['penalty'] = self.DEBT_PENALTY
-            breakdown['details'].append(f'Debt penalty: {self.DEBT_PENALTY} (total debt: €{total_debt:,.0f})')
+            from core.formatting import format_currency_eur
+            breakdown['details'].append(f'Debt penalty: {self.DEBT_PENALTY} (total debt: {format_currency_eur(total_debt)})')
         else:
             breakdown['details'].append('No debt penalty (clean financial status)')
 

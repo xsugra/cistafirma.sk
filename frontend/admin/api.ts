@@ -1,20 +1,69 @@
 import type {
   AdminCompany,
+  CompanyPreset,
+  CompanyReport,
   AdminUser,
   AuditLogEntry,
   CompanySyncStatus,
   DashboardOverview,
   DashboardSync,
   DashboardSystem,
+  SavedCompanyFilter,
   ScheduledTask,
   SyncJob,
 } from './types';
 import { apiRequest } from '../lib/apiClient';
+import { getAccessToken } from '../lib/tokenStore';
 
 const API_BASE = '/api/admin';
 
+/**
+ * What one company's refresh answered with.
+ *
+ * `skipped` and `blocked_but_asked` are the reason this is a shape rather than
+ * a boolean: the pass reports the sources it did *not* ask and the ones an
+ * admin has blocked that it asks anyway, so the control can say both instead of
+ * letting a full-looking source list imply neither happened.
+ */
+export interface CompanyRefreshResult {
+  company_id: number;
+  ico: string;
+  dispatched: string[];
+  skipped: CompanyRefreshSkip[];
+  blocked_but_asked: string[];
+  cooldown_seconds: number;
+}
+
+/** A source this pass did not ask, and which of the two refusals stopped it. */
+export interface CompanyRefreshSkip {
+  source: string;
+  reason: 'not_eligible' | 'blocked';
+}
+
 function adminRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  console.log('[adminApi] Fetching:', endpoint);
   return apiRequest<T>(endpoint, options, API_BASE);
+}
+
+async function adminDownload(endpoint: string, params?: Record<string, string | number | boolean | undefined | null>): Promise<Blob> {
+  // Through the store, not `localStorage` directly: an unticked "remember"
+  // session lives in `sessionStorage`, and reading only one of the two would
+  // download the report as an anonymous request.
+  const token = getAccessToken();
+  const filtered = Object.fromEntries(
+    Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+  ) as Record<string, string>;
+  const qs = Object.keys(filtered).length ? `?${new URLSearchParams(filtered).toString()}` : '';
+  const response = await fetch(`${API_BASE}${endpoint}${qs}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP Error: ${response.status}`);
+  }
+  return response.blob();
 }
 
 export const adminApi = {
@@ -24,10 +73,52 @@ export const adminApi = {
   dashboardSystem: () => adminRequest<DashboardSystem>('/metrics/system/'),
 
   // Companies
-  listCompanies: (params?: Record<string, string>) => {
-    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
-    return adminRequest<{ results: AdminCompany[]; count: number }>(`/companies/${qs}`);
+  listCompanies: (
+    params?: Record<string, string | number | boolean | undefined | null>,
+    options: RequestInit = {},
+  ) => {
+    const filtered = Object.fromEntries(
+      Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+    ) as Record<string, string>;
+    const qs = Object.keys(filtered).length ? '?' + new URLSearchParams(filtered).toString() : '';
+    return adminRequest<{ results: AdminCompany[]; count: number }>(`/companies/${qs}`, options);
   },
+  companyReport: (
+    params?: Record<string, string | number | boolean | undefined | null>,
+    options: RequestInit = {},
+  ) => {
+    const filtered = Object.fromEntries(
+      Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+    ) as Record<string, string>;
+    if (filtered.mode === undefined && filtered.light === undefined) {
+      filtered.light = '1';
+    }
+    const qs = Object.keys(filtered).length ? '?' + new URLSearchParams(filtered).toString() : '';
+    return adminRequest<CompanyReport>(`/companies/report/${qs}`, options);
+  },
+  downloadCompanyReport: (format: 'csv' | 'xlsx', params?: Record<string, string | number | boolean | undefined | null>) =>
+    adminDownload('/companies/report/', { ...(params || {}), export: format }),
+  companyPresets: () => adminRequest<CompanyPreset[]>('/companies/presets/'),
+
+  // One company, every source. `companyId` is the database pk, which is what
+  // the company page carries as `Company.id` -- not the IČO the URL is built
+  // from. Staff-only on the server; a 409 means a pass for this company is
+  // already inside its cooldown window.
+  refreshCompany: (companyId: string) =>
+    adminRequest<CompanyRefreshResult>('/companies/' + companyId + '/refresh/', { method: 'POST' }),
+  listCompanyFilters: () => adminRequest<{ results: SavedCompanyFilter[]; count: number }>('/company-filters/'),
+  saveCompanyFilter: (data: Pick<SavedCompanyFilter, 'name' | 'description' | 'filters' | 'is_favorite'>) =>
+    adminRequest<SavedCompanyFilter>('/company-filters/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateCompanyFilter: (id: number, data: Partial<SavedCompanyFilter>) =>
+    adminRequest<SavedCompanyFilter>(`/company-filters/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteCompanyFilter: (id: number) =>
+    adminRequest<void>(`/company-filters/${id}/`, { method: 'DELETE' }),
 
   // Users
   listUsers: (params?: Record<string, string>) => {

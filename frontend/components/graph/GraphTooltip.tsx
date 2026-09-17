@@ -55,6 +55,9 @@ export function GraphTooltip({ node, position }: GraphTooltipProps) {
             <div className="text-blue-600 dark:text-blue-400 pt-0.5 font-medium">
               <i className="fas fa-expand-alt mr-1 text-[9px]" />Klikni pre zobrazenie firiem
             </div>
+            <div className="text-blue-600 dark:text-blue-400 pt-0.5 font-medium">
+              <i className="fas fa-user mr-1 text-[9px]" />Dvojklik pre stránku osoby
+            </div>
           </div>
         )}
       </div>

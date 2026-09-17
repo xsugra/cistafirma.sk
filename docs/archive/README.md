@@ -34,10 +34,6 @@ Archiv sluzi na zachovanie kontextu bez prehlcovania root adresara.
 
 - [`notes/backend-fix-summary.md`](notes/backend-fix-summary.md)
 
-### Kontext
-
-- [`context/gemini.md`](context/gemini.md)
-
 ## Poznamka
 
 Tieto dokumenty sa povazuju za archivovane a nie su hlavnym vstupnym bodom projektu.

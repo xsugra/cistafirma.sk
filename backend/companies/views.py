@@ -4,18 +4,69 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from django.db.models import Q
 from django.utils import timezone
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
+from urllib.parse import quote as urlquote
 from .models import Company, Watchlist, SearchHistory
 from .serializers import CompanyListSerializer, CompanyDetailSerializer, WatchlistSerializer, SearchHistorySerializer
-from .services.pdf_report import generate_company_report
+from .services.pdf_report import get_company_report
+from .services.peers import PEER_SCOPES, peers_for
+from .services import ruz_documents
+from .throttles import DocumentsThrottle, PeersThrottle, ReportThrottle
+from registers.integrations.ruz_api import RuzUnreachable
 
 import logging
 logger = logging.getLogger(__name__)
 
 
+def _content_disposition(name: str) -> str:
+    """An attachment header that survives a Slovak filename.
+
+    HTTP header values are latin-1, and RUZ's attachment names are full of
+    characters that are not -- `Príloha k účtovnej závierke`, `Účtovný výkaz`.
+    A bare `filename="..."` would either raise or reach the browser mojibake'd,
+    so the name goes out twice: an ASCII-only `filename` for anything that
+    predates RFC 5987, and the real name percent-encoded in `filename*`, which
+    every browser this app targets prefers.
+
+    Control characters and quotes are removed rather than escaped: the value
+    comes from a third-party register, and a name carrying CRLF would inject a
+    header -- `strip()` would not catch one in the middle of a name.
+    """
+    cleaned = ''.join(ch for ch in name if ch.isprintable())
+    ascii_name = (
+        cleaned.encode('ascii', 'ignore').decode('ascii').replace('"', '').replace('\\', '').strip()
+        or 'zavierka'
+    )
+    return (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{urlquote(cleaned, safe='')}"
+    )
+
+
 @api_view(['GET'])
 @perm_classes([permissions.AllowAny])
 def landing_stats(request):
+    """Three counts for the public landing page.
+
+    Two of these have names that describe something other than what they count,
+    and both mislead in the reassuring direction, so read this before renaming
+    either back:
+
+    * `dailyChecks` is **not** a count of checks we ran. `datum_poslednej_upravy`
+      is `Dátum a čas kontroly RUZ`, and it is filled from RUZ's own
+      `datumPoslednejUpravy` -- the date the *register* last modified the record.
+      So this counts companies whose register entry changed today. The RUZ
+      incremental sync runs every six hours (`fetch-ruz-data-every-6-hours`) and
+      legitimately changes nothing on most runs: measured 2026-09-12, 30 of the
+      previous 90 days had any change at all, so this figure is 0 on two days in
+      three. The frontend label says "Zmien v registri dnes" for that reason. The
+      key is kept for API compatibility; a rename is a contract decision, not a
+      cleanup.
+    * `riskyCompaniesDetected` has **no date filter at all**. It is every company
+      carrying any recorded debt -- cumulative, not daily. The frontend label says
+      "Firiem s evidovaným dlhom" rather than the "Odhalených rizík dnes" it used
+      to say, which claimed a window the query never had.
+    """
     today = timezone.now().date()
     companies_indexed = Company.objects.count()
     risky = Company.objects.filter(
@@ -36,7 +87,14 @@ class WatchlistViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Watchlist.objects.filter(user=self.request.user).select_related('company')
+        # `company__financial_results` because `riskScore` is now the real
+        # score, and the real score reads the analysis. Without the prefetch
+        # that is one query per watched company.
+        return (
+            Watchlist.objects.filter(user=self.request.user)
+            .select_related('company')
+            .prefetch_related('company__financial_results')
+        )
 
     def create(self, request, *args, **kwargs):
         ico = request.data.get('ico', '').strip()
@@ -106,6 +164,23 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             return CompanyDetailSerializer
         return CompanyListSerializer
 
+    def get_throttles(self):
+        """Limit the two actions that cost real work, and only those.
+
+        `report` renders a PDF and `peers` counts across the whole register;
+        both are reachable without an account. Listing, searching and
+        retrieving a single company are unchanged -- a limit fitted to an
+        endpoint nobody has abused yet is a limit that breaks a working page
+        for the sake of a diagram. See `companies.throttles`.
+        """
+        if self.action == 'report':
+            return [ReportThrottle()]
+        if self.action == 'peers':
+            return [PeersThrottle()]
+        if self.action in ('documents', 'document'):
+            return [DocumentsThrottle()]
+        return []
+
     def retrieve(self, request, *args, **kwargs):
         ico = kwargs.get('ico')
         logger.info(f"Retrieving company with ICO: {ico}")
@@ -123,9 +198,16 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
                 {"detail": "Firma s týmto IČO nebola nájdená v našej databáze."},
                 status=status.HTTP_404_NOT_FOUND
             )
-        except Exception as e:
-            logger.error(f"Error in retrieve: {str(e)}", exc_info=True)
-            return Response({"detail": str(e)}, status=500)
+        except Exception:
+            # The traceback goes to the log and nowhere else. This endpoint is
+            # public, and an exception's own text names tables, columns, file
+            # paths and library internals -- a 500 is not a reason to hand a
+            # reader the inside of the process.
+            logger.exception(f"Error in retrieve for ICO {ico}")
+            return Response(
+                {"detail": "Pri načítaní firmy došlo k chybe. Skúste to prosím znova."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=False, methods=['get'])
     def search(self, request):
@@ -149,9 +231,14 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             logger.info(f"Found {len(companies)} results for name search, serializing...")
             serializer = CompanyListSerializer(companies, many=True)
             return Response({"results": serializer.data})
-        except Exception as e:
-            logger.error(f"Error in search: {str(e)}", exc_info=True)
-            return Response({"detail": str(e)}, status=500)
+        except Exception:
+            # Same reason as `retrieve` above: the client gets a sentence, the
+            # log gets the traceback.
+            logger.exception(f"Error in search for {query!r}")
+            return Response(
+                {"detail": "Vyhľadávanie zlyhalo. Skúste to prosím znova."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=['get'], url_path='report')
     def report(self, request, ico=None):
@@ -166,11 +253,17 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         try:
-            pdf_bytes = generate_company_report(company)
-        except Exception as e:
-            logger.error(f"PDF generation error for ICO {ico}: {e}", exc_info=True)
+            pdf_bytes = get_company_report(company)
+        except Exception:
+            # Third site of the same shape as `retrieve` and `search` above, and
+            # the one that leaked the most: the renderer wraps its own failure in
+            # a `RuntimeError` whose text is the underlying exception, so this
+            # endpoint answered an anonymous caller with an ImportError's module
+            # path or a weasyprint traceback sentence. `CompanyViewSet` is
+            # AllowAny, so there was no login between the two.
+            logger.exception(f"PDF generation error for ICO {ico}")
             return Response(
-                {"detail": f"Nepodarilo sa vygenerovať PDF: {e}"},
+                {"detail": "Report sa nepodarilo vygenerovať. Skúste to prosím znova."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -178,3 +271,170 @@ class CompanyViewSet(viewsets.ReadOnlyModelViewSet):
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'financials/(?P<year>[0-9]{4})/documents',
+    )
+    def documents(self, request, ico=None, year=None):
+        """The účtovné závierky that can be downloaded for one year.
+
+        Answers two different questions and keeps them apart: whether there is
+        anything to download, and whether we were able to find out. A failure to
+        reach the register is a `503` with an explicit state, never an empty
+        list -- an empty list here reads as "this company filed nothing", which
+        is a claim about the company rather than about our connection.
+
+        The reader is told the truth about a year we hold no filing for, too:
+        `no_statement` is about our records, and it is the honest answer for a
+        year whose row predates the field until the backfill reaches it.
+        """
+        company = self._company_or_404(ico)
+        if company is None:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        listing = ruz_documents.list_documents(company, int(year))
+        payload = {
+            'year': listing.year,
+            'state': listing.state,
+            'documents': [
+                {
+                    'id': document.id,
+                    'kind': document.kind,
+                    'name': document.name,
+                    'mimeType': document.mime_type,
+                    'size': document.size,
+                    'pages': document.pages,
+                    'url': self._document_url(company, listing.year, document.id),
+                }
+                for document in listing.documents
+            ],
+        }
+        if listing.state == ruz_documents.STATE_UNREACHABLE:
+            return Response(payload, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(payload)
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'financials/(?P<year>[0-9]{4})/documents/(?P<document_id>[a-z]+-[0-9]+)',
+    )
+    def document(self, request, ico=None, year=None, document_id=None):
+        """Stream one závierka document from this site.
+
+        The bytes come from RUZ and go straight to the browser; nothing is
+        written to disk or kept in memory whole. `open_document` re-derives the
+        listing and answers `None` for an id this company and year do not
+        actually have, which is what stops the endpoint being an open proxy onto
+        a register we do not own.
+        """
+        company = self._company_or_404(ico)
+        if company is None:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            opened = ruz_documents.open_document(company, int(year), document_id)
+        except RuzUnreachable as exc:
+            # Same distinction the listing makes, and it matters more here: a
+            # register we could not reach must not be rendered as "this company
+            # has no such document", which is what a 404 would say.
+            logger.warning(
+                'RUZ unreachable downloading %s for ICO %s: %s', document_id, ico, exc
+            )
+            return Response(
+                {"state": ruz_documents.STATE_UNREACHABLE,
+                 "detail": "Registr účtovných závierok je momentálne nedostupný."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if opened is None:
+            return Response(
+                {"detail": "Tento dokument pre túto firmu a rok k dispozícii nie je."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        upstream = opened.response
+        response = StreamingHttpResponse(
+            self._stream(upstream),
+            content_type=upstream.headers.get('Content-Type', 'application/octet-stream'),
+        )
+        response['Content-Disposition'] = _content_disposition(opened.document.name)
+        # The register's own length when it gave one, so the browser can show a
+        # real progress bar rather than an indeterminate spinner.
+        if upstream.headers.get('Content-Length'):
+            response['Content-Length'] = upstream.headers['Content-Length']
+        return response
+
+    @staticmethod
+    def _stream(upstream):
+        """Yield the body in chunks, always closing the upstream response.
+
+        The `finally` is the point: a reader who navigates away mid-download
+        raises `GeneratorExit` into this generator, and without it the connection
+        to RUZ would be left open holding a socket and a half-read body.
+        """
+        try:
+            for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    @staticmethod
+    def _document_url(company, year, document_id):
+        return f"/api/companies/{company.ico}/financials/{year}/documents/{document_id}/"
+
+    def _company_or_404(self, ico):
+        try:
+            return Company.objects.get(ico=ico)
+        except Company.DoesNotExist:
+            logger.warning(f"Company with ICO {ico} not found.")
+            return None
+
+    @action(detail=True, methods=['get'], url_path='peers')
+    def peers(self, request, ico=None):
+        """Companies ranked next to this one, in one scope.
+
+        Four company-page sections read this. `scope` is required and closed:
+        an unknown value is a 400 rather than a default, because every scope
+        answers a different question and silently picking one would put the
+        wrong ranking under the wrong heading.
+
+        The rows are returned as the service built them rather than through a
+        serializer. `CompanyDetailSerializer` exists to walk a model graph; a
+        peer row is ten fields assembled by hand in `services/peers.py`, and a
+        second declaration of that shape here is a second thing to update --
+        `_row` is the one place it is defined.
+        """
+        scope = request.query_params.get('scope', '').strip()
+        if scope not in PEER_SCOPES:
+            return Response(
+                {'detail': f'Neznámy rozsah "{scope}". Povolené: {", ".join(PEER_SCOPES)}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            company = Company.objects.get(ico=ico)
+        except Company.DoesNotExist:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            return Response(peers_for(company, scope))
+        except Exception:
+            # Same contract as `retrieve`, `search` and `report` above: the
+            # sentence goes to the caller, the traceback to the log.
+            logger.exception(f"Peer ranking error for ICO {ico}, scope {scope}")
+            return Response(
+                {"detail": "Podobné firmy sa nepodarilo načítať. Skúste to prosím znova."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

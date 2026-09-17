@@ -1,0 +1,97 @@
+# ============================================================================
+#  GitLab Runner na sam-lenovo — cez obmedzený socket proxy
+# ============================================================================
+#
+#  Toto je realizácia pravidla z runbooku:
+#    "Ak ho budeš chcieť späť, tak jedine cez obmedzený socket proxy
+#     (napr. tecnativa/docker-socket-proxy), nikdy s priamym prístupom
+#     k socketu."
+#
+#  Kto má socket:
+#    - docker-socket-proxy  ANO (read-only mount) — to je jeho úloha
+#    - gitlab-runner        NIE  — vidí len TCP port proxyho
+#    - job kontajnery       NIE  — nedostávajú ani socket, ani prístup
+#                                  do siete runner-net
+#
+#  POZOR, dôležité a neintuitívne: proxy SÁM O SEBE nestačí.
+#  Proxy obmedzuje, ktoré API endpointy sú dosiahnuteľné — ale NEROBÍ
+#  inšpekciu tela požiadavky. `POST /containers/create` s
+#  `-v /:/host --privileged` v tele prejde cez proxy rovnako ako cez
+#  surový socket. Skutočnú ochranu preto robí až to, že job kontajnery
+#  sú neprivilegované a bez socketu (config.toml: privileged=false,
+#  volumes=["/cache"]). Proxy je druhá vrstva: zužuje, čo zvládne
+#  samotný daemon runnera (žiadne exec, secrets, swarm, system).
+#
+#  Spustenie:   cd /home/sam/gitlab-runner && docker compose up -d
+# ============================================================================
+
+services:
+
+  # --------------------------------------------------------------------------
+  #  Obmedzený socket proxy. Jediné, čo vidí /var/run/docker.sock.
+  # --------------------------------------------------------------------------
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: gitlab-runner-proxy
+    restart: unless-stopped
+    environment:
+      # --- POVOLENÉ: presne to, čo runner potrebuje na spustenie jobu ---
+      CONTAINERS: 1    # create / start / wait / rm / inspect job kontajnera
+      IMAGES: 1        # pull image pre job
+      VOLUMES: 1       # cache volume
+      NETWORKS: 1      # runner si na job vytvára vlastnú sieť
+      POST: 1          # bez POST by nešlo create/start (proxy blokuje mutácie)
+
+      # --- ZAKÁZANÉ: uvádzam explicitne, aj keď default je 0 ---
+      EXEC: 0          # docker exec = cesta do bežiacich kontajnerov (napr. GitLabu)
+      BUILD: 0
+      SYSTEM: 0        # /system/* — df, events, info
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      SERVICES: 0
+      TASKS: 0
+      NODES: 0
+      PLUGINS: 0
+      SESSION: 0
+      DISTRIBUTION: 0
+      AUTH: 0
+      INFO: 1          # runner pri PRIPRAVE jobu vola GET /info (docker.go:1396).
+                           # S INFO:0 kazdy job zlyhal na runner_system_failure
+                           # (403 Forbidden) skor, nez zacal. Read-only metadata;
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - runner-net
+    # Zámerne sa NEPUBLIKUJE žiadny port. Proxy je dosiahnuteľný len
+    # z vnútra siete runner-net, teda len pre runner kontajner.
+
+  # --------------------------------------------------------------------------
+  #  Samotný runner. Socket nevidí — rozpráva sa len s proxym.
+  # --------------------------------------------------------------------------
+  gitlab-runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: gitlab-runner
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    volumes:
+      # Konfigurácia runnera. Súbor vytvára setup-config.sh, práva 0600.
+      - ./config:/etc/gitlab-runner
+    # Kontajner dostáva DNS z routera (192.168.1.1), ktorý o home.arpa nevie.
+    # dnsmasq na tailnet IP z docker bridge neodpovedá (Tailscale to blokuje),
+    # preto statický záznam. Rovnaký dôvod ako extra_hosts v config.toml
+    # pre job kontajnery.
+    #
+    # POZOR: tá istá IP je aj v setup-config.sh (GITLAB_IP) a musí sa rovnať —
+    # sú to dva kontajnery s dvoma /etc/hosts, takže jeden zdroj tu nie je možný.
+    # setup-config.sh preto pri každom spustení kontroluje, že tento riadok
+    # nesie jeho hodnotu, a skončí s exit 1, keď sa rozídu.
+    extra_hosts:
+      - "gitlab.home.arpa:100.120.104.84"
+    networks:
+      - runner-net
+
+networks:
+  runner-net:
+    driver: bridge

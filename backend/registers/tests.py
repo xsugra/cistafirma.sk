@@ -174,6 +174,52 @@ class OrsrHtmlParserTests(SimpleTestCase):
 			"Stotožnenie s registrom should be preserved in notes.",
 		)
 
+	def test_parse_takes_the_birth_date_line_out_of_the_address(self):
+		"""`Dátum narodenia:` is written on an address line and is not an address.
+
+		Left in, it was the whole address of 14 live rows -- and because
+		`compute_fingerprint` keys a row by the last non-numeric part of its
+		address, it was also their identity.
+		"""
+		person = _person_html(
+			name_tokens=["Matej", "Vácha"],
+			address_lines=["Dátum narodenia: 20.08.1992"],
+			vznik="18.05.2019",
+		)
+		html = _build_orsr_html(
+			oddiel="Sro",
+			vlozka="12345/T",
+			sections={"Štatutárny orgán": _entry(person, od="28.09.2022")},
+		)
+
+		parsed = self.parser.parse(html, "52366332")
+
+		people = parsed["structured"]["statutarny_organ"]
+		self.assertEqual(len(people), 1)
+		self.assertEqual(people[0]["birth_date"], "20.08.1992")
+		self.assertEqual(people[0]["address"], "")
+		self.assertEqual(people[0]["address_lines"], [])
+		# The other two labelled lines of the block still behave as before.
+		self.assertEqual(people[0]["vznik_funkcie"], "18.05.2019")
+		self.assertEqual(people[0]["od"], "28.09.2022")
+
+	def test_parse_keeps_a_real_address_beside_the_birth_date_line(self):
+		person = _person_html(
+			name_tokens=["Elena", "Ligásová"],
+			address_lines=["Dátum narodenia: 28.07.1956", "Kollárova 12", "Bratislava 811 06"],
+		)
+		html = _build_orsr_html(
+			oddiel="Sro",
+			vlozka="12345/T",
+			sections={"Štatutárny orgán": _entry(person)},
+		)
+
+		parsed = self.parser.parse(html, "50400118")
+
+		person_entry = parsed["structured"]["statutarny_organ"][0]
+		self.assertEqual(person_entry["birth_date"], "28.07.1956")
+		self.assertEqual(person_entry["address"], "Kollárova 12, Bratislava 811 06")
+
 	def test_parse_separates_prokura_person_from_authorization_sentence(self):
 		person = _person_html(
 			name_tokens=["Lukáš", "Jurica"],
@@ -625,3 +671,129 @@ class FocusModeDashboardTests(TestCase):
 			)
 		self.assertEqual(response.status_code, 302)
 		self.assertFalse(SyncFocusModeState.load().active)
+
+
+class OrsrEligibilityNormalizationTests(TestCase):
+	"""Test that ORSR eligibility checks use normalized legal form codes."""
+
+	def setUp(self):
+		self.company_sro = Company.objects.create(
+			ruz_id=999020,
+			ico='12345688',
+			nazov_UJ='Test s. r. o.',
+			pravna_forma='112',  # s. r. o. - should be ORSR eligible
+		)
+		self.company_as = Company.objects.create(
+			ruz_id=999021,
+			ico='12345689',
+			nazov_UJ='Test a. s.',
+			pravna_forma='121',  # a. s. - should be ORSR eligible
+		)
+		self.company_fo = Company.objects.create(
+			ruz_id=999022,
+			ico='12345690',
+			nazov_UJ='Test FO',
+			pravna_forma='101',  # FO-podnikateľ - typically NOT ORSR eligible
+		)
+		self.company_unknown = Company.objects.create(
+			ruz_id=999023,
+			ico='12345691',
+			nazov_UJ='Test Unknown',
+			pravna_forma='995',  # nešpecifikovaná - should NOT be ORSR eligible
+		)
+
+	def test_sro_is_orsr_eligible(self):
+		"""Test that s. r. o. (112) is ORSR eligible."""
+		self.assertTrue(is_orsr_eligible_company(self.company_sro))
+
+	def test_as_is_orsr_eligible(self):
+		"""Test that a. s. (121) is ORSR eligible."""
+		self.assertTrue(is_orsr_eligible_company(self.company_as))
+
+	def test_fo_not_orsr_eligible(self):
+		"""Test that FO (101) is NOT ORSR eligible."""
+		self.assertFalse(is_orsr_eligible_company(self.company_fo))
+
+	def test_unknown_not_orsr_eligible(self):
+		"""Test that unspecified form (995) is NOT ORSR eligible."""
+		self.assertFalse(is_orsr_eligible_company(self.company_unknown))
+
+	def test_eligibility_with_normalized_code(self):
+		"""Test that eligibility works when legal form is normalized."""
+		from companies.models import normalize_legal_form_code
+
+		# Test normalization before eligibility check
+		company = Company.objects.create(
+			ruz_id=999024,
+			ico='12345692',
+			nazov_UJ='Test Normalized',
+			pravna_forma=normalize_legal_form_code('  112  '),  # normalized '112'
+		)
+		self.assertTrue(is_orsr_eligible_company(company))
+
+
+class RuzSyncNormalizationTests(TestCase):
+	"""Test that RUZ sync normalizes legal form codes correctly."""
+
+	def test_sync_normalizes_legal_form_on_update(self):
+		"""Test that RUZ sync uses normalize_legal_form_code when updating company."""
+		from registers.tasks import _update_company_from_ruz_data
+		from companies.models import normalize_legal_form_code
+		
+		# Simulate RUZ data with a valid legal form code
+		ruz_data = {
+			'id': 999030,
+			'ico': '12345700',
+			'pravnaForma': 112,  # numeric
+			'nazovUJ': 'Test Company',
+			'dicsujCi': None,
+			'sidSujCi': None,
+		}
+		
+		# Call the update function
+		company = _update_company_from_ruz_data(ruz_data)
+		
+		# Verify that the code was normalized to string '112'
+		self.assertEqual(company.pravna_forma, '112')
+		self.assertEqual(company.nazov_UJ, 'Test Company')
+
+	def test_sync_handles_unknown_legal_form(self):
+		"""Test that RUZ sync falls back to '995' for unknown legal forms."""
+		from registers.tasks import _update_company_from_ruz_data
+		
+		# Simulate RUZ data with an unknown legal form code
+		ruz_data = {
+			'id': 999031,
+			'ico': '12345701',
+			'pravnaForma': 999,  # unknown code
+			'nazovUJ': 'Test With Unknown Form',
+			'dicsujCi': None,
+			'sidSujCi': None,
+		}
+		
+		# Call the update function
+		company = _update_company_from_ruz_data(ruz_data)
+		
+		# Verify that the code was normalized to '995' (fallback)
+		self.assertEqual(company.pravna_forma, '995')
+
+	def test_sync_handles_none_legal_form(self):
+		"""Test that RUZ sync handles None legal form gracefully."""
+		from registers.tasks import _update_company_from_ruz_data
+		
+		# Simulate RUZ data with None legal form
+		ruz_data = {
+			'id': 999032,
+			'ico': '12345702',
+			'pravnaForma': None,
+			'nazovUJ': 'Test With None Form',
+			'dicsujCi': None,
+			'sidSujCi': None,
+		}
+		
+		# Call the update function
+		company = _update_company_from_ruz_data(ruz_data)
+		
+		# Verify that the code was normalized to '995' (fallback)
+		self.assertEqual(company.pravna_forma, '995')
+

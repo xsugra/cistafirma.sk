@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatNumber } from '../utils/format';
 import { useNavigate } from 'react-router-dom';
 import {AnimatedSubtitle} from '../components/AnimatedSubtitle';
 import {SearchBar} from '../components/SearchBar';
@@ -70,12 +71,6 @@ export const Home: React.FC = () => {
                     >
                         Spustiť Monitoring <i className="fas fa-arrow-right ml-2"></i>
                     </button>
-                    <button
-                        onClick={() => navigate(ROUTES.PRICING)}
-                        className="btn bg-white dark:bg-slate-900 text-gray-800 dark:text-white border border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800 text-lg px-10 py-4 rounded-full shadow-md hover:shadow-lg w-full sm:w-auto transition-all duration-300"
-                    >
-                        Pozrieť Cenník
-                    </button>
                 </div>
             </section>
 
@@ -84,10 +79,19 @@ export const Home: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
                     {[
                         {val: stats.companiesIndexed, label: 'Indexovaných firiem', icon: 'fa-database'},
-                        {val: stats.dailyChecks, label: 'Denných kontrol', icon: 'fa-sync'},
+                        // Both of the next two labels used to say something the
+                        // number does not. "Denných kontrol" counted companies
+                        // whose *RUZ record changed* today -- the date comes from
+                        // RUZ's own `datumPoslednejUpravy`, not from our checks --
+                        // and "Odhalených rizík dnes" counted every company with a
+                        // recorded debt, with no date filter anywhere in the
+                        // query. On the public homepage a false label is a false
+                        // claim about the register, so the labels now name the
+                        // window and the thing that is actually counted.
+                        {val: stats.dailyChecks, label: 'Zmien v registri dnes', icon: 'fa-sync'},
                         {
                             val: stats.riskyCompaniesDetected,
-                            label: 'Odhalených rizík dnes',
+                            label: 'Firiem s evidovaným dlhom',
                             icon: 'fa-shield-virus',
                             plus: true
                         }
@@ -97,7 +101,7 @@ export const Home: React.FC = () => {
                             <div>
                                 <div
                                     className="text-4xl font-bold text-gray-900 dark:text-white mb-2 font-mono tracking-tight group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                    {stat.val.toLocaleString('sk-SK')}{stat.plus ? '+' : ''}
+                                    {formatNumber(stat.val)}{stat.plus ? '+' : ''}
                                 </div>
                                 <div
                                     className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{stat.label}</div>
@@ -132,13 +136,13 @@ export const Home: React.FC = () => {
                                 radikálnu transparentnosť do slovenského ekosystému.
                             </p>
                             <p>
-                                Náš systém využíva pokročilé algoritmy a AI na krížovú kontrolu údajov z viac ako 15
+                                Náš systém využíva pokročilé algoritmy na krížovú kontrolu údajov z viac ako 15
                                 verejných zdrojov v reálnom čase.
                             </p>
                         </div>
 
                         <div className="pt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {['Real-time dáta', 'AI Analýza', 'Notifikácie', 'API Integrácia'].map((item, i) => (
+                            {['Real-time dáta', 'Analýza rizík', 'Notifikácie', 'API Integrácia'].map((item, i) => (
                                 <div key={i}
                                      className="flex items-center gap-3 text-gray-800 dark:text-gray-200 font-medium">
                                     <i className="fas fa-check-circle text-blue-500"></i> {item}
@@ -173,7 +177,7 @@ export const Home: React.FC = () => {
                                     className="text-xs font-bold text-blue-600 uppercase tracking-wider">Legislatíva</span>
                                 <span className="text-xs text-gray-400">12. Feb</span>
                             </div>
-                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 transition-colors">
+                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                                 Zmeny v DPH od roku 2025: Na čo si dať pozor?
                             </h4>
                         </div>

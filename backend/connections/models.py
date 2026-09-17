@@ -4,18 +4,37 @@ import unicodedata
 from django.db import models
 
 
+def strip_diacritics(text: str) -> str:
+    """Lowercase, decompose, and drop the combining marks.
+
+    Slovak diacritics are combining marks under NFKD, so this turns `Kováč`
+    into `kovac` -- and `ď`, `ľ`, `ť` into `d`, `l`, `t` rather than losing them
+    the way a hand-written translation table would.
+    """
+    decomposed = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def normalize_name(name: str, title: str = "") -> str:
+    """The searchable form of a person's name.
+
+    The title is folded in rather than dropped, because the register keeps
+    `Miroslav Trnka` and `Ing. Miroslav Trnka` as separate records and a reader
+    typing either should reach the same person. Whitespace is collapsed so a
+    substring match cannot be broken by a double space in the source.
+    """
+    return re.sub(r"\s+", " ", strip_diacritics(f"{title} {name}")).strip()
+
+
 def compute_fingerprint(name: str, address: str = "", person_ico: str = "") -> str:
     if person_ico and person_ico.strip():
         return f"ico:{person_ico.strip()}"
 
-    normalized = unicodedata.normalize("NFKD", name.lower())
-    normalized = "".join(c for c in normalized if not unicodedata.combining(c))
-    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = re.sub(r"\s+", " ", strip_diacritics(name)).strip()
 
     addr_part = ""
     if address:
-        addr_normalized = unicodedata.normalize("NFKD", address.lower())
-        addr_normalized = "".join(c for c in addr_normalized if not unicodedata.combining(c))
+        addr_normalized = strip_diacritics(address)
         parts = [p.strip() for p in addr_normalized.replace("\n", ",").split(",") if p.strip()]
         for part in reversed(parts):
             if len(part) > 2 and not part.isdigit():
@@ -30,8 +49,42 @@ class Person(models.Model):
         max_length=255, unique=True, db_index=True, verbose_name="Fingerprint"
     )
     name = models.CharField(max_length=500, verbose_name="Meno")
+    name_normalized = models.CharField(
+        max_length=700,
+        blank=True,
+        default="",
+        db_index=True,
+        verbose_name="Meno bez diakritiky",
+        help_text="`title` + `name`, diacritics stripped, for searching.",
+    )
     title = models.CharField(max_length=100, blank=True, default="", verbose_name="Titul")
     address = models.TextField(blank=True, default="", verbose_name="Adresa")
+
+    # The register writes a person's birth date on the same line as the address,
+    # as `Dátum narodenia: 20.08.1992`, and the reader used to append that line
+    # to the address like any other. It is not an address, and storing it as one
+    # cost more than a wrong label: `compute_fingerprint` reads an address by its
+    # last non-numeric component, so the date *became the row's identity* --
+    # `name:matej vacha|addr:datum narodenia: 20.08.1992` -- and the same officer
+    # written once with the line and once without got two `Person` rows, which is
+    # the split `connections.identity` documents and refuses to merge away.
+    #
+    # Measured 2026-09-15 on the live table: 14 `Person` rows carry the prefix in
+    # `address`, out of 121 558, and in all 14 it is the *whole* address -- the
+    # register stated no address for those entries at all. Migration
+    # `connections/0004` re-keys 11 of them to the bare spelling and absorbs the
+    # other 3 into the row that already holds it, so no stored fingerprint is
+    # left one that no future read can reproduce. The column is filled from the
+    # sentence those rows already carried; only new reads write it from the
+    # parser.
+    #
+    # `NULL` is "the register did not state it", which is every row but those 14
+    # -- an empty date and an unknown date are the same claim here, and only one
+    # of them is expressible.
+    birth_date = models.DateField(
+        null=True, blank=True, verbose_name="Dátum narodenia"
+    )
+
     person_ico = models.CharField(
         max_length=20, blank=True, default="", db_index=True, verbose_name="IČO osoby"
     )
@@ -53,6 +106,20 @@ class Person(models.Model):
         indexes = [
             models.Index(fields=["name"]),
         ]
+
+    def save(self, *args, **kwargs):
+        """Keep `name_normalized` in step with the two fields it is built from.
+
+        Derived here rather than at each call site because there are several --
+        the ORSR extractor, the RPO extractor, the populate command -- and a row
+        whose searchable form is stale is invisible to search while still
+        looking perfectly fine in the database.
+        """
+        self.name_normalized = normalize_name(self.name, self.title)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            kwargs["update_fields"] = set(update_fields) | {"name_normalized"}
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -85,7 +152,16 @@ class PersonCompanyRelation(models.Model):
     )
     vznik_funkcie = models.DateField(null=True, blank=True, verbose_name="Vznik funkcie")
     zanik_funkcie = models.DateField(null=True, blank=True, verbose_name="Zánik funkcie")
-    is_active = models.BooleanField(default=True, verbose_name="Aktívna")
+    is_active = models.BooleanField(
+        null=True,
+        blank=True,
+        default=None,
+        verbose_name="Aktívna",
+        help_text=(
+            "True/False = the source states it; null = the function's history "
+            "was never read for this company, so we do not know."
+        ),
+    )
     source = models.CharField(max_length=20, default="orsr", verbose_name="Zdroj")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

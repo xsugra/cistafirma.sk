@@ -8,7 +8,9 @@ from adminapi.views import (
     AdminUserViewSet,
     AuditLogViewSet,
     CompanySyncStatusViewSet,
+    SavedCompanyFilterViewSet,
     SyncJobViewSet,
+    company_refresh_view,
     dashboard_business,
     dashboard_overview,
     dashboard_sync,
@@ -28,6 +30,7 @@ router = DefaultRouter()
 router.register(r"sync/jobs", SyncJobViewSet, basename="syncjob")
 router.register(r"sync/companies", CompanySyncStatusViewSet, basename="companysyncstatus")
 router.register(r"companies", AdminCompanyViewSet, basename="admincompany")
+router.register(r"company-filters", SavedCompanyFilterViewSet, basename="savedcompanyfilter")
 router.register(r"users", AdminUserViewSet, basename="adminuser")
 router.register(r"subscription-plans", AdminSubscriptionPlanViewSet, basename="adminplan")
 router.register(r"audit", AuditLogViewSet, basename="auditlog")
@@ -48,6 +51,11 @@ urlpatterns = [
     path("sync/queues/", queue_depths_view),
     path("sync/scheduled/", scheduled_tasks_view),
     path("sync/scheduled/<int:pk>/toggle/", toggle_scheduled_task_view),
+
+    # One company, every source -- declared before the router include so
+    # `companies/<pk>/refresh/` is matched here and not by the `companies`
+    # viewset's detail route.
+    path("companies/<int:company_id>/refresh/", company_refresh_view),
 
     # Impersonation (superuser only)
     path("users/<int:pk>/impersonate/", impersonate_user_view),

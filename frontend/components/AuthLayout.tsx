@@ -1,5 +1,11 @@
 import React from 'react';
 import {ROUTES} from '../constants';
+// Imported rather than written as `/logo/cistafirma-logo.png` -- see the longer
+// note in `BrandLogo.tsx`. The short version: `frontend/logo/` is not
+// `frontend/public/`, so `vite build` never carried it into `dist/`, and nginx's
+// SPA fallback answered the missing file with the HTML page. Same import, one
+// emitted asset, both call sites.
+import logoUrl from '../logo/cistafirma-logo.png';
 
 interface AuthLayoutProps {
     children: React.ReactNode;
@@ -32,7 +38,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({children, title, subtitle
                     <div className="relative z-10">
                         <div className="flex items-center gap-3 mb-8">
                             <img
-                                src="/logo/cistafirma-logo.png"
+                                src={logoUrl}
                                 alt="Logo"
                                 className="h-10 w-auto object-contain"
                             />
@@ -53,7 +59,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({children, title, subtitle
                     {/* Glass Cards Feature List */}
                     <div className="relative z-10 mt-12 space-y-4">
                         {[
-                            {icon: 'fa-robot', text: 'AI Analýza rizík'},
+                            {icon: 'fa-shield-virus', text: 'Analýza rizík'},
                             {icon: 'fa-search-dollar', text: 'Monitoring dlhov a DPH'},
                             {icon: 'fa-project-diagram', text: 'Grafické prepojenia'}
                         ].map((item, idx) => (

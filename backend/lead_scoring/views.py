@@ -1,5 +1,6 @@
 """Views for lead scoring API endpoints."""
 
+from django.db import models
 from django.db.models import Avg, Count, Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -43,26 +44,38 @@ class CompanyScoreViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def report(self, request):
         """Get lead scoring report with statistics."""
+        from django.db.models import Case, When, Value, IntegerField
+
         queryset = CompanyScore.objects.all()
 
-        total = queryset.count()
-        avg_score = queryset.aggregate(avg=Avg('score'))['avg'] or 0
+        # Optimized: Single aggregate query for counts and avg
+        counts = queryset.aggregate(
+            total=Count('id'),
+            avg_score=Avg('score'),
+            high_count=Count('id', filter=Q(score__gte=70)),
+            medium_count=Count('id', filter=Q(score__gte=50, score__lt=70)),
+            low_count=Count('id', filter=Q(score__lt=50)),
+        )
 
-        high_count = queryset.filter(score__gte=70).count()
-        medium_count = queryset.filter(score__gte=50, score__lt=70).count()
-        low_count = queryset.filter(score__lt=50).count()
+        total = counts['total']
+        avg_score = counts['avg_score'] or 0
+        high_count = counts['high_count']
+        medium_count = counts['medium_count']
+        low_count = counts['low_count']
 
-        # Distribution by 10-point ranges
-        distribution = {}
-        for i in range(0, 11):
-            start = i * 10
-            end = (i + 1) * 10
-            count = queryset.filter(score__gte=start, score__lt=end).count()
-            if count > 0:
-                distribution[f'{start}-{end}'] = count
+        # Distribution by 10-point ranges - optimized
+        distribution_data = queryset.values(
+            score_range=Case(
+                *[When(score__gte=i*10, score__lt=(i+1)*10, then=Value(f'{i*10}-{(i+1)*10}'))
+                  for i in range(0, 11)],
+                output_field=models.CharField(),
+            )
+        ).annotate(count=Count('id')).filter(score_range__isnull=False).order_by('score_range')
+
+        distribution = {item['score_range']: item['count'] for item in distribution_data}
 
         top_companies = queryset.order_by('-score')[:10]
-        last_scored = queryset.order_by('-updated_at').first()
+        last_scored = queryset.values_list('updated_at', flat=True).order_by('-updated_at').first()
 
         data = {
             'total_companies': total,
@@ -72,7 +85,7 @@ class CompanyScoreViewSet(viewsets.ReadOnlyModelViewSet):
             'low_score_count': low_count,
             'top_companies': CompanyScoreSerializer(top_companies, many=True).data,
             'score_distribution': distribution,
-            'last_scored_at': last_scored.updated_at if last_scored else None,
+            'last_scored_at': last_scored,
         }
 
         serializer = LeadScoreReportSerializer(data)

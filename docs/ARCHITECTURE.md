@@ -61,7 +61,17 @@ flowchart TD
 
 ## 4. Dátová synchronizácia
 
-Periodické úlohy sú definované v `backend/backend/settings.py` cez `CELERY_BEAT_SCHEDULE`.
+Periodické úlohy sú zapísané **dvakrát** a obe miesta musia súhlasiť:
+
+- `CELERY_BEAT_SCHEDULE` v `backend/backend/settings.py` — čitateľný zápis
+  zámeru, ale **nie to, čo naozaj beží**.
+- Tabuľka `PeriodicTask` (`django_celery_beat`) — `celery_beat` beží s
+  `--scheduler django_celery_beat.schedulers:DatabaseScheduler`, takže
+  dispatcher číta riadky z DB. Zmena dávky (`args`) v `settings.py` bez zmeny
+  riadku teda **nič neurobí** a naopak.
+
+Preklad: `sync-ruz-financials-every-12-hours` má v DB `args=[2000]` (2 000
+firiem / 12 h); rovnaké číslo je aj v `settings.py`. Obe sa menia spolu.
 
 Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 
@@ -71,7 +81,114 @@ Queue layout (každá queue mapuje na samostatný Celery worker v K8s):
 | `orsr` | 4 h | ORSR sync pre chýbajúce profily |
 | `financials` | 12 h | RUZ finančné výsledky per-company |
 | `insurance` | 12 h | Kontrola dlhov v poisťovniach (VŠZP, Soc. poisťovňa) |
-| `celery` (default) | 24 h | Aktualizácia FS dát, orchestračné a ad-hoc úlohy |
+| `celery` (default) | 24 h | Aktualizácia FS dát, sektorové mediány, orchestračné a ad-hoc úlohy |
+
+> `refresh-person-history-every-4-hours` bola **jednorazová, samovyprázdňujúca sa
+> oprava**: vyberala firmy, ktorých profil nemá v `structured` kľúč
+> `osoby_historia`, a keďže ten istý kľúč zapisuje aj nový čítač, po prečítaní
+> posledného profilu už nenaplánovala nič. **17. 9. 2026 boli zmazané obe jej
+> vrstvy — záznam v `CELERY_BEAT_SCHEDULE` aj jeho riadok `PeriodicTask`** —
+> lebo `refresh_person_history --dry-run` na delle hlásil `0 z 27 426 RPO
+> profilov`. Zmazanie, nie vypnutie: vypnutý riadok je kontrola, ktorá sa tvári,
+> že niečo rozhoduje nad prázdnou množinou. Dávka bola 2 000 firiem každé 4 h
+> a vychádzala z toho, že queue `orsr` odtečie 15 requestov/min (~133 min na
+> dávku), takže sa stihla vyprázdniť pred ďalším plánovaním aj s 500 firmami
+> z `sync-missing-orsr-profiles-every-4-hours`. Dispatcher bežal na queue
+> `celery`: plánovač na queue, ktorú sám zaplavuje, čaká za vlastným backlogom.
+> Samotná úloha `read_person_history` aj jej dispatcher ostávajú — volá ich
+> manuálny dispatcher a testy.
+>
+> Prácu vykonáva `read_person_history`, **nie** `sync_company_orsr_data`, a to
+> je zámer. Tá druhá úloha je vstupný bod ORSR *monitoringu* a
+> `is_orsr_eligible_company` tam patrí: ORSR vedie len aktuálne záznamy, takže
+> sledovať zrušenú firmu znamená míňať cudzí server na odpoveď, ktorá sa už
+> nezmení. Či RPO vedie históriu osôb je **iná otázka** a RPO ju vedie celú —
+> kým na obe odpovedala tá istá podmienka, 92 z 24 227 čakajúcich profilov
+> (90 zrušených, 2 s právnou formou, ktorú ORSR nevedie) nemohlo kľúč získať
+> nikdy, populácia teda nemohla klesnúť na nulu a riadok by sa nedal vypnúť
+> s čistým svedomím. Overené naživo 2026-09-13: `31408834` (v likvidácii)
+> 16 záznamov / 15 ukončených väzieb, `31681271` 62 záznamov, dve cirkevné
+> organizácie s `pravna_forma = NULL` po 2 záznamoch — ani jedna nevrátila
+> „RPO o firme nevie".
+>
+> Kľúč `osoby_historia` je zároveň značka „prečítané", takže sa zapisuje **až
+> po** úspešnom zápise väzieb; ak extrakcia zlyhá, čítač ho z profilu zase
+> odoberie a firma sa vráti do populácie. Bez toho by profil s kľúčom a bez
+> väzieb vyzeral ako hotový — presne to sa stalo, keď chýbal stĺpec
+> `connections_person.name_normalized`: firma na svojej stránke ticho stratila
+> osoby a každý log riadok hovoril, že sync prebehol úspešne.
+
+> `compute-sector-benchmarks-daily` prepočítava mediány (`SectorBenchmark`),
+> proti ktorým sa na stránke firmy porovnávajú jej vlastné ukazovatele. Úloha
+> mala v docstringu „beží raz denne cez Celery Beat" odjakživa, ale **žiadny
+> záznam v `CELERY_BEAT_SCHEDULE` ani riadok v `PeriodicTask` neexistoval** —
+> tabuľka bola prázdna a benchmark sa nezobrazoval nikde (ani v PDF). Zapisuje
+> výhradne riadky `SectorBenchmark` (`update_or_create`, jeden na NACE sekciu),
+> číta len našu databázu a na registre nerobí žiadny request.
+
+> `insurance` je **kapacitne viazaná, nie intervalom viazaná**: interval určuje
+> len to, ktoré firmy sú *due* (`last_insurance_debt` staršie ako 12 h alebo
+> nikdy), nie to, že sa stihnú za 12 h. Pri 441 714 firmách, dvoch zdrojoch na
+> firmu a zámernom `rate_limit='20/m'` trvá jeden plný priechod **~15 dní**.
+> Detaily a dôvod, prečo sa rate limit nezvyšuje bez rozhodnutia:
+> `docs/SOURCE_DATA_INTEGRITY.md`.
+>
+> `schedule-insurance-debt-checks-every-12-hours` plánuje **dávku veľkosti
+> jedného intervalu** (`INSURANCE_BATCH_PER_TICK`, odvodená z `rate_limit`), nie
+> celú due populáciu, a **beží na queue `celery`, nie na `insurance`** — plánovač
+> na queue, ktorú sám zaplavuje, čaká za vlastným backlogom a potom sa spúšťa
+> opakovane. Všetky tri vrstvy (`CELERY_TASK_ROUTES`, `CELERY_BEAT_SCHEDULE`,
+> riadok `PeriodicTask`) musia súhlasiť; na živom systéme rozhoduje **riadok**.
+
+> `match-seat-addresses-every-6-hours` je druhá polovica #148. `seat_*` je
+> **odvodená** hodnota — počíta ju `match_seat_addresses` z `Company.{psc,mesto,
+> ulica}` a z `AddressPoint` — a do #148 ju nič neprepočítavalo: príkaz sa dal
+> spustiť len ručne a v žiadnom pláne nebol, takže firma, ktorá sa presťahovala,
+> si držala pin na starej adrese **natrvalo**. `Company.save()` teraz pri zmene
+> adresy vyčistí všetkých šesť `seat_*` aj `seat_matched_at`; tento záznam je
+> priechod, ktorý ich z novej adresy spočíta znova. Kým neprebehne, karta firmy
+> hovorí „ešte nedopočítané", nie „register to neumiestni" — rozlíšiť tie dva
+> stavy sa nedá bez `seat_matched_at`, a to je dôvod, prečo je v zneplatnení.
+>
+> Ten rozdiel však drží **len vtedy, keď príkaz naozaj opečiatkuje aj riadok,
+> ktorý neumiestni** — a to bola druhá polovica #148, ktorá chýbala. Príkaz
+> zapisuje riadok, keď sa umiestnenie zmenilo **alebo** keď riadok nemá
+> pečiatku; testovať len hodnoty nestačí, lebo `_wanted(None)` je presne to, čo
+> neumiestnený riadok už má, takže by sa každá firma, ktorú register umiestniť
+> nevie, preskočila a zostala bez pečiatky **navždy** — karta by o adrese, na
+> ktorú sme sa pýtali pri každom priechode, ďalej tvrdila, že sme register
+> „ešte nepustili". Merané na produkcii 2026-09-17: 393 171 umiestnených
+> riadkov, všetky opečiatkované, a 56 609 neumiestnených, **ani jeden**
+> opečiatkovaný — pečiatka padala presne na tie riadky, ktoré sa zmenili, čo je
+> celá tá chyba.
+>
+> Interval **6 h je zámerne rovnaký ako `fetch-ruz-data-every-6-hours`**: adresu
+> mení ten sync, takže tento interval je to, ako dlho smie byť presťahovaná
+> firma bez sídla. Queue `celery` — na `ruz_full` drží sync svoj kurzor a na
+> `orsr`/`insurance` sa čaká na cudzí server; tento príkaz číta len našu
+> databázu. Záznam nemá `args`, takže riadok `PeriodicTask` sa od neho nemôže
+> rozísť v dávke — ale pri založení potrebuje `last_run_at` v minulosti, inak
+> riadok bez neho dostane `date_changed` a prvý beh príde až o celý interval
+> (`django_celery_beat/schedulers.py:95-96`).
+
+### `SyncJob` vs `SyncProgress`
+
+Dva záznamy, ktoré vyzerajú podobne, ale majú iný životný cyklus:
+
+- `SyncJob` je **per-run** záznam: jeden riadok na jedno spustenie syncu, s
+  vlastnými počítadlami (`processed_items`, `succeeded_items`, `failed_items`,
+  `skipped_items`) a vlastným `last_heartbeat`, ktorý stráži watchdog.
+- `SyncProgress` je **dlho žijúci, kumulatívny** riadok: `get_or_create_active`
+  ho medzi behmi recykluje a `start()` resetuje len `started_at`, takže jeho
+  počítadlá sa naprieč behmi sčítavajú. Worker log to ukázal priamo: pred
+  spracovaním 17 záznamov hlásil 6350 a po ňom 6367.
+
+Preto `SyncProgress` nevie odpovedať na otázku „čo spravil posledný beh?" a
+výsledky behu patria na job: zapisuje ich `set_job_outcome()`
+(`registers/services/sync_engine.py`), ktoré mení iba počítadlá a `status`
+necháva životnému cyklu (`complete_job` / `fail_job`). Bez toho bol job #8
+(`ruz_incremental`) uložený ako `completed` s `processed_items=0`, hoci beh
+vytvoril 17 firiem — nerozoznateľný od behu, ktorý nič neurobil.
 
 ## 5. Vyhľadávací flow (request lifecycle)
 
@@ -109,6 +226,14 @@ sequenceDiagram
 - **Async pipeline** – heavy I/O synchronizácie mimo request-response cesty.
 - **K8s migrate-first deploy** – schéma migrácie pred rolloutom app deploymentov.
 - **API-first backend** – frontend závislý na stabilných DRF endpointoch.
+- **Plánové limity sa nevynucujú** – `SubscriptionPlan.max_watched_companies`
+  a `pdf_reports_per_month` číta len admin a profil, nikde neblokujú operáciu;
+  jediné limity, ktoré projekt naozaj uplatňuje, sú DRF throttles v
+  `companies/throttles.py`. Je to rozhodnutie, nie nedokončená práca: nemáme
+  počítadlo stiahnutí, serverový report endpoint nemá ani volajúceho (PDF sa
+  skladá v prehliadači) a žiadny plán sa nepredáva. Vynútiť kvótu na endpoint,
+  ktorý nikto nevolá, by vytvorilo kontrolu, ktorá sa tvári zdravo a nerobí nič.
+  Dôvod je rozpísaný v docstringu modelu.
 
 ## 8. Rizikové miesta
 

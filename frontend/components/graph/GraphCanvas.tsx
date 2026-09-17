@@ -331,16 +331,22 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     ctx.moveTo(sx, sy);
     ctx.lineTo(tx, ty);
 
-    if (isActive) {
+    if (isActive === true) {
       ctx.strokeStyle = roleColor;
       ctx.lineWidth = 1.8 / globalScale;
       ctx.setLineDash([]);
-    } else {
+    } else if (isActive === false) {
       ctx.strokeStyle = colors.edge.inactive;
       ctx.lineWidth = 1 / globalScale;
       ctx.setLineDash([5 / globalScale, 4 / globalScale]);
+    } else {
+      // Unknown: dotted rather than dashed, so it is legible as a third state
+      // next to a dashed edge of nearly the same weight.
+      ctx.strokeStyle = colors.edge.unknown;
+      ctx.lineWidth = 1.2 / globalScale;
+      ctx.setLineDash([1.5 / globalScale, 3 / globalScale]);
     }
-    ctx.globalAlpha = isActive ? 0.55 : 0.35;
+    ctx.globalAlpha = isActive === true ? 0.55 : 0.35;
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
@@ -381,7 +387,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = isActive ? roleColor : colors.edge.inactive;
+      ctx.fillStyle =
+        isActive === true
+          ? roleColor
+          : isActive === false
+            ? colors.edge.inactive
+            : colors.edge.unknown;
       ctx.fillText(labelText, 0, 0.5 / globalScale);
 
       ctx.restore();

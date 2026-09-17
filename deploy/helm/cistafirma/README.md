@@ -25,6 +25,36 @@ Mal by obsahovať minimálne:
 
 Celery pody používajú backend image a očakávajú rovnakú app konfiguráciu plus Redis broker/backend cez premenné ako `REDIS_URL`, `CELERY_BROKER_URL` alebo `CELERY_RESULT_BACKEND`.
 
+## `frontend.backendResolver` — jediná hodnota, ktorá sa nedá odvodiť
+
+Frontend má nginx, ktorý prekladá meno backendu **za behu** (`resolve` +
+`resolver` v `frontend/nginx.conf.template`). To je oprava výpadku z 17. 9. 2026,
+keď si nginx preložil adresu raz pri štarte a po rekreovaní backendu na ňu
+ukazoval ešte 3 h 43 min.
+
+Meno backendu si chart počíta sám (`cistafirma.backendUpstream` z `fullname`),
+takže sa nemôže rozísť s Service, ktorý naozaj vytvára. **Adresu resolvera ale
+odvodiť nevie** — je vlastnosť klastra, nie chartu:
+
+| klaster | adresa |
+|---|---|
+| kubeadm, kind | `10.96.0.10` |
+| k3s | `10.43.0.10` |
+
+Over si ju pre svoj klaster:
+
+```bash
+kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+```
+
+`values-dev.yaml` ju má vyplnenú (lokálny kind). `values-prod.yaml` ju **nemá**,
+a to je zámer: neexistuje klaster, ktorému by patrila. Kým sa nedoplní, frontend
+pod do produkcie nenabehne — nginx odmietne štart s `no name servers defined`.
+To je hlasité zlyhanie, ktoré menuje samo seba; vymyslená adresa by vracala 502
+na každej požiadavke a pod by sa pritom hlásil ako zdravý, lebo jeho probe je
+voči backendu zámerne slepý. Rozdiel medzi tými dvoma je celý zmysel tohto
+nastavenia.
+
 ## Inštalačné príklady
 
 ### Dev
@@ -51,6 +81,11 @@ helm upgrade --install cistafirma-prod . \
 
 ## Image tagy v CI/CD
 
+> **Toto je návod pre K8s cestu, ktorá nie je nasadená.** GitLab CI dnes žiadny
+> image nestavia — stage `build` bol 15. 9. 2026 odstránený, lebo vyrábal
+> obrazy, ktoré nič nečíta. Až keď bude existovať klaster, bude mať zmysel
+> build vrátiť.
+
 V GitLab CI odovzdaj buildnutý image tag cez `--set global.backendImage.tag=$CI_COMMIT_TAG` a `--set global.frontendImage.tag=$CI_COMMIT_TAG`.
 
 ## Bezpečný deploy flow pre DB
@@ -76,9 +111,20 @@ kubectl apply --dry-run=server -f /tmp/cistafirma-dev-render.yaml
 kubectl apply --dry-run=server -f /tmp/cistafirma-prod-render.yaml
 ```
 
-V GitLab CI job `helm_render_validate` spustí `helm lint` a oba `helm template` rendery. Job `helm_k8s_validate` potom spustí oba `kubectl --dry-run=client` checky a, ak je dostupný validný `KUBE_CONFIG`, aj oba server dry-run checky. Ak nastavíš `STRICT_K8S_VALIDATION=true`, job failne v prípade, že server dry-run sa nedá spustiť.
+`kubectl` príkazy vyššie sú **lokálne** a patria k nenasadenej K8s ceste — bez
+klastra neprejdú (`--dry-run=client` aj tak robí discovery voči API serveru).
 
-CI flow je rozdelený do dvoch jobov:
+CI flow je rozdelený do dvoch jobov, a to zámerne **do dvoch rôznych obrazov**:
 
-- **`helm_render_validate`** – lint + render + upload artefaktov.
-- **`helm_k8s_validate`** – client dry-run vždy, server dry-run pri dostupnom cluster prístupe.
+- **`helm_render_validate`** (`alpine/helm:3.17.2`) – `helm lint` + oba rendery,
+  ktoré odovzdá ako artefakt ďalej.
+- **`helm_runtime_validate`** (`python:3.12-slim`) – spustí
+  `scripts/k8s/validate_helm_runtime.py` nad oboma rendermi.
+
+Rozdelenie nie je estetické: `alpine/helm` je holé Alpine s helmom a **python3
+v ňom nie je**, takže kým bol skript súčasťou render jobu, job padal na
+`exit 127` a kontrola sa nikdy nevykonala.
+
+Job `helm_k8s_validate` (a s ním `STRICT_K8S_VALIDATION`) bol 15. 9. 2026
+odstránený — nemal ako prejsť bez klastra a jeho obraz `bitnami/kubectl:1.30`
+na Docker Hube ani neexistuje.

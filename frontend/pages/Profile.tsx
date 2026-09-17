@@ -1,9 +1,7 @@
 import React, {useState, useEffect} from 'react';
-import { useNavigate } from 'react-router-dom';
 import {api} from '../api';
 import {useAuth} from '../context/AuthContext';
 import {StatusBadge} from '../components/StatusBadge';
-import {ROUTES} from '../constants';
 import {CompanyDetail} from '../components/CompanyDetail';
 import type {WatchlistEntry, HistoryEntry, Company, NotificationEvent, NotificationPreferences} from '../types';
 import {NotificationCenter} from '../components/NotificationCenter';
@@ -12,7 +10,6 @@ import {NotificationPreferences as NotifPrefsComponent} from '../components/Noti
 type Tab = 'dashboard' | 'watchlist' | 'history' | 'settings' | 'notifications';
 
 export const Profile: React.FC = () => {
-    const navigate = useNavigate();
     const {user} = useAuth();
     const [activeTab, setActiveTab] = useState<Tab>('dashboard');
 
@@ -173,7 +170,13 @@ export const Profile: React.FC = () => {
     };
 
     const renderDashboard = () => {
-        const percentUsed = user ? (user.apiCallsUsed / user.apiCallsLimit) * 100 : 0;
+        // The API publishes no search counter, so both of these are null for a
+        // real account. A bar drawn from an invented "0 / 10" is a measurement
+        // of nothing, and the page says so instead of drawing it.
+        const used = user?.apiCallsUsed ?? null;
+        const limit = user?.apiCallsLimit ?? null;
+        const measured = used !== null && limit !== null && limit > 0;
+        const percentUsed = measured ? (used / limit) * 100 : 0;
         return (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in">
                 <div className="app-card p-6">
@@ -204,25 +207,30 @@ export const Profile: React.FC = () => {
                     <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                         <i className="fas fa-chart-pie text-blue-600"></i> Využitie API Limitov
                     </h3>
-                    <div className="mb-2 flex justify-between text-sm">
-                        <span className="text-gray-600 dark:text-gray-400">Mesačné vyhľadávania</span>
-                        <span
-                            className="font-bold text-gray-900 dark:text-white">{user?.apiCallsUsed} / {user?.apiCallsLimit}</span>
-                    </div>
-                    <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-4 mb-4 overflow-hidden">
-                        <div
-                            className={`h-4 rounded-full transition-all duration-500 ${percentUsed > 90 ? 'bg-red-500' : 'bg-blue-600'}`}
-                            style={{width: `${percentUsed}%`}}
-                        ></div>
-                    </div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                        Limit sa obnoví 1. dňa nasledujúceho mesiaca.
-                        {percentUsed > 80 &&
-                            <span className="text-red-500 ml-1 block mt-1">Blížite sa k vyčerpaniu limitu!</span>}
-                    </p>
-                    <button onClick={() => navigate(ROUTES.PRICING)} className="btn btn-outline w-full mt-6">
-                        Navýšiť limit
-                    </button>
+                    {measured ? (
+                        <>
+                            <div className="mb-2 flex justify-between text-sm">
+                                <span className="text-gray-600 dark:text-gray-400">Mesačné vyhľadávania</span>
+                                <span
+                                    className="font-bold text-gray-900 dark:text-white">{used} / {limit}</span>
+                            </div>
+                            <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-4 mb-4 overflow-hidden">
+                                <div
+                                    className={`h-4 rounded-full transition-all duration-500 ${percentUsed > 90 ? 'bg-red-500' : 'bg-blue-600'}`}
+                                    style={{width: `${percentUsed}%`}}
+                                ></div>
+                            </div>
+                            {percentUsed > 80 &&
+                                <p className="text-sm text-red-500">
+                                    Blížite sa k vyčerpaniu limitu!
+                                </p>}
+                        </>
+                    ) : (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                            Počet vyhľadávaní pre tento účet nesledujeme, takže tu nie je čo
+                            vykresliť. Vyhľadávanie je zatiaľ bez kvóty.
+                        </p>
+                    )}
                 </div>
             </div>
         );
@@ -268,7 +276,7 @@ export const Profile: React.FC = () => {
                                     </div>
                                     <button
                                         onClick={(e) => handleDeleteFromWatchlist(item.id, e)}
-                                        className="btn btn-ghost btn-icon hover:bg-red-50 hover:text-red-500"
+                                        className="btn btn-ghost btn-icon hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500"
                                         title="Odstrániť"
                                     >
                                         <i className="fas fa-trash-alt"></i>
@@ -364,9 +372,7 @@ export const Profile: React.FC = () => {
                         <input name="confirmPassword" type="password" value={security.confirmPassword}
                                onChange={handleSecurityChange} className="app-input"/>
                     </div>
-                    <button type="submit" className="btn btn-primary bg-slate-800 hover:bg-slate-700 w-full">Zmeniť
-                        heslo
-                    </button>
+                    <button type="submit" className="btn btn-primary w-full">Zmeniť heslo</button>
                 </form>
             </div>
         </div>
@@ -385,7 +391,7 @@ export const Profile: React.FC = () => {
                 <h1 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white">Môj Profil</h1>
                 {message && (
                     <div
-                        className={`px-4 py-2 rounded-lg text-sm font-medium w-full md:w-auto ${message.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                        className={`px-4 py-2 rounded-lg text-sm font-medium w-full md:w-auto ${message.type === 'success' ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
                         {message.text}
                     </div>
                 )}

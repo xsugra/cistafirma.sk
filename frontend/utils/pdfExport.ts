@@ -3,6 +3,8 @@ import type { GraphNode, GraphEdge } from '../components/graph/graphTypes';
 import { API_BASE_URL } from '../constants';
 import { getLegalFormProfile } from './legalFormProfile';
 import { normalizePeople, formatDate, normalizeAmountText } from '../components/company/helpers';
+import { formatNumber } from './format';
+import { vatStanding, vatReliability, VAT_STANDING_LABEL } from './vatStatus';
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -11,13 +13,16 @@ function esc(text: string): string {
 }
 
 function eur(amount: number): string {
-  return amount.toLocaleString('sk-SK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+  return `${formatNumber(amount)} €`;
 }
 
-function eurCompact(amount: number): string {
+function eurCompact(amount: number | null | undefined): string {
+  // A figure the statement did not carry is not a zero, and printing `0 €` in
+  // an exported document is a claim about the company that nothing supports.
+  if (amount == null) return '—';
   if (Math.abs(amount) >= 1_000_000) return (amount / 1_000_000).toFixed(1) + 'M €';
   if (Math.abs(amount) >= 1_000) return Math.round(amount / 1_000) + 'k €';
-  return amount.toLocaleString('sk-SK') + ' €';
+  return `${formatNumber(amount)} €`;
 }
 
 function pct(value: number | null): string {
@@ -398,19 +403,23 @@ function buildHeader(c: Company): string {
     <tr><td>Sídlo</td><td colspan="3">${esc(address)}</td></tr>
     <tr><td>Dátum vzniku</td><td>${fmtDate(orsr?.den_zapisu || c.registrationDate)}</td><td>Stav</td><td>${esc(c.status)}</td></tr>
     ${reg ? `<tr><td>Register</td><td colspan="3">${esc(reg)}</td></tr>` : ''}
-    ${c.vatStatus.icDph ? `<tr><td>IČ DPH</td><td>${esc(c.vatStatus.icDph)}</td><td>Spoľahlivosť</td><td>${esc(c.vatStatus.taxReliabilityIndex)}</td></tr>` : ''}
+    ${c.vatStatus.icDph ? `<tr><td>IČ DPH</td><td>${esc(c.vatStatus.icDph)}</td><td>Spoľahlivosť</td><td>${esc(vatReliability(c.vatStatus.taxReliabilityIndex).label)}</td></tr>` : ''}
   </tbody></table>
 </div>`;
 }
 
 function buildSummary(c: Company): string {
   const totalDebt = c.debts.reduce((s, d) => s + d.amountEur, 0);
+  // An absent score prints a dash, not `null` and not a green 100. The report
+  // is the artefact that gets forwarded, so a figure invented here would
+  // outlive the screen it came from.
+  const score = c.riskScore.score;
   return `
 <div class="cols-3">
   <div class="box">
     <div class="box-label">Rizikové skóre</div>
-    <div class="box-value">${c.riskScore.score} / 100</div>
-    <div class="box-sub">${esc(c.riskScore.summary)}</div>
+    <div class="box-value">${score === null ? '—' : `${score} / 100`}</div>
+    <div class="box-sub">${esc(c.riskScore.summary || (score === null ? 'Skóre sa nepodarilo načítať.' : ''))}</div>
   </div>
   <div class="box">
     <div class="box-label">Celkové dlhy</div>
@@ -419,8 +428,8 @@ function buildSummary(c: Company): string {
   </div>
   <div class="box">
     <div class="box-label">DPH status</div>
-    <div class="box-value">${c.vatStatus.isVatPayer ? 'Platiteľ' : 'Neplatiteľ'}</div>
-    <div class="box-sub">${esc(c.vatStatus.taxReliabilityIndex)}</div>
+    <div class="box-value">${esc(VAT_STANDING_LABEL[vatStanding(c.vatStatus)])}</div>
+    <div class="box-sub">${esc(vatReliability(c.vatStatus.taxReliabilityIndex).label)}</div>
   </div>
 </div>`;
 }
@@ -435,6 +444,18 @@ function buildDebts(c: Company): string {
   return `<div class="section"><h2>Dlhy a nedoplatky</h2><table><thead><tr><th>Zdroj</th><th class="r">Suma</th><th>K dátumu</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+/** Does this year's statement carry a composition, not just the two totals? */
+function hasBreakdown(f: Financials): boolean {
+  return [
+    f.assetsIntangible, f.assetsTangible, f.assetsFinancial, f.assetsInventory,
+    f.assetsReceivablesLong, f.assetsReceivablesShort, f.assetsFinancialShort,
+    f.assetsFinancialAccounts,
+    f.assetsAccruals, f.equityBasic, f.equityCapitalFunds, f.equityProfitFunds,
+    f.equityRetained, f.liabilitiesReserves, f.liabilitiesLong, f.liabilitiesShort,
+    f.liabilitiesAccruals,
+  ].some(v => v != null);
+}
+
 function buildFinancials(c: Company): string {
   if (c.financials.length === 0) return `<div class="section"><h2>Finančné údaje</h2><p class="empty">Finančné údaje nie sú k dispozícii.</p></div>`;
 
@@ -443,11 +464,16 @@ function buildFinancials(c: Company): string {
 
   // Key indicators
   let kpi = `<div class="section"><h2>Kľúčové ukazovatele ${latest.year}</h2><table><tbody>`;
+  // Two rows, because the statement has two. Both used to read `profit`, which
+  // held whichever of the two the parser picked by absolute value -- so the KPI
+  // block printed the operating result under the label "Zisk po zdanení" for
+  // 86 % of the rows where the question can be settled at all.
   const rows: [string, string][] = [
-    ['Celkové výnosy', eurCompact(latest.totalRevenue || latest.revenue)],
-    ['Zisk po zdanení', eurCompact(latest.profit)],
+    ['Celkové výnosy', eurCompact(latest.totalRevenue ?? latest.revenue)],
+    ['Výsledok hospodárenia z hospodárskej činnosti', eurCompact(latest.profit)],
+    ['Zisk po zdanení', eurCompact(latest.profitAfterTax)],
   ];
-  if (latest.assetsTotal > 0) {
+  if (latest.assetsTotal != null) {
     rows.push(
       ['Celkové aktíva', eurCompact(latest.assetsTotal)],
       ['Vlastný kapitál', eurCompact(latest.equity)],
@@ -463,24 +489,28 @@ function buildFinancials(c: Company): string {
   kpi += '</tbody></table></div>';
 
   // Financial history table
-  let hist = `<div class="section"><h2>Hospodárske výsledky</h2><table class="compact"><thead><tr><th>Rok</th><th class="r">Výnosy</th><th class="r">Zisk</th><th class="r">Náklady</th><th class="r">Aktíva</th><th class="r">Vlast. kap.</th><th class="r">Zadlž.</th><th class="r">Marža</th></tr></thead><tbody>`;
+  let hist = `<div class="section"><h2>Hospodárske výsledky</h2><table class="compact"><thead><tr><th>Rok</th><th class="r">Výnosy</th><th class="r">VH z hosp. č.</th><th class="r">Zisk po zd.</th><th class="r">Náklady</th><th class="r">Aktíva</th><th class="r">Vlast. kap.</th><th class="r">Zadlž.</th><th class="r">Marža</th></tr></thead><tbody>`;
   for (const f of sorted) {
     hist += `<tr>
       <td><b>${f.year}</b></td>
-      <td class="r">${eurCompact(f.totalRevenue || f.revenue)}</td>
+      <td class="r">${eurCompact(f.totalRevenue ?? f.revenue)}</td>
       <td class="r">${eurCompact(f.profit)}</td>
+      <td class="r">${eurCompact(f.profitAfterTax)}</td>
       <td class="r">${eurCompact(f.costs)}</td>
-      <td class="r">${f.assetsTotal ? eurCompact(f.assetsTotal) : '—'}</td>
-      <td class="r">${f.equity ? eurCompact(f.equity) : '—'}</td>
+      <td class="r">${eurCompact(f.assetsTotal)}</td>
+      <td class="r">${eurCompact(f.equity)}</td>
       <td class="r">${pct(f.debtRatio)}</td>
       <td class="r">${pct(f.grossMargin)}</td>
     </tr>`;
   }
   hist += '</tbody></table></div>';
 
-  // Assets & liabilities breakdown for latest year with balance sheet
+  // Assets & liabilities breakdown for the latest year that has one. The
+  // breakdown is only worth a page when there is a breakdown to print: a
+  // statement can file `Aktíva celkom` with no readable composition, and that
+  // would render sixteen rows of dashes into the exported document.
   let balance = '';
-  const bal = sorted.find(f => f.assetsTotal > 0);
+  const bal = sorted.find(hasBreakdown);
   if (bal) {
     balance = `<div class="section"><h2>Štruktúra majetku a záväzkov ${bal.year}</h2>
     <div class="cols-2">
@@ -493,6 +523,7 @@ function buildFinancials(c: Company): string {
           <tr><td>Zásoby</td><td class="r">${eurCompact(bal.assetsInventory)}</td></tr>
           <tr><td>Dlhodobé pohľadávky</td><td class="r">${eurCompact(bal.assetsReceivablesLong)}</td></tr>
           <tr><td>Krátkodobé pohľadávky</td><td class="r">${eurCompact(bal.assetsReceivablesShort)}</td></tr>
+          <tr><td>Krátkodobý finančný majetok</td><td class="r">${eurCompact(bal.assetsFinancialShort)}</td></tr>
           <tr><td>Finančné účty</td><td class="r">${eurCompact(bal.assetsFinancialAccounts)}</td></tr>
           <tr class="total"><td><b>Aktíva celkom</b></td><td class="r"><b>${eurCompact(bal.assetsTotal)}</b></td></tr>
         </tbody></table>

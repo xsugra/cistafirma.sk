@@ -2,6 +2,10 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Class-based dark mode: the `dark` class on <html> (set by ThemeProvider)
+   drives all `dark:` utilities instead of the OS prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-brand: #2563eb;
   --color-brand-hover: #1d4ed8;
@@ -39,6 +43,12 @@
     
     --text-muted-light: #64748b;
     --text-muted-dark: #94a3b8;
+
+    color-scheme: light;
+}
+
+html.dark {
+    color-scheme: dark;
 }
 
 body {
@@ -57,6 +67,48 @@ h1, h2, h3, h4, h5, h6 {
 html.dark body {
     background-color: var(--bg-dark);
     color: var(--text-main-dark);
+}
+
+/* Default border colour for an unqualified `border` / `border-t` / `border-b`.
+   Tailwind v4's preflight resolves those to `currentColor` (v3 used gray-200),
+   and `html.dark body` is #f8fafc -- so a border written without a colour
+   utility rendered as a near-white hairline in dark mode, which is invisible
+   in review and only shows up on screen.
+
+   This lives in `@layer base`, and Tailwind declares its layers as
+   `theme, base, components, utilities` -- a utilities-layer rule always wins
+   over a base-layer one regardless of specificity, so every explicit
+   `border-<colour>` (including `dark:border-*`) is unaffected. The default is
+   therefore a safety net for the omission, never an override of a choice. */
+@layer base {
+    *,
+    ::after,
+    ::before,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: var(--border-light);
+    }
+
+    html.dark *,
+    html.dark ::after,
+    html.dark ::before,
+    html.dark ::backdrop,
+    html.dark ::file-selector-button {
+        border-color: var(--border-dark);
+    }
+}
+
+/* The Profile tab rail scrolls horizontally on a narrow screen, and asks for
+   this class so the scrollbar stays out of the way. Tailwind v4 ships no such
+   utility, so the class was inert and the rail showed a scrollbar. Declared
+   with `@utility` so it lands in the utilities layer like any built-in. */
+@utility no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
 }
 
 /* --- UTILITIES & ANIMATIONS --- */
@@ -216,6 +268,10 @@ html.dark .form-label {
     top: 50%;
     transform: translateY(-50%);
     color: var(--text-muted-light);
+}
+
+html.dark .input-icon {
+    color: var(--text-muted-dark);
 }
 
 .app-input {
