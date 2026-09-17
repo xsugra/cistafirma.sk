@@ -5470,6 +5470,91 @@ vetva aj jej commity ostávajú (`8ea1e50`).
 
 ---
 
+### „Zlúčiť `feat/ai-ready-baseline` s `main`" nebol problém — je to predok (2026-09-18)
+
+V zozname otvorených vecí bola aj „konvergencia `feat/ai-ready-baseline` s `main`".
+**Nie je čo zlučovať.** `git rev-list --count main..gitlab-home/feat/ai-ready-baseline`
+je **0** — vetva nemá ani jeden vlastný commit; `main` je o 10 napred, ale len
+preto, že je to tá istá línia. `git ls-remote` na oba remoty vracia pre tú vetvu
+**`fc460015baaabf0a7285d6058a2e9b57f26882b8`**, a `git merge-base --is-ancestor
+fc46001 main` je pravda.
+
+História je teda **jedna priamka**, nie dve vetvy:
+
+```
+6abd4d5 (dell) → fc46001 (feat/ai-ready-baseline na oboch remoteoch)
+              → d113a67 (merge) → 7d97d66 → 945fce2 (main)
+```
+
+**A to isté platí pre `dell`.** Beží na `feat/ai-ready-baseline`, HEAD
+**`6abd4d533d8162ccf491c6c6170e799520c48cc4`**, pracovný strom **čistý**,
+a `git rev-list --count main..6abd4d5` je **0** — nasadený commit je predok
+`main`. `6abd4d5..main` je **25 commitov**, čiže nasadenie je **čistý
+fast-forward**, nie merge a nie rebase. (Predtým som to odhadoval na 15 commitov;
+presné číslo je 25 a je merané, nie odhadnuté.)
+
+Z toho vyplýva, že „zlúčiť vetvu s `main`" aj „doviesť `dell` na `main`" sú dve
+stránky tej istej veci: **`main` už všetko obsahuje**, obe mená ukazujú na jeho
+predkov. Nič sa nemerguje — len sa posunie ukazovateľ. Nechal som to na tvoje
+slovo, lebo posun `feat/ai-ready-baseline` (vetva, ktorú má `dell` vycheckoutovanú)
+je rozhodnutie o zdieľanej vetve.
+
+#### Koľko z tých 22 vetiev je mŕtvych — a či o niečo prídu
+
+`gitlab-home` má **22 vetiev**, GitHub **2** (`main`, `feat/ai-ready-baseline`).
+Pre každú vetvu som zmeral `git rev-list --count main..<vetva>`:
+
+- **14 vetiev má 0 vlastných commitov** — sú celé obsiahnuté v `main` a zmazať sa
+  dajú bez straty: `checkpoint/wip-state`, `chore/frontend-assets`,
+  `ci/runner-tags-and-kubectl-image`, `feat/ai-ready-baseline` (pozor — tú drží
+  `dell`), `feat/companies-registers-backend`, `feat/frontend-admin-pages`,
+  `feat/frontend-components-overhaul`, `feat/frontend-ts-migration`,
+  `feat/new-apps-connections-core`, `feature/admin-overhaul`,
+  `feature/frontend-enhancements`, `feature/registers-sync-engine`,
+  `infra/docs-k8s-audit-fix`, `refactor/admin-UI`.
+- **7 má vlastné commity**: `backup/origin-main-20260507204206` (1),
+  `chore/gitignore-config` (1), `chore/project-config` (2), `feat/admin-dashboard` (1),
+  `dev` (8), `docs/licence-and-readme-update` (8), `fix/code-review-improvements` (8).
+
+**Nič som nezmazal** — je to nevratné a nie je to moja vec. Ale tú najpodstatnejšiu
+som preveril, aby sa „8 nezlúčených commitov" nečítalo ako 8 stratených vecí.
+`fix/code-review-improvements` vyzerá najhodnotnejšie (k8s init kontajner,
+`/healthz/` sondy, `{once:true}` na Vanta listeneroch, `pgpass` namiesto
+`PGPASSWORD`), a **všetko z toho už v `main` je, inou cestou**:
+
+- `pgpass` — `main:scripts/k8s/backup_postgres.sh` používa `PGPASSFILE` (`mktemp`
+  + `chmod 600` + `trap` na zmazanie). Vetvový commit je predbehnutý.
+- `/healthz/` sondy — `main` ich má v `deploy/k8s/base/backend-deployment.yaml`
+  aj v `deploy/helm/cistafirma/templates/backend-deployment.yaml`.
+- `{once:true}` na Vanta listeneroch — **moot**: `main` už Vanta skript
+  nenačítava vôbec, shadery má vendorované priamo
+  (`frontend/components/VantaBackground.tsx` má `compileShader`/`initWebGL`
+  a v celom `frontend/` nie je `<script>` load listener). Oprava riešila kód,
+  ktorý v `main` neexistuje.
+
+**Pozitívna kontrola k tomu:** `git grep` na `main` tie veci **našiel** (`PGPASSFILE`,
+`/healthz/`), takže „nenájdené" pri Vante je meranie, nie prázdny výsledok
+prístroja, ktorý nevie hľadať ([[absence-needs-a-positive-control]]).
+
+#### Vlastná chyba: 20 fantómových `origin/*` refs
+
+Pri porovnávaní som spravil `git fetch gitlab-home '+refs/heads/*:refs/remotes/origin/*'`
+— a tým **prepísal `origin/*`**. Remote `gitlab-home` má pritom vlastný
+namespace (`+refs/heads/*:refs/remotes/gitlab-home/*`), takže vzniklo 20 refs
+`origin/<vetva>`, ktoré na GitHube **neexistujú**. `git fetch --prune origin`
+ich presne tých 20 odstránil a nechal `origin/main` a
+`origin/feat/ai-ready-baseline` — jediné dve vetvy, ktoré GitHub má. Stratené
+nebolo nič: tie refs boli kópie `gitlab-home/*`, ktoré tam ostali.
+
+#### `dell` sa odtiaľto cez `~/.ssh/config` nedá dosiahnuť
+
+`Host dell` má `HostName 192.168.1.210` a to je LAN adresa, ktorá z Macu
+**timeoutuje**. `tailscale status` vidí `dell` na **`100.79.47.4`**, a odtiaľto
+funguje. Je to tá istá trieda ako `gitlab.home.arpa` — adresa v configu
+predpokladá sieť, v ktorej práve nie sme ([[always-name-the-device]]).
+
+---
+
 ## 8. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
