@@ -528,9 +528,23 @@ CELERY_BEAT_SCHEDULE = {
     # but changing this dict alone would change nothing on a live system.
     #
     # Measured 2026-09-13: every row on this instance carries `expires=None`
-    # while its `args` and `queue` do match this dict, so `options` does not
-    # reach a row that already exists. It is set here for a fresh install,
-    # where the row is created from this dict.
+    # while its `args` and `queue` do match this dict. That is not evidence that
+    # `options` fails to reach an existing row -- `queue` *is* an option and it
+    # does reach one; measured again 2026-09-17 on a row created from this dict,
+    # which came back with `queue=celery`. The reason is the key name:
+    # `ModelEntry._unpack_options` takes `expire_seconds`, not `expires`
+    # (`django_celery_beat/schedulers.py:217-218`), so `expires` falls into
+    # `**kwargs` and is discarded. A row's expiry comes only from
+    # `model.expires_`, which reads the `expires`/`expire_seconds` *columns*.
+    #
+    # So this `expires` is inert for the row in both directions, and the three
+    # layers do **not** all agree: the intent ("a pass must not still be queued
+    # when the next one is due") reaches `CELERY_BEAT_SCHEDULE` only. Left as it
+    # is rather than renamed, because `expire_seconds` would start dropping a
+    # dispatched pass that waited longer than the interval -- turning "the pass
+    # happens late" into "the pass does not happen", which is the silent-failure
+    # shape this repository keeps paying for. Renaming it is a decision about
+    # scheduling semantics, not a typo fix.
     'schedule-insurance-debt-checks-every-12-hours': {
         'task': 'registers.tasks.schedule_insurance_debt_checks',
         'schedule': 43200.0,
@@ -564,6 +578,12 @@ CELERY_BEAT_SCHEDULE = {
     # arguments. It does need `last_run_at` set in the past on a live instance --
     # a row created with none gets `date_changed`, so its first run would land a
     # full interval after the deploy (see docs/ARCHITECTURE.md §4).
+    # `expires` here is inert on a live system for the reason spelled out above
+    # `schedule-insurance-debt-checks-every-12-hours`: the key the library reads
+    # is `expire_seconds`. It is set so the intent travels with the entry, and
+    # the row's own expiry is deliberately left unset -- a matcher pass that is
+    # dispatched but waits must still run, because it is the pass that makes a
+    # moved company's card true again.
     'match-seat-addresses-every-6-hours': {
         'task': 'registers.tasks.match_company_seats',
         'schedule': 21600.0,
