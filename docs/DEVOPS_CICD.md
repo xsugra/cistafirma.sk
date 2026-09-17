@@ -99,6 +99,29 @@ ssh lenovo 'docker exec gitlab-server gitlab-rails runner \
 > s `run_untagged = true` v configu ostal v GitLabe stav `false`
 > (`ci_runners.updated_at` sa nepohol).
 
+> **Domerané 17. 9. 2026 — a GitLab to pomenoval sám.** Záznamy jobov dávajú
+> odseku vyššie presné čísla. **Všetkých 49 jobov**, ktoré medzi **10. 9. 2026
+> 20:15 a 15. 9. 2026 13:45** skončili `failed` bez toho, aby ich niekto
+> prevzal, má `failure_reason = 26` — `stuck_pending_no_matching_runners` —
+> a `runner_id` prázdne. To nie je interpretácia, to je GitLabov vlastný
+> verdikt, že job ostal visieť, pretože naň **nemal kto**: 49 jobov, nula
+> runnerov. Ostatné príčiny sú v menšine a iné — `script_failure` (10 jobov,
+> 11.–15. 9.), `runner_system_failure` (6, 11. 9. 17:59–18:05) a jeden
+> `server_timeout_canceling` (15. 9. 20:01). Mená hodnôt sú z
+> `Enums::Ci::CommitStatus.failure_reasons`, nie odhadnuté z čísel.
+>
+> Závislosť na `tags:` je v tých dátach vidieť priamo. Keď `d8fd936` (11. 9.
+> 19:55) tagy pridal, joby sa začali prevzímať — pipeline 6 na jeho vetve má
+> `runner_id = 1` a padá až na `script_failure`. Keď vetva 13. 9. tagy zase
+> stratila (`4731a620`), tie isté joby sa vrátili do
+> `stuck_pending_no_matching_runners`. Kedy presne sa `run_untagged` prepol na
+> `true`, v databáze nie je (históriu `ci_runners` GitLab nevedie); podľa
+> pipeline to bolo medzi 15. 9. 21:06 (posledný `script_failure`
+> na `backend_tests`) a 21:19 (prvá zelená pipeline na tejto vetve).
+>
+> „Štyri dni" v odseku vyššie je teda zmeraných **päť** (10. 9. 20:15 → 15. 9.
+> 13:45), a netýkalo sa to len `main`: tých 49 jobov je z viacerých vetiev.
+
 > **Oprava 17. 9. 2026 — „žiadny job v histórii repa nemal `tags:`" nie je
 > pravda.** Zmerané na refoch: commit `d8fd936` (`ci: tagy pre runner na
 > sam-lenovo + oprava neexistujuceho kubectl image`, 11. 9. 2026 **19:55**)
