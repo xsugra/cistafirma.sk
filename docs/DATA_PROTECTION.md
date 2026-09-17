@@ -424,10 +424,24 @@ to record somewhere else.
 `make ops-check` answers one question in one command: is everything this
 document depends on actually working? It covers the stack, the database, Celery
 queue depths, active sync jobs, the local backup and its checksum, every
-off-site control, the drill record, and whether the weekly job is still firing.
-It is read-only — it
+off-site control, the drill record, whether the weekly job is still firing, and
+one live API request through the published frontend port. It is read-only — it
 starts no container and writes nothing — so it is safe to run at any time, and it
 exits non-zero when a control is unmet.
+
+The API check is the one that judges the *service* rather than its parts, and it
+is there because parts can all be healthy while the service is not. On
+2026-09-17 nginx answered 502 to every `/api/` call for 3 h 43 min — it had
+resolved the backend's address once, at its own start, and the backend container
+was recreated 22 seconds later — while the frontend stayed up, its healthcheck
+passed and `/healthz` on the same published port answered 200 throughout. Every
+control in this gate was green for the whole outage. The check therefore asks the
+question from outside, as a browser would: it finds the frontend's published
+address in `docker compose ps` and requires a 200 from `/api/stats/landing/`
+(`AllowAny`, cheap, and downstream of nginx, gunicorn, Django and Postgres). It
+fails closed when the frontend is not running or its address cannot be found, and
+prints a visible `SKIP` — never silence — on a host with no stack at all, such as
+the retired Mac. `CISTAFIRMA_API_TIMEOUT` (default 10 s) bounds the request.
 
 The weekly job runs the same gate as its last step. On any failure it writes
 `LAST_FAILURE` in the platform's log directory (`~/Library/Logs/CistaFirma` on

@@ -215,6 +215,12 @@ per source, written by `record_ruz_date_outcome`, `record_orsr_outcome` and
 - The `process_*`/`python_*` collectors are only exported when the multiprocess
   directory is unset (tests, `runserver`, management commands); under gunicorn
   they would be one worker's view, so they are excluded.
+- **Nothing here detects an API outage on its own.** `/metrics` describes what
+  the backend did with the requests it received; it cannot report requests that
+  never arrived because nginx could not reach the backend — during the
+  2026-09-17 outage the scrape target itself stayed up and reported normally.
+  The outside-in check in `make ops-check` exists to cover exactly that, and it
+  is a weekly-and-by-hand gate, not an alert.
 
 ## Optional monitoring stack
 
@@ -235,6 +241,20 @@ Both ports are published on **loopback only** — the UIs are never exposed to t
 LAN. Grafana provisions its Prometheus datasource and a `CistaFirma Overview`
 dashboard (request rate by status, p95 latency, 5xx ratio, top paths, unknown
 legal-form codes) from `deploy/monitoring/`. No alerting rules are provisioned.
+
+That is the gap the 2026-09-17 outage fell through: with nothing alerting,
+metrics and dashboards only answer questions somebody is already asking, and for
+3 h 43 min nobody was. Availability is therefore asserted by
+`scripts/local/ops_check.sh`, whose **API availability** section GETs
+`/api/stats/landing/` through the frontend's *published* port from the host and
+requires a 200 — a path that includes nginx, the exact component whose stale
+upstream address caused the outage, and one that a running, healthy frontend
+does not make pass on its own (`/healthz` answered 200 for the whole of it). What
+it proves is deliberately bounded: that the API answers, not that its answers are
+right — correctness is the sync-jobs and source-health sections' verdict. And it
+is a weekly and by-hand gate, not an alert; a real alert would need an
+Alertmanager this stack does not run, so the weekly job's notification is what
+stands in for one.
 
 Do **not** use `docker compose down` to stop this stack: that verb is on this
 repository's never-run list and would also stop the database. Use `stop`.

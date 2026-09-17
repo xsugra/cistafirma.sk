@@ -201,10 +201,14 @@ server {
     # answered 502. That is the correct trade for a LIVENESS probe -- restarting
     # nginx cannot fix an unreachable backend, and a probe that failed here would
     # restart every frontend pod during any backend restart. It does mean this
-    # endpoint is not an availability signal, and nothing else in the stack is
-    # either: prometheus.yml provisions no alerting rules, and scripts/local/ops_check.sh
-    # probes no frontend. Detecting the next occurrence needs a check that
-    # exercises /api/ from outside, not a change to this location.
+    # endpoint is not an availability signal, and prometheus.yml provisions no
+    # alerting rules either. So availability is measured where it can actually be
+    # observed: `scripts/local/ops_check.sh` has an "API availability" section
+    # that GETs `/api/stats/landing/` through this container's *published* port
+    # from the host -- the same path a browser takes, nginx included -- and fails
+    # on anything but 200. Nothing needs to change here for that to work, which is
+    # the point: the fix for a blind probe is a second, differently-placed probe,
+    # not a probe that would restart pods during every backend restart.
     location /healthz {
         access_log off;
         default_type text/plain;

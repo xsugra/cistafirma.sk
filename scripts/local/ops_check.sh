@@ -36,6 +36,10 @@ QUEUES="${CISTAFIRMA_QUEUES:-celery ruz_full orsr financials insurance}"
 SOURCE_WINDOW_HOURS="${CISTAFIRMA_SOURCE_WINDOW_HOURS:-24}"
 SOURCE_MIN_ATTEMPTS="${CISTAFIRMA_SOURCE_MIN_ATTEMPTS:-200}"
 SOURCE_MIN_SUCCESSES="${CISTAFIRMA_SOURCE_MIN_SUCCESSES:-20}"
+# How long one outside-in API request may take before it counts as unmet. Ten
+# times the 0.26 s the endpoint needs on production, so a slow-but-working API
+# does not redden the gate; raise it on a host whose database is slower.
+API_TIMEOUT="${CISTAFIRMA_API_TIMEOUT:-10}"
 
 LABEL="sk.cistafirma.backup"
 OUT_LOG="$(log_dir)/backup.out.log"
@@ -101,6 +105,11 @@ printf '  host: %s   %s\n' "$(hostname -s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 section "Stack"
 
 stack=$(docker compose ps --format '{{.Service}}|{{.State}}|{{.Health}}' 2>/dev/null || true)
+# The service names compose reports as running, for the sections below that have
+# to know whether one particular service is up. Derived from the same call
+# rather than asked again, so a service cannot come out running for one section
+# and not for another.
+running_services=$(printf '%s\n' "$stack" | awk -F'|' '$2 == "running" { print $1 }')
 if [ -z "$stack" ]; then
     bad "no compose services are running (start the stack with: make docker-up)"
 else
@@ -126,6 +135,119 @@ if docker compose exec -T db pg_isready -q >/dev/null 2>&1; then
     ok "database is accepting connections"
 else
     bad "database is not accepting connections"
+fi
+
+# --- API availability ----------------------------------------------------
+# Every other section judges a *component*. This one judges the thing the
+# components exist for: a real API request, from outside, answered the way a
+# browser asks for it.
+#
+# The 2026-09-17 outage is why it is here. nginx had resolved the backend's
+# address once, at its own start; the backend container was recreated 22 seconds
+# later and its old address went to celery_beat, which listens on nothing -- so
+# every /api/ call answered 502 for 3 h 43 min. Nothing noticed. The frontend
+# container was up the whole time, its healthcheck passed, and `/healthz` on the
+# very port probed below answered 200 throughout, because that endpoint is a
+# LIVENESS probe and is blind to the backend by design. A gate that only ever
+# asks "is the process running?" cannot see an answer that stopped being right.
+#
+# So this asks the real question against the real published port. `/api/stats/landing/`
+# is chosen for being `AllowAny`, cheap (three COUNTs; measured 0.26 s on
+# production) and downstream of everything: nginx, gunicorn, Django, Postgres.
+#
+# It is also the only check here that a *restart of the stack itself* does not
+# invalidate -- it needs no shell inside any container, so it still answers when
+# `docker compose exec` cannot.
+
+# The address the frontend is published on, as "host:port", or the empty string
+# when compose does not report one.
+#
+# Taken from compose rather than from `.env`: `FRONTEND_PORT` and `BIND_HOST`
+# live in a file this script deliberately does not read, and the two compose
+# variants publish different *container* ports -- 5173 for the Vite dev server,
+# 80 for the production nginx -- so the container-side number is not a constant
+# either. `{{.Ports}}` is the one place that already carries both halves.
+frontend_published_address() {
+    local mapping host
+    mapping=$(docker compose ps --format '{{.Ports}}' frontend 2>/dev/null || true)
+    # "127.0.0.1:5173->80/tcp, [::1]:5173->80/tcp": the first mapping is the
+    # IPv4 one, and the right-hand side is the container's own port, which is
+    # the half that differs between the two variants.
+    mapping=${mapping%%,*}
+    # A mapping without "->" is a container port that was never published --
+    # compose lists those the same way (`8000/tcp`, as every worker does above).
+    # There is no host address to probe in that case, and reporting one is this
+    # function's whole job, so it reports none rather than inventing a URL from
+    # it.
+    case "$mapping" in
+        *"->"*) host=${mapping%%->*} ;;
+        *) host= ;;
+    esac
+    # A wildcard bind answers on loopback too (`BIND_HOST=0.0.0.0` is documented
+    # as deliberate). Normalising it keeps curl from being handed an address
+    # form it will not accept.
+    case "$host" in
+        0.0.0.0:* | "[::]:"*) host="127.0.0.1:${host##*:}" ;;
+    esac
+    printf '%s' "$host"
+}
+
+section "API availability"
+
+if [ -z "$stack" ]; then
+    # Deliberately not a failure. A host with no stack is documented here as
+    # having nothing to serve -- the retired Mac keeps its volume and runs
+    # nothing -- and the Stack section above has already said so. What the skip
+    # must not be is silent: a check that quietly does nothing when it cannot run
+    # is indistinguishable from one that ran and passed, which is the failure
+    # mode this whole script exists to avoid.
+    printf 'SKIP  %s\n' "no stack on this host, so there is no published port to probe"
+elif ! printf '%s\n' "$running_services" | grep -qx frontend; then
+    # Fail closed, like the source and sync sections do when the backend is
+    # missing: the frontend is what publishes /api/ on this host, so without it
+    # there is no entry point at all -- and a stack deliberately brought up
+    # without it is a state that should be looked at, not one that passes.
+    bad "the frontend is not running, so nothing serves /api/ from outside"
+elif ! command -v curl >/dev/null 2>&1; then
+    # Fail closed rather than skip: an unprobeable API is not a working one, and
+    # a silent skip here would read as a pass.
+    bad "curl is not installed, so /api/ cannot be probed from outside"
+else
+    api_host=$(frontend_published_address)
+    if [ -z "$api_host" ]; then
+        bad "compose reports no published port for frontend, so /api/ cannot be probed"
+    else
+        api_url="http://$api_host/api/stats/landing/"
+        set +e
+        api_status=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time "$API_TIMEOUT" "$api_url" 2>/dev/null)
+        api_rc=$?
+        set -e
+        case "$api_status" in
+            200)
+                ok "GET $api_url answered 200 through the published frontend port"
+                ;;
+            502 | 504)
+                # Named separately because the status alone does not say why it
+                # matters: nginx answering for an upstream it cannot reach is
+                # exactly what the 3 h 43 min outage looked like, and it is the
+                # one failure here that a running, healthy frontend does not
+                # rule out.
+                bad "GET $api_url answered $api_status -- the frontend is up but cannot reach the backend, which is the 2026-09-17 outage exactly"
+                ;;
+            *)
+                # curl's own exit code is the useful half when it never got an
+                # answer (7 = refused, 28 = timed out); when it did get one, the
+                # status is, and printing "curl exit 0" next to a 404 would only
+                # invite the reader to look for meaning in it.
+                if [ "$api_rc" -eq 0 ]; then
+                    bad "GET $api_url answered $api_status, not 200"
+                else
+                    bad "GET $api_url did not complete (curl exit $api_rc), so nothing answered"
+                fi
+                ;;
+        esac
+    fi
 fi
 
 # --- celery queues -------------------------------------------------------
