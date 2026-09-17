@@ -1329,11 +1329,23 @@ def sync_company_now(company_id: int):
 def compute_sector_benchmarks(year: int | None = None):
     """Compute sector benchmarks for financial indicators.
 
-    Runs once daily via Celery Beat.
+    Runs once daily via Celery Beat. Called with no argument -- as the beat
+    entry does -- it recomputes **every** year that clears the threshold, not
+    only the newest one. See `companies.services.benchmarking`: storing a single
+    year was a `break` in a loop that wanted to be a filter, and it left 1 703
+    of 15 467 companies without a benchmark, because both readers look the row
+    up by the company's own latest filed year.
     """
     from companies.services.benchmarking import compute_sector_benchmarks as _compute
-    result = _compute(year)
-    return f"Sector benchmarks done: {result}"
+    per_year = _compute(year)
+    if not per_year:
+        return "Sector benchmarks done: no year cleared the threshold"
+    # Summarised rather than repr'd: thirteen years of nineteen sections is a
+    # few kilobytes of task result nobody reads.
+    return "Sector benchmarks done: " + ', '.join(
+        f"{y} ({len(sections)} sections, {sum(sections.values())} companies)"
+        for y, sections in sorted(per_year.items(), reverse=True)
+    )
 
 
 @shared_task(queue='celery')

@@ -34,34 +34,70 @@ BENCHMARK_RATIOS = [
     'current_ratio', 'self_financing_ratio',
 ]
 
+# A year needs at least this many filed results before a median drawn from it is
+# a sector median rather than a median of a handful of firms.
+MIN_RESULTS_PER_YEAR = 500
 
-def compute_sector_benchmarks(year: int | None = None) -> dict[str, int]:
-    """Compute sector benchmarks for all NACE sections.
+# ... and one section needs at least this many companies before we store a row
+# for it at all.
+MIN_COMPANIES_PER_SECTION = 5
+
+
+def _years_with_enough_results(min_results: int | None = None) -> list[int]:
+    """Every year whose filings can carry a sector median, newest first.
+
+    `min_results` defaults to `MIN_RESULTS_PER_YEAR` at call time rather than at
+    definition time, so a test can lower the threshold and exercise this query
+    with a handful of rows.
+    """
+    if min_results is None:
+        min_results = MIN_RESULTS_PER_YEAR
+    from django.db.models import Count
+    counts = (
+        CompanyFinancialResult.objects
+        .values('year')
+        .annotate(cnt=Count('id'))
+        .order_by('-year')
+    )
+    return [row['year'] for row in counts if row['cnt'] >= min_results]
+
+
+def compute_sector_benchmarks(year: int | None = None) -> dict[int, dict[str, int]]:
+    """Compute sector benchmarks, one row per NACE section per year.
 
     Args:
-        year: Target year. Defaults to the latest available year.
+        year: A single year to (re)compute. `None` -- what the daily beat entry
+            passes -- means every year clearing `MIN_RESULTS_PER_YEAR`.
 
     Returns:
-        Dict mapping section → number of companies in benchmark.
-    """
-    if year is None:
-        # Find the latest year with enough financial data for meaningful benchmarks
-        from django.db.models import Count
-        year_counts = (
-            CompanyFinancialResult.objects
-            .values('year')
-            .annotate(cnt=Count('id'))
-            .order_by('-year')
-        )
-        year = None
-        for yc in year_counts:
-            if yc['cnt'] >= 500:  # Need at least 500 companies for meaningful sector medians
-                year = yc['year']
-                break
-        if year is None:
-            logger.warning('No year with >=500 financial results found — skipping benchmark computation')
-            return {}
+        `{year: {section: company_count}}`, one entry per year computed.
 
+    `None` used to mean "the newest year that clears the threshold", and the
+    loop that found it `break`-ed on the first match, so exactly one year was
+    ever stored: on 2026-09-17 the table held 19 rows, all of them 2025. The two
+    readers (`companies/serializers.py`, `companies/services/pdf_report.py`)
+    look a benchmark up by the **company's** latest filed year, so no company
+    whose last filing predates the newest qualifying year could ever match one
+    and every one of them rendered without a benchmark. Measured on production,
+    that was **1 703 of 15 467** companies (2024: 469, 2023: 179, 2013-2022: the
+    remaining 1 055), against 228 of the 247 (section, year) keys missing.
+
+    It is a filter, not a search: all thirteen years 2013-2025 clear 500 (13 999
+    to 14 790 filings each; only 2026, still being filed, is under it at 98).
+    """
+    years = _years_with_enough_results() if year is None else [year]
+    if not years:
+        logger.warning(
+            'No year has >=%d financial results — skipping benchmark computation',
+            MIN_RESULTS_PER_YEAR,
+        )
+        return {}
+
+    return {target_year: _compute_year(target_year) for target_year in years}
+
+
+def _compute_year(year: int) -> dict[str, int]:
+    """Compute and store one year's benchmarks, section by section."""
     logger.info('Computing sector benchmarks for year %s ...', year)
 
     # Fetch all financial results for the target year, joined with company NACE
@@ -77,6 +113,12 @@ def compute_sector_benchmarks(year: int | None = None) -> dict[str, int]:
             'assets_receivables_long', 'assets_financial_short',
             'assets_financial_accounts',
             'liabilities_total', 'liabilities_short', 'equity_retained',
+            # `_compute_section_metrics` reads this one too, and it has to be
+            # listed: a field left out of `only()` is not merely absent, it is
+            # *deferred*, so reading it issues one more query -- per row, and
+            # this loop walks every row of a year. It was missing, and 13 999
+            # rows meant 13 999 extra round trips, once per year computed.
+            'liabilities_accruals',
         )
         .iterator(chunk_size=2000)
     )
@@ -93,11 +135,15 @@ def compute_sector_benchmarks(year: int | None = None) -> dict[str, int]:
     # Compute medians and save
     created = 0
     updated = 0
+    # Only the sections actually stored, so the summary the caller logs is the
+    # table's contents rather than the input's -- those differ by every section
+    # the threshold below skips.
+    stored: dict[str, int] = {}
 
     for section, fr_list in section_data.items():
         metrics = _compute_section_metrics(fr_list, section)
 
-        if metrics['company_count'] < 5:
+        if metrics['company_count'] < MIN_COMPANIES_PER_SECTION:
             # Too few companies — skip to avoid misleading benchmarks
             continue
 
@@ -124,14 +170,15 @@ def compute_sector_benchmarks(year: int | None = None) -> dict[str, int]:
             created += 1
         else:
             updated += 1
+        stored[section] = metrics['company_count']
 
     logger.info(
         'Sector benchmarks computed: %d sections, %d created, %d updated (year=%s)',
-        len(section_data), created, updated, year,
+        len(stored), created, updated, year,
     )
 
     # Return summary
-    return {s: len(d) for s, d in section_data.items()}
+    return stored
 
 
 def _compute_section_metrics(fr_list: list[CompanyFinancialResult], section: str) -> dict[str, Any]:

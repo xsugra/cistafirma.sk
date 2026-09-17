@@ -632,8 +632,10 @@ CELERY_BEAT_SCHEDULE = {
     # no entry here and no `PeriodicTask` row ever existed, so
     # `SectorBenchmark` was empty and the benchmark block rendered nowhere: not
     # on the company page, not in the PDF export. Writes only `SectorBenchmark`
-    # rows (one per NACE section, `update_or_create`), reads only our own
-    # database, and issues no request to any register.
+    # rows (one per NACE section **per year**, `update_or_create`), reads only
+    # our own database, and issues no request to any register. Called with no
+    # argument it walks every year that clears the sample threshold -- thirteen
+    # of them today -- not the newest alone.
     'compute-sector-benchmarks-daily': {
         'task': 'registers.tasks.compute_sector_benchmarks',
         'schedule': 86400.0,

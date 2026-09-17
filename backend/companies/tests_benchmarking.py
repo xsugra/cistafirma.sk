@@ -12,9 +12,14 @@ The other half of the rule matters just as much: a line that *was* filed as
 zero is a measurement, and excluding it would be the same error mirrored.
 """
 
-from django.test import SimpleTestCase
+from unittest.mock import patch
 
-from companies.models import CompanyFinancialResult
+from django.db import connection
+from django.test import SimpleTestCase, TestCase
+from django.test.utils import CaptureQueriesContext
+
+from companies.models import Company, CompanyFinancialResult, SectorBenchmark
+from companies.services import benchmarking
 from companies.services.benchmarking import _compute_section_metrics
 
 
@@ -135,3 +140,103 @@ class MedianOfFiledLinesTests(SimpleTestCase):
         metrics = _compute_section_metrics(rows, 'G')
 
         self.assertEqual(metrics['median_current_ratio'], 30.0)
+
+
+class EveryQualifyingYearTests(TestCase):
+    """`year=None` computes every year worth computing, not the newest alone.
+
+    Both readers -- `companies/serializers.py` and
+    `companies/services/pdf_report.py` -- look a benchmark up by the **company's**
+    latest filed year, so a table holding one year serves only the companies
+    whose last filing is still in it. On production on 2026-09-17 the table held
+    19 rows, all of them 2025, and 1 703 of 15 467 companies rendered with no
+    benchmark at all (2024: 469, 2023: 179, 2013-2022: 1 055).
+    """
+
+    @staticmethod
+    def _file(year: int, count: int, *, first: int) -> None:
+        """`count` companies of one NACE section, each with a `year` filing."""
+        for n in range(first, first + count):
+            company = Company.objects.create(
+                ruz_id=910000 + n,
+                ico=f'{91000000 + n:08d}',
+                nazov_UJ=f'Firma {year}/{n}',
+                sk_NACE='4610',  # section G
+            )
+            CompanyFinancialResult.objects.create(
+                company=company, year=year, revenue=1000, profit=100,
+                assets_total=2000, equity=800, liabilities_total=1100,
+            )
+
+    def setUp(self):
+        self._file(2024, 6, first=0)
+        self._file(2025, 6, first=6)
+
+    def test_a_run_without_a_year_stores_every_qualifying_year(self):
+        with patch.object(benchmarking, 'MIN_RESULTS_PER_YEAR', 1), \
+                patch.object(benchmarking, 'MIN_COMPANIES_PER_SECTION', 1):
+            summary = benchmarking.compute_sector_benchmarks()
+
+        self.assertEqual(sorted(summary), [2024, 2025])
+        self.assertEqual(
+            sorted(set(SectorBenchmark.objects.values_list('year', flat=True))),
+            [2024, 2025],
+        )
+
+    def test_an_explicit_year_still_computes_only_that_one(self):
+        with patch.object(benchmarking, 'MIN_COMPANIES_PER_SECTION', 1):
+            summary = benchmarking.compute_sector_benchmarks(2024)
+
+        self.assertEqual(list(summary), [2024])
+        self.assertEqual(
+            list(SectorBenchmark.objects.values_list('year', flat=True)), [2024]
+        )
+
+    def test_a_year_under_the_sample_threshold_is_left_out(self):
+        # 2026 on production: 98 filings against 13 999-14 790 for every year
+        # 2013-2025. The threshold is not what held the table to a single year
+        # -- a `break` was, and it cost every year but one -- but it still has
+        # to bind where it is meant to.
+        self._file(2026, 3, first=20)
+        with patch.object(benchmarking, 'MIN_RESULTS_PER_YEAR', 5), \
+                patch.object(benchmarking, 'MIN_COMPANIES_PER_SECTION', 1):
+            summary = benchmarking.compute_sector_benchmarks()
+
+        self.assertEqual(sorted(summary), [2024, 2025])
+
+    def _queries_to_compute(self, year: int) -> CaptureQueriesContext:
+        """The queries one year costs, always on the same branch.
+
+        `update_or_create` takes two: its create half wraps the INSERT in its own
+        `atomic`, so it pays a SAVEPOINT/RELEASE pair the update half does not.
+        Clearing the table first puts both measurements on the create half --
+        otherwise the second run is compared against a different code path and
+        reads as an improvement it did not make.
+        """
+        SectorBenchmark.objects.all().delete()
+        with CaptureQueriesContext(connection) as ctx:
+            benchmarking.compute_sector_benchmarks(year)
+        return ctx
+
+    def test_the_cost_per_year_does_not_grow_with_the_rows_in_it(self):
+        # A field left out of `only()` is not absent, it is *deferred*: reading
+        # it issues one more query, per row. `liabilities_accruals` was missing
+        # from that list while `_compute_section_metrics` read it for every row,
+        # so a single year cost one round trip per filing -- 13 999 of them on
+        # production -- and computing thirteen years would have multiplied it.
+        #
+        # Equal counts for 6 rows and for 12 is the whole assertion. The fetch
+        # itself is one server-side cursor either way (`iterator()`), so any
+        # per-row query makes the second number larger by exactly six.
+        with patch.object(benchmarking, 'MIN_COMPANIES_PER_SECTION', 1):
+            few = self._queries_to_compute(2025)
+            self._file(2025, 6, first=40)
+            many = self._queries_to_compute(2025)
+
+        self.assertEqual(
+            len(few), len(many),
+            'computing a year must not cost a query per filing:\n'
+            + '\n'.join(f'  6 rows: {q["sql"][:90]}' for q in few.captured_queries)
+            + '\n'
+            + '\n'.join(f' 12 rows: {q["sql"][:90]}' for q in many.captured_queries),
+        )
