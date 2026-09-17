@@ -2408,15 +2408,17 @@ to firmy, ktorým sa od 13. 9. pohla adresa, `Company.save()` im vyčistil
 produkcii potvrdili v jednom priechode: zneplatnenie (187daf3) aj prepočet
 (95c47a9).
 
-**Krok 5 nedokončený — permission vrstva zápis odmietla.** `UPDATE
-django_celery_beat_periodictask SET last_run_at = …` („Blocked by classifier“).
-Neobchádzal som to. Dôsledok je malý a je to **oneskorenie, nie strata**: riadok
-má `last_run_at` NULL a `date_changed` 06:37:21.9008 UTC, takže `ModelEntry` ho
-číta ako `date_changed` a prvý plánovaný beh padá na **12:37:21 UTC** — o šesť
-hodín. Backlog je pritom dorovnaný manuálne, takže ten beh už len potvrdí, že
-automatická cesta funguje.
+**Krok 5 — permission vrstva zápis odmietla, ale plánovač si ho vyriešil sám.**
+`UPDATE django_celery_beat_periodictask SET last_run_at = …` („Blocked by
+classifier”). Neobchádzal som to. Dôsledok bol malý a bolo to **oneskorenie, nie
+strata**: riadok má `last_run_at` NULL a `date_changed` 06:37:21.9008 UTC, takže
+`ModelEntry` ho číta ako `date_changed` a prvý plánovaný beh padá na
+**12:37:21 UTC** — o šesť hodín. Backlog je pritom dorovnaný manuálne, takže ten
+beh už len potvrdí, že automatická cesta funguje. **Presne to sa stalo** —
+*„Krok 5 dokončený”* nižšie.
 
-**Čo z toho zostáva otvorené — a čo nie** (overené 2026-09-17 ~07:30 UTC, čítaním):
+**Čo z toho zostáva otvorené — a čo nie** (overené 2026-09-17 ~07:30 UTC, čítaním;
+prvá odrážka od 12:37 UTC už neplatí — pozri *„Krok 5 dokončený"* nižšie):
 
 - **Riadok**, `SELECT * … WHERE name = 'match-seat-addresses-every-6-hours'`:
   `task = registers.tasks.match_company_seats`, `queue = celery`, `enabled = t`,
@@ -2441,6 +2443,80 @@ WHERE name = 'match-seat-addresses-every-6-hours';
 ```
 
 `total_run_count` 0 → 1 a `last_run_at` ~12:37 UTC to potvrdí.
+
+#### Krok 5 dokončený: riadok sa spustil sám, v predpovedanú sekundu (2026-09-17)
+
+Overené čítaním na `dell` — vyšlo presne:
+
+| | hodnota |
+|---|---|
+| `total_run_count` | **1** (predtým 0) |
+| `last_run_at` | **2026-09-17 12:37:21.91305+00** |
+
+Predpoveď o sekciu vyššie znela „prvý plánovaný beh padá na 12:37:21 UTC"
+a `date_changed` bol `06:37:21.9008+00`. Odchýlka je **12 ms**, takže interval
+6 h sa naozaj uplatnil a posun o celý interval po reštarte beatu nenastal. Tým je
+zodpovedané to jediné, čo sa čítaním overiť nedalo („že tomuto konkrétnemu riadku
+naozaj uplynie jeho interval") — a to je zároveň to, čo mal krok 5 získať.
+Odmietnutý zápis `last_run_at` do minulosti by tú istú vlastnosť **overil o šesť
+hodín skôr**; nezískal ju, len urýchlil.
+
+`total_run_count` sám dokazuje len **odovzdanie**, nie vykonanie, preto aj worker
+log tej istej session:
+
+| čas (UTC) | riadok |
+|---|---|
+| 12:37:21.915733 | `registers.tasks.match_company_seats[4de451a7]` received |
+| 12:37:21.917004 | `Triggering match_seat_addresses command...` |
+| 12:40:25.617566 | `match_seat_addresses command finished.` |
+| 12:40:25.618614 | `succeeded in 183.70185311799287s` |
+
+Beh trval **183,7 s** a skončil `succeeded`. Príkaz v ňom vypísal svoj súhrn
+a ten je druhý, nezávislý dôkaz, že sa dlh **nevracia**:
+
+| | po uzavretí (o sekciu vyššie) | tento beh |
+|---|---|---|
+| riadkov spolu | 449 780 | **449 786** |
+| umiestnené | 393 175 | **393 181** |
+| neumiestnené | 56 605 | 56 605 |
+| zmenené týmto priechodom | 4 | **6** |
+
+Rozdiel sú 6 nové riadky a všetkých 6 sa umiestnilo (393 175 + 6 = 393 181,
+449 780 + 6 = 449 786); súčet 393 181 + 56 605 = 449 786 sa uzaviera na jednotku.
+Neumiestených je stále 56 605 a **ani jeden z nich nebol prepísaný** — čo je
+presne to, čo `95c47a9` sľubuje: riadok bez zmeny umiestnenia sa zapisuje len
+vtedy, keď pečiatku nemá. Keby backlog pečiatku nemal, „zmenené" by bolo o tých
+56 605 vyššie — teda 56 611, nie 6.
+
+To posledné je však odvodené z počtu, nie zmerané — a práve „počet, ktorý nevie
+ukázať zlyhanie" je trieda, ktorá ma tu už raz oklamala. Preto to isté ešte raz
+**meraním**, tou istou úzkou agregáciou, akú permission vrstva predtým pustila:
+
+```sql
+SELECT count(*) AS total,
+       count(*) FILTER (WHERE seat_matched_at IS NOT NULL) AS stamped,
+       count(*) FILTER (WHERE coalesce(btrim(seat_precision),'') <> '') AS placed,
+       count(*) FILTER (WHERE coalesce(btrim(seat_precision),'') = ''
+                          AND seat_matched_at IS NULL) AS unplaced_unstamped
+FROM "Companies and SZCO";
+```
+
+```
+449786|449786|393181|0
+```
+
+**Dlh je na nule a zostal na nule.** Všetkých 449 786 riadkov má pečiatku
+a `neumiestené a bez pečiatky` je **0** — tých 56 605 neumiestnených pečiatku
+**má**, matcher ich neobchádza. To je zároveň odpoveď na krok 7, ktorá sa podľa
+*„Nález po nasadení"* vyššie už len čakala: *„dlh, ktorý viaže šesťhodinový
+interval"* = 0 a *„backlog, ktorý sa vyčerpá jediným priechodom"* = 0. Automatická
+cesta je teda overená **v prevádzke**, nie len jednorazovým behom, ktorý som
+spustil ručne.
+
+---
+
+Poznámka pod týmto riadkom o odmietnutom `UPDATE` je teda **bezpredmetná** —
+netreba ju použiť, ale nechávam ju ako záznam, prečo sa `last_run_at` needitoval.
 
 Ak by to niekto neskôr predsa len chcel posunúť skôr, odmietnutý zápis mal dva
 stĺpce: `last_run_at = now() - interval '1 day'` a `last_update = now()`. To
