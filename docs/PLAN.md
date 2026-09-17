@@ -5447,9 +5447,26 @@ zmazaním `~/gitlab` zmizne bez kópie, a je zapísaná v `README.md` archívu.
 **A jedna korekcia, ktorú si tento dokument nesie ďalej.** `CLAUDE.md` aj §8
 nižšie tvrdili, že Mac má „zamrznutú záložnú" databázu. **Nemá.**
 `docker volume ls` ju neuvádza a `docker volume inspect` vracia `no such volume`;
-volumes na Macu zmizli **2026-09-17** pri purge. Ostávajú **dumpy** (2,4 GB,
-44 súborov, najnovší 2026-09-15 12:31) — archív, nie databáza. Obe miesta sú
-opravené na mieste.
+`cistafirma_postgres_data` aj ostatné cistafirma a GitLab volumes zmizli
+**2026-09-17** pri purge. Ostávajú **dumpy** (2,4 GB, 44 súborov, najnovší
+2026-09-15 12:31) — archív, nie databáza. Obe miesta sú opravené na mieste.
+
+**A hneď druhá korekcia, tej istej triedy — tentoraz moja vlastná, o pár minút
+neskôr.** Napísal som, že pri purge zmizli **všetky** volumes na Macu. Keď som
+to šiel overiť, `docker volume ls` ich vrátil **šesť**: `sslcheckerapp_sqlite_data`
+a `sslcheckerapp_static_volume` (vytvorené **2026-06-13**, teda purge **prežili** —
+dva zastavené kontajnery na ne stále ukazujú) a štyri anonymné z 21:57–21:58 UTC
+toho dňa. Purge bol teda selektívny, nie plošný. Safety-critical polovica
+(`cistafirma_postgres_data` je preč) platí a je overená `no such volume`; plošné
+tvrdenie bolo nepravdivé a je opravené vyššie. Je to **tretí raz v jednom dni**,
+čo som zúžene meranie vydal za fakt — pozri `absence-needs-a-positive-control`
+v pamäti.
+
+**A jedna maličkosť, tiež „zbytočne stojí":** `git worktree list` držal
+registráciu na `/private/tmp/cistafirma-ci` pre vetvu
+`ci/runner-tags-and-kubectl-image` (`8ea1e50`), hoci ten adresár už neexistuje —
+GitLab ju sám označoval ako `prunable`. `git worktree prune` ju odstránil;
+vetva aj jej commity ostávajú (`8ea1e50`).
 
 ---
 
