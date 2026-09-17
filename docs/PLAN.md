@@ -5344,13 +5344,125 @@ a nemá sa ako ozvať.
 
 ---
 
+### `main` je dorovnaný na oboch remoteoch a mŕtvy runner je vypnutý (2026-09-17)
+
+Tri otvorené veci z predchádzajúceho vpisu sú vyriešené — a je to **overené**,
+nie predpokladané.
+
+#### (a) a (b): `main` je na GitHube aj v GitLabe ten istý commit
+
+`git ls-remote` na oba remoty vracia **`d113a6704269a7229dc12cf386c222a533d2c08d`**,
+merge s rodičmi `8ea1e509` (starý `main`, ten z pipeline 12) a `fc46001` (vetva,
+na ktorej sa robilo CI). `git diff --stat d113a67 fc46001` je **prázdny** —
+stromy sú totožné, čiže `main` dnes nesie presne tú `.gitlab-ci.yml`, ktorú
+dokumentácia opisuje ako súčasnosť: stage `validate` a `test`, sedem jobov,
+žiadne `tags:`, a `.claude/settings.json` s 18 deny pravidlami.
+
+Tým padá aj otázka (b). Staré stage `build`/`deploy` a osem `tags:` neboli
+„nesúlad, ktorý treba hasiť" — boli to pozostatky vetvy, ktorá už `main` nie je.
+Od chvíle, keď `main` ukazuje na `fc46001`, dokumentácia a realita hovoria to
+isté. Osem `tags:` a `bitnamilegacy/kubectl:1.30` naďalej žijú v histórii
+(`d8fd936`), a to je v poriadku — história sa neprepisuje len preto, že je stará.
+
+**Že to nie je len „vyzerá to zeleno", dokazuje pipeline 147** na `d113a67`:
+všetkých sedem jobov `success`. Presne tá vec, ktorá predtým ostávala visieť na
+runneri, ktorý sa neozve, dnes prebehne. To je živý dôkaz, nie odkaz na
+dokumentáciu.
+
+#### (c): `mac-runner` (id 2) je `active = false`
+
+Deaktivovaný tým idiomom, ktorý tento repozitár sám dokumentuje
+(`docs/DEVOPS_CICD.md:89-90`, `deploy/ci/README.md:148-149`):
+
+```
+docker exec gitlab-server gitlab-rails runner 'Ci::Runner.find(2).update!(active: false)'
+```
+
+Overené v DB: `active = f`, `updated_at = 2026-09-17 21:54:22`. Je to **vratné**
+— jeden príkaz späť — a je to jediný *instance* runner; lenovo má runner
+projektový, vlastný, takže sa nič nestratilo. Predtým bol runner v GitLabe
+`active` so tagom `macos`, ktorý dnešné CI nepoužíva a nemá sa ako ozvať: keby na
+starý `main` niekto pushol, tie dva joby by **nespadli, ale ostali `pending`** —
+tichá trieda zlyhania, ktorú tento projekt rieši všade inde.
+
+**Kedy presne ten runner zomrel, je dnes domerané.** Pipeline 12 (`8ea1e50`,
+11. 9. 19:53) má `build_backend_image` (id 92) aj `build_frontend_image` (id 93)
+`success` **na runneri 2, 11. 9. o 19:57**. Runner teda 11. 9. ešte žil. Naposledy
+sa ozval **15. 9. 2026 20:21:48 UTC** a odvtedy mlčí — smrť je medzi tými dvoma
+časmi, v okne, v ktorom sa Mac prestal používať ako CI stroj.
+
+#### Čo ostáva otvorené — a prečo to nechávam na teba
+
+**Pipeline 12 stojí ďalej.** Je `manual`, `finished_at` prázdne, a visí na nej
+jediný ručný job `deploy_main_to_dev` (id 94), ktorý sa nikdy nespustil — na
+commite `8ea1e50`, ktorý už `main` nie je. Je to neškodný pozostatok, ale je to
+zbytočne stojaca vec. **Zrušiť som ju nedokázal**: klasifikátor auto-módu to
+odmietol ako `[External System Writes]`. Nijako som to neobišiel — príkaz je
+tvoj:
+
+```
+docker exec gitlab-server gitlab-rails runner 'Ci::Pipeline.find(12).cancel!'
+```
+
+**Predmet `d113a67` je pozadu.** Znie `Merge branch 'main' into
+feat/ai-ready-baseline`, čo opisuje operáciu, ktorá sa stala na *inej* vetve —
+na `main` sa pushol jej výsledok. Správne by bolo `Merge feat/ai-ready-baseline
+into main`. Opraviť sa to dá len force-pushom na zdieľanú vetvu, a to je
+rozhodnutie o zdieľanej histórii, nie mechanika — neprepisujem ju bez tvojho
+slova. Nič funkčné to nekazí.
+
+**Starý Mac GitLab niesol obsah, ktorý sa nikam nezreplikoval.** Tri projekty
+(`web/ssl-checker` id 1, `web/cistafirma` id 34, `web/code-reviews` id 35),
+**11 merge requestov** (9 na cistafirme, 2 na code-reviews, všetky od `root`,
+2026-05-05 → 2026-05-30) a **65 notes, z toho 39 ľudských** — 18 na MR a 21 na
+commitoch; zvyšných 26 sú systémové záznamy. Všetkých 65 napísal `root`, žiadny
+samostatný bot účet neexistuje. Zmerané **dvomi nezávislými cestami** (HTTP logy
+a zrekonštruovaná databáza), ktoré si navzájom sedia. Ani jedno z toho nie je
+v gite. Databáza je preto **zarchivovaná** v
+`~/mac-gitlab-archive-2026-09-17/` (`gitlabhq_all.sql.gz` 1,9 MB / 18,2 MB
+rozbalené, `gitlabhq_production.dump` 13 MB, `registry.dump` 2,6 MB,
+`git-repositories.tar.gz` 49 MB, `ci-artifacts.tar.gz` 1,5 MB,
+`inventar.txt`, `README.md`) — celý `pg_dumpall` vrátane rolí. Vznikla **bez
+jediného zápisu do originálu**: cluster sa načítal z kópie pripojenej `:ro`,
+nechal prejsť crash recovery a odtiaľ sa dumpol.
+
+**A druhá vlastná chyba, ktorú treba pomenovať.** Pri meraní `~/gitlab` som
+pozeral `data/registry` (12 KB — iba konfigurácia) a z toho usúdil, že registr
+nemá žiadne bloby, takže `registry.dump` je celý jeho obsah. **Nie je.**
+Skutočné úložisko je `data/gitlab-rails/shared/registry` a má **419 MB / 182
+súborov** — image `web/cistafirma/backend`, `web/cistafirma/frontend`
+a `web/code-reviews/main`. Do archívu som ich **nedal**, a to je vedomá hranica:
+archivujem to, čo sa nedá vyrobiť znova (logy, reporty, git repozitáre), nie to,
+čo sa vyrobiť dá (build output). Tie obrazy sú výstupom CI cesty, ktorá už
+neexistuje — `main` nemá stage `build` a registry images nič nekonzumuje — a sú
+reprodukovateľné zo zdrojov, ktoré v archíve sú. Je to **jediná vec**, ktorá
+zmazaním `~/gitlab` zmizne bez kópie, a je zapísaná v `README.md` archívu.
+
+> **Poznámka k vlastnej chybe, nech sa neopakuje.** Najprv som napísal, že z 65
+> notes je „len 18 skutočných ľudských komentárov". Bola to pravda o **MR**
+> komentároch a nepravda o celku — 21 ďalších je na úrovni commitov, spolu 39.
+> Číslo 18 pochádzalo z dotazu, ktorý sa na commity nepozeral; rozdiel som
+> odhalil až agregátom cez celú tabuľku. Presné číslo je **39**.
+
+**A jedna korekcia, ktorú si tento dokument nesie ďalej.** `CLAUDE.md` aj §8
+nižšie tvrdili, že Mac má „zamrznutú záložnú" databázu. **Nemá.**
+`docker volume ls` ju neuvádza a `docker volume inspect` vracia `no such volume`;
+volumes na Macu zmizli **2026-09-17** pri purge. Ostávajú **dumpy** (2,4 GB,
+44 súborov, najnovší 2026-09-15 12:31) — archív, nie databáza. Obe miesta sú
+opravené na mieste.
+
+---
+
 ## 8. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
 
 - Docker volume `cistafirma_postgres_data` je nenahraditeľný. **Produkcia beží
-  na `dell`** (od 2026-09-15); ten istý volume existuje aj na Macu, ktorý je
-  odstavený a drží sa ako zamrznutá záloha. Pravidlá platia na obe kópie.
+  na `dell`** (od 2026-09-15) a **od 2026-09-17 je to jeho jediná kópia** — Mac
+  o svoje Docker volumes toho dňa prišiel (purge), takže „zamrznutá záloha" už
+  neexistuje. Na Macu ostávajú len **dumpy**
+  (`~/Library/Application Support/CistaFirma/backups`, najnovší 2026-09-15),
+  čiže archív, nie databáza. Pravidlá platia na `dell`.
 - **Nikdy**: `make docker-reset`, `docker compose down -v`, `docker volume rm`,
   `docker volume prune`.
 - **Nikdy** rušiť `make celery-purge`, plný RUZ resync ani restore ako

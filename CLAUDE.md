@@ -10,15 +10,20 @@ command** — this repo treats a local Docker Postgres as production data.
 **Production is the `dell` server** (Ubuntu, reachable over Tailscale), not the
 machine you happen to be sitting at. It moved there on **2026-09-15**, when the
 MacBook that used to host it was retired as a production host: its stack is
-stopped, its weekly backup job is uninstalled, and its database volume and dumps
-are kept untouched as a frozen fallback. `make ops-check` therefore *fails* on
-the Mac by design — no stack, no weekly job — and that is not a fault to repair.
+stopped, its weekly backup job is uninstalled, and its **dumps** are kept
+untouched (`~/Library/Application Support/CistaFirma/backups`, newest
+2026-09-15). Its database *volume* is not there any more — every Docker volume
+on that host was purged on **2026-09-17** — so what survives on the Mac is a
+fallback *archive*, not a fallback *database*, and it reaches back only to
+2026-09-15. `make ops-check` therefore *fails* on the Mac by design — no stack,
+no weekly job — and that is not a fault to repair.
 
 ## Data safety rules (non-negotiable)
 
 The Docker PostgreSQL volume `cistafirma_postgres_data` holds durable,
-irreplaceable company data. The same volume name exists on both hosts, and every
-rule below applies to whichever one holds it.
+irreplaceable company data. It exists on `dell` (production) and, since
+2026-09-17, **nowhere else** — the Mac's copy was purged — so losing it means
+losing the database, with only the dated dump archive above to fall back on.
 
 - **Never** run `make docker-reset`, `docker compose down -v`, `docker volume rm`,
   or `docker volume prune`. These destroy the database volume.
