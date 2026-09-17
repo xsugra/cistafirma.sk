@@ -636,6 +636,13 @@ ktorom celý lane stál: nový profil prichádza **už prečítaný**, lebo ten 
 kľúč `osoby_historia` zapisuje bežný ORSR čítač. Keby to tak nebolo, číslo by
 pri raste populácie stúplo. Preto sa lane nesmie vrátiť — nemal by čo robiť.
 
+**Tretie meranie o ~8 h neskôr (2026-09-17 06:00 UTC): `0 z 27 429`.** Populácia
+medzitým narástla o ďalšie dva profily a chýbajúcich ostalo nula — a to **už bez
+riadku v beate**, teda bez toho, aby lane vôbec bežal. Fronta `orsr` je v tom
+istom okamihu **0** (worker `celery_worker_orsr` beží 34 h), takže sa vyprázdnila
+podľa aritmetiky z `settings.py` (~17 h) a nezostal po nej zaseknutý lane.
+Invariant teda drží na troch meraniach v rozostupe ~32 h, nie na jednom okne.
+
 **Priamy dôkaz, že sa linka naozaj zastavila** (nie že sme len zmazali kód):
 bežiaci beat zalogoval `DatabaseScheduler: Schedule changed.` o **22:16:20 UTC**,
 hneď po zmazaní riadku a **pred** reštartom — dispatcher teda zareagoval na
