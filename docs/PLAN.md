@@ -5287,20 +5287,57 @@ robilo 13.–15. 9., ich tiež nemá (zmizli v `4731a620`, 13. 9. 17:27).
 Obe tvrdenia sú v tých dokumentoch **opravené na mieste** — nie prepísané,
 pôvodné znenie tam ostáva — s odkazom sem.
 
-**Čo z toho vyplýva a čo nie.** Isté je, že `gitlab-home/main` dnes nesie stav,
-ktorý oba dokumenty opisujú ako odstránený, a že `build_backend_image` aj
-`build_frontend_image` majú `rules` na `$CI_COMMIT_BRANCH == "main"` — pipeline
-na `main` by ich teda spustila, a tie potrebujú DinD, ktoré runner na lenovo
-nemá. **Nezmeral som však, či taká pipeline od 11. 9. vôbec niekedy bežala**; na
-to treba záznamy jobov z GitLabu (`gitlab-psql`, nie `git log`) a to je
-samostatná otázka. Preto tu nestojí „hlavná vetva je červená", ale presne to, čo
-je zmerané.
+**Ako to na `main` dopadlo — domerané, a je to inak, než som čakal.** Stav
+`gitlab-home/main` je jedná vec; či z neho niekedy niečo bežalo, je vec druhá,
+a tá sa `git log`om zistiť nedá. Zmerané z GitLabu (`gitlab-psql`, nie `git
+log`): na `main` bežalo dokopy šesť pipeline a **od 11. 9. 2026 ani jedna**.
+
+| id | sha | kedy (UTC) | výsledok |
+|---|---|---|---|
+| 1 | `ab3138ec` | 10. 9. 20:15 → 11. 9. 14:00 | `failed` po takmer 18 hodinách |
+| 7 | `35a9a36c` | 11. 9. 18:01 → 18:03 | `failed` — spadol `helm_k8s_validate`, zvyšok `skipped` |
+| 8 | `5bd111ce` | 11. 9. 18:05 → 18:10 | `failed` — `build_backend_image`, `build_frontend_image` |
+| 9 | `1148bc69` | 11. 9. 19:29 → 19:34 | `failed` — tie isté dva build joby |
+| 10 | `d80df5ad` | 11. 9. 19:37 → 19:42 | `failed` — tie isté dva build joby |
+| 11 | `38f66393` | 11. 9. 19:47 → 19:51 | `failed` — tie isté dva build joby |
+| 12 | `8ea1e509` | 11. 9. 19:53 | **`manual`**, `finished_at` prázdne — nikdy nedobehla |
+
+Pipeline 12 je pritom celá zelená okrem brány: `backend_validate`,
+`frontend_validate`, `docs_audit`, `helm_render_validate`, `helm_k8s_validate`,
+`backend_tests`, `build_backend_image` aj `build_frontend_image` sú `success`
+a `deploy_main_to_dev` je `manual` (a to je brána, nie zlyhanie — `manual`
+znamená, že všetko automatické pred ňou prešlo).
+
+**`main` teda nie je červený — je zablokovaný na bráne.** Medzi pipeline 11
+(19:51) a 12 (19:53) prišla oprava, ktorá tie dva build joby spravila zelenými,
+a odvtedy tá vetva stojí. Šesť dní.
+
+Moja domnienka platila len pre pipelines 8–11: build joby naozaj padali na DinD
+— a padali, nie viseli, lebo `macos` runner bol 11. 9. ešte živý. Pipeline 7 ale
+padla z úplne iného dôvodu (`helm_k8s_validate`) a pipeline 12 tie isté build
+joby prešla. Keby som bol napísal „hlavná vetva je červená, lebo DinD", bol by
+v tomto dokumente ďalší vymyslený koreň.
+
+**Čo tam ale naozaj visí.** `build_backend_image` aj `build_frontend_image` majú
+na `main` `tags: [macos]`, a jediný runner s tým tagom je `mac-runner` (id 2,
+`run_untagged = false`), ktorý sa naposledy ozval **15. 9. 2026 20:21:48 UTC**
+a odvtedy mlčí — v GitLabe je pritom stále `active` a s tagom `macos`. Keby dnes
+na `main` niekto pushol, tie dva joby by **nespadli, ale ostali `pending`**:
+GitLab by ich držal na runner, ktorý sa už neozve, a nič by to nehlásilo ako
+chybu. Je to presne tá potichu zlyhávajúca trieda, ktorú tento projekt rieši
+inde — a dnes to nehryzie len preto, že na `main` šesť dní nikto nič nepustil.
+Runner 1 (lenovo, `run_untagged = true`) sa chytá všetkého ostatného; druhý
+runner má dnes jediné použitie a to použitie nikto nepoužíva.
 
 **Nerobil som s tým nič.** Posunúť `main` na GitHube alebo na GitLabe je
 rozhodnutie o zdieľanej vetve, nie mechanika — a `feat/ai-ready-baseline` ten
-stav aj tak celý nahradí. Ak sa to má zavrieť hneď, je to jeden fast-forward
-(`origin/main` je predok `gitlab-home/main`) a jedna otázka na GitLab: bežala od
-11. 9. na `main` nejaká pipeline?
+stav aj tak celý nahradí (jeho `.gitlab-ci.yml` má len stage `validate` a `test`
+a žiadne `tags:`). Otvorené sú tri veci, všetky na človeka: (a) či sa `main` na
+GitHube dorovná — `origin/main` je predok `gitlab-home/main`, takže fast-forward;
+(b) či sa má stav na `gitlab-home/main` (staré stage `build`/`deploy` a osem
+`tags:`) nejako zosúladiť s tým, čo dokumentácia opisuje ako súčasnosť; a (c) čo
+s `mac-runner` — je registrovaný, `active`, má tag, ktorý dnešné CI nepoužíva,
+a nemá sa ako ozvať.
 
 ---
 

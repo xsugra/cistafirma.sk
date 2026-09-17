@@ -251,15 +251,34 @@ súbore a patch je presne ten rozdiel proti `ab3138e:.gitlab-ci.yml`.
 stav pred 15. 9. 2026, ktorý vracia štyri veci odstránené zámerne, každú
 s dôvodom:
 
-| Vracia | Prečo to nemôže prejsť |
+| Vracia | Prečo to bolo na tejto vetve odstránené |
 |---|---|
 | celý stage `build` (`.build_template` s `docker:27.1.2-dind`, `build_backend_image`, `build_frontend_image`) | DinD potrebuje `privileged`, čo runner na lenovo zámerne nevie; a obrazy, ktoré vyrábal, nikto nečíta |
 | celý stage `deploy` (`.deploy_template`, `deploy_dev`, `deploy_main_to_dev`, `deploy_prod`) | `echo "$KUBE_CONFIG" \| base64 -d` — `KUBE_CONFIG` nie je definovaná nikde: ani v projekte, ani v skupine, ani v inštancii |
 | `helm_k8s_validate` | obraz `bitnami/kubectl:1.30` na Docker Hube **neexistuje** (Bitnami presunul free obrazy do `bitnamilegacy`) — padne už na pull |
 | `backend_tests` bez `services:` a bez `collectstatic` | spadne na tom istom, na čom padal predtým: bez `DATABASE_URL` sa schéma postaví na SQLite a `companies/0014` tam neprejde (`text_pattern_ops`) — červený vždy, nech je kód akýkoľvek |
 
-Navrch `tags: [macos]` na `.build_template` menuje stroj, ktorý už neexistuje —
-Mac prišiel o runner 15. 9. 2026.
+„Prečo to bolo odstránené **tu**" nie je to isté ako „prečo to nemôže prejsť
+inde" — a pri `build` stage to nie je pravda ani omylom. Na `gitlab-home/main`
+majú tie dva build joby `tags: [macos]`, teda iný stroj než lenovo, a **prešli**:
+pipeline `8ea1e509` z 11. 9. 2026 19:53 UTC ich má oba `success`. DinD je teda
+prekážkou runnera na lenovo, nie projektového CI ako takého.
+
+Pri `backend_tests` je to naopak a je dobre vedieť prečo: ten istý job (bez
+`services:`) **na `main` prechádza** — 11. 9. 2026 `success` v pipelines 11 aj
+12, a to bez jedinej projektovej, skupinovej či inštančnej CI premennej
+(`ci_variables` je prázdna, takže `DATABASE_URL` neexistuje nikde). Dôvod je
+v migráciách: `main` končí na `companies/0008`, kým táto vetva ich má po `0023`
+a `companies/0014_add_pattern_ops_structured_indexes` je Postgres-only (odtiaľ
+aj `services:` v tejto verzii). SQLite teda na `main` stačí a tu nestačí —
+rovnaký job, iný strom migrácií.
+
+Navrch `tags: [macos]` na `.build_template` menuje stroj, ktorý sa už neozve.
+`mac-runner` (id 2) je v GitLabe **stále registrovaný, `active`, s tagom
+`macos`** a naposledy komunikoval 15. 9. 2026 20:21:48 UTC. To je horšie než
+odstránený runner: job s tým tagom **nespadne, ostane `pending`** a GitLab ho
+drží na runner, ktorý mlčí. Dnešná vetva preto žiadne `tags:` nemá a spolieha sa
+na `run_untagged = true` na runneri 1 — čo je overené a dnes `true`.
 
 **Nedá sa aplikovať omylom.** `commit-ci-tags.rb` má poistku
 `EXPECTED_SHA = '247169a23b7b5e40'`: zahashuje `.gitlab-ci.yml` na `main`

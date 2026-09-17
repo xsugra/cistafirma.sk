@@ -105,12 +105,29 @@ ssh lenovo 'docker exec gitlab-server gitlab-rails runner \
 > pridáva do `.gitlab-ci.yml` osem `tags:` riadkov a je predok
 > `gitlab-home/main`, ktorý ich má dodnes. Pravda je teda užšia: **do 19:55
 > toho dňa** nemal `tags:` ani jeden job — a vetva, na ktorej sa CI robilo
-> 13.–15. 9., ich nemá tiež (zmizli v `4731a620`, 13. 9. 17:27). Či to
-> vysvetľuje celé „štyri dni ticha", touto opravou **zodpovedané nie je**: na to
-> treba záznamy jobov z GitLabu, nie `git log`. Istý je ale dôsledok:
-> **`gitlab-home/main` dnes nesie `tags:` aj celý starý `build` a `deploy`
-> stage** — teda presne ten stav, ktorý tento dokument o pár odsekov nižšie
-> opisuje ako odstránený. Podrobnosti a zvyšok: `docs/PLAN.md` §7.
+> 13.–15. 9., ich nemá tiež (zmizli v `4731a620`, 13. 9. 17:27). Istý je ale
+> dôsledok: **`gitlab-home/main` dnes nesie `tags:` aj celý starý `build`
+> a `deploy` stage** — teda presne ten stav, ktorý tento dokument o pár odsekov
+> nižšie opisuje ako odstránený. Podrobnosti a zvyšok: `docs/PLAN.md` §7.
+
+> **Domerané 17. 9. 2026 — čo z toho `main` naozaj zažil.** Na otázku, ktorú
+> `git log` nezodpovie, odpovedajú záznamy jobov z GitLabu (`gitlab-psql`). Na
+> `main` bežalo dokopy šesť pipeline a **od 11. 9. 2026 ani jedna**. Posledná
+> (`8ea1e509`, 11. 9. 19:53 UTC) má **všetkých osem automatických jobov
+> `success`** a `deploy_main_to_dev` v stave `manual` — čiže **`main` nie je
+> červený, je zablokovaný na manuálnej bráne**, a to šesť dní. Predošlé štyri
+> (`5bd111ce`, `1148bc69`, `d80df5ad`, `38f66393`) padali na
+> `build_backend_image` a `build_frontend_image`, nie na validáciách.
+>
+> Dve veci z toho sa týkajú priamo tohto odseku. (1) Runner 1 má dnes
+> `run_untagged = true` — overené v `ci_runners` 17. 9., takže to, čo tu stálo
+> o neprevzateľných joboch, už neplatí; `config.toml` ani reštart na to
+> nestačili, stav sa musel zmeniť server-side (príkaz vyššie). (2) Tie dva build
+> joby na `main` majú `tags: [macos]` a jediný runner s tým tagom (`mac-runner`,
+> id 2, `run_untagged = false`) sa naposledy ozval **15. 9. 2026 20:21:48 UTC** —
+> takže dnes by také joby **nespadli, ale ostali `pending`**, teda v presne tej
+> istej tichosti, ktorú tento odsek opisuje. Tabuľka pipeline, jobov a runnerov:
+> `docs/PLAN.md` §7.
 
 Bezpečnostný model runnera (socket proxy, neprivilegované job kontajnery,
 `allowed_images`, pamäťové limity) je v [`deploy/ci/README.md`](../deploy/ci/README.md)
