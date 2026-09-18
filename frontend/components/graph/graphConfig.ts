@@ -79,6 +79,36 @@ export const NODE_SIZES = {
   person: { radius: 20 },
 } as const;
 
+/**
+ * Label font size in *screen* pixels, and the gap between a node's disc and its
+ * name, per node kind.
+ *
+ * Both are screen measurements even though the painter works in graph units:
+ * `paintNode` divides the font by the zoom (`13 / globalScale`) and the gap by
+ * the same, so what the reader sees is 13 px of text sitting 5 px (4 px for a
+ * person) below the disc at every zoom level. The fit has to budget for the
+ * same numbers -- in screen pixels, which is why it can measure them once
+ * instead of once per candidate zoom.
+ */
+export const LABEL_FONT_PX = 13;
+export const LABEL_GAP_PX = { company: 5, person: 4 } as const;
+
+/**
+ * How the graph is framed in the part of the page the reader can see.
+ *
+ * The zoom is bounded here rather than by the library's own limits (0.01 to
+ * 1000): a fit is meant to *show* the graph, and a two-node graph fitted to a
+ * desktop window would otherwise be blown up until the discs filled it.
+ */
+export const FIT_CONFIG = {
+  /** Breathing room between the drawn graph and the edge of the window, in px. */
+  padding: 24,
+  minZoom: 0.02,
+  maxZoom: 2.5,
+  /** ms — long enough to follow by eye, short enough not to lag a scroll. */
+  duration: 400,
+};
+
 export const FORCE_CONFIG = {
   chargeStrength: -700,
   linkDistance: 220,

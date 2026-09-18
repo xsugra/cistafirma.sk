@@ -52,6 +52,18 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     (globalThis as {ResizeObserver?: unknown}).ResizeObserver = ResizeObserverStub;
 }
 
+// jsdom has no 2D context either: `getContext('2d')` returns null *and* prints
+// "Not implemented: HTMLCanvasElement.prototype.getContext" on the virtual
+// console, once per call. `GraphCanvas` probes for one to measure label text and
+// falls back to an average glyph width -- it is built for exactly this, so the
+// fallback is what runs either way and the printout adds nothing but noise at
+// the top of the run. Same reasoning as the stub above: the environment is
+// answering a question the code already knows to ask twice.
+//
+// Returning null rather than throwing keeps it behaviour-identical to jsdom's
+// own answer; only the console line goes away.
+HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
 beforeEach(() => {
     vi.clearAllMocks(); // reset call history; implementations survive
     localStorage.clear();

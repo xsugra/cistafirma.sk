@@ -2,7 +2,16 @@ import { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardR
 import ForceGraph2D from 'react-force-graph-2d';
 import { forceCollide } from 'd3-force-3d';
 import { useTheme } from '../../context/ThemeContext';
-import { GRAPH_COLORS, GRAPH_COLORS_DARK, NODE_SIZES, FORCE_CONFIG } from './graphConfig';
+import {
+  FIT_CONFIG,
+  FORCE_CONFIG,
+  GRAPH_COLORS,
+  GRAPH_COLORS_DARK,
+  LABEL_FONT_PX,
+  LABEL_GAP_PX,
+  NODE_SIZES,
+} from './graphConfig';
+import { fitTransform, type FitTransform, type Rect } from './graphFit';
 import {
   LABEL_PRIORITY,
   labelFont,
@@ -16,7 +25,10 @@ import type { GraphData, GraphNode } from './graphTypes';
 export interface GraphCanvasHandle {
   zoomIn: () => void;
   zoomOut: () => void;
-  zoomToFit: () => void;
+  /** Frame the graph in what the reader can see, and keep doing so. */
+  fitToView: () => void;
+  /** The same, but only while the reader has not taken the view over. */
+  refitIfAuto: () => void;
   exportPng: () => void;
 }
 
@@ -27,6 +39,53 @@ interface GraphCanvasProps {
   onNodeHover: (node: GraphNode | null) => void;
   width: number;
   height: number;
+  /**
+   * The part of the canvas the reader can actually see, in canvas pixels —
+   * asked for at the moment of a fit, so it is always current. `null` means the
+   * whole canvas, which is what it degrades to when no measurement is available.
+   */
+  focusRect?: () => Rect | null;
+}
+
+/**
+ * How long after an automatic fit to judge whether it was left alone. The
+ * animation itself is `FIT_CONFIG.duration`; the margin covers the tween's last
+ * frame and the timeout's own scheduling.
+ */
+const FIT_SETTLE_MARGIN_MS = 120;
+
+/**
+ * A 2D context kept only to measure text, so that the fit budgets for the pill
+ * the painter will draw rather than for a guess at it. `undefined` is "not
+ * looked for yet" and `null` is jsdom, which has no 2D context at all.
+ */
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+function measureLabelWidth(text: string, bold: boolean): number {
+  if (measureCtx === undefined) {
+    measureCtx = document.createElement('canvas').getContext('2d');
+  }
+  if (!measureCtx) {
+    // No canvas in this environment (jsdom). An average glyph is a little over
+    // half the font size, which is close enough for an extent nothing will be
+    // tested against here.
+    return text.length * LABEL_FONT_PX * 0.55;
+  }
+  measureCtx.font = labelFont(LABEL_FONT_PX, bold);
+  return measureCtx.measureText(text).width;
+}
+
+/** Is the view where an automatic fit left it? */
+function transformMatches(fg: any, target: FitTransform): boolean {
+  const zoom = fg.zoom();
+  const center = fg.centerAt();
+  if (typeof zoom !== 'number' || !center) return false;
+  if (Math.abs(zoom - target.zoom) > Math.max(0.002, target.zoom * 0.01)) return false;
+  // Two pixels on screen, whatever the zoom — a pan the reader would notice.
+  return (
+    Math.abs(center.x - target.centerX) * zoom <= 2 &&
+    Math.abs(center.y - target.centerY) * zoom <= 2
+  );
 }
 
 function drawBuildingIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
@@ -163,7 +222,7 @@ function getRoleAbbrev(role: string): string {
 }
 
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function GraphCanvas(
-  { data, centerNode, onNodeClick, onNodeHover, width, height }, ref
+  { data, centerNode, onNodeClick, onNodeHover, width, height, focusRect }, ref
 ) {
   const fgRef = useRef<any>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -174,11 +233,73 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   /**
+   * Whether the graph may still frame itself. The reader's own pan or zoom turns
+   * this off — nothing is more irritating than a view that re-centres itself
+   * every time you move it — and the ⟲ button turns it back on.
+   */
+  const autoFitRef = useRef(true);
+  /** What the last automatic fit aimed at, and the judge of who moved the view. */
+  const lastFitRef = useRef<FitTransform | null>(null);
+  const settleTimerRef = useRef<number | null>(null);
+
+  /**
    * Labels are collected while the nodes are drawn and placed afterwards, once
    * per frame — see `clearPendingLabels` / `paintLabels` below. A ref, not
    * state: this is written on every frame and must never trigger a re-render.
    */
   const pendingLabelsRef = useRef<LabelRequest[]>([]);
+
+  /**
+   * Frame the drawn graph in the reader's window.
+   *
+   * `fitTransform` does the arithmetic; this is the half that talks to the
+   * library and, more importantly, the half that decides whether the reader has
+   * since moved the view themselves. d3-zoom emits its `end` event for a
+   * programmatic transition exactly as it does for a gesture — during a 400 ms
+   * tween it fires on every frame — so the events cannot say who moved the view.
+   * What can: the transform the animation was aiming at, compared once it has
+   * finished. Anything else in that seat is the reader.
+   */
+  const fitToRect = useCallback((duration: number) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+
+    const window_ = focusRect?.() ?? { x: 0, y: 0, width, height };
+    const fit = fitTransform(
+      (data.nodes as GraphNode[]).map((node: any) => ({
+        x: node.x,
+        y: node.y,
+        radius: node.type === 'company' ? NODE_SIZES.company.radius : NODE_SIZES.person.radius,
+        kind: node.type,
+        label: node.label,
+        bold: node.id === centerNode,
+      })),
+      measureLabelWidth,
+      window_,
+      { width, height },
+      FIT_CONFIG,
+    );
+    if (!fit) return;
+
+    // The timer is armed *before* the animation starts, not after: a tween
+    // calls its update on the frame it starts, and with no duration the library
+    // applies the transform synchronously — either way an `end` event arrives
+    // before the next line runs, and a guard armed afterwards would read that
+    // event as the reader moving the view.
+    lastFitRef.current = fit;
+    if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null;
+      if (!transformMatches(fg, fit)) autoFitRef.current = false;
+    }, duration + FIT_SETTLE_MARGIN_MS);
+
+    fg.centerAt(fit.centerX, fit.centerY, duration);
+    fg.zoom(fit.zoom, duration);
+  }, [data, centerNode, focusRect, width, height]);
+
+  useEffect(() => () => {
+    if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+  }, []);
 
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
@@ -189,7 +310,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const fg = fgRef.current;
       if (fg) fg.zoom(fg.zoom() / 1.4, 300);
     },
-    zoomToFit: () => fgRef.current?.zoomToFit(400, 60),
+    fitToView: () => {
+      autoFitRef.current = true;
+      fitToRect(FIT_CONFIG.duration);
+    },
+    refitIfAuto: () => {
+      if (autoFitRef.current) fitToRect(FIT_CONFIG.duration);
+    },
     exportPng: () => {
       const canvas = wrapperRef.current?.querySelector('canvas');
       if (!canvas) return;
@@ -225,11 +352,36 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     fg.d3Force('collide', labelCollide);
   }, [data]);
 
+  /**
+   * The reader's own gesture. d3-zoom reports a programmatic transition the same
+   * way it reports a drag, so the *decision* is not made here — see `fitToRect`.
+   * This only asks the question once no fit is in flight.
+   */
+  const handleZoomEnd = useCallback(() => {
+    if (settleTimerRef.current !== null) return;
+    const fg = fgRef.current;
+    const target = lastFitRef.current;
+    if (!fg || !target) return;
+    if (!transformMatches(fg, target)) autoFitRef.current = false;
+  }, []);
+
+  /**
+   * Frame the graph once the layout has stopped moving.
+   *
+   * Twice, on purpose. The timer frames it shortly after the data arrives, while
+   * the forces are still spreading the nodes — that is the frame the reader
+   * looks at for the first half second, and it is what the graph used to do. The
+   * engine stop is the frame that lasts: by then the nodes are where they will
+   * stay, and a fit computed before that would be framing a layout that no
+   * longer exists.
+   */
   useEffect(() => {
-    if (fgRef.current && data.nodes.length > 0) {
-      setTimeout(() => fgRef.current?.zoomToFit(400, 60), 500);
-    }
-  }, [data.nodes.length]);
+    if (data.nodes.length === 0 || !autoFitRef.current) return;
+    const timer = setTimeout(() => {
+      if (autoFitRef.current) fitToRect(FIT_CONFIG.duration);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [data.nodes.length, fitToRect]);
 
   /**
    * Node chrome only. The name is *requested* here and drawn later, in
@@ -241,7 +393,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const gn = node as GraphNode;
     const isCenter = gn.id === centerNode;
-    const fontSize = Math.max(13 / globalScale, 4);
+    // Both constants are screen pixels; dividing by the zoom is what keeps them
+    // that. The fit budgets for the same two numbers, so a change here that is
+    // not made there would silently frame the wrong rectangle.
+    const fontSize = Math.max(LABEL_FONT_PX / globalScale, 4);
     const priority = isCenter
       ? LABEL_PRIORITY.center
       : gn.id === hoveredId
@@ -263,7 +418,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         text: gn.label,
         kind: 'company',
         x: node.x,
-        y: node.y + r + 5 / globalScale,
+        y: node.y + r + LABEL_GAP_PX.company / globalScale,
         fontSize,
         bold: isCenter,
         priority,
@@ -285,7 +440,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         text: gn.label,
         kind: 'person',
         x: node.x,
-        y: node.y + r + 4 / globalScale,
+        y: node.y + r + LABEL_GAP_PX.person / globalScale,
         fontSize,
         bold: false,
         priority,
@@ -450,6 +605,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         linkCanvasObject={paintLink}
         onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
         onNodeHover={handleNodeHover}
+        // Placing a node by hand is the reader arranging the picture, and a
+        // drag reheats the engine — so without this, letting go of a node would
+        // be followed by the view sliding back to the middle. Treated like a
+        // pan: the graph stops framing itself until the ⟲ is pressed.
+        onNodeDrag={() => {
+          autoFitRef.current = false;
+        }}
+        onZoomEnd={handleZoomEnd}
+        onEngineStop={() => {
+          if (autoFitRef.current) fitToRect(FIT_CONFIG.duration);
+        }}
         nodeVal={getNodeArea}
         cooldownTicks={100}
         backgroundColor="transparent"
