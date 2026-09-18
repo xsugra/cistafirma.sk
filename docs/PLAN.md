@@ -6283,11 +6283,30 @@ Zoradené podľa závažnosti; **prvé dve sú merané**, nie odhadnuté.
    insete 0 je `calc(6rem+0px)` = `pt-24`, `calc(0.75rem+0px)` = `top-3`,
    `calc(0.5rem+0px)` = `bottom-2` — na desktope a na telefóne bez výrezu je
    tento commit **no-op**.
-6. `h-screen` — **`AdminLayout.tsx:40` hotové v `68b4a6f`,
-   `ConnectionGraph.tsx:150` v `4f0df9d`**; ostáva: mobilné menu bez
+6. ~~**`h-screen`**~~ — **`AdminLayout.tsx:40` hotové v `68b4a6f`,
+   `ConnectionGraph.tsx:150` v `4f0df9d`**. ~~mobilné menu bez
    `overflow-y-auto` a bez zámku skrolovania pozadia; zatvorené menu ostáva
-   v DOM aj v tab-poradí; `GraphControls` má 32 px tlačidlá; legenda grafu sa
-   na 393 px láme na ~5 riadkov cez plátno.
+   v DOM aj v tab-poradí; `GraphControls` má 32 px tlačidlá~~ — **všetko
+   hotové v `83c850b`**, spolu s chybou, ktorú plán nemal:
+
+   **Legenda grafu a ovládanie sa prekrývali na oboch šírkach**, nielen na
+   telefóne — boli to dva nezávislé `absolute` rohy:
+
+     393 px: legenda x 53..352, ovládanie x 116..340, obe od y 37
+     900 px: legenda x 53..833, ovládanie x 623..847, obe od y 37
+
+   Ovládanie teda kreslilo **cez** legendu a skrývalo jej položky. Dva
+   absolútne boxy v jednom rohu o sebe nevedia; riešenie je jeden `flex` pruh
+   (na telefóne `flex-col`, od `md` `flex-row` + `justify-between`, rozostupy
+   cez `gap`). Po oprave namerané **prekrytie False na oboch šírkach**.
+   Tlačidlá boli 28–30 × 32 (textové) a 34 × 26 (SVG) — SVG boli **nižšie než
+   pilulka**, v ktorej sedia; teraz 44 × 44 pod `md`, 32 × 32 od `md`
+   (SVG 34 × 32, rozdiel v šírke 2 px zámerne nechaný).
+   Zámok skrolovania pozadia je overený testom, nie okom —
+   `documentElement.scrollTop` išlo predtým 0 → 600 s otvoreným menu.
+
+   **`#176 je tým uzavreté.** Ostávajú len nálezy z 9.5, ktoré sú mimo jeho
+   rozsahu.
 
 **Hranica dôkazu pre kroky 2 a 3 — `dvh` a insety sú odôvodnené, nie
 merané,** a to treba povedať nahlas. Headless Chromium nemá adresnú lištu ani
@@ -6312,10 +6331,13 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   blokované OS, nie mnou.
 - **`pages/ApiDocs.tsx`: 8 zo 40 endpointov** má na 393 px odrezanú cestu
   a úplne zmiznutý JWT štítok aj šípku rozbalenia. Tabuľka nemá `overflow-x-auto`.
-- **Mobilné menu nezamyká skrolovanie pozadia.** `Header.tsx` nezapisuje do
-  `document.body` ani `overflow` (grep = 0), overlay je `fixed inset-0`, ale
-  obsah pod ním sa hýbe — merané: `documentElement.scrollTop` ide 0 → 600 pri
-  kolese. Nepatrí do #176 podľa poradia, ale je to tá istá trieda chyby.
+- ~~**Mobilné menu nezamyká skrolovanie pozadia.**~~ — **opravené v `83c850b`**
+  (#176, krok 4). `Header.tsx` nezapisoval do `document.body` ani `overflow`
+  (grep = 0), overlay bol `fixed inset-0`, ale obsah pod ním sa hýbal — merané:
+  `documentElement.scrollTop` išlo 0 → 600 pri kolese. Teraz sa `overflow`
+  zamyká a vracia späť (uloží sa predchádzajúca hodnota, nie `''`), a navyše
+  `overscroll-contain` bráni reťazeniu skrolu z menu na stránku. Overené testom,
+  nie okom.
 - **`admin/pages/CompaniesBuilderPage.tsx:594`** — `min-w-[240px] flex-1` na
   `PresetCard` je pevné, nezmenšiteľné minimum v tej istej 105 px admin lište
   ako nálezy v 9.4. V public režime (329 px) sa neprejaví.
@@ -6378,9 +6400,12 @@ overiť sa dá len proti reálnemu backendu na telefóne, nie z kódu.
    ~~**`viewport-fit=cover` + safe-area**~~ — **hotové v `4f0df9d`** (meta
    atribút, `.safe-frame`, `.header-wrapper`, mobilné menu, admin lišta pod
    `md`, ovládanie grafu v celoobrazovkovom režime, `h-dvh` v grafe).
-   **Ďalej:** mobilné menu — `overflow-y-auto` a zámok skrolovania pozadia
-   (ten je aj v 9.5); zatvorené menu von z DOM a z tab-poradia;
-   `GraphControls` 32 px tlačidlá; legenda grafu na 393 px.
+   ~~**Mobilné menu, `GraphControls` a legenda grafu**~~ — **hotové v `83c850b`**
+   (zámok skrolovania pozadia a `overflow-y-auto`; zatvorené menu je `invisible`,
+   teda von z tab-poradia aj z accessibility tree; tlačidlá 44 px pod `md`;
+   legenda s ovládaním v jednom `flex` pruhu namiesto dvoch `absolute` rohov).
+   Merania a čo z toho je len odôvodnené: 9.4 bod 6. **`#176 je uzavreté** —
+   štyri kroky: `1f806ee`, `68b4a6f`, `4f0df9d`, `83c850b`.
 
 Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`),
 štruktúrovaný commit, push na `origin` aj `gitlab-home`.
