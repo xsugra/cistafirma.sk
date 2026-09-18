@@ -7359,6 +7359,23 @@ jediná vec, ktorá by päťdňový beh ticho zabila.
 1 333 MB, Redis 22,94 MB. Redis má `maxmemory = 0` a `noeviction`, takže rásť
 môže neobmedzene — pri 23 MB je to ale bezpredmetné.
 
+**Walk smeruje ľudí správne — overené proti živým dátam, nie proti kódu.**
+Toto je kontrola, ktorá má cenu len dovtedy, kým beh beží: chyba v smerovaní
+SZCO by päť dní vyrábala falošné `Company` riadky a späť by sa to naprávalo
+ťažko. Invariant, ktorý drží:
+
+- `Company` (`"Companies and SZCO"`) má s právnymi formami `100`–`110` a `422`
+  **0 riadkov** — a to je práve množina, ktorá nemá ani jeden mať.
+- `"Individual Entities"` má **37 286** riadkov a sú v nej presne formy
+  `101, 105, 109, 103, 107, 102, 110, 106, 108` (formu `422` nemá ani jedna
+  tabuľka).
+- `"Individual Entities"` bolo pri meraní v #187 **35 339** → na 37 286, čiže
+  walk naozaj pridáva ľudí tam, kam patria. `Company` je 449 795.
+
+(Pozor na názov tabuľky: `db_table` je `"Individual Entities"` s medzerou, takže
+`registers_individualentity` **neexistuje** — dopyt naň spadne na
+`relation does not exist`, čo je našťastie tá hlasná polovica.)
+
 **ETA je odvodená, nie prevzatá.** Prírastkový riadok #2 dokončil svoj priechod
 na RUZ id **2 486 558**, čiže id priestor má ~2,49 M. Stav 18:12 UTC: kurzor
 43 600. Zvyšok 2 442 958 pri 20 100/h je **~121 h ≈ 5,0 dňa** → **~2026-09-23
@@ -7374,7 +7391,11 @@ behu. Kontrola, že kurzor je naozaj tohto behu a nie naakumulovaný:
   teda **predtým**, než walk o 16:02 zabral slot — takže vo fronte ešte nič
   nie je. Prvá zrážka je **20:07 UTC**. Ani `inspect reserved` nič neukazuje,
   takže to neleží ani v prefetch bufferi (`worker_prefetch_multiplier = 4`).
-  Nulový front tu znamená „ešte nenastalo", nie „nedeje sa".
+  Nulový front tu znamená „ešte nenastalo", nie „nedeje sa". Zrážka je
+  neškodná a **nemení sa kvôli nej nič v beat schéme**: `ruz_full` číta výhradne
+  `celery_ruz` s `concurrency = 1`, takže správa len počká, kým walk dobehne,
+  a potom sa ~20 naakumulovaných prírastkov vystrieda za sebou. Zasahovať do
+  `PeriodicTask` počas behu by bolo riziko bez úžitku.
 - **`SyncProgress` počítadlá sú kumulatívne cez behy**, keď sa riadok recykluje.
   Riadok #2 hlási `total_created = 32 187` pri behu, ktorý trval **3,88 s**
   (14:07:28,578 → 14:07:32,460) — to sa nedá vysvetliť inak než načítaním
