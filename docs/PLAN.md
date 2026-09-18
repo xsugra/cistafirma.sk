@@ -6067,18 +6067,48 @@ Odporúčam **C**: A samo o sebe je len „stratí sa to predvídateľne", čo n
 to, o čo si žiadal. Ale B mení vzhľad grafu — a to je tvoje rozhodnutie, nie
 moje.
 
-**Rozdelenie na commity:** (1) hranica frame (`onRenderFramePre`) + kreslenie
-názvov v `onRenderFramePost` + jedna pravda o obdĺžniku názvu (`drawLabelWithBg`
-dnes kreslí na `y - padY`, ale vracia obdĺžnik s `y` — dnes neškodné, len čo
-na obdĺžniku začne stáť rozhodnutie, je to chyba) — malý, samostatne
-recenzovateľný commit, ktorý je overenou koreňovou opravou; (2) politika
-názvov (deterministické poradie, zmenšenie, prípadne B).
+**Rozdelenie na commity — plán hovoril dva, vyšiel jeden.** Plán chcel
+(1) hranicu frame + kreslenie v `onRenderFramePost` + jednu pravdu o obdĺžniku
+a (2) politiku názvov. Rozdeliť sa to nedalo bez výroby medzikroku, ktorý nikto
+nepotrebuje: **len čo sa kreslenie odpojí od priechodu uzlov, „kto bol prvý"
+prestane existovať** — o poradí sa musí rozhodnúť v tom istom kroku, v ktorom
+sa kreslí. Deterministické poradie teda nie je druhá zmena, je to dôsledok
+prvej. Namiesto umelého medzicomitu je to jeden commit, `311a888`, a toto je
+záznam toho, že sa zámer zmenil a prečo.
 
-**Testy:** graf dnes nemá **ani jeden test** — `grep` cez
-`frontend/**/*.test.ts(x)` nenájde zmienku o `GraphCanvas`, `ConnectionGraph`,
-`useGraphData` ani `force-graph`. Všetky tri CI kontroly teda o kreslení
-netvrdia nič. Plán preto pridá `labelLayout.ts` (čistá funkcia bez DOM) +
-`labelLayout.test.ts`.
+Čo commit `311a888` spravil:
+
+- `paintNode` už kreslí **len uzol** a názov **žiada** (`pendingLabelsRef`);
+  `onRenderFramePre` buffer vyprázdni, `onRenderFramePost` názvy umiestni
+  a vykreslí. Tým zmizla aj druhá príčina — názov už nemôže prepísať
+  nepriehľadný kruh a glow uzla kresleného po ňom.
+- `labelLayout.ts` je jediné miesto, kde sa počíta obdĺžnik názvu (`rectFor`),
+  a `drawLabel` ho **berie tak, ako je** — kreslenie a rozhodnutie teda nemôžu
+  nesúhlasiť. `drawLabel` je zároveň prvý raz obalený v `save`/`restore`;
+  dovtedy to bola jediná pomôcka bez neho a nechávala `textAlign`, `textBaseline`
+  a `fillStyle` nastavené pre ďalšie kreslenie (vrátane popiskov hrán).
+- `bold` pre osobu ostáva `false` a `alwaysDraw` `false` — stred grafu je vždy
+  firma (`useGraphData.ts:38`), takže pôvodné `|| isCenter`, ktoré bolo pre
+  osobu nedosiahnuteľné, sa neprevzalo.
+
+**Testy — a jeden z nich hneď našiel chybu v mojej zmene.** Graf nemal ani
+jeden test (`grep` cez `frontend/**/*.test.ts(x)` nenašiel zmienku
+o `GraphCanvas`, `ConnectionGraph`, `useGraphData` ani `force-graph`), takže tri
+CI kontroly o kreslení netvrdili nič. Pribudlo **16 testov** čistej geometrie
+(`labelLayout.test.ts`) a **7 testov** komponentu (`GraphCanvas.test.tsx`, cez
+atrapu `react-force-graph-2d`, ktorá len zachytí props — testuje sa teda
+**poradie volaní**, čo je presne to, o čom oprava je).
+
+Test „názov pod kurzorom vyhrá" **zhodil sa na mojej vlastnej chybe**:
+`handleNodeHover` som definoval, ale na `ForceGraph2D` som ho nepripojil —
+hover by ticho nerobil nič a `tsc` to nezachytil. Bez toho testu by to odišlo
+do produkcie ako mŕtvy kód. Dve ďalšie červené boli chyby testu, nie kódu
+(falošná `measureText` ignorovala veľkosť fontu; `"aaa s.r.o."` má 10 znakov,
+nie 11) — obe opravené v teste.
+
+**Páka A je hotová, B a C nie:** vzhľad grafu sa nezmenil, len sa
+názvy prestali strácať náhodou. Ak si „1" myslel ako C (redší graf), je to
+samostatný malý commit — viď tabuľka vyššie.
 
 ---
 
@@ -6180,12 +6210,35 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   neviditeľné, kým sa na kód netapne (iOS syntetický `:hover` ho odhalí).
 - `~/.Trash` (TCC), Docker reclaim na Macu a runner id=2 na lenovo — #174,
   blokované OS, nie mnou.
+- **`pages/ApiDocs.tsx`: 8 zo 40 endpointov** má na 393 px odrezanú cestu
+  a úplne zmiznutý JWT štítok aj šípku rozbalenia. Tabuľka nemá `overflow-x-auto`.
+- **Mobilné menu nezamyká skrolovanie pozadia.** `Header.tsx` nezapisuje do
+  `document.body` ani `overflow` (grep = 0), overlay je `fixed inset-0`, ale
+  obsah pod ním sa hýbe — merané: `documentElement.scrollTop` ide 0 → 600 pri
+  kolese. Nepatrí do #176 podľa poradia, ale je to tá istá trieda chyby.
+- **`admin/pages/CompaniesBuilderPage.tsx:594`** — `min-w-[240px] flex-1` na
+  `PresetCard` je pevné, nezmenšiteľné minimum v tej istej 105 px admin lište
+  ako nálezy v 9.4. V public režime (329 px) sa neprejaví.
+
+**Čo audit preveril a NIE je chyba** — aby to nikto nehlásil znova:
+`AuditLog.tsx:91` (`max-w-[200px] truncate`) a `SyncJobs.tsx:151`
+(`min-w-[120px]`) sú **vnútri** `overflow-x-auto` tabuliek, teda správne;
+`ApiDocs.tsx:626` má `overflow-hidden` bez scroll obalu, ale tabuľka má len dva
+stĺpce a `min-content` ≈ 241 px < 361 px dostupných. `.app-card { overflow: hidden }`
+(`main.css:217`) dnes chybu nerobí, ale je to **pasca pri ďalšej úprave** tejto
+karty.
+
+**Neoverená hypotéza, ktorú nechávam ako hypotézu:** ak je telefónna session
+staff a tlačidlo aj tak chýba, druhé možné vysvetlenie je, že `api.getProfile()`
+na mobile zlyhal a `AuthContext.tsx:53-70` spustil `logout()`. **Nemerané** —
+overiť sa dá len proti reálnemu backendu na telefóne, nie z kódu.
 
 ---
 
 ### 9.6 Poradie prác
 
-1. **Graf** (#178) — dva commity; páka **C** alebo **A** podľa tvojho slova.
+1. ~~**Graf** (#178)~~ — **hotové v `311a888`**, jeden commit namiesto dvoch
+   (dôvod v 9.1). Tri CI kontroly zelené, 375 testov, push na oba remoty.
 2. **„Vypočítať trasu"** (#175) + tmavá variant `.btn-outline` v tom istom
    commite.
 3. **„Aktualizovať údaje"** (#177) — a overenie staff session na telefóne.
