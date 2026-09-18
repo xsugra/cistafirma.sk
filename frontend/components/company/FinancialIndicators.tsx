@@ -145,7 +145,12 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
 
     return (
         <InfoCard title={`Kľúčové ukazovatele ${latest.year}`} icon="fa-table">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* One column on a phone, so at nine tiles this block was 809 px
+                tall -- taller than the screen it was read on, one number per
+                tile. Below `sm` a tile is a single line instead: the label and
+                the figure share it, and every new class is a base class with
+                `sm:` restoring today's value, so the desktop is untouched. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 sm:gap-3">
                 {indicators.map((ind) => {
                     const displayValue = ind.value == null
                         ? '—'
@@ -158,17 +163,25 @@ export const FinancialIndicators: React.FC<FinancialIndicatorsProps> = ({ data, 
                     return (
                         <div
                             key={ind.label}
-                            className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900/50"
+                            className="flex items-center gap-2 p-2 rounded-lg sm:gap-3 sm:p-3 sm:rounded-xl border border-gray-100 dark:border-slate-800 bg-white dark:bg-slate-900/50"
                         >
-                            <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center flex-shrink-0">
-                                <i className={`fas ${ind.icon} text-blue-600 dark:text-blue-400 text-sm`}></i>
+                            <div className="w-6 h-6 rounded-lg sm:w-9 sm:h-9 bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center flex-shrink-0">
+                                <i className={`fas ${ind.icon} text-blue-600 dark:text-blue-400 text-[10px] sm:text-sm`}></i>
                             </div>
-                            <div className="min-w-0 flex-1">
-                                <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            <div className="min-w-0 flex-1 flex items-baseline justify-between gap-2 sm:block">
+                                {/* `tracking-normal` on a phone only: the widest
+                                    label ("Celková zadlženosť") needs 132 px of
+                                    the 131,5 px the tile has left beside the
+                                    figure, and the letter-spacing is what tips
+                                    it over. Nothing is clipped either way --
+                                    the label wraps rather than truncating. */}
+                                <p className="text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-normal sm:tracking-wider">
                                     {ind.label}
                                 </p>
-                                <div className="flex items-baseline gap-2">
-                                    <span className={`text-base font-bold ${ind.value != null ? valueColor(ind.value) : 'text-gray-400'}`}>
+                                {/* `shrink-0` so the figure keeps its width and
+                                    the label is what wraps. */}
+                                <div className="flex items-baseline gap-2 shrink-0">
+                                    <span className={`text-sm sm:text-base font-bold ${ind.value != null ? valueColor(ind.value) : 'text-gray-400'}`}>
                                         {displayValue}
                                     </span>
                                     {prev && ind.prevValue != null && ind.value != null && (
