@@ -6131,6 +6131,26 @@ a veľkosť**, nie štruktúru.
 lebo ani jedno z tých dvoch tlačidiel `.btn-outline` nepoužíva; po prevode by
 sa prejavilo. Preto sa tmavá variant dopĺňa **v tom istom commite**.
 
+**Ako to dopadlo** (`673ab4d`) — rozmery a kontrast sú **merané**, nie
+odhadnuté: Playwright + Chromium, 393 × 852, DSF 3, a prechody vypnuté
+(`*,*::before,*::after{transition:none!important}`), lebo prvé meranie
+zachytilo `.btn{transition:all .2s}` v behu a prečítalo `#f2f3f3` namiesto
+tmavej karty. Namerané: **133,9 × 44 px** v oboch témach, 14 px text; tá istá
+trieda **bez** `min-h-11` má **38 px** (takže 44 px robí naozaj `min-h-11`,
+nie niečo iné); pôvodná pilulka **140,6 × 26 px** pri 12 px → **+69 %**.
+Kontrast tinty: **5,17:1** svetlá, **9,98:1** tmavá (proti 3,52:1, ktoré by
+dalo `--color-brand` na tmavej karte `#0e1629`).
+
+Dosah je zámerne širší než jedno tlačidlo: tú istú chybu — značková farba
+použitá ako *tinta* namiesto *výplne* — mali aj `.btn-ghost:hover` a
+`.nav-link:hover/.active`, takže dostali `--color-brand-ink` tiež. Jedna rola,
+jeden token; `.btn-outline:hover` výplňou ostáva na `--color-brand` s bielym
+textom (5,17:1), kde je pôvodná modrá správna.
+
+`.app-input:focus { border-color: var(--color-brand) }` zostáva **nedotknuté**:
+2,83:1 je tesne pod hranicou 3:1 pre nerastrový prvok a je to 1 px rámik, nie
+text. Neznižujem latku potichu tým, že to opravím bez slova — hlásim to.
+
 ---
 
 ### 9.3 „Aktualizovať údaje" — nepríjemná pravda (#177)
@@ -6219,6 +6239,30 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
 - **`admin/pages/CompaniesBuilderPage.tsx:594`** — `min-w-[240px] flex-1` na
   `PresetCard` je pevné, nezmenšiteľné minimum v tej istej 105 px admin lište
   ako nálezy v 9.4. V public režime (329 px) sa neprejaví.
+- **`.btn` a `.btn-*` sú mimo `@layer`, takže prebíjajú každú Tailwind
+  utility, ktorá im odporuje.** Toto je systematická chyba, nie jedna trieda:
+  `@import "tailwindcss"` vygeneruje `@layer properties/theme/base/utilities`
+  a každé pravidlo napísané v `main.css` **mimo** `@layer` je *unlayered* —
+  a nezaradené normálne deklarácie porazia zaradené **bez ohľadu na
+  špecificitu aj poradie**. Overené párovaním zátvoriek vo zbuildovanom CSS:
+  `@layer utilities` siaha od znaku 12902 po 115770, `.text-gray-700{` (66167)
+  a `.border-gray-300{` (47820) sú **vnútri**, kým `.btn{` (117010) a
+  `.btn-outline{` (117449) sú **vonku**. Dôsledok: utility `px-*`, `py-*`,
+  `rounded-*`, `text-*`, `border-*`, `hover:bg-*` na prvku, ktorý má `.btn`,
+  sa **ticho ignorujú**. Dotknuté miesta, kde to už dnes zhadzuje zámer
+  pisateľa: `NotFound.tsx:48` (`border-gray-300`, `dark:border-slate-700`,
+  `text-gray-700`, `dark:text-gray-300`, `hover:bg-gray-100`,
+  `dark:hover:bg-slate-800` aj `px-8 py-3 rounded-full` — teda **celý** ten
+  reťazec je mŕtvy), `Header.tsx:154` (`py-3`, `rounded-xl`),
+  `Login.tsx:128` (`py-3.5`, `shadow-lg`), `Home.tsx:70`
+  (`px-10 py-4 rounded-full shadow-lg`). To, že `NotFound.tsx:48` píše
+  `dark:border-slate-700` na prvok, ktorý `.btn-outline` aj tak prebije, je
+  **priamy dôkaz, že na to už niekto narazil** a obchádzal to zľava.
+  Neopravujem to tu — je to zmena dizajnového systému naprieč ~4 stránkami
+  a patrí do vlastného rozhodnutia, nie do mobilného zadania. **Dôsledok pre
+  #175 a #177: na `.btn` sa smie pridávať len to, čo `.btn` sám nenastavuje**
+  (`min-height`, `font-size`) — preto `min-h-11` a `text-sm`, a preto žiadne
+  `px-*`/`rounded-*`.
 
 **Čo audit preveril a NIE je chyba** — aby to nikto nehlásil znova:
 `AuditLog.tsx:91` (`max-w-[200px] truncate`) a `SyncJobs.tsx:151`
@@ -6239,8 +6283,11 @@ overiť sa dá len proti reálnemu backendu na telefóne, nie z kódu.
 
 1. ~~**Graf** (#178)~~ — **hotové v `311a888`**, jeden commit namiesto dvoch
    (dôvod v 9.1). Tri CI kontroly zelené, 375 testov, push na oba remoty.
-2. **„Vypočítať trasu"** (#175) + tmavá variant `.btn-outline` v tom istom
-   commite.
+2. ~~**„Vypočítať trasu"** (#175) + tmavá variant `.btn-outline`~~ — **hotové
+   v `673ab4d`**, rozsah rozšírený na celú rolu „značková farba ako tinta"
+   (dôvod a merania v 9.2). Tri CI kontroly zelené, 375 testov.
+   **Ostáva neopravené a hlásené:** kaskádové vrstvy (9.5) — `.btn` prebíja
+   Tailwind utility na štyroch ďalších miestach.
 3. **„Aktualizovať údaje"** (#177) — a overenie staff session na telefóne.
 4. **Tabuľky** (meraný orez) → **admin sidebar a inputy** → **`viewport-fit=cover`
    + safe-area** → **menu, `h-screen`, legenda grafu**.
