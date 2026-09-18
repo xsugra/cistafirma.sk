@@ -1,8 +1,16 @@
-import { useRef, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react';
+import { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { forceCollide } from 'd3-force-3d';
 import { useTheme } from '../../context/ThemeContext';
 import { GRAPH_COLORS, GRAPH_COLORS_DARK, NODE_SIZES, FORCE_CONFIG } from './graphConfig';
+import {
+  LABEL_PRIORITY,
+  labelFont,
+  layoutLabels,
+  type LabelKind,
+  type LabelRequest,
+  type PlacedLabel,
+} from './labelLayout';
 import type { GraphData, GraphNode } from './graphTypes';
 
 export interface GraphCanvasHandle {
@@ -19,22 +27,6 @@ interface GraphCanvasProps {
   onNodeHover: (node: GraphNode | null) => void;
   width: number;
   height: number;
-}
-
-interface LabelRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-function rectsOverlap(a: LabelRect, b: LabelRect, padding: number): boolean {
-  return !(
-    a.x + a.w + padding < b.x ||
-    b.x + b.w + padding < a.x ||
-    a.y + a.h + padding < b.y ||
-    b.y + b.h + padding < a.y
-  );
 }
 
 function drawBuildingIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
@@ -124,49 +116,37 @@ function drawCircleNode(
   ctx.restore();
 }
 
-function drawLabelWithBg(
+/**
+ * Draws a label the layout has already placed. It consumes `label.rect` exactly
+ * rather than recomputing the pill, so the rectangle the collision test used and
+ * the rectangle on screen cannot drift apart — they are the same number.
+ */
+function drawLabel(
   ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number, y: number,
-  fontSize: number,
+  label: PlacedLabel,
   textColor: string,
   bgColor: string,
   globalScale: number,
-  bold: boolean,
-): LabelRect {
-  ctx.font = `${bold ? 'bold ' : '500 '}${fontSize}px 'Inter', sans-serif`;
-  const tw = ctx.measureText(text).width;
-  const padX = 3 / globalScale;
-  const padY = 1.5 / globalScale;
-
-  const pillW = tw + padX * 2;
-  const pillH = fontSize + padY * 2;
+) {
+  ctx.save();
+  ctx.font = labelFont(label.usedFontSize, label.bold);
 
   ctx.fillStyle = bgColor;
   ctx.beginPath();
-  ctx.roundRect(x - pillW / 2, y - padY, pillW, pillH, 3 / globalScale);
+  ctx.roundRect(label.rect.x, label.rect.y, label.rect.w, label.rect.h, 3 / globalScale);
   ctx.fill();
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = textColor;
-  ctx.fillText(text, x, y);
+  ctx.fillText(label.text, label.x, label.y);
 
-  return { x: x - pillW / 2, y: y - padY, w: pillW, h: pillH };
+  ctx.restore();
 }
 
-function measureLabel(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  fontSize: number,
-  globalScale: number,
-  bold: boolean,
-): { w: number; h: number } {
-  ctx.font = `${bold ? 'bold ' : '500 '}${fontSize}px 'Inter', sans-serif`;
-  const tw = ctx.measureText(text).width;
-  const padX = 3 / globalScale;
-  const padY = 1.5 / globalScale;
-  return { w: tw + padX * 2, h: fontSize + padY * 2 };
+function labelColor(kind: LabelKind, isDark: boolean): string {
+  if (kind === 'company') return isDark ? '#93C5FD' : '#1E40AF';
+  return isDark ? '#D1D5DB' : '#374151';
 }
 
 function getRoleAbbrev(role: string): string {
@@ -191,8 +171,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const colors = isDark ? GRAPH_COLORS_DARK : GRAPH_COLORS;
   const labelBg = isDark ? 'rgba(2, 6, 23, 0.85)' : 'rgba(255, 255, 255, 0.88)';
 
-  const drawnLabelsRef = useRef<LabelRect[]>([]);
-  const lastClearTimeRef = useRef(0);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  /**
+   * Labels are collected while the nodes are drawn and placed afterwards, once
+   * per frame — see `clearPendingLabels` / `paintLabels` below. A ref, not
+   * state: this is written on every frame and must never trigger a re-render.
+   */
+  const pendingLabelsRef = useRef<LabelRequest[]>([]);
 
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
@@ -245,17 +231,22 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
   }, [data.nodes.length]);
 
+  /**
+   * Node chrome only. The name is *requested* here and drawn later, in
+   * `paintLabels`, because a node painted further down the list would otherwise
+   * cover a label already drawn by an earlier one — its opaque disc and its glow
+   * are painted after the label and on top of it. Collecting first and drawing
+   * once at the end of the frame removes that whole class of loss.
+   */
   const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const gn = node as GraphNode;
     const isCenter = gn.id === centerNode;
     const fontSize = Math.max(13 / globalScale, 4);
-
-    // Detect new frame and clear label tracking
-    const now = performance.now();
-    if (now - lastClearTimeRef.current > 8) {
-      drawnLabelsRef.current = [];
-      lastClearTimeRef.current = now;
-    }
+    const priority = isCenter
+      ? LABEL_PRIORITY.center
+      : gn.id === hoveredId
+        ? LABEL_PRIORITY.hovered
+        : LABEL_PRIORITY.rest;
 
     if (gn.type === 'company') {
       const r = NODE_SIZES.company.radius;
@@ -267,19 +258,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       );
       drawBuildingIcon(ctx, node.x, node.y, r * 1.3, colors.company.icon);
 
-      const labelX = node.x;
-      const labelY = node.y + r + 5 / globalScale;
-      const textColor = isDark ? '#93C5FD' : '#1E40AF';
-      const size = measureLabel(ctx, gn.label, fontSize, globalScale, isCenter);
-
-      const proposed: LabelRect = { x: labelX - size.w / 2, y: labelY, w: size.w, h: size.h };
-      const pad = 2 / globalScale;
-      const hasOverlap = drawnLabelsRef.current.some(r => rectsOverlap(proposed, r, pad));
-
-      if (!hasOverlap || isCenter) {
-        const rect = drawLabelWithBg(ctx, gn.label, labelX, labelY, fontSize, textColor, labelBg, globalScale, isCenter);
-        drawnLabelsRef.current.push(rect);
-      }
+      pendingLabelsRef.current.push({
+        id: gn.id,
+        text: gn.label,
+        kind: 'company',
+        x: node.x,
+        y: node.y + r + 5 / globalScale,
+        fontSize,
+        bold: isCenter,
+        priority,
+        degree: gn.rolesCount ?? 0,
+        alwaysDraw: isCenter,
+      });
     } else {
       const r = NODE_SIZES.person.radius;
       drawCircleNode(
@@ -290,21 +280,51 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       );
       drawPersonIcon(ctx, node.x, node.y, r * 1.2, colors.person.icon);
 
-      const labelX = node.x;
-      const labelY = node.y + r + 4 / globalScale;
-      const textColor = isDark ? '#D1D5DB' : '#374151';
-      const size = measureLabel(ctx, gn.label, fontSize, globalScale, false);
-
-      const proposed: LabelRect = { x: labelX - size.w / 2, y: labelY, w: size.w, h: size.h };
-      const pad = 2 / globalScale;
-      const hasOverlap = drawnLabelsRef.current.some(r => rectsOverlap(proposed, r, pad));
-
-      if (!hasOverlap) {
-        const rect = drawLabelWithBg(ctx, gn.label, labelX, labelY, fontSize, textColor, labelBg, globalScale, false);
-        drawnLabelsRef.current.push(rect);
-      }
+      pendingLabelsRef.current.push({
+        id: gn.id,
+        text: gn.label,
+        kind: 'person',
+        x: node.x,
+        y: node.y + r + 4 / globalScale,
+        fontSize,
+        bold: false,
+        priority,
+        degree: gn.rolesCount ?? 0,
+        // The centre of the graph is only ever a company (useGraphData.ts), so
+        // this is false for a person by construction, not by omission.
+        alwaysDraw: false,
+      });
     }
-  }, [centerNode, colors, isDark, labelBg]);
+  }, [centerNode, colors, hoveredId]);
+
+  /**
+   * The frame boundary. `force-graph` calls this once at the start of every
+   * redraw, immediately before the nodes are painted — which is the only
+   * reliable "new frame" signal available. The previous code guessed at it from
+   * a wall clock inside the per-node callback, so on a slow frame the list was
+   * cleared mid-paint and a name could be dropped against labels that were no
+   * longer on screen.
+   */
+  const clearPendingLabels = useCallback(() => {
+    pendingLabelsRef.current = [];
+  }, []);
+
+  /** The second half of the frame: place the collected names and draw them. */
+  const paintLabels = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const requests = pendingLabelsRef.current;
+    if (requests.length === 0) return;
+
+    // Measured on the same context, at the same font, that draws them below.
+    const measureWidth = (text: string, fontSize: number, bold: boolean) => {
+      ctx.font = labelFont(fontSize, bold);
+      return ctx.measureText(text).width;
+    };
+
+    const { placed } = layoutLabels(requests, measureWidth, globalScale, 2 / globalScale);
+    for (const label of placed) {
+      drawLabel(ctx, label, labelColor(label.kind, isDark), labelBg, globalScale);
+    }
+  }, [isDark, labelBg]);
 
   const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const source = link.source;
@@ -399,6 +419,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
   }, [colors]);
 
+  const handleNodeHover = useCallback((node: any) => {
+    const next = node ? (node as GraphNode) : null;
+    setHoveredId(next ? next.id : null);
+    onNodeHover(next);
+  }, [onNodeHover]);
+
   const getNodeArea = useCallback((node: any) => {
     const r = (node as GraphNode).type === 'company' ? NODE_SIZES.company.radius : NODE_SIZES.person.radius;
     return Math.PI * r * r;
@@ -412,6 +438,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         width={width}
         height={height}
         nodeCanvasObject={paintNode}
+        onRenderFramePre={clearPendingLabels}
+        onRenderFramePost={paintLabels}
         nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
           const r = (node as GraphNode).type === 'company' ? NODE_SIZES.company.radius : NODE_SIZES.person.radius;
           ctx.beginPath();
@@ -421,7 +449,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }}
         linkCanvasObject={paintLink}
         onNodeClick={(node: any) => onNodeClick(node as GraphNode)}
-        onNodeHover={(node: any) => onNodeHover(node ? (node as GraphNode) : null)}
+        onNodeHover={handleNodeHover}
         nodeVal={getNodeArea}
         cooldownTicks={100}
         backgroundColor="transparent"
