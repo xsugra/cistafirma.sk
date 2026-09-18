@@ -6436,7 +6436,142 @@ no-op — viď 9.4 bod 5).
 
 ---
 
-## 10. Nemenné pravidlá
+## 10. Plán: druhé kolo mobilných opráv (2026-09-18)
+
+Po #176 prišli od užívateľa dve veci: *„tlačidlo overiť vo vyhľadávacom okne
+vyteká z toho okna na mobilnom zobrazení. potreba opravit. tiež skús nejako viac
+kompaktne zobraziť kľúčové ukazovatele na mobilnom zobrazení."*
+
+Obe som najprv **odmeral v reálnom prehliadači** (Chromium, 393 × 852,
+`deviceScaleFactor` 3, dotykový režim) proti **bežiacemu dev serveru**, nie proti
+ručne napísanej napodobenine — React teda kreslí skutočnú komponentu so
+skutočným CSS. Ako sa to meralo: `ENABLE_MOCK_DATA` je v `constants.ts` napevno
+`false`, takže skript prepíše ten modul **na drôte** (`page.route`) a na
+`/firma/50059959/prehlad` sa vykreslí deväť dlaždíc (2 hlavné + 4 súvahové +
+3 pomerové; tie pomerové som do mocku doplnil, aby bol zmeraný najhorší prípad,
+ktorý kód dokáže vyrobiť). Ani jeden súbor v repe sa pritom nemenil.
+Kandidátske opravy som overil vstreknutím **nezaradeného (unlayered) CSS** do
+bežiacej stránky — teda presne tou cestou, akou `main.css` prebíja Tailwind (9.5).
+
+### 10.1 Tlačidlo „Overiť" vytieka z pilulky (#179)
+
+Merané na `Home`, teda vo variante `hero` — ten používa `Home.tsx:63` aj
+`Monitoring.tsx:97`:
+
+```
+393 px:  wrapper 32,0 .. 361,0   pilulka 48,0 .. 345,0   tlačidlo 280,7 .. 355,0
+         pilulka je vnorená o 16 px (px-4 wrappera), tlačidlo má right-1.5 = 6 px
+         od wrappera  →  presah  +10,0 px ZA pravý okraj pilulky
+900 px:  wrapper 114,0 .. 786,0  pilulka 114,0 .. 786,0  tlačidlo 665,6 .. 778,0
+         wrapper je sm:px-0  →  presah −8,0 px (8 px vnútri)   ← takto to má byť
+```
+
+Nie je to odhad z kódu: `elementFromPoint` 2 px a 6 px za pravým okrajom pilulky
+vracia **tlačidlo samotné**, čiže je tam naozaj vykreslené (10 px ďalej už
+wrapper). `overflow-hidden` na pilulke ho pritom neoreže — a to je správne
+správanie CSS, nie chyba: absolútne pozicionovaný prvok obíde `overflow` predka,
+ktorý **nie je v reťazi jeho obsahujúceho bloku**. Pilulka má `position: static`,
+takže obsahujúcim blokom je `styles.wrapper` (`relative w-full px-4 sm:px-0`).
+
+**Príčina je teda jedna vec:** `right-1.5` sa meria od wrappera, ktorý má na
+mobile `px-4`, kým pilulka je o tých 16 px vnútri. Kód to na jednom mieste
+priznáva — komentár vo `VARIANT_STYLES.hero` hovorí, že `px-4` je kompenzované
+„vo vlastných offsetoch dropdownu a tlačidla" — a dropdown to naozaj kompenzuje
+(`mx-4 sm:mx-0`). Tlačidlo nie.
+
+**Oprava:** pridať `relative` na pilulku (spoločná trieda oboch variantov), čím sa
+obsahujúcim blokom stane pilulka, a vo `hero.button` nechať `right-1.5`
+**bez `sm:right-2`**. Overené vstreknutím presne tejto dvojice pravidiel do
+bežiacej stránky:
+
+```
+393 px:  tlačidlo 262,7 .. 337,0   →  8,0 px VNÚTRI okraja pilulky   (dnes +10,0 von)
+900 px:  tlačidlo 665,6 .. 778,0   →  zhodné na desatinu px s dneškom
+```
+
+Prečo `sm:right-2` mizne: pilulka má `border-2`, takže 6 px od *padding boxu* je
+8 px od vonkajšieho okraja — presne toľko, koľko dnes dáva `right-2` na wrappri
+s `sm:px-0`. Desktop je preto **pixel na pixel rovnaký** a `sm:` variant je
+nadbytočný. Kompaktný variant (`Person.tsx`, `Company.tsx`) sa posunie o
+**1,0 px** vľavo (merané: 4 px → 5 px vnútri okraja), lebo jeho rám má `border`,
+nie `border-2` — neviditeľné.
+
+Dropdown sa nemení: je to súrodenec `<form>`, nie dieťa pilulky, takže jeho
+obsahujúci blok ostáva wrapper a `mx-4 sm:mx-0` platí ďalej. Overené s reálnymi
+našepkávačmi (mock režim): dropdown 48 .. 345 px = presne ľavý a pravý okraj
+pilulky.
+
+### 10.2 Kľúčové ukazovatele na mobile (#179)
+
+`FinancialIndicators.tsx` kreslí `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, takže
+na telefóne je **jeden stĺpec** a deväť dlaždíc pod sebou. Merané (9 dlaždíc,
+393 px):
+
+```
+dnes:  mriežka 311 × 694,5 px   karta 361 × 809,5 px
+       dlaždica 66,5 px, ikonka 36 × 36 px, popis 11 px, hodnota 16 px
+```
+
+809 px na obrazovke vysokej 852 px znamená, že kým sa čitateľ dostane
+k „Hospodárskym výsledkom", prejde takmer celú obrazovku dlaždíc, z ktorých každá
+nesie **jedno číslo**. To je to, čo užívateľ nazval nekompaktným.
+
+**Oprava (mobile-first, `sm:` vracia dnešok):** dlaždica sa na mobile zmení na
+**jeden riadok** — malá ikonka vľavo, popis vľavo, hodnota so šípkou vpravo.
+
+| | dnes | kandidát |
+|---|---|---|
+| mriežka | `gap-3` | `gap-1.5 sm:gap-3` |
+| dlaždica | `p-3 rounded-xl gap-3` | `p-2 rounded-lg gap-2 sm:p-3 sm:rounded-xl sm:gap-3` |
+| ikonka | `w-9 h-9`, znak `text-sm` | `w-6 h-6`, znak `text-[10px]` (`sm:` = dnešok) |
+| telo dlaždice | `block` (popis nad hodnotou) | `flex items-baseline justify-between gap-2 sm:block` |
+| popis | `tracking-wider` | `tracking-normal sm:tracking-wider` (kupuje ~10 px) |
+| hodnota | `text-base` | `text-sm sm:text-base` |
+| rad s hodnotou | — | `shrink-0`, aby sa popis zalomil a hodnota nie |
+
+Merané na tých istých deviatich dlaždiciach, tou istou metódou:
+
+```
+kandidát:  mriežka 311 × 426,0 px   karta 361 × 541,0 px
+           dlaždica 42,0 px, každý popis na JEDNOM riadku, nič odstrihnuté
+```
+
+**Karta sa skráti o 268,5 px (−33 %)** a na obrazovku sa zmestí aj „Hospodárske
+výsledky". Najdlhší popis („Celková zadlženosť") potrebuje 132 px z 131,5 px
+dostupných — to je na hrane, a preto to `tracking-normal` na mobile. Aj keby
+predsa prešiel na dva riadky, dlaždica narastie, ale **nič sa neodstrihne**:
+`overflow` je `visible`, text sa zalomí, nie oreže.
+
+Desktop sa nemení — pri 900 px je mriežka pred aj po 380,5 px vysoká, lebo všetky
+nové triedy sú základné a `sm:` vracia dnešné hodnoty. Overené, nie odvodené.
+
+### 10.3 Nález mimo rozsahu: desatinná bodka v percentách
+
+Karta mieša dva zápisy čísel: `formatCurrency` používa `sk-SK`
+(„1 440 000 €"), kým percentá idú cez `value.toFixed(2)` („53.33 %") a šípka
+trendu cez `toFixed(1)` („↓2.7 %"). Slovenský čitateľ čaká `53,33 %`.
+**Neopravujem to** — je to formátovanie, nie kompaktnosť, a zmena by sa dotkla aj
+`FinancialRatiosTable` a PDF exportu. Ak to užívateľ chce, je to samostatný krok.
+
+**Zvažované a zamietnuté:** zmenšiť `InfoCard` `p-6` na mobile na `p-4`. Ušetrilo
+by ďalších ~16 px, ale `InfoCard` je na stránke firmy aj v celom admin paneli —
+je to zmena dizajnového systému, nie tejto karty.
+
+### 10.4 Poradie prác
+
+1. **Tlačidlo „Overiť"** — `components/SearchBar.tsx` + regresný test, ktorý
+   stráži invariant (pilulka musí byť obsahujúci blok, inak sa `right-*` zase
+   meria od `px-4` wrappera).
+2. **Kľúčové ukazovatele** — `components/company/FinancialIndicators.tsx`.
+3. Ak povie, **desatinná bodka** (10.3) — samostatný commit.
+
+Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`),
+štruktúrovaný commit, push na `origin` aj `gitlab-home`. Po oboch krokoch
+premerať **to isté**, čo je namerané vyššie, na zbuildovanej verzii — nie okom.
+
+---
+
+## 11. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
 
