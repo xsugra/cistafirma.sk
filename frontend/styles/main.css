@@ -28,7 +28,16 @@
     --color-brand: #2563eb;
     --color-brand-hover: #1d4ed8;
     --color-brand-light: #eff6ff;
-    
+
+    /* Brand used as *ink* rather than as *fill*: button outlines, links, the
+       active nav item. `--color-brand` above is tuned for white text sitting on
+       top of it and is deliberately the same in both themes — which is correct
+       for a fill and wrong for ink, where it measures ~3.5:1 on a dark surface
+       and misses AA. One token, because it is one role: anything painting
+       brand-coloured text or a brand border takes this; anything filling with
+       brand keeps `--color-brand`. */
+    --color-brand-ink: #2563eb;
+
     --bg-light: #ffffff;
     --bg-dark: #020617;
     
@@ -49,6 +58,11 @@
 
 html.dark {
     color-scheme: dark;
+
+    /* 10,1:1 on the dark card and 11,2:1 on the dark page ground, against
+       3,5:1 for the fill blue. Blue-300, which is what the codebase already
+       reaches for as brand-coloured text in dark mode. */
+    --color-brand-ink: #93c5fd;
 }
 
 body {
@@ -177,11 +191,13 @@ html.dark .hero-backdrop {
 }
 
 .btn-outline {
-    border: 1px solid var(--color-brand);
-    color: var(--color-brand);
+    border: 1px solid var(--color-brand-ink);
+    color: var(--color-brand-ink);
     background: transparent;
 }
 
+/* The hover state *fills*, so it goes back to the fill blue with a white label
+   (5,2:1) — the ink token is only for the resting border and text. */
 .btn-outline:hover {
     background-color: var(--color-brand);
     color: white;
@@ -197,7 +213,7 @@ html.dark .btn-ghost {
 }
 
 .btn-ghost:hover {
-    color: var(--color-brand);
+    color: var(--color-brand-ink);
     background-color: rgba(37, 99, 235, 0.1);
 }
 
@@ -326,7 +342,7 @@ html.dark .nav-link {
 }
 
 .nav-link:hover, .nav-link.active {
-    color: var(--color-brand);
+    color: var(--color-brand-ink);
 }
 
 .nav-link.active {

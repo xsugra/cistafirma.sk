@@ -250,13 +250,22 @@ export const SeatLocationCard: React.FC<SeatLocationCardProps> = ({ seat, addres
                 </p>
                 {/* An `<a>`, not a `<button>`: it navigates, so it keeps
                     middle-click, ⌘-click and "open in new tab". The label changes
-                    with the precision because the promise does. */}
+                    with the precision because the promise does.
+
+                    `.btn .btn-outline` rather than a hand-rolled pill, so it is
+                    the same button as everywhere else on the site. `min-h-11` is
+                    44 px — Apple's minimum tap target, and this button sits in a
+                    card footer on a phone. Only `min-height` and `font-size` are
+                    added here: every other `.btn` property (padding, radius, gap)
+                    is set by unlayered CSS in `main.css`, which outranks a
+                    Tailwind utility, so a `px-*`/`rounded-*` here would be
+                    silently ignored. */}
                 <a
                     href={link.href}
                     target="_blank"
                     rel="noreferrer noopener"
                     title={link.title}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/50"
+                    className="btn btn-outline min-h-11 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:focus-visible:outline-blue-300"
                 >
                     <i className={`fas ${link.icon}`} aria-hidden="true" />
                     {link.label}
