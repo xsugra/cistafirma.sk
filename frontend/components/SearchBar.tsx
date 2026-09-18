@@ -59,7 +59,12 @@ const VARIANT_STYLES = {
     frame: 'border-2 border-gray-200 dark:border-slate-800 rounded-full shadow-lg',
     icon: 'pl-4 sm:pl-6 pr-2 sm:pr-3 text-lg sm:text-xl',
     input: 'text-base sm:text-lg py-3 sm:py-4 pr-24 sm:pr-36',
-    button: 'right-1.5 sm:right-2 py-2 sm:py-3 px-4 sm:px-8 text-sm sm:text-base',
+    // One offset for both sizes: the pill is the containing block now (see the
+    // `relative` on the frame), so `right-*` is measured from the pill and not
+    // from the wrapper's `px-4`. 6 px inside a `border-2` pill is 8 px from its
+    // outer edge -- exactly what the old `right-2` gave on the desktop, where
+    // the wrapper has no padding at all.
+    button: 'right-1.5 py-2 sm:py-3 px-4 sm:px-8 text-sm sm:text-base',
     dropdown: 'mt-2 mx-4 sm:mx-0',
     placeholder: 'Zadajte IČO, názov firmy alebo meno osoby...',
     label: 'Overiť',
@@ -68,8 +73,8 @@ const VARIANT_STYLES = {
     // No side padding here on purpose: this one is placed inside a page that
     // already has its own gutter, and a second one would inset the box from the
     // content it stands above. The hero's `px-4` is compensated for in its own
-    // dropdown and button offsets, which is why the two wrappers cannot simply
-    // share a class list.
+    // dropdown offsets, which is why the two wrappers cannot simply share a
+    // class list.
     wrapper: 'relative w-full',
     frame: 'border border-gray-300 dark:border-slate-700 rounded-full shadow-sm',
     icon: 'pl-4 pr-2 text-base',
@@ -222,7 +227,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   return (
     <div className={styles.wrapper} ref={dropdownRef}>
       <form onSubmit={handleSubmit}>
-        <div className={`flex items-center bg-white dark:bg-slate-900 overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300 ${styles.frame}`}>
+        {/* `relative` is what makes this box -- the visible pill -- the containing
+            block for the absolutely positioned button below. Without it the
+            button is positioned against the wrapper instead, and the hero
+            wrapper carries `px-4` on a phone, so the button was placed 10 px
+            past the pill's right edge (measured on Home at 393 px). With it, the
+            offset is measured from the pill at every width, which is also why
+            the button no longer needs a `sm:` variant. */}
+        <div className={`relative flex items-center bg-white dark:bg-slate-900 overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300 ${styles.frame}`}>
           <i className={`fas fa-search text-gray-400 ${styles.icon}`}></i>
           <input
             // One box per page, so one id. `name` is what Chrome asks for

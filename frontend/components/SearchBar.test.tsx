@@ -140,3 +140,48 @@ describe('SearchBar — people alongside companies', () => {
         expect(mocks.api.searchPersons).not.toHaveBeenCalled();
     });
 });
+
+describe('SearchBar — the button is placed against the pill, not the wrapper', () => {
+    // The geometry itself was measured in a browser, not here: on Home at
+    // 393 px the button's right edge sat 10 px *past* the pill's (it overflowed
+    // the search box, which is the bug), and 8 px inside it after the fix --
+    // with the desktop unchanged to the pixel. jsdom has no layout engine, so
+    // what this holds is the invariant those numbers came from, because it is
+    // one word wide and easy to lose in a refactor.
+    //
+    // `right-1.5` is measured from the containing block's *padding* box. The
+    // pill carries `overflow-hidden`, which does not save it: an absolutely
+    // positioned box is only clipped by an ancestor that is in its containing
+    // block chain. With the pill static the containing block was the wrapper,
+    // which carries `px-4` on a phone -- so the offset landed outside the pill
+    // the reader can actually see.
+    const firstPositionedAncestor = (el: HTMLElement): HTMLElement | null => {
+        for (let node = el.parentElement; node; node = node.parentElement) {
+            if (node.classList.contains('relative') || node.classList.contains('absolute')) return node;
+        }
+        return null;
+    };
+
+    const mount = (variant: 'hero' | 'compact') => {
+        const {container} = renderWithProviders(
+            <SearchBar onSearch={() => {}} isLoading={false} initialIco="" variant={variant} />,
+        );
+        return {
+            wrapper: container.firstElementChild as HTMLElement,
+            pill: container.querySelector('form > div') as HTMLElement,
+            button: screen.getByRole('button', {name: /Overiť|Hľadať/}),
+        };
+    };
+
+    it.each(['hero', 'compact'] as const)('anchors the button to the pill in the %s variant', (variant) => {
+        const {wrapper, pill, button} = mount(variant);
+
+        expect(firstPositionedAncestor(button)).toBe(pill);
+        // The hazard the assertion above neutralises, stated so that changing
+        // it fails here rather than on a phone: a padded pill would move the
+        // button inward on every screen size and the offsets would have to be
+        // re-measured.
+        expect(pill.className).not.toMatch(/\bpx-/);
+        if (variant === 'hero') expect(wrapper.className).toContain('px-4');
+    });
+});
