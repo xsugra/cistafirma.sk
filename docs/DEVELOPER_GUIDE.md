@@ -193,7 +193,102 @@ Ak query stále padá na `Seq Scan`, ďalší krok je zmeniť semantiku filtra z
 - Over `KUBE_CONFIG` v CI.
 - Spusti rollback script (`scripts/k8s/rollback.sh`) ak rollout zlyhal.
 
-## 9. Dokumentačný štandard
+## 9. Admin panel (Firmy / SZCO)
+
+Prevzaté z archívneho jednostranného záznamu
+`docs/archive/ADMIN_PANEL_PROFESSIONAL_GUIDE.md` (2026-08). Čísla a príkazy
+nižšie sú **overené proti kódu**, nie prevzaté z pôvodného textu.
+
+### Kde čo je
+
+| Oblasť | Umiestnenie v adminu | Model |
+|---|---|---|
+| Firmy (LPO — právnické osoby) | `Firmy → Firmy` | `companies.Company` |
+| Fyzické osoby (SZCO) | `Registre → Fyzické osoby/SZCO` | `registers.IndividualEntity` |
+| Synchronizácia (RUZ) | `Registre → Synchronizácia` | `registers.SyncProgress` |
+
+LPO a SZCO sú **oddelené tabuľky s oddeleným checkpointom** — `companies` sync
+a `individuals` sync sa dajú spustiť súčasne a navzájom si neprekážajú.
+
+### Vlastný filter (`SimpleListFilter`)
+
+```python
+class InsuranceDebtFilter(admin.SimpleListFilter):
+    title = 'Dlh v poisťovniach'
+    parameter_name = 'has_insurance_debt'
+
+    def lookups(self, request, model_admin):
+        return [('yes', 'S dlhom VSZP'), ('no', 'Bez dlhu VSZP')]
+
+    def queryset(self, request, queryset):
+        if self.value() == 'yes':
+            return queryset.filter(debt_vszp__gt=0)
+        if self.value() == 'no':
+            return queryset.filter(Q(debt_vszp__isnull=True) | Q(debt_vszp=0))
+        return queryset
+```
+
+Potom ho pridaj do `list_filter = [..., InsuranceDebtFilter]`.
+
+### Vlastný stĺpec v `list_display`
+
+```python
+@admin.display(description='Custom Metric')
+def custom_metric_display(self, obj):
+    return format_html(
+        '<span class="cf-badge cf-badge--{}">{}</span>',
+        'success' if obj.some_field else 'danger',
+        'Value' if obj.some_field else 'No Value',
+    )
+```
+
+Triedy `cf-badge`, `cf-badge--success`, `cf-badge--danger` a `cf-badge__dot`
+sa reálne používajú v `backend/companies/admin.py` — drž sa ich, aby badge
+vyzeral rovnako ako inde.
+
+### Výkon (overené hodnoty)
+
+- **Cache:** dashboard štatistiky **120 s**, kombinované možnosti filtrov
+  **300 s** (`backend/companies/admin.py:942`, `:998`).
+- **Pagination:** `list_per_page = 50`, `list_max_show_all = 500`
+  (`backend/companies/admin.py:224-225`).
+
+### Sync cez CLI
+
+```bash
+# Len právnické osoby (LPO)
+python manage.py fetch_ruz_data --full-resync --entity-type companies
+
+# Len fyzické osoby (SZCO) — vlastný SyncProgress, vlastný checkpoint
+python manage.py fetch_ruz_data --full-resync --entity-type individuals
+
+# Pokračovanie z prerušeného behu (nájde najnovší paused/failed)
+python manage.py fetch_ruz_data --resume
+```
+
+`--entity-type` má voľby `companies | individuals | both` (default `both`).
+Ďalšie prepínače: `--reset`, `--sync-job-id`.
+
+### Troubleshooting
+
+**Sync sa nezobrazuje v admine** — obnov stránku a pozri „Recent Syncs"; stav
+over priamo v DB cez `make docker-shell` → `python manage.py dbshell`:
+
+```sql
+SELECT sync_type, status, total_processed
+FROM registers_syncprogress
+ORDER BY last_activity DESC LIMIT 1;
+```
+
+**Sync visí na „Running" bez postupu** — pozri
+`docker compose logs -f celery_worker_ruz`, over Redis
+(`docker compose exec redis redis-cli PING`), potom sync manuálne pozastav
+a prečítaj `last_error`.
+
+**Duplicitné záznamy po synci** — over `LEGAL_FORMS` vo `fetch_ruz_data.py`
+a to, či `SZCO_LEGAL_FORMS` obsahuje `100–110` a `422`.
+
+## 10. Dokumentačný štandard
 
 Pri zmene API/deploy flow aktualizuj spolu s kódom aj:
 
