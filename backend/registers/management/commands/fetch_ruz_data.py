@@ -315,8 +315,9 @@ class Command(BaseCommand):
                         self.stderr.write(
                             f"Unstorable record ID {company_id}: {e}"
                         )
-                        progress.record_progress(ruz_id=company_id, error=True)
-                        progress.last_error = str(e)
+                        progress.record_progress(
+                            ruz_id=company_id, error=True, error_message=str(e)
+                        )
                         unstorable_ids.append(
                             f"{company_id} ({details.get('ico') if details else '?'})"
                         )
@@ -325,8 +326,9 @@ class Command(BaseCommand):
                         run["unstorable"] += 1
                     except Exception as e:
                         self.stderr.write(f"Error processing company ID {company_id}: {e}")
-                        progress.record_progress(ruz_id=company_id, error=True)
-                        progress.last_error = str(e)
+                        progress.record_progress(
+                            ruz_id=company_id, error=True, error_message=str(e)
+                        )
                         run["processed"] += 1
                         run["errors"] += 1
                         run["unreadable"] += 1

@@ -338,26 +338,45 @@ class SyncProgress(models.Model):
         self.completed_at = timezone.now()
         self.save()
     
-    def record_progress(self, ruz_id, created=False, updated=False, skipped=False, error=False):
-        """Zaznamená spracovanie jednej firmy"""
+    def record_progress(self, ruz_id, created=False, updated=False, skipped=False,
+                        error=False, error_message=None):
+        """Zaznamená spracovanie jednej firmy
+
+        `error_message` patrí k `error=True`: nesie dôvod, prečo firma skončila
+        ako chyba. Prijíma sa tu, a nie priradením do `last_error` po tomto
+        volaní, pretože toto volanie je to, čo ukladá. Text priradený po ňom
+        ostane v pamäti a do riadku sa dostane až pri záverečnom plnom `save()`
+        (`complete()`/`pause()`/`fail()`) -- takže po celý beh, a ten trvá dni,
+        riadok hlási `total_errors=57` a ani jeden z tých dôvodov. Overené na
+        bežiacom plnom walku 2026-09-18: `total_errors=1`, `last_error` prázdny.
+        """
         self.last_processed_ruz_id = ruz_id
         self.total_processed += 1
-        
+
         if created:
             self.total_created += 1
         elif updated:
             self.total_updated += 1
         elif skipped:
             self.total_skipped += 1
-        
+
         if error:
             self.total_errors += 1
-        
-        # Ukladáme len každých 100 záznamov pre efektivitu
+            if error_message is not None:
+                self.last_error = error_message
+
+        # Ukladáme len každých 100 záznamov pre efektivitu.
+        #
+        # `last_error` je v zozname pri každom ukladaní, nie len pri tom, ktoré
+        # nasleduje po chybe: zápis prichádza na každý stý záznam, takže chyba na
+        # 905. firme sa ukladá až pri 1000. -- a to ukladanie samo nijakú chybu
+        # nemá. Podmienečné pridanie by zahodilo presne ten text, ktorý má toto
+        # pole niesť, a beh by skončil s `total_errors=57` a prázdnym dôvodom.
         if self.total_processed % 100 == 0:
             self.save(update_fields=[
                 'last_processed_ruz_id', 'total_processed', 'total_created',
-                'total_updated', 'total_skipped', 'total_errors', 'last_activity'
+                'total_updated', 'total_skipped', 'total_errors', 'last_error',
+                'last_activity'
             ])
 
 

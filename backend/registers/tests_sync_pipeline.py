@@ -1069,6 +1069,57 @@ class RuzIncrementalWindowTests(TestCase):
         )
 
 
+class SyncProgressErrorReasonTests(TestCase):
+    """Why an item failed has to be readable *while* the run is running.
+
+    `record_progress` writes every hundredth item, and the two callers that file
+    a failed item used to assign `progress.last_error` *after* calling it -- so
+    the message was set on an instance whose save had already happened. The row
+    then climbed to `total_errors=57` with an empty `last_error`, and the only
+    copy of the reason was a stderr line in a container log.
+
+    The end of a run papers over this: `complete()`, `pause()` and `fail()` all
+    call a full `save()`, so a *finished* row does carry the last reason. That is
+    exactly why this is asserted mid-run, on the throttled save -- a test placed
+    after the walk would have passed with the defect still in place. Observed
+    live on the full walk, 2026-09-18: `total_errors=1`, `last_error` empty.
+    """
+
+    def _progress(self):
+        return SyncProgress.objects.create(sync_type="incremental", status="running")
+
+    def test_a_failed_item_leaves_its_reason_on_the_row(self):
+        progress = self._progress()
+        reason = (
+            'duplicate key value violates unique constraint '
+            '"Companies and SZCO_ICO_key"'
+        )
+
+        progress.record_progress(ruz_id=491, error=True, error_message=reason)
+        # Up to the hundredth item, which is what triggers the write. The reason
+        # was recorded on the first one, so a save that omits it loses it.
+        for ruz_id in range(492, 591):
+            progress.record_progress(ruz_id=ruz_id)
+
+        stored = SyncProgress.objects.get(pk=progress.pk)
+        self.assertEqual(stored.total_errors, 1)
+        self.assertEqual(stored.last_error, reason)
+
+    def test_a_later_success_does_not_erase_the_reason(self):
+        """The write lands on every hundredth item, so it usually arrives well
+        after the error it is meant to record. A save that only carried the
+        reason when its *own* item had failed would drop it here."""
+        progress = self._progress()
+
+        progress.record_progress(ruz_id=491, error=True, error_message="refused")
+        for ruz_id in range(492, 591):
+            progress.record_progress(ruz_id=ruz_id)
+
+        stored = SyncProgress.objects.get(pk=progress.pk)
+        self.assertEqual(stored.last_error, "refused")
+        self.assertEqual(stored.total_processed, 100)
+
+
 class RuzDateGuardTests(TestCase):
     """A date we cannot read must not erase a date we already hold.
 
