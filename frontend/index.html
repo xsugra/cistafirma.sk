@@ -13,7 +13,13 @@
         } catch (e) {}
       })();
     </script>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` lets the page paint to the physical edges of a
+         notched phone instead of being letterboxed short of them -- which is
+         what the full-bleed header and the admin shell are drawn for. The cost
+         is that the top of the header sits under the clock unless it adds
+         `env(safe-area-inset-top)` back as padding, so this attribute and the
+         `.safe-*` rules in `styles/main.css` are one change, not two. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>cistafirma.sk - Home</title>
     <!-- Tab icons. They live in `frontend/public/`, which `vite build` copies
          verbatim into `dist/`, and nginx serves straight off the site root.

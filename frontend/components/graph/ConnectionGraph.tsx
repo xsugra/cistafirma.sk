@@ -144,10 +144,32 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
     );
   }
 
+  /**
+   * Edge offsets for the legend, the controls and the caption.
+   *
+   * `env(safe-area-inset-*)` is a property of the *viewport*, not of where an
+   * element happens to sit in it: it is the size of the unsafe strip at that
+   * edge of the screen, and it does not fall to 0 for an element further down
+   * the page. So it may only be used where the element really is against the
+   * edge -- the fullscreen overlay. These three are rendered in the inline card
+   * as well, where the same declaration would shove them ~59 px down for no
+   * reason at all. Hence the conditional, rather than one class list.
+   */
+  const edgeTop = isFullscreen ? 'top-[calc(0.75rem_+_env(safe-area-inset-top))]' : 'top-3';
+  const edgeRight = isFullscreen ? 'right-[calc(0.75rem_+_env(safe-area-inset-right))]' : 'right-3';
+  const edgeLeft = isFullscreen ? 'left-[calc(0.75rem_+_env(safe-area-inset-left))]' : 'left-3';
+  const edgeBottom = isFullscreen
+    ? 'bottom-[calc(0.5rem_+_env(safe-area-inset-bottom))]'
+    : 'bottom-2';
+
   const graphContent = (
     <div
       ref={containerRef}
-      className={`relative w-full ${isFullscreen ? 'h-screen' : 'h-[75vh] min-h-[500px]'}`}
+      // `h-dvh`, not `h-screen`: this one is a child of a `fixed inset-0`
+      // overlay, and `100vh` on iOS Safari is the *large* viewport -- taller
+      // than what is on screen -- so the bottom of the graph and its caption
+      // sat under the browser chrome. Same correction as `AdminLayout`.
+      className={`relative w-full ${isFullscreen ? 'h-dvh' : 'h-[75vh] min-h-[500px]'}`}
       onMouseMove={handleMouseMove}
       onDoubleClick={() => {
         if (hoveredNode) handleNodeDoubleClick(hoveredNode);
@@ -165,10 +187,10 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
         />
       )}
       <GraphTooltip node={hoveredNode} position={tooltipPos} />
-      <div className="absolute top-3 left-3 pointer-events-none">
+      <div className={`absolute ${edgeTop} ${edgeLeft} pointer-events-none`}>
         <GraphLegend />
       </div>
-      <div className="absolute top-3 right-3 pointer-events-none">
+      <div className={`absolute ${edgeTop} ${edgeRight} pointer-events-none`}>
         <GraphControls
           onZoomIn={() => canvasRef.current?.zoomIn()}
           onZoomOut={() => canvasRef.current?.zoomOut()}
@@ -180,7 +202,7 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
           truncated={truncated}
         />
       </div>
-      <p className="absolute bottom-2 left-3 text-xs text-gray-400 dark:text-gray-500 pointer-events-none">
+      <p className={`absolute ${edgeBottom} ${edgeLeft} text-xs text-gray-400 dark:text-gray-500 pointer-events-none`}>
         {isFullscreen ? 'Esc pre zatvorenie. ' : ''}Klikni na firmu pre rozbalenie prepojení. Dvojklik na firmu alebo osobu otvorí jej stránku.
       </p>
     </div>

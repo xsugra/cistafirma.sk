@@ -130,7 +130,15 @@ export const Header: React.FC = () => {
             </header>
 
             <div
-                className={`fixed inset-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl transition-all duration-300 lg:hidden flex flex-col pt-24 px-6
+                // `pt-24` (6rem) is what clears the header, and the header is
+                // now taller by the top inset -- so the sum, written out, rather
+                // than `pt-24` beside a `.safe-*` class that would *replace* it
+                // instead of adding to it. The overlay's own background still
+                // reaches the glass; only the content is inset, and the bottom
+                // keeps the last item off the home indicator. Underscores are
+                // Tailwind's spaces in an arbitrary value -- `calc(6rem+env(…))`
+                // with no spaces is not valid CSS.
+                className={`fixed inset-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl transition-all duration-300 lg:hidden flex flex-col pt-[calc(6rem_+_env(safe-area-inset-top))] pb-[env(safe-area-inset-bottom)] px-6
             ${isMobileMenuOpen ? 'opacity-100 pointer-events-auto translate-x-0' : 'opacity-0 pointer-events-none translate-x-full'}`}
             >
                 <nav className="flex flex-col space-y-6 text-center text-lg">

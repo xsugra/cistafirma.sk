@@ -54,7 +54,10 @@ export function AdminLayout({ activePage, onNavigate, onExit, children, userName
     // measured as if the address bar were already hidden, so the bottom of a
     // `h-screen overflow-hidden` shell sits under browser chrome that is still
     // there. `dvh` tracks what is actually visible.
-    <div className="flex h-dvh bg-slate-50 dark:bg-slate-950 overflow-hidden relative z-10">
+    // `safe-frame` insets the whole shell -- the top bar and the scrolling
+    // content -- from the notch and the home indicator, which `viewport-fit=cover`
+    // lets the page paint under. It is `0px` on hardware without an inset.
+    <div className="safe-frame flex h-dvh bg-slate-50 dark:bg-slate-950 overflow-hidden relative z-10">
       {/* Sidebar. Below `md` it leaves the flow and overlays the content
           instead of squeezing it: `w-60` inside a 393 px flex row left the page
           105 px wide, and no amount of making the content shrink fixes a width
@@ -70,7 +73,13 @@ export function AdminLayout({ activePage, onNavigate, onExit, children, userName
           utilities and `flex` was emitted last, so the `hidden` lost and the
           rail stayed painted over the text. `hidden md:flex` pits a variant
           against the plain utility instead, which is the ordering that holds. */}
-      <aside className={`${sidebarOpen ? 'w-60 flex' : 'w-16 hidden md:flex'} flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex-col transition-all duration-200 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:shadow-2xl`}>
+      {/* The insets are repeated on the aside, below `md` only, because an
+          absolutely positioned box is placed against the padding box of its
+          containing block -- so `max-md:inset-y-0` reaches back up through the
+          shell's own safe-area padding and the logo would sit under the notch
+          again. In flow, at `md` and up, the shell's padding already covers it
+          and a second one here would double it. */}
+      <aside className={`${sidebarOpen ? 'w-60 flex' : 'w-16 hidden md:flex'} flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex-col transition-all duration-200 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:shadow-2xl max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]`}>
         {/* Logo */}
         <div className="h-14 flex items-center px-4 border-b border-slate-200 dark:border-slate-800 gap-3">
           <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white flex-shrink-0">

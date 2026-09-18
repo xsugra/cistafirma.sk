@@ -83,6 +83,34 @@ html.dark body {
     color: var(--text-main-dark);
 }
 
+/* --- SAFE AREA -------------------------------------------------------------
+
+   `viewport-fit=cover` (index.html) lets the page paint under the notch, the
+   status bar and the home indicator. That is what makes a full-bleed header
+   look right on an iPhone 14 Pro instead of stopping short of the glass -- but
+   it also means whatever meets an edge has to add the inset back as padding,
+   or the top of the header sits under the clock and the last row of a
+   full-screen panel sits under the home indicator.
+
+   `env(safe-area-inset-*)` is `0px` wherever there is no inset, so every rule
+   here is a no-op on a desktop and on a phone without a notch. **Keep that
+   property**: these classes add space, they never take it away. One way to
+   break it is to put one of them on an element that already has a `pt-*` /
+   `pb-*` / `p-*` utility of the same side -- an unlayered rule beats a layered
+   one regardless of order (see the `.btn` finding in docs/PLAN.md 9.5), so the
+   padding would be *replaced*, not added to, and at inset 0 it would vanish.
+   Where a side already has padding, write the sum instead, as the mobile menu
+   in `Header.tsx` does with `pt-[calc(6rem+env(safe-area-inset-top))]`.
+
+   `padding` shorthand is fine in `.safe-frame`: the elements that carry it are
+   app shells whose only padding is this, and a shorthand is the honest way to
+   say "all four edges". */
+
+.safe-frame {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
 /* Default border colour for an unqualified `border` / `border-t` / `border-b`.
    Tailwind v4's preflight resolves those to `currentColor` (v3 used gray-200),
    and `html.dark body` is #f8fafc -- so a border written without a colour
@@ -326,6 +354,11 @@ html.dark .app-input {
     position: sticky;
     top: 0;
     z-index: 50;
+    /* Grows the header by the inset, so the nav clears the notch instead of
+       sliding under it. The inner bar keeps its own `h-16 md:h-20`; this is
+       space above it, not a taller bar. No `pt-*` utility competes here, which
+       is why the declaration can sit directly in this rule. */
+    padding-top: env(safe-area-inset-top);
     border-bottom: 1px solid var(--border-light);
     backdrop-filter: blur(12px);
     background-color: rgba(255, 255, 255, 0.95); /* Increased opacity */
