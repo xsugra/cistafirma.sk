@@ -6181,6 +6181,46 @@ presunuté z hodnoty do akčného radu `:223`.
 **Predtým, než uverím vlastnej oprave:** ak je telefónna session staff a
 tlačidlo sa aj tak nezobrazuje, príčina je inde a v statickom zdroji nie je.
 
+**Reťaz je teraz overená od konca do konca** (nie odhadnutá) — a jedna vec
+v nej bola dovtedy neoverená: či backend `is_staff` **vôbec posiela**. Keby
+nie, tlačidlo by nevidel *nikto* a „telefón nie je staff" by bola nesprávna
+diagnóza. Overené: `backend/users/serializers.py:59` je v `UserDetailSerializer`
+(`fields` obsahuje `is_staff`), ten obsluhuje `/api/auth/profile/`
+(`backend/users/views.py:44`), a `frontend/api.ts:114` ho mapuje na `isStaff`.
+Pole teda chodí; testy to dokázať nemohli, lebo `api.getProfile` mockujú.
+
+Tri vysvetlenia, všetky **správanie brány**, nie chyba renderovania — v poradí
+pravdepodobnosti pre telefón:
+
+1. **Telefón nie je prihlásený vôbec.** `user` začína ako `null`
+   (`AuthContext.tsx:38`) a nastaví sa len z `login()` alebo z `getProfile()`;
+   `UserProfileView` je `IsAuthenticated`. Stránka je verejná, takže to je
+   predvolený stav telefónneho prehliadača. PDF a Sledovať sa pritom zobrazujú
+   (`isAuthenticated` brzdí len `getWatchlist`), čo presne sedí na hlásenie
+   „v mobile sa nezobrazuje" pri „na desktope vidím".
+2. **Je prihlásený, ale nie je staff.**
+3. **Je prihlásený ako staff a nemá zaškrtnuté „Zapamätať prihlásenie"** —
+   `saveSession(tokens, remember)` potom píše do **`sessionStorage`**
+   (`lib/tokenStore.ts:60`), teda session končí so zavretím karty, a iOS Safari
+   karty zahadzuje agresívne. Toto je jediné vysvetlenie, ktoré dáva hlásený
+   rozdiel *desktop áno / telefón nie* na tom istom účte.
+
+Ani jedno sa z kódu nedokáže vyvrátiť a ani potvrdiť — treba sa pozrieť na
+`GET /api/auth/profile` z tej telefónnej session. **Nepredstieram, že som
+našiel chybu, ktorú som nenašiel.** Zámer „bez nápovedy pre neprihlásených"
+(`:303-309`) ostáva: verejná stránka nemôže vedieť, že čitateľ je staff, takže
+nápoveda by bola signál pre všetkých ostatných.
+
+**Ako to dopadlo** (`28f35b9`) — tlačidlo je `.btn .btn-outline min-h-11`
+v akčnom rade, ktorý dostal `flex-wrap` (na 393 px sa štyri prvky nezmestia).
+Meranie vynútilo **rozšírenie**: PDF a Sledovať mali **40 px**, tiež pod
+minimom, takže nové 44 px tlačidlo bolo v tom istom rade jediné vyššie —
+dostali `min-h-11` tiež. Namerané: `Aktualizovať údaje` 174,3 × 44 px,
+`Sledovať` 119,2 × 44, `PDF` 86 × 44, rad 104 px = 44 + 16 + 44 (dva riadky,
+bez preteku), kontrast 5,17:1 svetlá a 9,98:1 tmavá. `.btn:disabled
+{cursor: not-allowed}` pribudlo do `main.css`, lebo `disabled:cursor-not-allowed`
+z Tailwindu je mŕtvy z toho istého dôvodu ako nález v 9.5.
+
 ---
 
 ### 9.4 Mobilná responzivita pre iPhone 14 Pro (#176)
@@ -6288,7 +6328,10 @@ overiť sa dá len proti reálnemu backendu na telefóne, nie z kódu.
    (dôvod a merania v 9.2). Tri CI kontroly zelené, 375 testov.
    **Ostáva neopravené a hlásené:** kaskádové vrstvy (9.5) — `.btn` prebíja
    Tailwind utility na štyroch ďalších miestach.
-3. **„Aktualizovať údaje"** (#177) — a overenie staff session na telefóne.
+3. ~~**„Aktualizovať údaje"** (#177)~~ — **hotové v `28f35b9`**, vrátane
+   overenia reťaze `is_staff` (serializér → view → `api.ts`). **Ostáva
+   neoverené a overiť sa dá len na telefóne:** ktoré z troch vysvetlení
+   v 9.3 to je — ideálne `GET /api/auth/profile` z tej telefónnej session.
 4. **Tabuľky** (meraný orez) → **admin sidebar a inputy** → **`viewport-fit=cover`
    + safe-area** → **menu, `h-screen`, legenda grafu**.
 
