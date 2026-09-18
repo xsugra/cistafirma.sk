@@ -6338,16 +6338,44 @@ v správnej media query, a že pri insete 0 nič nemenia.
 
 Mimo zadania; uvádzam ich, neopravujem ich ticho:
 
-- `main.css:63` žiada `'IBM Plex Sans'` pre všetky nadpisy, ale `index.html:35`
-  načíta **len Outfit**; `'Inter'` sa tiež nenačítava → tichý fallback na
-  `system-ui` (nadpisy) a `sans-serif` (názvy v grafe). Dizajnová
-  nekonzistencia, nie rozbité zobrazenie.
+- **`main.css:77` žiada `'IBM Plex Sans'` pre všetky nadpisy (h1–h6), ale
+  `index.html:41` načíta len Outfit** (`main.css:23` je `--font-sans: 'Outfit'`,
+  `index.html:61` dáva `<body>` triedu `font-sans`). `'Inter'` sa tiež
+  nenačítava a v celom `frontend/` nie je ani `@font-face`, ani self-hosted
+  `.woff`/`.ttf`, ani `@fontsource` → tichý fallback na `system-ui`. Overené
+  znovu 2026-09-18 dvoma nezávislými refutermi (päť z piatich citácií doslovne)
+  a **stále neopravené**. Dve veci, ktoré k tomu pribudli: nadpisy sa teda
+  kreslia iným písmom než telo stránky, a pravidlo je **unlayered** (je pred
+  `@layer base` na `main.css:125`), takže prebíja každú Tailwind `font-*`
+  utility na nadpise — **nedá sa opraviť z markupu**, len v CSS. Nie je to
+  „len dizajnová nekonzistencia": je to zámer zapísaný v CSS, ktorý na obrazovke
+  nikdy nenastane. (Pôvodné čísla `main.css:63` a `index.html:35` v tomto
+  dokumente boli zastarané; platia 77 a 41.)
 - `pages/ApiDocs.tsx:386` je `opacity-0 group-hover:opacity-100` — na dotyk
   neviditeľné, kým sa na kód netapne (iOS syntetický `:hover` ho odhalí).
 - `~/.Trash` (TCC), Docker reclaim na Macu a runner id=2 na lenovo — #174,
   blokované OS, nie mnou.
 - **`pages/ApiDocs.tsx`: 8 zo 40 endpointov** má na 393 px odrezanú cestu
   a úplne zmiznutý JWT štítok aj šípku rozbalenia. Tabuľka nemá `overflow-x-auto`.
+  **Príčina je teraz presne známa** (2026-09-18, merané v Chromiu na zbuildovanom
+  `frontend/dist`, 393×852 — nie odvodené úvahou): `<code>` na `ApiDocs.tsx:413`
+  má `flex-1`, ale flex položka má default `min-width: auto`, takže sa nezmenší
+  pod svoju `min-content` šírku — a URL cesta je jeden nezlomiteľný token. Karta
+  na riadku 407 má `overflow-hidden`, ktoré to odstrihne, a v celom reťazci
+  predkov nie je `overflow-x-auto` (jediný výskyt v súbore je na riadku 381
+  v CodeBlocku), takže sa k odrezanej časti nedá doskrolovať. Za `flex-1` prvkom
+  sú tým vytlačené mimo viditeľnú oblasť aj JWT štítok (r. 417) a šípka
+  rozbalenia (r. 422). **Oprava je `min-w-0` na to `<code>`.**
+- **`escape_sed()` je definovaná dvakrát, bajt na bajt rovnako** —
+  `scripts/local/install_backup_schedule.sh:21-23` a
+  `scripts/local/install_ruz_keeper.sh:30-32` (md5 tela
+  `d56020fad5187d312abe2a7f270f740a`, 13 volaní, žiadne tretie použitie).
+  Oba skripty už zdrojujú zdieľanú knižnicu `scripts/local/lib/backup_os.sh`
+  (riadok 14, resp. 24), kde žijú všetky ostatné zdieľané funkcie, takže
+  spoločná kópia patrí tam. Nie je to živá chyba, ale pasca: escapovanie pre
+  `sed` je platformovo jemná vec (BSD vs GNU rozhoduje o význame `\\&`, o backslashi
+  v znakovej triede a o delimitri — tu `|`, zvolenom preto, že cesty majú `/`),
+  takže kto raz jednu kópiu opraví, druhá zostane ticho nesprávna.
 - ~~**Mobilné menu nezamyká skrolovanie pozadia.**~~ — **opravené v `83c850b`**
   (#176, krok 4). `Header.tsx` nezapisoval do `document.body` ani `overflow`
   (grep = 0), overlay bol `fixed inset-0`, ale obsah pod ním sa hýbal — merané:
@@ -6355,9 +6383,17 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   zamyká a vracia späť (uloží sa predchádzajúca hodnota, nie `''`), a navyše
   `overscroll-contain` bráni reťazeniu skrolu z menu na stránku. Overené testom,
   nie okom.
-- **`admin/pages/CompaniesBuilderPage.tsx:594`** — `min-w-[240px] flex-1` na
+- ~~**`admin/pages/CompaniesBuilderPage.tsx:594`** — `min-w-[240px] flex-1` na
   `PresetCard` je pevné, nezmenšiteľné minimum v tej istej 105 px admin lište
-  ako nálezy v 9.4. V public režime (329 px) sa neprejaví.
+  ako nálezy v 9.4. V public režime (329 px) sa neprejaví.~~ — **spúšťač je
+  preč, chyba už nenastane** (`68b4a6f`). `min-w-[240px]` na riadku 594 naozaj
+  je a je to jediný výskyt v `frontend/`, ale `68b4a6f` spravil z admin
+  `<aside>` pod `md` absolútne pozicionovaný box (`AdminLayout.tsx:82`,
+  `max-md:absolute`), takže obsah má vždy plných 393 px a vnútro karty
+  313 px > 240 px. **Pozor na formuláciu:** trieda tam zostala, zmizol len jej
+  následok — je to latentný pach (pevné minimum bez hornej hranice v kontajneri,
+  ktorý sa môže zúžiť), nie opravený riadok. (Refuter zároveň našiel jednu
+  nesprávnu citáciu: grid je na riadku 325, nie 323.)
 - **`.btn` a `.btn-*` sú mimo `@layer`, takže prebíjajú každú Tailwind
   utility, ktorá im odporuje.** Toto je systematická chyba, nie jedna trieda:
   `@import "tailwindcss"` vygeneruje `@layer properties/theme/base/utilities`
@@ -6366,7 +6402,11 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   špecificitu aj poradie**. Overené párovaním zátvoriek vo zbuildovanom CSS:
   `@layer utilities` siaha od znaku 12902 po 115770, `.text-gray-700{` (66167)
   a `.border-gray-300{` (47820) sú **vnútri**, kým `.btn{` (117010) a
-  `.btn-outline{` (117449) sú **vonku**. Dôsledok: utility `px-*`, `py-*`,
+  `.btn-outline{` (117449) sú **vonku**. (Offsety sa posunú s každým buildom —
+  pri opakovanom meraní 2026-09-18 vyšli `utilities` 12875–117454 a `.btn{`
+  118872, teda o ~1,8 kB inde, a nález bol aj tak rovnaký. Rozhoduje **vzťah**
+  „vnútri/vonku", nie konkrétne číslo; kto to overuje, nech si zátvorky
+  v zbuildovanom CSS započíta sám.) Dôsledok: utility `px-*`, `py-*`,
   `rounded-*`, `text-*`, `border-*`, `hover:bg-*` na prvku, ktorý má `.btn`,
   sa **ticho ignorujú**. Dotknuté miesta, kde to už dnes zhadzuje zámer
   pisateľa: `NotFound.tsx:48` (`border-gray-300`, `dark:border-slate-700`,
@@ -6382,6 +6422,20 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   #175 a #177: na `.btn` sa smie pridávať len to, čo `.btn` sám nenastavuje**
   (`min-height`, `font-size`) — preto `min-h-11` a `text-sm`, a preto žiadne
   `px-*`/`rounded-*`.
+
+**Sedem prezývok z jednania bolo 2026-09-18 nanovo odvodených** — aby sa to
+nemuselo robiť znova a aby po nich nezostal zoznam mien bez obsahu. Každú
+hľadal jeden vyšetrovateľ a potom ju nezávisle vyvracali dvaja ďalší (17
+agentov, 0 chýb); výsledok: **žiadna nebola vymyslená**, všetkých sedem
+označovalo reálnu vec. Štyri sú živé chyby a sú rozpísané vyššie
+(`IBM Plex Sans`, `.btn` kaskáda, orezy v `ApiDocs`, duplicita `escape_sed`).
+`companiesbuilder-minw` a `searchbar-drobnosti` boli medzitým opravené
+(`68b4a6f`, resp. `7cd0e7f` — druhé je v 10.1) a
+`mrtvy-gitlab-remote-code-reviews` **vôbec neoznačuje tento repozitár**: je to
+mŕtvy remote `gitlab` v klone code-review bota `~/Code/code-reviews`, ktorý
+mieri na `localhost:8088`, teda na zrušený Mac GitLab. V CistaFirme po ňom
+nič živé neostalo (`.git/config` má len `gitlab-home` a `origin`, žiadny
+`refs/remotes/gitlab/*` neexistuje).
 
 **Čo audit preveril a NIE je chyba** — aby to nikto nehlásil znova:
 `AuditLog.tsx:91` (`max-w-[200px] truncate`) a `SyncJobs.tsx:151`
