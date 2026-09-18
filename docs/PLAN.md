@@ -7071,6 +7071,233 @@ to, aby `DROP DATABASE test_cistafirma` spadol na „being accessed by other
 users" a zobral so sebou celý beh. Testy preto pool nahradzujú inline
 exekútorom (`_InlineExecutor`); o súbežnosť v nich nejde.
 
+### 11.9 Opravné príkazy prepisujú identitu firmy (#187)
+
+**Zadanie.** Tri opravné príkazy — `repair_ruz_sync` (v1), `repair_ruz_sync_v2`
+a `repair_ruz_gaps` — zapisujú firmy **inak než walk**. Majú to robiť rovnako;
+a kým to robia inak, je to jeden z najhorších defektov v repozitári, pretože
+ticho maže firmy a hlási to ako prácu.
+
+**Mechanizmus, overený proti zdroju aj spustením.** Všetky tri obmedzia prácu na
+`ruz_id`, ktoré v `Company` **nie sú** (`repair_ruz_sync_v2.py:120-124`,
+`repair_ruz_gaps.py:248`, `repair_ruz_sync.py:125`), a potom zapíšu
+
+```python
+Company.objects.update_or_create(ico=details['ico'], defaults={... 'ruz_id': details.get('id') ...})
+```
+
+`Company.ico` je `unique` (`companies/models.py:280-285`) a `ruz_id` tiež
+(`:261`). `ruz_id` bol vybraný práve preto, že chýba — takže kolidovať nemá čo
+a zápis **prejde bez chyby**. Nájdený riadok je ale vždy iná entita, lebo jeho
+`ruz_id` v množine chýbajúcich nebol: riadok entity `Z` dostane `ruz_id`
+súrodenca `Y` a entita `Z` prestane existovať. Beh to započíta ako `skipped`
+(`repair_ruz_sync_v2.py:243-247`) alebo `repaired`
+(`repair_ruz_gaps.py:253-258`, s komentárom `# Existujúca firma s iným RUZ ID -
+aktualizujeme` — defekt zapísaný ako návrh).
+
+Register naozaj odpovedá jedno IČO viac entitami: `00177474` → ruz_id 1677,
+1049449, 1070716 (`fetch_ruz_data.py:503-505`). Walks to rieši tým, že kľúčuje
+na `ruz_id`, takže druhá entita pod držaným IČO narazí na unique index a skončí
+ako `unstorable` (`fetch_ruz_data.py:302-326`) — držaný riadok ostane nedotknutý.
+Opravný príkaz na to isté nemá handler.
+
+**Korekcia §11.8.** Tam je to zapísané ako „môžu prepísať uložené
+`datum_zalozenia` / `datum_zrusenia` / `datum_poslednej_upravy` na `None`".
+To je nepresné a treba to povedať: keďže práca je obmedzená na **chýbajúce**
+`ruz_id`, zhodu na `ico` nemôže spôsobiť tá istá firma — je to **vždy** swap
+identity. Dátumy nie sú druhý defekt, sú súčasť toho istého zápisu: prepíše sa
+celý riadok. Holý `parse_date` (`:222-223, :235`) navyše zlieva „chýbajúce"
+a „nečitateľné" do `None`, čo je presne to, pred čím `apply_ruz_dates` chráni
+(`ruz_api.py:287-322`) — ale dosiahnuteľné je to len skrz ten istý swap, takže
+je to zhoršenie dôsledku, nie samostatná chyba.
+
+**Tretí príkaz.** §11.8 hovorí o „oboch opravných príkazoch". Sú **tri**:
+`repair_ruz_sync.py` (v1) má ten istý zápis. Nikto ho nevolá — ani task, ani
+admin, ani dokumentácia. *Oprava plánu:* pri implementácii sa ukázalo, že tento
+súbor **nie je funkčný príkaz s jednou chybou**, ale nedokončený prepis, ktorý
+spadne na prvej neprázdnej stránke (`self._fetch_and_save_company` neexistuje,
+`api`/`total_missing`/`total_downloaded`/`total_skipped`/`total_errors` sú
+prečítané pred priradením, tie isté `missing_ids` sťahuje dvakrát). Rieši sa to
+ako taký — viď **Výsledok** na konci tejto sekcie.
+
+**Rozsah, ktorý z toho robí viac než kozmetiku — namerané.** Workflow
+`wf_09267a5b-44e` spravil na delle čítací odhad: `Company` má 449 795 riadkov
+a **0** s `pravna_forma` v 100-110/422; `IndividualEntity` má 35 339 riadkov
+a **všetky** ich `ruz_id` v `Company` chýbajú. Žiadny z tých príkazov neroutuje
+SZCO podľa `pravna_forma` — `IndividualEntity` v nich nie je ani naimportovaný.
+(Číslo je snímka z 2026-09-18 a **rastie**, ako beží walk #46 — pri prvom meraní
+toho dňa bolo 31 198. Nulový prienik s `Company` je tá polovica, ktorá sa
+nemení, a práve o ňu sa opiera oprava pracovného zoznamu nižšie.)
+Príkaz prejdený nad registrom by teda vytvoril **35 339 fantómových `Company`
+riadkov** pre fyzické osoby, nafúkol `Company.objects.count()` o ~7 % a sprístupnil
+ich vo verejnom vyhľadávaní (`companies/views.py` — `AllowAny`, queryset bez
+filtra na SZCO). Toto nie je teória: je to jeden klik v adminovi.
+
+**Druhá chyba v tom istom kóde: chyba bez dôvodu.** `except Exception as e:` na
+`repair_ruz_sync_v2.py:249-251` (a `repair_ruz_gaps.py:260-262`) len zvýši
+počítadlo; `e` sa nikdy neprečíta, `logging` sa v súbore nevyskytuje. Počítadlo
+ide do `progress.total_errors` → `set_job_outcome(failed=…)`, a `complete_job`
+nastaví `completed` bez ohľadu naň — takže beh, ktorému zlyhal **každý** zápis,
+je natrvalo uložený ako `completed` s číslom a bez jediného slova o príčine.
+`SyncProgress.record_progress(..., error_message=…)` na to existuje a tento
+príkaz ho nepoužíva.
+
+**Tretia chyba: resume, ktorý klamе.** `resume_repair_sync` loguje
+`"Resuming repair sync from RUZ ID %s"` a `REPAIR_RESUMABLE_STATUSES` zámerne
+prijíma aj `running` (§11.8) — ale príkaz číta kurzor len pre
+`progress.status in ['paused', 'failed']` (`:61`). Po zabitom behu (SIGKILL
+nechá `running`) teda log tvrdí, že sa pokračuje, a príkaz ide od 0. Je to tá
+istá rodina ako #185.
+
+Rozhodnutie o `0` vs. kurzor, aby sa to neopravilo naopak: pre `completed` beh
+je štart od 0 **správny**. Oprava má hľadať `ruz_id`, ktoré databáza nemá,
+a tie sa medzi behmi menia — skenovať od uloženého kurzora by tie pod ním už
+nikdy nenašlo. Kurzor má zmysel len pre **prerušený** beh, kde prefix tej istej
+jazdy už prejdený bol. Preto sa dopĺňa `running`, nie odstraňuje podmienka.
+
+**Oprava.** Všetky tri príkazy prestanú mať vlastný `defaults` a vlastný upsert
+a budú zapisovať cez `fetch_ruz_data.Command.update_or_create_company` — presne
+to, čo už robí `repair_ico_shape._reimport` (`:131-189`), a z toho istého
+dôvodu: druhá kópia mapovania sa rozíde a oprava je správna len vtedy, keď uloží
+to, čo by uložil walk. Delegovaním sa získa kľúčovanie na `ruz_id`, `apply_ruz_dates`
+aj `record_ruz_date_outcome`, routing SZCO na `IndividualEntity`, `.strip()` na
+IČO a `detect_status_change` pre zrušenia.
+
+Dve veci, ktoré walkov zapisovač nemá a opravné príkazy potrebujú:
+
+- **Zámok na výstup.** `update_or_create_company` píše na `self.stdout` /
+  `self.stderr` za každý záznam; opravné príkazy ho volajú z
+  `ThreadPoolExecutor` s 5-10 vláknami. Zámok ide okolo **zápisu**, nie okolo
+  DB práce — inak by serializoval presne tú paralelitu, kvôli ktorej tam pool je.
+- **Rozlíšenie výsledkov.** `(False, False)` znamená „register vrátil záznam bez
+  použiteľného IČO" a patrí do `skipped`; `(DataError, IntegrityError)` znamená
+  „databáza záznam odmietla" (najčastejšie IČO, ktoré drží iná entita) a patrí do
+  **`errors`** — s dôvodom, ktorý sa zapíše na stderr, do logu a do
+  `progress.last_error`. Presne to je ten prípad, ktorý sa dnes počíta ako
+  úspešná oprava.
+
+**Testy.** `registers/tests_repair_write_path.py` je napísaný proti **výsledku**
+(kto je entita v riadku a čo beh tvrdí, že spravil), nie proti kľúčovému slovu
+lookupu, takže ostane platný aj keby bola oprava napísaná inak. Proti pôvodnému
+kódu padá **5 zo 7**; dve, ktoré prejdú, sú pozitívne kontroly — a to je
+správne.
+
+Stav po dokončení: **15 testov, `OK`** (`.claude` job 2070505d, 2026-09-18).
+Dva z nich sú nové proti prvému návrhu a oba vznikli z chyby v mojom vlastnom
+kóde, nie z čítania:
+
+- `RepairWriter.store()` volal na ceste `REFUSED` `self._walk.stderr.write()`
+  **pod** `with self._lock:`, ale `self._walk.stderr` je `_OneWriterAtATime` nad
+  tým istým zámkom — re-entrantný záber ne-reentrantného `Lock`, teda uviaznutie
+  navždy. Diagnostikované cez `sample <pid> 3` (hlavné vlákno
+  v `lock_PyThread_acquire_lock`), nie čítaním; test visel 20 minút pri 0:01.79
+  CPU. Vláčilo sa to **len na refuse ceste**, takže by to vyzeralo ako oprava
+  zaseknutá na zlom zázname.
+- v1 mal dva `handle` (viď vyššie) — odmietnutie bolo mŕtvy kód, kým sa telo
+  nepremenovalo.
+
+Obe majú spoločné to, že **kód vyzeral správne** a chybu našiel až beh proti
+výsledku. To je argument pre testy proti výsledku, nie proti implementácii.
+
+### 11.9.1 Výsledok (2026-09-18)
+
+Overené nezávisle: workflow `wf_09267a5b-44e` (25 nálezov → 8 overovaných → 6
+potvrdených, 2 vyvrátené, completeness critic na konci) ohodnotil implementáciu
+ako **správnu** — „Delegating to the walk's `update_or_create_company` closes all
+three: `ruz_id` key (swap becomes `IntegrityError` → `REFUSED`), `apply_ruz_dates`
+(unreadable date refused), SZCO routing to `IndividualEntity`" — a jeden
+verifikátor defekt **empiricky reprodukoval**: `Ran 7 tests, FAILED
+(failures=5)`, s `AssertionError: 1049449 != 1677` na riadku incumbent-a.
+
+Čo je v strome:
+
+- `registers/services/ruz_repair_writer.py` (nový) — `RepairWriter`, ktorý drží
+  inštanciu walku a deleguje na `update_or_create_company`; zámok je okolo
+  **streamu**, nie okolo DB práce.
+- `repair_ruz_sync_v2.py`, `repair_ruz_gaps.py` — zapisujú cez neho, počítajú
+  `REFUSED` ako chybu s dôvodom (`logger.error` + stderr + `last_error`
+  priradené **pred** `save()`), v2 počíta `updated` zvlášť a číta kurzor aj pre
+  `running`.
+- `repair_ruz_sync.py` (v1) — `handle` odmieta na prvom riadku s odkazom na v2
+  (predtým `AttributeError` z vlákna, ktorý `except Exception` zapísal ako
+  `failed` na **zdieľaný** `sync_type='repair'` riadok, čiže na kurzor v2);
+  `_update_or_create_company` deleguje, aby v strome neostal vzor na
+  skopírovanie. **Odporúčanie: zmazať tento súbor** — nie je moje rozhodnutie.
+- **V1 má dva `def handle` a vyhráva ten druhý.** Prvý pokus o odmietnutie bol
+  preto mŕtvy kód: `call_command('repair_ruz_sync')` šiel rovno do pôvodného
+  tela a spadol na `Company` v pracovnom zozname — čo je presne traceback, ktorý
+  zachytil test `test_it_refuses_and_names_the_command_that_replaced_it`
+  (`NameError: name 'Company' is not defined`, riadok 141). Odmietnutie je
+  skutočné až od premenovania tela na `_handle_unfinished`; nič nedispečuje iné
+  meno než `handle`. Toto je druhý nález toho istého druhu ako nález §11.9 —
+  **chyba, ktorá sa hlási ako niečo iné, než čím je** — a keby test nebol
+  napísaný proti *výsledku*, prešel by.
+- `adminapi/views/sync.py` — `params.get("start_id", 0)` → `params.get("start_id")`.
+  Nula nie je sentinel, ktorý by príkaz odlíšil od skutočného štartu (`0 is not
+  None`), takže `--start-id=0` sa pripojil a resume vetva bola z admin API
+  nedosiahnuteľná. Overené spustením `_dispatch_job`: `parameters={}` →
+  `{'start_id': 0, …}`.
+- `repair_ruz_sync_v2.py` + `analyze_ruz_gaps.py` — pracovný zoznam sa pýta **na
+  obe tabuľky**. `Company` samotná bola celá definícia „už držané", a keďže
+  žiadne `IndividualEntity.ruz_id` v `Company` nie je, celá tá populácia
+  (35 339 k 2026-09-18) bola **natrvalo** „chýbajúca": každý beh znovu stiahol
+  35k stránok,
+  znovu uložil už správne riadky a každý započítal ako novú prácu — takže oprava
+  nikdy nemohla hlásiť, že skonvergovala. Gap analýza je nástroj, ktorého výstup
+  ponúka admin tlačidlo (`analyze_ruz_gaps.py`, `registers/admin.py:190-206`),
+  takže nafúknuté číslo je to, čo operátor číta pred stlačením. Poznámka:
+  `repair_ruz_gaps` nad **uloženou** analýzou použije jej `gap_ranges`, takže
+  stará analýza si fantómové ID drží, kým sa nespraví nová.
+
+**Tri korekcie skorších tvrdení** (z overenia, nie z dohadu):
+
+1. **Swap nie je samoopravný.** „Durable until someone re-runs the canonical walk
+   per entity" je nesprávne: aj walk kľúčuje na `ruz_id`, takže vloženie
+   pôvodnej entity narazí na unique `ico` — presne ten počítaný, nefatálny
+   duplicate-IČO prípad. Prelabelovanie je teda **trvalé, kým ho niekto neopraví
+   ručne**.
+2. **Oscilácia je medzi behmi, nie v rámci jedného.** Stránkuje sa vzostupne po
+   1000, takže 1677 a 1049449 sú na rôznych stránkach. Za beh sa nepreklopia;
+   preklopia sa tým, že ďalší beh začína od 0 a posunutý `ruz_id` je zase
+   „chýbajúci".
+3. **„Zhruba deň navyše" nemalo správny základ** — 6,1 záznamu/s je rýchlosť
+   `ruz_incremental` behu #23, nie repair slučky, ktorá stránkuje po 1000 ID.
+   Cena re-walku od 0 je reálna, ale nebola nameraná.
+
+**Dôsledok, ktorý stojí za zapísanie:** zápis je UPDATE existujúceho pk, takže FK
+deti ostávajú pripojené — `CompanyFinancialResult.company` a
+`PersonCompanyRelation.company` sú `CASCADE` — čiže sa **prelabelujú**, nie
+odpoja, a `seat_*` (zámerne mimo repair `defaults`) ostávajú zastarané.
+
+**Nezaradené nálezy z toho istého overenia** (nie sú súčasťou #187, každý chce
+svoje rozhodnutie):
+
+- **Repair nemá keepers.** `ruz_full_keeper_decision` filtruje len
+  `FULL_RESYNC_JOB_TYPE`, `ruz_keeper_tick.DISPATCH` mapuje len `start`/`resume`
+  walku, a žiadny beat entry nespúšťa repair. Zabitý repair teda nikto
+  nerestartuje — a kým jeho riadok sedí `running`, drží `ruz:global`, takže
+  `enqueue_ruz_job` vráti živý riadok a `_run_ruz_command` odmietne („already
+  running"): mŕtvy repair **zastaví šesťhodinový walk**, kým ho
+  `detect_stuck_sync_jobs` nezoberie.
+- **`rpo_sync.py:151/173-174`** — `_parse_date` vracia `None` pre neprítomné aj
+  nečitateľné, a zapisuje sa cez `OrsrCompanyProfile.objects.update_or_create`
+  na **beat ceste** (`sync-missing-orsr-profiles-every-4-hours`). To isté
+  `orsr_scraper.py:659-670` + `orsr_sync.py:44`. Rovnaký kolaps, iný model.
+- **`update_fs_data.py:122`/`fs_data_handlers.py`** — FS datasety sa pripájajú
+  **len podľa IČO** (`Company.objects.filter(ico__in=batch)`), takže pri
+  duplicitnom IČO jedna entita dostane DPH stav druhej. Obmedzené (nepíše
+  `ruz_id`, takže nemôže prelepiť identitu), ale je mimo `ruz:global` — čo
+  odporuje docstringu toho zámku.
+- **Štrukturálne:** `update_or_create` je get-then-create, nie atomické, a beží
+  z poolu s 5-10 vláknami na vlastných spojeniach — dve súrodené ID na jednej
+  stránke môžu obe minúť `get`. Po oprave sa tá prehra hlási ako `REFUSED`
+  s dôvodom; nameraná nebola.
+
+**Bezpečnostná poznámka k oprave:** po zmene stojí ochrana proti súbežnému behu
+na unique obmedzení `ruz:global`, nie na zozname statusov — `resume_repair_sync`
+stále posiela len `--workers`, zatiaľ čo `REPAIR_RESUMABLE_STATUSES` prijíma aj
+`running`. Je to bezpečné, ale je to constraint, nie kód, ktorý číta `start_id`.
+
 ---
 
 ## 12. Nemenné pravidlá
