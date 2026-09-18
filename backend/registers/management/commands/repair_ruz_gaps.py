@@ -3,7 +3,8 @@ from django.utils.dateparse import parse_date
 from django.utils import timezone
 from companies.models import Company
 from registers.integrations.ruz_api import RuzApi
-from registers.models import SyncGapAnalysis
+from registers.models import SyncGapAnalysis, SyncJob
+from registers.services.sync_engine import set_job_outcome
 import time
 import concurrent.futures
 import threading
@@ -35,6 +36,11 @@ class Command(BaseCommand):
             '--resume',
             action='store_true',
             help='Pokračovať od posledného opravenéha ID',
+        )
+        parser.add_argument(
+            '--sync-job-id',
+            type=int,
+            help='Internal durable SyncJob correlation ID for a Celery-dispatched RUZ run.',
         )
 
     def handle(self, *args, **options):
@@ -72,19 +78,40 @@ class Command(BaseCommand):
         
         analysis.status = 'repairing'
         analysis.save()
-        
+
+        # Heartbeat for the job the caller claimed -- without it this run looks
+        # dead to the watchdog and is reaped mid-repair. See `fetch_ruz_data`.
+        job_row = (
+            SyncJob.objects.filter(pk=options['sync_job_id']).first()
+            if options.get('sync_job_id') else None
+        )
+        sync_job_id = job_row.pk if job_row is not None else None
+
+        def beat() -> None:
+            if job_row is not None:
+                job_row.heartbeat()
+
+        # This run's own numbers: `analysis` is reused by a resume, so its
+        # counters accumulate. The job row is per-run and gets the difference.
+        baseline = (
+            analysis.repaired_count,
+            analysis.skipped_count,
+            analysis.error_count,
+        )
+
         # Zozbierame všetky chýbajúce ID do zoznamu
         self.stdout.write('Pripravujem zoznam chýbajúcich ID...')
-        
+
         missing_ids = []
         for gap_range in analysis.gap_ranges:
+            beat()
             start, end = gap_range
             for ruz_id in range(start, end + 1):
                 # Skip už opravené ID
                 if options['resume'] and analysis.repair_progress_id and ruz_id <= analysis.repair_progress_id:
                     continue
                 missing_ids.append(ruz_id)
-        
+
         if not missing_ids:
             self.stdout.write(self.style.SUCCESS('Všetky ID už boli opravené!'))
             analysis.status = 'completed'
@@ -101,6 +128,7 @@ class Command(BaseCommand):
         try:
             # Spracujeme v batch-och pre lepší progress tracking
             for i in range(0, len(missing_ids), batch_size):
+                beat()
                 batch = missing_ids[i:i + batch_size]
                 self.batch_stats = {'repaired': 0, 'skipped': 0, 'errors': 0}
                 
@@ -159,6 +187,22 @@ class Command(BaseCommand):
             analysis.last_error = str(e)
             analysis.save()
             raise
+
+        finally:
+            # Every exit path, so a completed job never reads as one that did
+            # nothing -- see `sync_engine.set_job_outcome`.
+            if sync_job_id is not None:
+                set_job_outcome(
+                    sync_job_id,
+                    processed=(
+                        analysis.repaired_count - baseline[0]
+                        + analysis.skipped_count - baseline[1]
+                        + analysis.error_count - baseline[2]
+                    ),
+                    succeeded=analysis.repaired_count - baseline[0],
+                    skipped=analysis.skipped_count - baseline[1],
+                    failed=analysis.error_count - baseline[2],
+                )
 
     def _fetch_and_save(self, ruz_id):
         """Stiahne a uloží jednu firmu podľa RUZ ID (thread-safe)."""

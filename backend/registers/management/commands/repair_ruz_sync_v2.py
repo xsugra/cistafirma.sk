@@ -4,7 +4,8 @@ from django.utils import timezone
 from django.db import connection
 from companies.models import Company
 from registers.integrations.ruz_api import RuzApi
-from registers.models import SyncProgress
+from registers.models import SyncJob, SyncProgress
+from registers.services.sync_engine import set_job_outcome
 import time
 import concurrent.futures
 import threading
@@ -31,6 +32,11 @@ class Command(BaseCommand):
             type=int,
             default=10,
             help='Počet paralelných workerov (default: 10)',
+        )
+        parser.add_argument(
+            '--sync-job-id',
+            type=int,
+            help='Internal durable SyncJob correlation ID for a Celery-dispatched RUZ run.',
         )
 
     def handle(self, *args, **options):
@@ -69,9 +75,34 @@ class Command(BaseCommand):
         ))
         
         pokracovat_za_id = start_id
-        
+
+        # Heartbeat for the job the caller claimed. Without it this run looks
+        # dead to the watchdog: the loop below can sit inside a single page for
+        # minutes, and nothing else writes `last_heartbeat`. Same shape as
+        # `fetch_ruz_data`, which is the pattern this follows.
+        job_row = (
+            SyncJob.objects.filter(pk=options['sync_job_id']).first()
+            if options.get('sync_job_id') else None
+        )
+        sync_job_id = job_row.pk if job_row is not None else None
+
+        def beat() -> None:
+            if job_row is not None:
+                job_row.heartbeat()
+
+        # This run's own numbers. `progress` cannot supply them on its own: its
+        # row is reused between runs, so its counters accumulate. The job row is
+        # per-run, so what lands there is the difference this run made.
+        baseline = (
+            progress.total_processed,
+            progress.total_created,
+            progress.total_skipped,
+            progress.total_errors,
+        )
+
         try:
             while True:
+                beat()
                 # Získame ďalšiu stránku ID z RUZ API
                 id_data = self.api.get_changed_company_ids(
                     zmenene_od='2000-01-01',
@@ -149,6 +180,19 @@ class Command(BaseCommand):
             progress.last_error = str(e)
             progress.save()
             raise
+
+        finally:
+            # Written on every exit path, so a completed job can never be
+            # confused with one that did nothing -- the reason
+            # `set_job_outcome` exists at all.
+            if sync_job_id is not None:
+                set_job_outcome(
+                    sync_job_id,
+                    processed=progress.total_processed - baseline[0],
+                    succeeded=progress.total_created - baseline[1],
+                    skipped=progress.total_skipped - baseline[2],
+                    failed=progress.total_errors - baseline[3],
+                )
 
     def _fetch_and_save(self, ruz_id):
         """Stiahne a uloží jednu firmu (thread-safe)."""

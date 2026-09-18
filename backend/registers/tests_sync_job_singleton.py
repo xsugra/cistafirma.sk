@@ -6,7 +6,7 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.utils import timezone
 
-from registers.models import SyncJob, SyncProgress
+from registers.models import SyncGapAnalysis, SyncJob, SyncProgress
 from registers.services import sync_engine
 
 
@@ -667,24 +667,55 @@ class ResumeProgressIdTests(TestCase):
         with self.assertLogs("registers.tasks", level="INFO") as logs:
             resume_repair_sync.apply(args=(), kwargs={"progress_id": repair.pk})
 
-        call_command.assert_called_once_with("repair_ruz_sync_v2", "--workers=3")
+        # The job row is the second half of the assertion: the run has to be
+        # claimed, not merely dispatched, or the row sits `queued` and holds the
+        # `ruz:global` slot against every later RUZ run.
+        job = SyncJob.objects.get(job_type="ruz_repair")
+        call_command.assert_called_once_with(
+            "repair_ruz_sync_v2", "--workers=3", sync_job_id=job.pk
+        )
         self.assertIn("555", "\n".join(logs.output))
 
     @patch("registers.tasks.call_command")
     def test_repair_will_not_start_a_run_that_is_still_going(self, call_command):
-        """The walk counts `running` as resumable because a killed walk leaves
-        that status behind and nothing clears it. Repair is the other way round:
-        its command continues from its own cursor, so the status is only a gate
-        on whether to start -- and a repair that is really still running must not
-        be started a second time."""
+        """The gate on a second start is the global slot, not the status.
+
+        A `running` repair row means one of two opposite things -- a repair
+        really in progress, or the wreck a SIGKILL or a mid-run deploy leaves --
+        and the status alone cannot tell them apart. The live job can: while one
+        holds `ruz:global` the dispatch refuses, whatever the row says.
+        """
         from registers.tasks import resume_repair_sync
 
         repair = self._progress(sync_type="repair", status="running")
+        live, _ = sync_engine.enqueue_ruz_job(job_type="ruz_repair")
+        sync_engine.claim_ruz_job(live.pk)
 
         result = resume_repair_sync.apply(args=(), kwargs={"progress_id": repair.pk})
 
         call_command.assert_not_called()
-        self.assertEqual(result.get(), "No repair sync to resume")
+        self.assertIn("already running", result.get())
+        self.assertEqual(
+            SyncJob.objects.filter(status="running").count(), 1,
+            "the live repair was joined, not duplicated",
+        )
+
+    @patch("registers.tasks.call_command")
+    def test_a_killed_repair_is_resumed(self, call_command):
+        """The other meaning of `running`: nothing holds the slot, so the row is
+        a corpse and the resume is exactly what it is for."""
+        from registers.tasks import resume_repair_sync
+
+        repair = self._progress(
+            sync_type="repair", status="running", last_processed_ruz_id=777
+        )
+
+        resume_repair_sync.apply(args=(), kwargs={"progress_id": repair.pk})
+
+        call_command.assert_called_once()
+        job = SyncJob.objects.get(job_type="ruz_repair")
+        job.refresh_from_db()
+        self.assertEqual(job.status, "completed")
 
 
 class ResumeAdminViewTests(TestCase):
@@ -765,9 +796,212 @@ class ResumeAdminViewTests(TestCase):
         incremental_task.delay.assert_called_once_with()
         self.assertTrue(any("zaradene" in t for t in texts), texts)
 
-    def test_a_running_or_idle_row_is_not_resumable(self):
+    def test_an_idle_or_finished_row_is_not_resumable(self):
+        for status in ("idle", "completed"):
+            with self.subTest(status=status):
+                _, texts = self._resume(self._progress(status=status))
+
+                self.assertTrue(
+                    any("nie je mozne obnovit" in t for t in texts), texts
+                )
+
+    @patch("registers.tasks.resume_full_ruz_sync")
+    def test_a_killed_walk_is_offered_a_resume_again(self, resume_task):
+        """A `running` row with nothing in the slot is the wreck a SIGKILL or a
+        mid-run deploy leaves: the process that would have written `failed` is
+        the one that died. Refusing it here is what made the resume useless in
+        the only case it exists for."""
         progress = self._progress(status="running")
 
         _, texts = self._resume(progress)
 
-        self.assertTrue(any("nie je mozne obnovit" in t for t in texts), texts)
+        resume_task.delay.assert_called_once_with(progress_id=progress.pk)
+        self.assertTrue(any("zaradene" in t for t in texts), texts)
+
+    @patch("registers.tasks.resume_full_ruz_sync")
+    def test_a_live_walk_is_not_offered_as_a_resume(self, resume_task):
+        """The same row, while a job holds the slot, is a run in progress -- the
+        page says so rather than queueing a resume that would do nothing."""
+        progress = self._progress(status="running")
+        live, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        sync_engine.claim_ruz_job(live.pk)
+
+        _, texts = self._resume(progress)
+
+        resume_task.delay.assert_not_called()
+        self.assertTrue(any("neurobilo nic" in t for t in texts), texts)
+
+
+class RepairDispatchTests(TestCase):
+    """Every repair entry point runs as a tracked RUZ job, or not at all.
+
+    All four used to call their command directly. The run then had no `SyncJob`
+    row, no heartbeat and no outcome -- invisible to the watchdog, to
+    `ops-check` and to the admin's job list -- and it never took `ruz:global`,
+    the only thing that keeps a repair from writing company rows beside the
+    full walk. `ruz_repair` had existed in `JOB_TYPE_CHOICES` all along, created
+    by no task.
+    """
+
+    @patch("registers.tasks.call_command")
+    def test_start_repair_sync_claims_a_repair_job(self, call_command):
+        from registers.tasks import start_repair_sync
+
+        result = start_repair_sync.apply(args=(), kwargs={"workers": 3})
+
+        job = SyncJob.objects.get(job_type="ruz_repair")
+        call_command.assert_called_once_with(
+            "repair_ruz_sync_v2", "--workers=3", sync_job_id=job.pk
+        )
+        job.refresh_from_db()
+        self.assertEqual(job.status, "completed")
+        self.assertIn(f"#{job.pk}", result.get())
+
+    @patch("registers.tasks.call_command")
+    def test_start_repair_sync_passes_the_id_it_was_given(self, call_command):
+        from registers.tasks import start_repair_sync
+
+        start_repair_sync.apply(args=(), kwargs={"start_id": 2000000, "workers": 5})
+
+        call_command.assert_called_once()
+        self.assertEqual(
+            call_command.call_args.args,
+            ("repair_ruz_sync_v2", "--workers=5", "--start-id=2000000"),
+        )
+
+    @patch("registers.tasks.call_command")
+    def test_gap_repair_claims_a_repair_job(self, call_command):
+        from registers.tasks import repair_ruz_gaps
+
+        repair_ruz_gaps.apply(
+            args=(), kwargs={"analysis_id": 4, "workers": 5, "resume": True}
+        )
+
+        job = SyncJob.objects.get(job_type="ruz_repair")
+        call_command.assert_called_once_with(
+            "repair_ruz_gaps",
+            "--workers=5",
+            "--analysis-id=4",
+            "--resume",
+            sync_job_id=job.pk,
+        )
+        job.refresh_from_db()
+        self.assertEqual(job.status, "completed")
+
+    @patch("registers.tasks.call_command")
+    def test_a_repair_beside_a_live_walk_does_not_start(self, call_command):
+        """The whole point of the slot: two writers of company data, one key."""
+        from registers.tasks import start_repair_sync
+
+        walk, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        sync_engine.claim_ruz_job(walk.pk)
+
+        result = start_repair_sync.apply(args=(), kwargs={})
+
+        call_command.assert_not_called()
+        self.assertIn("already running", result.get())
+        self.assertFalse(SyncJob.objects.filter(job_type="ruz_repair").exists())
+
+    def test_no_hard_time_limit_kills_a_repair(self):
+        """`time_limit` is a hard SIGKILL: nothing writes `failed`, so the run
+        simply stops moving and leaves a `running` row behind. These walk the
+        whole register at roughly 6 ids per second, so a 24-hour limit could
+        only ever kill them mid-run."""
+        from registers.tasks import (
+            repair_ruz_gaps,
+            resume_gap_repair,
+            resume_repair_sync,
+            start_repair_sync,
+        )
+
+        for task in (
+            start_repair_sync,
+            resume_repair_sync,
+            repair_ruz_gaps,
+            resume_gap_repair,
+        ):
+            self.assertIsNone(
+                task.time_limit,
+                f"{task.name} would be SIGKILLed mid-repair at {task.time_limit}s",
+            )
+
+
+class RepairAdminRefusalTests(TestCase):
+    """The three repair buttons refuse out loud while the walk holds the slot.
+
+    A dispatch that meets a live RUZ job returns without doing anything, so the
+    buttons used to report a repair as planned when nothing had been planned
+    and nothing would run -- the same false success `resume_sync_view` was
+    fixed for. The page is the only place the operator finds out.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        self.staff = get_user_model().objects.create_superuser(
+            email="admin@example.com", password="x"
+        )
+        self.client.force_login(self.staff)
+        self.analysis = SyncGapAnalysis.objects.create(
+            status="ready",
+            analyzed_min_id=1,
+            analyzed_max_id=10,
+            total_missing=2,
+            total_gaps=1,
+            gap_ranges=[[5, 6]],
+        )
+
+    def _click(self, url_name, *args):
+        from django.contrib.messages import get_messages
+        from django.urls import reverse
+
+        response = self.client.get(reverse(url_name, args=args))
+        return [str(m) for m in get_messages(response.wsgi_request)]
+
+    def _take_the_slot(self):
+        job, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        sync_engine.claim_ruz_job(job.pk)
+        return job
+
+    @patch("registers.tasks.repair_ruz_gaps")
+    def test_gap_repair_is_refused_while_the_walk_runs(self, gap_task):
+        self._take_the_slot()
+
+        texts = self._click(
+            "admin:registers_syncgapanalysis_repair", self.analysis.pk
+        )
+
+        gap_task.delay.assert_not_called()
+        self.assertTrue(any("neurobila nic" in t for t in texts), texts)
+
+    @patch("registers.tasks.repair_ruz_gaps")
+    def test_gap_repair_resume_is_refused_while_the_walk_runs(self, gap_task):
+        self.analysis.status = "repairing"
+        self.analysis.save(update_fields=["status"])
+        self._take_the_slot()
+
+        texts = self._click(
+            "admin:registers_syncgapanalysis_resume", self.analysis.pk
+        )
+
+        gap_task.delay.assert_not_called()
+        self.assertTrue(any("neurobila nic" in t for t in texts), texts)
+
+    @patch("registers.tasks.start_repair_sync")
+    def test_the_repair_sync_button_is_refused_while_the_walk_runs(self, repair_task):
+        self._take_the_slot()
+
+        texts = self._click("admin:registers_syncprogress_trigger_repair")
+
+        repair_task.delay.assert_not_called()
+        self.assertTrue(any("neurobil nic" in t for t in texts), texts)
+
+    @patch("registers.tasks.repair_ruz_gaps")
+    def test_gap_repair_is_still_offered_when_the_slot_is_free(self, gap_task):
+        """The positive control: the refusal is the live job, not the button."""
+        texts = self._click(
+            "admin:registers_syncgapanalysis_repair", self.analysis.pk
+        )
+
+        gap_task.delay.assert_called_once_with(analysis_id=self.analysis.pk, workers=5)
+        self.assertTrue(any("bola naplanovana" in t for t in texts), texts)

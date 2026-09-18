@@ -193,6 +193,15 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
         if analysis.status != 'ready':
             messages.error(request, 'Analyza nie je pripravena na opravu.')
             return HttpResponseRedirect(reverse('admin:registers_syncgapanalysis_changelist'))
+        # A gap repair now claims the global RUZ slot, so while the walk is
+        # running this dispatch does nothing at all. Saying "bola naplanovana"
+        # then is the same false report `resume_sync_view` was fixed for.
+        if _live_ruz_job() is not None:
+            messages.warning(
+                request,
+                'RUZ bezi. Oprava dier by teraz neurobila nic; skus to, ked dobehne.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncgapanalysis_changelist'))
         try:
             repair_ruz_gaps.delay(analysis_id=pk, workers=5)
             messages.success(request, f'Oprava {analysis.total_missing:,} chybajucich ID bola naplanovana.')
@@ -203,6 +212,12 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
     def resume_view(self, request, pk):
         from registers.tasks import repair_ruz_gaps
         analysis = SyncGapAnalysis.objects.get(pk=pk)
+        if _live_ruz_job() is not None:
+            messages.warning(
+                request,
+                'RUZ bezi. Oprava dier by teraz neurobila nic; skus to, ked dobehne.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncgapanalysis_changelist'))
         try:
             repair_ruz_gaps.delay(analysis_id=pk, workers=5, resume=True)
             messages.success(request, f'Oprava pokracuje od ID {analysis.repair_progress_id:,}.')
@@ -233,6 +248,30 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
                 extra_context['top_gaps'] = [(g[0], g[1], g[1] - g[0] + 1) for g in sorted_gaps]
 
         return super().changelist_view(request, extra_context=extra_context)
+
+
+def _live_ruz_job():
+    """The RUZ job currently holding the global slot, or `None`.
+
+    Every RUZ command claims this one row before it may write company data, so
+    a dispatch that meets a live job returns without doing anything. Any view
+    that reports "bolo zaradene" -- or offers a button that does -- has to ask
+    this first, or it is reporting a resume that was never going to run.
+
+    One definition rather than a copy per view: the three views that queue a
+    repair and the two that offer a resume all have to agree on what "the slot
+    is taken" means, and a check that drifts between them is a lie in whichever
+    copy drifted.
+    """
+    from registers.models import SyncJob
+    from registers.services.sync_engine import RUZ_CONCURRENCY_KEY
+
+    return (
+        SyncJob.objects
+        .filter(concurrency_key=RUZ_CONCURRENCY_KEY, status__in=['queued', 'running'])
+        .order_by('-queued_at')
+        .first()
+    )
 
 
 @admin.register(SyncProgress)
@@ -353,7 +392,18 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         # The type gate is not decoration: for a type with no resume path the
         # view now refuses, so offering the button would only produce a refusal
         # on the next page. Kept in step with `RESUMABLE_SYNC_TYPES`.
-        if obj.status in ['paused', 'failed'] and obj.sync_type in self.RESUMABLE_SYNC_TYPES:
+        #
+        # A `running` row is offered only when nothing holds the RUZ slot. With
+        # a live job the same row is a run in progress, and a "Pokracovat"
+        # button on the walk that is currently working is an offer to restart
+        # it. Without one it is the wreck a SIGKILL or a mid-run deploy leaves
+        # -- the one case a resume exists for, and the one the status filter
+        # alone cannot tell apart from a healthy run. The query runs only for
+        # `running` rows, so the changelist does not pay for it per row.
+        resumable = obj.status in ['paused', 'failed'] or (
+            obj.status == 'running' and _live_ruz_job() is None
+        )
+        if resumable and obj.sync_type in self.RESUMABLE_SYNC_TYPES:
             url = reverse("admin:registers_syncprogress_resume", args=[obj.pk])
             buttons.append(f'<a href="{url}" class="cf-btn cf-btn--success cf-btn--sm">Pokracovat</a>')
         if obj.status == 'running':
@@ -520,9 +570,14 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         and a dispatch that meets a live job returns without doing anything --
         so saying "obnovenie bolo zaradene" then would be false, and the
         operator would wait for a resume that was never going to run.
+
+        `running` is an accepted status, and it is the live-job check below --
+        not the status -- that tells the two meanings of that word apart. With
+        a job in the slot it is a run in progress and the operator gets told so;
+        with nothing in the slot it is the wreck a SIGKILL or a mid-run deploy
+        leaves, whose `failed` was never written because the process that would
+        have written it is the one that died.
         """
-        from registers.models import SyncJob
-        from registers.services.sync_engine import RUZ_CONCURRENCY_KEY
         from registers.tasks import (
             resume_full_ruz_sync,
             resume_repair_sync,
@@ -530,7 +585,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         )
 
         progress = SyncProgress.objects.get(pk=pk)
-        if progress.status not in ['paused', 'failed']:
+        if progress.status not in ['paused', 'failed', 'running']:
             messages.error(request, 'Synchronizaciu nie je mozne obnovit.')
             return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
 
@@ -542,12 +597,7 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             )
             return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
 
-        live = (
-            SyncJob.objects
-            .filter(concurrency_key=RUZ_CONCURRENCY_KEY, status__in=['queued', 'running'])
-            .order_by('-queued_at')
-            .first()
-        )
+        live = _live_ruz_job()
         if live is not None:
             messages.warning(
                 request,
@@ -616,6 +666,15 @@ class SyncProgressAdmin(UnfoldModelAdmin):
 
     def trigger_repair_sync_view(self, request):
         from registers.tasks import start_repair_sync
+        # A repair claims the global RUZ slot, so while the walk runs this queue
+        # is refused inside the task and nothing happens. Reporting it as
+        # planned would be the false success `resume_sync_view` was fixed for.
+        if _live_ruz_job() is not None:
+            messages.warning(
+                request,
+                'RUZ bezi. Opravny Sync by teraz neurobil nic; skus to, ked dobehne.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
         try:
             start_repair_sync.delay(workers=3)
             messages.success(request, 'Opravny Sync bol naplanovany.')

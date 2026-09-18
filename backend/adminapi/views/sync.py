@@ -335,9 +335,18 @@ def _dispatch_job(job: SyncJob) -> None:
         "ruz_full_firmy": (tasks.fetch_ruz_data_firmy_only, {"sync_job_id": job.pk}),
         "ruz_full_szco": (tasks.fetch_ruz_data_szco_only, {"sync_job_id": job.pk}),
         "ruz_incremental": (tasks.start_incremental_sync, {"sync_job_id": job.pk}),
+        # `sync_job_id` is not optional here. Every other RUZ entry point passes
+        # it, and this one did not: the job row this view had just created was
+        # handed to a task that called the command directly and never claimed
+        # it. A `queued` row is exactly what `reg_s_one_active_ruz_job` holds,
+        # so the row stayed `queued` for ever and every later RUZ run met the
+        # constraint, got this job back and returned without dispatching --
+        # including the keeper's own resume. `_run_ruz_command` claims what it
+        # is given; the id is how it gets there.
         "ruz_repair": (tasks.start_repair_sync, {
             "start_id": params.get("start_id", 0),
             "workers": params.get("workers", 3),
+            "sync_job_id": job.pk,
         }),
         "orsr_batch": (tasks.schedule_missing_orsr_sync, {"limit": params.get("limit", 200)}),
         "financials_batch": (tasks.schedule_ruz_financials_sync, {

@@ -45,12 +45,27 @@ def _run_ruz_command(
     job_type: str,
     command_args: list[str],
     celery_task_id: str = "",
+    command: str = "fetch_ruz_data",
 ):
-    """Claim the global RUZ job before any command can write company data."""
+    """Claim the global RUZ job before any command can write company data.
+
+    `command` names the management command to run. It was hardcoded to
+    `fetch_ruz_data`, and that is the whole reason the repair entry points
+    could not use this function: they run `repair_ruz_sync_v2` and
+    `repair_ruz_gaps`, and this function is the only thing that gives a RUZ run
+    a job row, a heartbeat, an outcome, and the `ruz:global` slot that keeps it
+    from writing company data beside the full walk.
+
+    Any command named here has to accept `--sync-job-id`: that is how it beats
+    the heart of the job claimed below. A command that does not beat it looks
+    dead to the watchdog and is reaped mid-run.
+    """
     if sync_job_id is None:
         job, created = enqueue_ruz_job(
             job_type=job_type,
-            parameters={"command_args": command_args},
+            # The command is in `parameters` because the job type alone no longer
+            # says what ran: `ruz_repair` covers three different commands.
+            parameters={"command": command, "command_args": command_args},
             triggered_via="beat_schedule",
         )
         if not created and job.status == "running":
@@ -64,7 +79,7 @@ def _run_ruz_command(
         return f"RUZ job #{sync_job_id} not runnable"
 
     try:
-        call_command("fetch_ruz_data", *command_args, sync_job_id=job.pk)
+        call_command(command, *command_args, sync_job_id=job.pk)
     except Exception as exc:
         fail_job(job, error=f"{type(exc).__name__}: {exc}")
         raise
@@ -656,11 +671,17 @@ def search_and_add_company_by_ico(ico: str):
 RESUMABLE_SYNC_STATUSES = ('paused', 'failed', 'running')
 
 
-#: A killed repair also leaves a `running` row, but unlike the walk nothing here
-#: reads that row to resume from -- the command continues from its own stored
-#: cursor. The filter is a gate on *whether to start*, so a repair that is
-#: really still running must not be started a second time.
-REPAIR_RESUMABLE_STATUSES = ('paused', 'failed')
+#: A killed repair leaves a `running` row the same way, and for the same reason:
+#: the process that would have written `failed` is the one that died. The
+#: `time_limit` that used to guarantee that kill is gone, but a deploy does it
+#: too -- the container gets SIGTERM, and Docker's stop timeout SIGKILLs
+#: whatever has not finished. Nothing here reads the row to resume from (the
+#: command continues from its own stored cursor), so the filter is only a gate
+#: on *whether to start*, and the thing that actually stops a second start of a
+#: live repair is the `ruz:global` slot, which `_run_ruz_command` claims before
+#: any command runs. Excluding `running` therefore bought no safety and cost the
+#: one case a resume exists for.
+REPAIR_RESUMABLE_STATUSES = ('paused', 'failed', 'running')
 
 
 def _progress_to_resume(
@@ -861,44 +882,58 @@ def start_incremental_sync(self, sync_job_id: int | None = None):
     )
 
 
-@shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
-def start_repair_sync(start_id=None, workers=3):
+@shared_task(bind=True, queue='ruz_full')
+def start_repair_sync(self, start_id=None, workers=3, sync_job_id: int | None = None):
     """
     Celery task na spustenie repair synchronizácie.
     Prejde všetky RUZ ID a stiahne chýbajúce firmy.
-    
+
     Args:
         start_id: Od ktorého RUZ ID začať (None = pokračovať kde sa skončilo)
         workers: Počet paralelných workerov
+
+    It goes through `_run_ruz_command` for the reason written up there: a run
+    this function started directly had no job row, no heartbeat and no outcome
+    -- invisible to the watchdog, to `ops-check` and to the admin's job list --
+    and it did not take the `ruz:global` slot, which is the only thing that
+    keeps a repair from writing company rows beside the full walk.
+
+    The 24-hour `time_limit` is gone with the same reasoning as
+    `start_full_ruz_sync_from_id`'s: this walks the whole register at roughly 6
+    ids per second, so the limit could only ever SIGKILL it mid-run, and
+    `time_limit` is a hard kill -- nothing writes `failed`, so the run would
+    simply stop moving and leave a `running` row behind. The heartbeat and the
+    stored cursor are what make a long repair safe; neither is what the limit
+    was protecting.
     """
-    logger.info(f"Starting repair sync (start_id={start_id}, workers={workers})...")
-    
-    args = ['repair_ruz_sync_v2', f'--workers={workers}']
+    logger.info("Starting repair sync (start_id=%s, workers=%s)...", start_id, workers)
+
+    args = [f'--workers={workers}']
     if start_id is not None:
         args.append(f'--start-id={start_id}')
-    
-    call_command(*args)
-    return "Repair sync completed"
+
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_repair",
+        command_args=args,
+        command="repair_ruz_sync_v2",
+        celery_task_id=self.request.id or "",
+    )
 
 
-@shared_task(queue='ruz_full')
-def resume_repair_sync(workers=3, progress_id: int | None = None):
+@shared_task(bind=True, queue='ruz_full')
+def resume_repair_sync(self, workers=3, progress_id: int | None = None,
+                       sync_job_id: int | None = None):
     """Continue a paused repair sync from the cursor its run left.
 
     `progress_id` works as it does in `resume_full_ruz_sync`: the admin passes
     the row it was clicked on, and a row that is not a resumable `repair` one
-    resumes nothing. Two differences from that task are deliberate rather than
-    oversights.
+    resumes nothing.
 
-    It accepts `paused` and `failed` only -- not `running`; see
-    `REPAIR_RESUMABLE_STATUSES`.
-
-    It still calls the command directly rather than through `_run_ruz_command`,
-    so a repair has no `SyncJob` row, no heartbeat and no outcome -- it is
-    invisible to the watchdog, to `ops-check` and to the admin's job list, and
-    it does not take the `ruz:global` lock, which is what would stop it running
-    concurrently with the full walk. That is #186; this task is the one place
-    that has to change with it.
+    It goes through `_run_ruz_command` like every other RUZ entry point, so the
+    run gets a job row, a heartbeat, an outcome and the `ruz:global` slot. The
+    command continues from its own stored cursor -- `progress_id` only decides
+    *whether* to start -- so there is nothing to pass down but the worker count.
     """
     progress = _progress_to_resume(
         progress_id, 'repair', statuses=REPAIR_RESUMABLE_STATUSES
@@ -911,10 +946,15 @@ def resume_repair_sync(workers=3, progress_id: int | None = None):
         # the log, which is the only place a `.delay()` caller can see it.
         return "No repair sync to resume"
 
-    logger.info(f"Resuming repair sync from RUZ ID {progress.last_processed_ruz_id}...")
-    call_command('repair_ruz_sync_v2', f'--workers={workers}')
+    logger.info("Resuming repair sync from RUZ ID %s...", progress.last_processed_ruz_id)
 
-    return f"Resumed repair sync from RUZ ID {progress.last_processed_ruz_id}"
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_repair",
+        command_args=[f'--workers={workers}'],
+        command="repair_ruz_sync_v2",
+        celery_task_id=self.request.id or "",
+    )
 
 
 # === GAP ANALYSIS TASKS ===
@@ -924,9 +964,22 @@ def analyze_ruz_gaps(expected_max=None):
     """
     Celery task na analýzu dier v RUZ ID.
     Nájde chýbajúce záznamy v databáze.
-    
+
     Args:
         expected_max: Očakávané maximálne RUZ ID (voliteľné)
+
+    This is the one task in this group that stays outside `_run_ruz_command`,
+    deliberately. The analysis reads the register and writes a `SyncGapAnalysis`
+    row and nothing else -- no company data -- so taking the `ruz:global` slot
+    would stop the full walk for hours to gain nothing a reader needs. It also
+    writes no progress row of its own kind, so there is nothing for a resume to
+    continue and nothing for an unreaped `running` row to strand.
+
+    Its `time_limit` stays because of that: with no heartbeat there is no job
+    row the watchdog could reap, so the limit is the only bound on it. It is an
+    order of magnitude above the real cost -- the scan is one Python pass over
+    the id range plus a `values_list` of ~450k ids, seconds to a couple of
+    minutes -- so it terminates the command rather than the work.
     """
     logger.info("Starting RUZ gap analysis...")
     
@@ -944,47 +997,65 @@ def analyze_ruz_gaps(expected_max=None):
     return "Analysis completed"
 
 
-@shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
-def repair_ruz_gaps(analysis_id=None, workers=5, resume=False):
+@shared_task(bind=True, queue='ruz_full')
+def repair_ruz_gaps(self, analysis_id=None, workers=5, resume=False,
+                    sync_job_id: int | None = None):
     """
     Celery task na opravu chýbajúcich RUZ záznamov podľa analýzy.
-    
+
     Args:
         analysis_id: ID analýzy (SyncGapAnalysis). Ak None, použije poslednú.
         workers: Počet paralelných workerov.
         resume: Ak True, pokračuje od posledného opravenéha ID.
+
+    Job row, heartbeat, outcome and the `ruz:global` slot all come from
+    `_run_ruz_command`; the 24-hour `time_limit` is gone for the reason written
+    on `start_repair_sync` -- a hard SIGKILL on days of work, recorded nowhere.
     """
-    logger.info(f"Starting RUZ gap repair (analysis_id={analysis_id}, workers={workers}, resume={resume})...")
-    
-    args = ['repair_ruz_gaps', f'--workers={workers}']
+    logger.info("Starting RUZ gap repair (analysis_id=%s, workers=%s, resume=%s)...",
+                analysis_id, workers, resume)
+
+    args = [f'--workers={workers}']
     if analysis_id:
         args.append(f'--analysis-id={analysis_id}')
     if resume:
         args.append('--resume')
-    
-    call_command(*args)
-    return "Gap repair completed"
+
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_repair",
+        command_args=args,
+        command="repair_ruz_gaps",
+        celery_task_id=self.request.id or "",
+    )
 
 
-@shared_task(queue='ruz_full')
-def resume_gap_repair(workers=5):
+@shared_task(bind=True, queue='ruz_full')
+def resume_gap_repair(self, workers=5, sync_job_id: int | None = None):
     """
     Celery task na pokračovanie pozastavenej opravy dier.
     """
     from registers.models import SyncGapAnalysis
-    
+
     analysis = SyncGapAnalysis.objects.filter(
         status='repairing'
     ).order_by('-created_at').first()
-    
+
     if not analysis:
         logger.info("No paused gap repair found.")
         return "No gap repair to resume"
-    
-    logger.info(f"Resuming gap repair from ID {analysis.repair_progress_id}...")
-    call_command('repair_ruz_gaps', f'--analysis-id={analysis.id}', '--resume', '--workers=5')
-    
-    return f"Resumed gap repair from ID {analysis.repair_progress_id}"
+
+    logger.info("Resuming gap repair from ID %s...", analysis.repair_progress_id)
+
+    # `workers` was accepted and then ignored -- the command was called with a
+    # hardcoded `--workers=5`. Pass the argument the caller gave.
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_repair",
+        command_args=[f'--analysis-id={analysis.id}', '--resume', f'--workers={workers}'],
+        command="repair_ruz_gaps",
+        celery_task_id=self.request.id or "",
+    )
 
 
 @shared_task(base=BaseSyncTask, queue='orsr', rate_limit='15/m')
