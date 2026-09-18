@@ -7292,6 +7292,19 @@ svoje rozhodnutie):
   z poolu s 5-10 vláknami na vlastných spojeniach — dve súrodené ID na jednej
   stránke môžu obe minúť `get`. Po oprave sa tá prehra hlási ako `REFUSED`
   s dôvodom; nameraná nebola.
+- **Bežiaci job hlási nulu, celý čas.** `set_job_outcome` vznikol presne preto,
+  aby „dokončený job s nulou spracovaných nevyzeral ako job, ktorý nič
+  neurobil" — a volá sa na **konci** behu. Kým beží, riadok jobu drží
+  `processed_items=0`, `succeeded_items=0`, `total_items=NULL` a hýbe sa len
+  `last_heartbeat`. Namerané na dell 2026-09-18 o 20:05 na jobe #46: po
+  **štyroch hodinách** a 41 200 spracovaných ID sú tam nuly. Admin stránka
+  SyncJobs (`frontend/admin/pages/SyncJobs.tsx:152`) kreslí
+  `ProgressBar pct={job.progress_percentage}` a `succeeded_items of total_items`,
+  takže päťdňový beh sa tam celý čas zobrazuje ako **prázdny pruh na 0 %**.
+  Reálny postup pritom čitateľný je — `SyncProgress` #4 ho má a keeper ho loguje
+  ako `RUZ_KEEPER_STATE` — takže to nie je stratený signál, ale riadok, ktorý
+  vyzerá zaseknuto. **Neopravovať počas behu**: zmena v ceste walku chce
+  reštart workera a ten zastaví beh až na ~35 minút.
 
 **Bezpečnostná poznámka k oprave:** po zmene stojí ochrana proti súbežnému behu
 na unique obmedzení `ruz:global`, nie na zozname statusov — `resume_repair_sync`
