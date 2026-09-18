@@ -7369,23 +7369,44 @@ SZCO by päť dní vyrábala falošné `Company` riadky a späť by sa to naprá
 
 - `Company` (`"Companies and SZCO"`) má s právnymi formami `100`–`110` a `422`
   **0 riadkov** — a to je práve množina, ktorá nemá ani jeden mať.
-- `"Individual Entities"` má **37 286** riadkov a sú v nej presne formy
-  `101, 105, 109, 103, 107, 102, 110, 106, 108` (formu `422` nemá ani jedna
-  tabuľka).
-- `"Individual Entities"` bolo pri meraní v #187 **35 339** → na 37 286, čiže
-  walk naozaj pridáva ľudí tam, kam patria. `Company` je 449 795.
+- `"Individual Entities"` má **58 341** riadkov a sú v nej presne formy
+  `101` (51 177), `105` (3 267), `109` (2 233), `103` (836), `107` (671),
+  `102` (119), `110` (51), `106` (26), `108` (2) — formu `422` nemá ani jedna
+  tabuľka.
+- **Kontrola je obojsmerná, a to je silnejšia verzia než jednosmerná.** Nielen
+  `Company` má s formami `100`–`110`/`422` **0** riadkov, ale aj
+  `"Individual Entities"` má **0** riadkov *mimo* týchto foriem. Rozdelenie je
+  teda presná partícia, nie filter, ktorý niečo prepustí — a keby walk sypal
+  ľudí aj do firiem, odhalí to buď jedna, alebo druhá strana.
+- Walk práve teraz zakladá **výhradne ľudí**: `Company` je 449 795, teda presne
+  toľko ako pri meraní v #187, kým `"Individual Entities"` išlo 37 286 → 58 341.
+  To je presne to, na čo Samuel upozornil, keď povedal, že mu v DB chýbajú
+  firmy — chýbali mu živnostníci, a `Company` sa pritom nezmenil, čo je zároveň
+  nezávislý dôkaz, že tie isté záznamy nezakladá dvakrát.
 
 (Pozor na názov tabuľky: `db_table` je `"Individual Entities"` s medzerou, takže
 `registers_individualentity` **neexistuje** — dopyt naň spadne na
 `relation does not exist`, čo je našťastie tá hlasná polovica.)
 
-**ETA je odvodená, nie prevzatá.** Prírastkový riadok #2 dokončil svoj priechod
-na RUZ id **2 486 558**, čiže id priestor má ~2,49 M. Stav 18:12 UTC: kurzor
-43 600. Zvyšok 2 442 958 pri 20 100/h je **~121 h ≈ 5,0 dňa** → **~2026-09-23
-neskoro večer CEST**. Obe čísla sú namerané, nie odhadnuté: 2 486 558 je
-posledný kurzor dokončeného prírastkového priechodu a 20 100/h je tempo tohto
-behu. Kontrola, že kurzor je naozaj tohto behu a nie naakumulovaný:
-43 600 / 2,17 h = 20 100/h, čo je presne rate, ktorý si ráta keeper sám.
+**ETA je odvodená, nie prevzatá.** Strop id priestoru je **2 624 307** — overené
+priamo v produkčnej DB: `max("RUZ ID")` je 2 624 307 v `"Companies and SZCO"`
+a 2 624 305 v `"Individual Entities"`; `min` je 4, resp. 7, takže pod kurzorom
+walku nič nechýba, a riadok s `NULL` RUZ ID nemá ani jedna tabuľka. Stav
+18:44 UTC: kurzor 54 900, tempo 20 376/h. Zvyšok 2 569 407 je **~126 h ≈ 5,25
+dňa** → **~2026-09-24 skoro ráno CEST (~03:00)**. Zdroj môže mať medzitým id
+vyššie než 2 624 307, takže to je *skorší* okraj, nie sľub.
+
+**Táto ETA bola o ~7 h optimistickejšia a bola to moja chyba.** Ako strop som
+predtým použil **2 486 558** — posledný kurzor *prírastkového* riadku #2. To je
+však len najvyššie id, ktoré sa zmenilo v okne toho priechodu; prírastkový
+priechod ide cez **zmenené** záznamy, nie cez celý id priestor, takže o maxime
+zdroja nehovorí vôbec nič. Bolo to namerané číslo, ktoré meria inú vec — presne
+trieda chyby, pred ktorou tento dokument varuje inde.
+
+Kontrola, že kurzor je naozaj tohto behu a nie naakumulovaný:
+54 900 / 2,69 h (`get_duration()` = 2:41:39, čiže `started_at` ≈ 16:02 UTC, čo
+sedí s tým, kedy walk zabral slot) = 20 378/h, čo je presne rate, ktorý si ráta
+keeper sám (20 376/h).
 
 **Dve pasce pre toho, kto to bude čítať zajtra.**
 
