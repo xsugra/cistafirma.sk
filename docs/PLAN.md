@@ -6879,8 +6879,9 @@ outlier, nie poistka. (Pozitívna kontrola, že `time_limit` vieme vôbec preč�
 
 ### 11.5 Čo je overené a čo ešte nie
 
-- Backend: **945 testov OK** (`registers.tests_sync_job_singleton` má 14, z
-  toho 9 nových), frontend: `npm test` 423 OK, `typecheck` aj `build` čisté.
+- Backend: **964 testov OK** (`registers.tests_sync_job_singleton` má 33, z toho
+  6 nových na keeper rozhodnutie, 6 na `ruz_keeper_tick` a 11 na oba opravené
+  vstupné body), frontend: `npm test` 423 OK, `typecheck` aj `build` čisté.
 - Mierka behu: job #23 (`ruz_incremental`, 2026-09-13 09:54→11:57) spracoval
   45 306 záznamov za 123 min ≈ **6,1 záznamu/s**. `Companies and SZCO` má
   449 792 riadkov a najvyššie `RUZ ID` 2 624 307. Dell má 423 GB voľných,
@@ -6892,22 +6893,65 @@ outlier, nie poistka. (Pozitívna kontrola, že `time_limit` vieme vôbec preč�
 
 ### 11.6 Ako to beží 24/7
 
-Zámerne cez Celery na fronte `ruz_full` (`cistafirma_celery_ruz`,
+**Samotný walk** ide cez Celery na fronte `ruz_full` (`cistafirma_celery_ruz`,
 `--concurrency=1`, vlastný kontajner — jeho zablokovanie nič iné nevyhladuje),
 nie cez odpojený `docker compose exec`: len tak má beh job riadok, heartbeat,
 viditeľnosť vo watchdogu a singletnovú poistku.
 
-Keeper na delle každých ~5 min číta **najnovší** `ruz_full` `SyncJob`:
+**Keeper je mimo Celery** — je to systémd user timer na delle, ktorý každých
+5 minút spustí `python manage.py ruz_keeper_tick`. Zámerne nie je ďalší záznam
+v `CELERY_BEAT_SCHEDULE`: keeper má za úlohu dostať stack zo stavu, v ktorom už
+Celery je, takže na `celery` fronte by prestal presne vtedy, keď je potrebný
+(uviaznutý worker, alebo `PeriodicTask` riadok, ktorý už nezodpovedá
+`CELERY_BEAT_SCHEDULE` — na to už tento repozitár raz doplatil). Brána, ktorá
+sleduje niečo, nesmie závisieť od toho istého niečoho.
 
-| stav | akcia |
-|---|---|
-| `completed` | skončiť |
-| `running` s čerstvým heartbeatom | čakať |
-| `failed` / `paused` / `cancelled` | `resume_full_ruz_sync.delay()` |
-| žiadny | `start_full_ruz_sync.delay(reset=False)` |
+Rozhodnutie je `sync_engine.ruz_full_keeper_decision` (testovateľné, na rozdiel
+od pravidla v shell skripte). Keeper číta **najnovší** `ruz_full` `SyncJob`:
 
-`resume_full_ruz_sync` je bezpečné dispatchovať opakovane: druhý dispatch stretne
-živý job na `ruz:global` a vráti sa.
+| stav | akcia | prečo |
+|---|---|---|
+| `completed` | skončiť | koniec zoznamu; walk sa dokončil |
+| `queued` / `running` | čakať | beh je v pohybe |
+| `failed` / `paused` / `cancelled` | `resume_full_ruz_sync.delay()` | beh skončil a nedošiel na koniec |
+| žiadny | `start_full_ruz_sync.delay(reset=False)` | ešte nikdy nebežal |
+
+Detaily, ktoré nie sú vidieť z tabuľky:
+
+- **`running` so starým heartbeatom je zámerne „čakať".** „Tento beh je mŕtvy"
+  vlastní watchdog a je jeho jediný vlastník; druhý vlastník by bol druhý
+  odpoveď na tú istú otázku. Navyše `running` riadok blokuje dispatch na
+  `ruz:global`, takže by keeper len zaplnil frontu správami, ktoré nemôžu
+  urobiť nič.
+- **`paused` sa nedá spoznať z `completed_at`.** `pause_job` ho nenastavuje, takže
+  rozhodnutie číta `completed_at or started_at or queued_at`. Keby čítalo len
+  `completed_at`, pauznutý walk by ostal pauznutý navždy.
+- **`resume` má 15-minútový odstup** (`KEEPER_REDISPATCH_AFTER`). `.delay()` len
+  vloží správu do brokera — nový job riadok vytvára až worker, ktorý si ju
+  vyzdvihne — takže pri zastavenom workerovi ostáva najnovším riadkom stále ten
+  mŕtvy. Bez odstupu by keeper posielal novú úlohu každý tick, kým by výpadok
+  trval.
+- **`resume` je bezpečné dispatchovať opakovane**: druhý dispatch stretne živý
+  job na `ruz:global` a vráti sa (`_run_ruz_command`).
+- **Keeper je bezstavový.** Žiadna slučka, žiadny stavový súbor — každý tick
+  prečíta DB a rozhodne odznova. Tick, ktorý neprebehol (host bol dole), nič
+  nestojí; ďalší tick vidí tú istú DB a urobí správnu vec. `Persistent=true`
+  navyše po reštarte spustí tick hneď, nie až o päť minút.
+- **Prvý walk sa spúšťa ručne**, nie keeperom: `completed` je terminálny stav, a
+  keby v `SyncJob` ostal starý dokončený `ruz_full` riadok, keeper by korektne
+  usúdil „hotovo" a walk by nikdy nezačal. Po ručnom dispatchi je najnovším
+  riadkom ten nový a keeper ho odvtedy stráži.
+- **Keeper sa po dokončení sám nevypne** — tickne „done" a ďalej nič nerobí.
+  Je to tak zámerne: keby niekedy v budúcnosti vznikol nový `ruz_full` beh
+  (napr. po zmene schémy), keeper ho stráži bez zásahu človeka. Vypnutie:
+  `systemctl --user disable --now sk.cistafirma.ruz-keeper.timer`.
+
+Inštalácia na delle: `scripts/local/install_ruz_keeper.sh` (Linux-only, inak
+odmietne). Jednotky: `scripts/local/systemd/sk.cistafirma.ruz-keeper.{service,timer}.in`.
+Inštalátor **odmietne** inštalovať bez `loginctl enable-linger`: user timer bez
+lingeru prestane pri odhlásení — ticho, a `systemctl --user status` pritom stále
+hlási „waiting". To je presne tá trieda zlyhania, kvôli ktorej celý mechanizmus
+existuje, takže sa to kontroluje, nie dokumentuje.
 
 ---
 
