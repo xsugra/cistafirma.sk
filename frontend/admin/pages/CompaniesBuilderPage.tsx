@@ -528,7 +528,7 @@ function GroupEditor({ group, onChange, isRoot = false }: { group: FilterBuilder
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Skupina</span>
-          <select className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs" value={group.logic} onChange={e => onChange({ ...group, logic: e.target.value as FilterLogic })}>
+          <select className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-base sm:text-xs" value={group.logic} onChange={e => onChange({ ...group, logic: e.target.value as FilterLogic })}>
             <option value="and">AND</option>
             <option value="or">OR</option>
           </select>
@@ -559,27 +559,27 @@ function ConditionEditor({ node, onChange, onDelete }: { node: FilterBuilderCond
     <div className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 md:grid-cols-12">
       <div className="md:col-span-3">
         <Label text="Pole" />
-        <select className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={node.field} onChange={e => onChange(defaultCondition(e.target.value, node.value))}>
+        <select className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-base sm:text-sm" value={node.field} onChange={e => onChange(defaultCondition(e.target.value, node.value))}>
           {FIELD_DEFS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
       </div>
       <div className="md:col-span-2">
         <Label text="Operátor" />
-        <select className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={node.operator} onChange={e => onChange({ ...node, operator: e.target.value })}>
+        <select className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-base sm:text-sm" value={node.operator} onChange={e => onChange({ ...node, operator: e.target.value })}>
           {operatorsForField(node.field).map(op => <option key={op.value} value={op.value}>{op.label}</option>)}
         </select>
       </div>
       <div className="md:col-span-6">
         <Label text="Hodnota" />
         {meta.kind === 'select' ? (
-          <select className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={node.value} onChange={e => onChange({ ...node, value: e.target.value })}>
+          <select className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-base sm:text-sm" value={node.value} onChange={e => onChange({ ...node, value: e.target.value })}>
             <option value="">Vyber</option>
             {meta.options.map(opt => <option key={opt} value={opt}>{selectLabel(node.field, opt)}</option>)}
           </select>
         ) : meta.kind === 'number' ? (
-          <input className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" type="number" value={node.value} onChange={e => onChange({ ...node, value: e.target.value })} />
+          <input className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-base sm:text-sm" type="number" value={node.value} onChange={e => onChange({ ...node, value: e.target.value })} />
         ) : (
-          <input className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" type="text" value={node.value} onChange={e => onChange({ ...node, value: e.target.value })} placeholder={meta.label} />
+          <input className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-base sm:text-sm" type="text" value={node.value} onChange={e => onChange({ ...node, value: e.target.value })} placeholder={meta.label} />
         )}
       </div>
       <div className="md:col-span-1 flex md:justify-end">
@@ -621,7 +621,7 @@ function Input({ label, value, onChange, placeholder }: { label: string; value: 
   return (
     <label className="space-y-1 block">
       <span className="block text-xs font-medium text-slate-500 dark:text-slate-400">{label}</span>
-      <input className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
+      <input className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-base sm:text-sm" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
     </label>
   );
 }

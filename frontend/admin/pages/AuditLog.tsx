@@ -40,7 +40,7 @@ export function AuditLog() {
               placeholder="Filtrovať akcie..."
               value={actionFilter}
               onChange={e => setActionFilter(e.target.value)}
-              className="pl-9 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white placeholder-slate-400 w-48 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+              className="pl-9 pr-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-base sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 w-48 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
             />
           </div>
           <button

@@ -142,7 +142,7 @@ export function SyncStatus() {
         <select
           value={source}
           onChange={e => changeFilter(() => setSource(e.target.value))}
-          className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+          className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-base sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/40"
         >
           <option value="">Všetky zdroje</option>
           {Object.entries(SOURCE_LABELS).map(([value, label]) => (

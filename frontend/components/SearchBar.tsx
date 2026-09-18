@@ -73,7 +73,11 @@ const VARIANT_STYLES = {
     wrapper: 'relative w-full',
     frame: 'border border-gray-300 dark:border-slate-700 rounded-full shadow-sm',
     icon: 'pl-4 pr-2 text-base',
-    input: 'text-sm py-2.5 pr-24',
+    // 16 px on a phone, 14 px from `sm` up. iOS Safari zooms the whole page
+    // when a text field it focuses computes below 16 px, and it does not zoom
+    // back out on blur -- so on the two pages that use this variant the box was
+    // a trapdoor into a permanently scaled page. The desktop size is unchanged.
+    input: 'text-base sm:text-sm py-2.5 pr-24',
     button: 'right-1 py-2 px-4 text-sm',
     dropdown: 'mt-2',
     placeholder: 'Hľadať inú firmu alebo osobu…',
