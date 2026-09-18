@@ -6879,9 +6879,11 @@ outlier, nie poistka. (Pozitívna kontrola, že `time_limit` vieme vôbec preč�
 
 ### 11.5 Čo je overené a čo ešte nie
 
-- Backend: **964 testov OK** (`registers.tests_sync_job_singleton` má 33, z toho
+- Backend: **966 testov OK** (`registers.tests_sync_job_singleton` má 33, z toho
   6 nových na keeper rozhodnutie, 6 na `ruz_keeper_tick` a 11 na oba opravené
-  vstupné body), frontend: `npm test` 423 OK, `typecheck` aj `build` čisté.
+  vstupné body; `registers.tests_sync_pipeline.SyncProgressErrorReasonTests` má
+  2 na dôvod chyby firmy — §11.7), frontend: `npm test` 423 OK, `typecheck` aj
+  `build` čisté.
 - Mierka behu: job #23 (`ruz_incremental`, 2026-09-13 09:54→11:57) spracoval
   45 306 záznamov za 123 min ≈ **6,1 záznamu/s**. `Companies and SZCO` má
   449 792 riadkov a najvyššie `RUZ ID` 2 624 307. Dell má 423 GB voľných,
@@ -6952,6 +6954,38 @@ Inštalátor **odmietne** inštalovať bez `loginctl enable-linger`: user timer 
 lingeru prestane pri odhlásení — ticho, a `systemctl --user status` pritom stále
 hlási „waiting". To je presne tá trieda zlyhania, kvôli ktorej celý mechanizmus
 existuje, takže sa to kontroluje, nie dokumentuje.
+
+### 11.7 Dôvod chyby firmy sa počas behu nedal prečítať (`1e00c66`, zámerne nenasadnuté)
+
+Nájdené na **bežiacom** walku 2026-09-18: `SyncProgress` #4 hlásil
+`total_errors=1` a `last_error` bol **prázdny**. Príčina je presná:
+`SyncProgress.record_progress` ukladá každý stý záznam cez `update_fields`,
+ktoré `last_error` neobsahujú — a obe miesta, ktoré chybu firmy zapisujú
+(`fetch_ruz_data.py:318` a `:328`), priradili `progress.last_error` až **po**
+tomto volaní. Text teda ostal v pamäti.
+
+Čo to znamená prevádzkovo: po celý beh riadok hlási počet chýb **bez jediného
+dôvodu**, a pri walku, ktorý trvá dni, je to celý ten čas. Až na konci ho
+zapíše `complete()`/`pause()`/`fail()`, ktoré volajú plný `save()` — takže
+*dokončený* riadok dôvod nesie, ale len ten posledný. Overené: dôvod chyby
+(duplicitné IČO) bol dosiahnuteľný len z logu kontajnera.
+
+Oprava: `error_message` je parameter `record_progress` (poradie volania už text
+nemôže ticho zahodiť) a `last_error` je v `update_fields` pri **každom** zápise,
+nie len pri tom hneď po chybe — chyba na 905. firme sa ukladá až pri 1000. a to
+ukladanie samo nijakú chybu nemá. Oba nové testy mieria na priebežný zápis;
+assertion po dobehnutí walku by prešla aj s pôvodným defektom. Overené proti
+kódu bez opravy: padajú na `'' != 'refused'`.
+
+**Zámerne sa to nenasadzuje počas walku.** Reštart `celery_worker_ruz` by beh
+zastavil až na ~35 minút (30 min prah watchdogu + 5 min tick keepera) a znovu
+by spravil ≤100 záznamov — za zlepšenie *výpisu*, nie správania. Dovtedy je
+dôvod stále dosiahnuteľný z logu. Nasadí sa po dokončení walku.
+
+Samotné chyby, ktoré sa počítajú, sú **duplicitné IČO**
+(`Companies and SZCO_ICO_key`): register odpovedá jedným IČO na viac subjektov
+a unique index to odmietne. To je zámerný, nefatálny prípad z #83 — okno sa
+cez neho posunie, namiesto aby navždy stálo.
 
 ---
 
