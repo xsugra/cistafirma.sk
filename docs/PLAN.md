@@ -6557,17 +6557,116 @@ trendu cez `toFixed(1)` („↓2.7 %"). Slovenský čitateľ čaká `53,33 %`.
 by ďalších ~16 px, ale `InfoCard` je na stránke firmy aj v celom admin paneli —
 je to zmena dizajnového systému, nie tejto karty.
 
-### 10.4 Poradie prác
+### 10.4 Graf „Prepojenia" sa vycentruje na to, čo človek vidí (#179)
+
+**Zadanie:** *„nejakým vhodným spôsobom vyrieš automatické centrovanie toho grafu
+prepojení na tú zobrazovaciu plochu, ktorú používateľ práve vidí."*
+
+**Ako som to meral.** Vite dev server na Macu, `ENABLE_MOCK_DATA` prepnuté **na
+drotu** (rewrite `constants.ts` v `page.route`), a grafové API
+(`/api/companies/*/graph/`) odpovedané z fixtures — 9 uzlov, 10 hrán, teda bežná
+s.r.o. Pravda o tom, kde graf naozaj je, nie je výpočet, ale **alpha kanál
+plátna**: skript prejde `getImageData` a nájde obdĺžnik, v ktorom sú naozaj
+namalované pixely (uzly, hrany aj názvy). Ten sa porovná s prienikom boxu grafu
+a viewportu. Ani jeden súbor v repozitári sa nedotkol.
+
+**Namerené — 393 × 852, priskrolované ku grafu:**
+
+| | dnes, ako sa to načíta | po návrate z celej obrazovky |
+|---|---|---|
+| box grafu | 359 × 639 | 359 × 639 |
+| **plátno** | **1100 × 1000** (`attr 3300×3000`) | **359 × 639** (`attr 1077×1917`) |
+| atrament | x 291,3..992,0 (700,7 px), y 0..835,3 | x 65,0..312,3 (247,3), y 213,0..445,3 |
+| stred atramentu vs stred okna | **+445,2 px vpravo**, +98,1 px dole | **−7,8 px**, +9,6 px |
+| rezerva vpravo / dole | **−616,0 / −196,3** | +63,7 / +193,7 |
+| zmení sa plátno pri 393 → 900? | **nie** (ostane 3300 × 3000) | — |
+
+**To je koreňová príčina a je iná, než som čakal.** `ConnectionGraph` drží
+`dimensions` v stavu, na začiatku `{ width: 1100, height: 1000 }`, a zapisuje ho
+**jediný efekt** — ten, ktorý meria kontajner. Jeho strážca je
+`containerRef.current`, a ten je pri prvom prebehnutí efektu `null`: kým dáta
+nedorazia, komponent vracia vetvu „Žiadne prepojenia neboli nájdené", takže
+`ref` nie je na čom. Závislosti efektu sú `[isFullscreen]`, tie sa nikdy
+nezmenia — **takže sa už nikdy nezmeria.**
+
+Dôsledok: plátno je **3,06× širšie a 1,56× vyššie než box, v ktorom je
+vystavené** (karta má `overflow-hidden`, takže vidno jeho ľavý horný roh),
+a `zoomToFit` vycentruje graf na stred *plátna*, ktorý je mimo obrazovky. Na
+telefóne je preto z celej šírky grafu (700,7 px) v boxe **~85 px** — zvyšok je
+vpravo za okrajom. To je aj odpoveď na #178: „musím priblížiť, aby názov
+nabehol" bolo hľadanie grafu, ktorý je z väčšiny mimo.
+
+Dôkaz, že príčina je meranie a nie fit: **jediné, čo efekt spustí znova, je
+prepnutie celej obrazovky** — a to je zároveň jediná zmena, po ktorej sa čísla
+dostanú na správne hodnoty (stĺpec vpravo). Ten istý kód, tie isté dáta, iné
+plátno. Zároveň to bol jediný spôsob, ako dnes zmerať „ako to vyzerá, keď sa
+meria správne", bez zmeny zdrojáku.
+
+**To isté na 900 × 900 (dnes):** plátno 1100 × 1000 v boxe 734 × 675, atrament
+704 × 841, stred **+192,0 px vpravo** a +83,0 px dole, presah 177 px vpravo
+a 166 px dole. Po zmeraní: atrament 446 × 443, stred odchýlený o 3,0 px. Nie je
+to teda mobilná chyba — mobil ju len zviditeľní.
+
+**Druhá polovica zadania — „plocha, ktorú práve vidí".** Aj keď sa box zmeria
+správne, `zoomToFit` centruje na **celý box**, a to nie je to isté ako to, čo
+človek vidí:
+
+| orientácia | box | vidno | prekryv hore (legenda+ovl.) | popis dole | použiteľné okno | stred vs stred boxu |
+|---|---|---|---|---|---|---|
+| 393 × 852 (stojato) | 639 px | 639 px (100 %) | y 12..148 = **136 px** | y 599..631 | y 148..599 = **451 px** | **+54,0 px** |
+| 852 × 393 (ležato) | **500 px** | 393 px (**79 %**) | y 12..72 = 60 px | y 476..492 | y 72..393 = 321 px | −17,5 px |
+
+Na stojato je box celý na obrazovke, ale **horných 136 px je prekrytých**
+legendou a ovládaním — fit, ktorý centruje na box, posadí vrchol grafu pod
+legendu (stred má byť o 54 px nižšie). Na ležato je box 500 px vysoký
+(`min-h-[500px]` prebije `75vh` = 295 px) v 393 px okne, takže **štvrtina boxu je
+mimo obrazovky vždy**, nech sa skroluje kamkoľvek.
+
+**Oprava, dva commity:**
+
+1. **Meranie.** Kontajner sa meria **callback refom** — ten sa zavolá v okamihu,
+   keď sa uzol naozaj pripojí, takže ho poradie vetiev neobíde — plus
+   `ResizeObserver` na ňom. `dimensions` začína na `{ 0, 0 }`, takže plátno sa
+   nevykreslí, kým nemá skutočnú veľkosť; tým zmizne aj `isFullscreen` vetva
+   (v celej obrazovke je box `h-dvh`, čiže jeho obdĺžnik *je* okno).
+2. **Fit na použiteľný obdĺžnik.** `GraphCanvas` dostane `fitToRect(rect)`, ktorý
+   počíta mierku a stred z **kresleného** rozsahu (disk + názov pod ním), nie
+   z `getGraphBbox` knižnice: tá nafukuje každú firmu o
+   `sqrt(nodeVal)·nodeRelSize = sqrt(π·26²)·4` = **184,3 px**, kým disk má 26 px —
+   preto je graf dnes menší, než by mohol byť. Použiteľný obdĺžnik počíta
+   `ConnectionGraph` (box ∩ viewport, mínus pruh s legendou a mínus popis)
+   a odovzdáva ho ako getter. Automaticky sa prefitne, keď človek **dorazí** ku
+   grafu (≥ 55 % boxu vidno a obdĺžnik sa zmenil o viac než prah), a keď sa zmenia
+   dáta; **ručné potiahnutie alebo zoom automatiku vypne** a ⟲ („Reset pohľadu")
+   ju zase zapne.
+
+**Čo to netvrdí.** Že bude vidno každý názov pri každom zoome — to je aritmetika
+z 9.1 (páky B a C) a tej sa to netýka. A že sa vzhľad nemení: fit na kreslený
+rozsah znamená **väčší zoom** než dnes (184,3 px na firmu → 26 px + šírka názvu),
+takže graf bude na obrazovke väčší. Presné čísla po zmene idú do overenia, nie
+do odhadu.
+
+### 10.5 Poradie prác
 
 1. **Tlačidlo „Overiť"** — `components/SearchBar.tsx` + regresný test, ktorý
    stráži invariant (pilulka musí byť obsahujúci blok, inak sa `right-*` zase
-   meria od `px-4` wrappera).
+   meria od `px-4` wrappera). **Hotové** (`7cd0e7f`).
 2. **Kľúčové ukazovatele** — `components/company/FinancialIndicators.tsx`.
-3. Ak povie, **desatinná bodka** (10.3) — samostatný commit.
+   **Hotové** (`4691fbe`).
+3. **Graf „Prepojenia"** — `components/graph/ConnectionGraph.tsx` +
+   `GraphCanvas.tsx` (+ testy: fit je čistá aritmetika, tá sa testovať dá).
+   **Hotové** — `graphFit.ts` (čistá geometria) + `graphFit.test.ts` (13),
+   `GraphCanvas.test.tsx` (13, s stavovým dvojníkom `force-graph`),
+   `ConnectionGraph.test.tsx` (8, s podstrčeným `getBoundingClientRect`).
+   Celkovo 45 súborov / 420 testov, `typecheck` aj `build` čisté.
+4. Ak povie, **desatinná bodka** (10.3) — samostatný commit. **Nespravené**,
+   čaká na slovo.
 
 Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`),
-štruktúrovaný commit, push na `origin` aj `gitlab-home`. Po oboch krokoch
-premerať **to isté**, čo je namerané vyššie, na zbuildovanej verzii — nie okom.
+štruktúrovaný commit, push na `origin` aj `gitlab-home`. Po všetkých krokoch
+premerať **to isté**, čo je namerané vyššie, na zbuildovanej verzii — nie okom:
+na 393 px musí byť plátno 359 × 639 a atrament vnútri použiteľného okna, na 900 px
+plátno 734 × 675 a stred odchýlený do 10 px.
 
 ---
 
