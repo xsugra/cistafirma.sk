@@ -214,7 +214,17 @@ export const FinancialRatiosTable: React.FC<FinancialRatiosTableProps> = ({ anal
                                 </p>
                             )}
                         </div>
-                        <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-slate-800">
+                        {/* `overflow-x-auto`, not `overflow-hidden`. Four
+                            columns with fixed widths need 397,9 px (Rentabilita)
+                            and 426,1 px (Zadĺženosť) at their narrowest, against
+                            313 px available on an iPhone 14 Pro (393 − 32
+                            `main.px-4` − 48 `InfoCard.p-6`). `overflow-hidden`
+                            clipped the „Stav" column and, because a hidden
+                            overflow cannot be scrolled, there was no gesture
+                            that reached it — the verdict was simply gone. A
+                            scroll container clips the same pixels but keeps them
+                            reachable. */}
+                        <div className="overflow-x-auto rounded-lg border border-gray-100 dark:border-slate-800">
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="bg-gray-50 dark:bg-slate-900/50">

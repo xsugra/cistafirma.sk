@@ -95,7 +95,11 @@ export const BenchmarkComparison: React.FC<BenchmarkComparisonProps> = ({
             <p className="text-xs text-gray-500 dark:text-gray-400 -mt-1 mb-3">
                 {sectionLabel} — medián z {benchmark.companyCount.toLocaleString('sk-SK')} firiem v roku {benchmark.year}
             </p>
-            <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-slate-800">
+            {/* Same four-column shape as the ratios table, so the same defect:
+                the derived „Rozdiel" column is the whole point of this card and
+                it was the first thing clipped away at 393 px, unreachably. See
+                the longer note in `FinancialRatiosTable`. */}
+            <div className="overflow-x-auto rounded-lg border border-gray-100 dark:border-slate-800">
                 <table className="w-full text-sm">
                     <thead>
                         <tr className="bg-gray-50 dark:bg-slate-900/50">
