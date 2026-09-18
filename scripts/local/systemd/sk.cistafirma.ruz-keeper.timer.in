@@ -1,0 +1,20 @@
+[Unit]
+Description=CistaFirma RUZ full-resync keeper (every 5 minutes)
+
+[Timer]
+# Wall-clock aligned rather than an interval measured from the last tick: "every
+# five minutes" then means the same thing on every host and in every log, and a
+# tick missed while the host was down needs no special handling -- the next
+# five-minute mark is at most five minutes away either way.
+OnCalendar=*:0/5
+# A tick is a few seconds of Django start-up. Allowing the timer to drift half a
+# minute keeps systemd from waking the host precisely on the mark for no gain.
+AccuracySec=30s
+# After a reboot, run once immediately instead of waiting for the next mark.
+# A reboot is one of the things that ends the walk, so the tick that restarts it
+# is wanted at boot, not up to five minutes later.
+Persistent=true
+Unit=sk.cistafirma.ruz-keeper.service
+
+[Install]
+WantedBy=timers.target

@@ -704,6 +704,83 @@ def detect_and_fail_stuck_jobs() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Full-resync keeper
+# ---------------------------------------------------------------------------
+
+FULL_RESYNC_JOB_TYPE = "ruz_full"
+
+# Every verb `ruz_full_keeper_decision` may return. The ops script that calls it
+# dispatches on these and raises on anything else, so a verb added here without a
+# matching branch there stops the tick loudly instead of doing nothing quietly --
+# the failure mode this repository keeps paying for.
+KEEPER_ACTIONS = frozenset({"done", "wait", "resume", "start"})
+
+# A dispatch should produce a new SyncJob row within moments. If the newest
+# `ruz_full` row is still the same dead one after this long, the dispatch did not
+# take -- the broker is unreachable, the queue is gone, the worker is stopped --
+# and it is worth sending again. Without a floor, a broker outage would have the
+# keeper enqueue a fresh task every tick for however many days it lasted.
+KEEPER_REDISPATCH_AFTER = timedelta(minutes=15)
+
+
+def ruz_full_keeper_decision(*, now=None) -> tuple[str, SyncJob | None]:
+    """What the full-RUZ-resync keeper should do on this tick.
+
+    Returns `(action, job)`:
+
+    - `"done"`   -- the newest full walk completed. Nothing left to keep alive.
+    - `"wait"`   -- a run is in flight, or has just ended and its resume is still
+                    on its way.
+    - `"resume"` -- the newest full walk ended without finishing. Continue it.
+    - `"start"`  -- no full walk has ever run. Begin one from 2000-01-01.
+
+    A full walk over `zmenene-od=2000-01-01` covers up to ~2.6M RUZ ids at
+    roughly 6 per second, so it runs for days -- and over days the things that
+    end it are ordinary: a `docker compose up`, a reboot, a killed worker. Each
+    leaves the same fingerprint, a `running` SyncJob whose heartbeat stops, which
+    the watchdog fails half an hour later while nothing restarts it. This decides
+    whether to restart it.
+
+    The rule lives here rather than in the ops script that calls it, for the same
+    reason `is_stuck` does: the caller is a shell script on one host, the rule is
+    the part that has to be right, and a rule inside a shell script is a rule no
+    test can reach. The script maps the verb onto a dispatch and decides nothing.
+
+    `"wait"` covers a `running` job whose heartbeat has gone stale, on purpose.
+    Dispatching a resume there would meet the live row on the `ruz:global`
+    concurrency key and return without importing anything -- the watchdog is
+    already the owner of that transition, and a second owner would be a second
+    answer to the same question.
+    """
+    if now is None:
+        now = timezone.now()
+
+    job = (
+        SyncJob.objects.filter(job_type=FULL_RESYNC_JOB_TYPE)
+        .order_by("-id")
+        .first()
+    )
+
+    if job is None:
+        return "start", None
+
+    if job.status == "completed":
+        return "done", job
+
+    if job.status in ("queued", "running"):
+        return "wait", job
+
+    # failed / paused / cancelled -- the run is over and did not reach the end.
+    # Named by exclusion rather than by listing them: a status added later should
+    # read as "needs a resume", not as "probably fine".
+    ended = job.completed_at or job.started_at or job.queued_at
+    if ended is not None and (now - ended) < KEEPER_REDISPATCH_AFTER:
+        return "wait", job
+
+    return "resume", job
+
+
+# ---------------------------------------------------------------------------
 # Iteration helpers
 # ---------------------------------------------------------------------------
 

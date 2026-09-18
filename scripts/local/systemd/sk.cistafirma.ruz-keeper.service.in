@@ -1,0 +1,32 @@
+[Unit]
+Description=CistaFirma RUZ full-resync keeper (one tick)
+Documentation=file://__ROOT_DIR__/backend/registers/management/commands/ruz_keeper_tick.py
+# No After=/Wants= on docker.service: a systemd *user* unit may not depend on
+# system units. A tick that fires while docker is down fails loudly and is
+# recorded as a failed unit -- which is the honest outcome, and better than a
+# tick that silently does nothing.
+
+[Service]
+Type=oneshot
+# The repo directory, not $HOME: `docker compose` resolves its compose file, its
+# project name and its `.env` -- including the COMPOSE_FILE line that replaces
+# the frontend service on a production host -- from the working directory, so a
+# tick run from anywhere else would exec into a different project.
+WorkingDirectory=__ROOT_DIR__
+# Absolute, not resolved through PATH: systemd does not consult Environment=PATH
+# when locating the ExecStart binary, so a bare `docker` would be looked for in
+# the standard system directories and fail on a host that keeps it elsewhere.
+ExecStart=__DOCKER__ compose exec -T backend python manage.py ruz_keeper_tick
+# Deterministic PATH for the docker CLI's own children, for the same reason the
+# backup job embeds one: a job that resolves its tools differently from the
+# operator's shell fails in ways nobody can reproduce.
+Environment=PATH=__PATH__
+Environment=HOME=__HOME__
+# stdin is closed (systemd's default for a oneshot), which is what `-T` expects.
+# No User=/Group=: a user unit already runs as the user who installed it. That
+# user must be able to run `docker compose`, and the installer checks it rather
+# than letting the first tick discover it.
+#
+# Output goes to the journal, not to a file: the state this job acts on is the
+# `SyncJob` row, nothing reads a log file back, and journald already rotates.
+# Read it with:  journalctl --user -u sk.cistafirma.ruz-keeper
