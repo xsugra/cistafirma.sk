@@ -5953,7 +5953,251 @@ opravená je v tom dokumente.
 
 ---
 
-## 9. Nemenné pravidlá
+## 9. Plán: mobilná responzivita a graf „Prepojenia" (2026-09-18)
+
+**Stav:** ⏳ **čaká na tvoje slovo.** Z tohto plánu nie je v kóde zatiaľ ani
+riadok.
+
+Zadanie boli štyri veci: (1) tlačidlo „Vypočítať trasu" väčšie a viac na
+dizajnový systém, (2) frontend prispôsobiť mobilu, hlavne iPhone 14 Pro
+(393 × 852), (3) tlačidlo „Aktualizovať údaje" sa na mobile nezobrazuje,
+(4) graf „Prepojenia" občas nekreslí názvy uzlov.
+
+Pred prvým riadkom kódu bežali dve analýzy (23 agentov): audit responzivity
+(6 hľadačov, každý nález prešiel nezávislým verifikátorom, ktorého úlohou bolo
+ho **vyvrátiť**) a diagnóza grafu (3 nezávislé diagnózy, 3 návrhy, 3 sudcovia).
+Výsledok: **52 verdiktov, jeden z nich nález zamietol** — a **tri moje vlastné
+predpoklady boli vyvrátené**. Uvádzam ich nižšie, lebo keby som ich bol
+zapracoval, boli by to commity, ktoré nič nerobia.
+
+Baseline je zamknutý a zelený: `npm test` **352/352**, `npm run typecheck`
+čistý, `npm run build` zelený, pracovný strom čistý.
+
+---
+
+### 9.1 Graf „Prepojenia" — koreňová príčina je nájdená (#178)
+
+**Symptóm:** po usadení grafu niektorý názov chýba; pomôže až priblíženie
+alebo oddialenie zoomu.
+
+**Koreňová príčina.** `drawnLabelsRef` je pomocný zoznam obdĺžnikov **jedného
+frame**, ale resetuje sa `performance.now()` testom **vnútri per-uzol
+callbacku**:
+
+```js
+// frontend/components/graph/GraphCanvas.tsx:253-258 — vnútri paintNode
+const now = performance.now();
+if (now - lastClearTimeRef.current > 8) {
+  drawnLabelsRef.current = [];      // „nový frame" podľa hodín, nie podľa knižnice
+  lastClearTimeRef.current = now;
+}
+```
+
+`paintNode` sa volá **raz za uzol** v rámci jedného frame (až 200×, `MAX_NODES`).
+Knižnica pritom hranicu frame **pozná presne** a vystavuje ju —
+`onRenderFramePre(ctx, globalScale)`, raz za vykreslený frame tesne pred
+`tickFrame()` (`force-graph.mjs:1655-1663`). Kód ju nepoužíva; háda ju z hodín.
+Traja sudcovia to overili nezávisle v zdrojáku knižnice a **ani jeden
+mechanizmus nevyvrátil**.
+
+**Prečo to spraví práve zoom.** Keď simulácia dobehne (`cooldownTicks = 100`),
+`autoPauseRedraw` (default `true`) vypne prekresľovanie úplne — na plátne
+**zamrzne presne ten frame, v ktorom engine skončil, aj so svojou chybou**.
+Jediné, čo po zastavení vynúti prekreslenie, je interakcia: d3 zoom nastaví
+`needsRedraw` (`:12770-12773`). Preto názov „nabehne" až po zmene zoomu.
+To je celý hlásený symptóm, vysvetlený do dna.
+
+Regresiu zaviedol `fd185d5` (jún 2026) — dovtedy sa názvy kreslili vždy.
+Sudca to overil z gitu.
+
+**Dve mechaniky, obe treba zavrieť.** Prvá je tá časová (hore). Druhú našiel
+až tretí sudca a inde spomenutá nebola: názvy sa kreslia **inline v `paintNode`,
+v poradí `data.nodes`**, takže **neskorší uzol svojím nepriehľadným kruhom
+a `shadowBlur` presvietením prekreslí názov skoršieho uzla**. Je to ten istý
+symptóm, ale úplne deterministický — a sedí naň aj to, že pomôže priblíženie:
+názov je jediný objekt s veľkosťou na obrazovke, kým polomery uzlov sú pevné
+v jednotkách grafu. Riešenie: kresliť názvy v `onRenderFramePost`, po všetkej
+chróme uzlov.
+
+**Tri veci, ktoré som tvrdil a boli nesprávne:**
+
+1. ❌ *„Kolízny test je zle v jednotkách grafu, treba ho prepísať na
+   obrazovkové pixely."* — **Nepravda.** `measureText` ignoruje CTM a
+   `fontSize = Math.max(13 / globalScale, 4)`, takže obdĺžnik v jednotkách
+   grafu je **konštantných ~165 px na obrazovke**. Porovnanie v jednotkách
+   grafu je podobnostná transformácia porovnania v pixeloch — prepis by
+   **nezmenil nič**. Bol by to commit, ktorý nič nerobí.
+2. ⚠️ *„Mid-frame clear nastane, keď frame prekročí 8 ms."* — Presnejšie: test
+   sa meria proti uzlu, ktorý prah naposledy prekročil, takže na 120 Hz paneli
+   uzol 0 prekročí takmer vždy a clear na začiatku frame **zvyčajne prebehne**.
+   Živá vetva je užšia — clear sa zopakuje mid-frame len vtedy, keď **samotné
+   `paintNodes`** prekročí 8 ms. Preto je to „občas", nie vždy.
+3. ⚠️ *„Do person vetvy treba doplniť `|| isCenter`."* — **Nedosiahnuteľné.**
+   `centerNode` pochádza výhradne z firemného endpointu (`useGraphData.ts:38`)
+   a `ConnectionGraph` sa renderuje len z `ConnectionsSection.tsx:21`, takže
+   `isCenter` je pre osoby vždy `false`. Doplniť to = meniť kresliace pravidlo,
+   ktoré nič netestuje, a to bez účinku. **Nedopĺňam.**
+
+Ďalej: `Math.max(baseRadius + 8, gn.label.length * 3.2 + 10)`
+(`GraphCanvas.tsx:237`) je v jednotkách grafu a podhodnocuje skutočnú pilulku
+**~4×** pri zoome k ≈ 0,47 — layout teda ukladá názvy bližšie, než sú široké,
+a deklutter to platí tým, že názov zmaže.
+
+**Čo oprava garantuje — a čo nie.** Toto je podstatné a nechcem to obísť.
+Oprava garantuje **determinizmus**: tá istá schéma pri tom istom zoome vždy
+zobrazí tie isté názvy; žiadne blikanie závislé od hardvéru, žiadny zamrznutý
+pokazený frame. **Negarantuje, že každý názov bude vidno pri každom zoome.**
+Pri n = 200 je auto-fit zoom k = 4/∛200 ≈ 0,68, názov firmy s 25 znakmi má
+~244 jednotiek grafu, kým `forceCollide` rozostupuje len na ~180 — **väčšina
+názvov sa prekrýva geometricky a žiadne množstvo kódu to nezmení.** To je
+aritmetika, nie chyba.
+
+„Nech to funguje plnohodnotne" má preto čestné čítanie: **úplne opraviť to,
+čo je chybou** (názov sa stratí kvôli časovaniu, poradiu alebo hardvéru),
+a **zmenšiť počet názvov, ktoré zoom ešte potrebujú** — nie „všetky naraz".
+Na to sú dve páky a **pri druhej potrebujem tvoje slovo**:
+
+| | páka | čo spraví | cena |
+|---|---|---|---|
+| **A** | deterministické poradie (stred → hover → počet väzieb), porazený sa **zmenší**, nezmaže sa | tie isté názvy vždy tie isté; menej názvov potrebuje zoom | žiadna zmena vzhľadu |
+| **B** | `forceCollide` odvodiť zo skutočnej šírky pilulky (~4× väčší) | menej kolízií už v layoute | **graf bude redší a širší** — uzly ďalej od seba |
+| **C** | A + B | najviac názvov bez zoomu | najväčšia zmena vzhľadu |
+
+Odporúčam **C**: A samo o sebe je len „stratí sa to predvídateľne", čo nie je
+to, o čo si žiadal. Ale B mení vzhľad grafu — a to je tvoje rozhodnutie, nie
+moje.
+
+**Rozdelenie na commity:** (1) hranica frame (`onRenderFramePre`) + kreslenie
+názvov v `onRenderFramePost` + jedna pravda o obdĺžniku názvu (`drawLabelWithBg`
+dnes kreslí na `y - padY`, ale vracia obdĺžnik s `y` — dnes neškodné, len čo
+na obdĺžniku začne stáť rozhodnutie, je to chyba) — malý, samostatne
+recenzovateľný commit, ktorý je overenou koreňovou opravou; (2) politika
+názvov (deterministické poradie, zmenšenie, prípadne B).
+
+**Testy:** graf dnes nemá **ani jeden test** — `grep` cez
+`frontend/**/*.test.ts(x)` nenájde zmienku o `GraphCanvas`, `ConnectionGraph`,
+`useGraphData` ani `force-graph`. Všetky tri CI kontroly teda o kreslení
+netvrdia nič. Plán preto pridá `labelLayout.ts` (čistá funkcia bez DOM) +
+`labelLayout.test.ts`.
+
+---
+
+### 9.2 „Vypočítať trasu" — na dizajnový systém a väčšie (#175)
+
+Dnes je to ručne písaná pilulka `px-2.5 py-1 text-xs` → **26 px**, a je to
+**jediné tlačidlo na karte, ktoré nepozná dizajnový systém** (`.btn`).
+Identický reťazec tried má aj „Nájsť na Google Maps" hneď vedľa
+(`SeatLocationCard.tsx:254-264`).
+
+Plán: `.btn .btn-outline` + `min-h-11` (**44 px**, Apple HIG).
+
+**Obmedzenie, ktoré to viaže:** testy držia `<a>` rolu, `href` z `mapsLink()`,
+`target="_blank"`, `rel="noreferrer noopener"` aj text labelu
+(`SeatLocationCard.test.tsx:175-189, :203, :230`). Mením teda **len triedy
+a veľkosť**, nie štruktúru.
+
+**Vedľajší nález, ktorý musí ísť prv:** `.btn-outline` **nemá tmavú variantu**
+(`main.css:179-188`) — kontrast ~3,4:1, teda pod AA. Dnes sa to neprejavuje,
+lebo ani jedno z tých dvoch tlačidiel `.btn-outline` nepoužíva; po prevode by
+sa prejavilo. Preto sa tmavá variant dopĺňa **v tom istom commite**.
+
+---
+
+### 9.3 „Aktualizovať údaje" — nepríjemná pravda (#177)
+
+Hľadal som CSS chybu. **Nie je.** Šesť nezávislých auditov, tri verifikátory;
+jeden nález bol dokonca **zamietnutý** (`not-real`), pretože tvrdil, že je
+tlačidlo úplne skryté — nie je.
+
+- Jediná brána je `user?.isStaff` (`CompanyHeader.tsx:310`) a je to **zámer** —
+  dokumentovaný v komentári `:303-309` a testovaný
+  (`CompanyHeader.test.tsx:150-161`).
+- Na 393 px sa tlačidlo kreslí **identicky ako na desktope**.
+- Variantu „telefón beží na starom builde" verifikátor **vyvrátil meraním**:
+  `b7d5818` je predkom `main` aj `feat/ai-ready-baseline`, takže produkcia
+  tlačidlo má.
+
+**Najpravdepodobnejšie vysvetlenie: telefón je prihlásený účtom, ktorý nie je
+staff.** To sa zo zdrojáku dokázať nedá — treba sa pozrieť na živú stránku
+(`GET /api/auth/profile` z tej telefónnej session). **Nepredstieram, že som
+našiel chybu, ktorú som nenašiel.**
+
+**Čo reálna chyba je:** tlačidlo má **~22 px na výšku a 12 px písmo**
+(`px-2 py-0.5 text-xs` + 1 px rámiky: 16 px riadok + 4 px padding + 2 px rám)
+a je vnorené do bunky hodnoty s dátumom. To je **polovica dotykového minima**
+a v riadku dátumu sa dá prehliadnuť. Oprava: plnohodnotné `.btn` s `min-h-11`,
+presunuté z hodnoty do akčného radu `:223`.
+
+**Predtým, než uverím vlastnej oprave:** ak je telefónna session staff a
+tlačidlo sa aj tak nezobrazuje, príčina je inde a v statickom zdroji nie je.
+
+---
+
+### 9.4 Mobilná responzivita pre iPhone 14 Pro (#176)
+
+Zoradené podľa závažnosti; **prvé dve sú merané**, nie odhadnuté.
+
+1. **Tabuľka pomerových ukazovateľov — celý stĺpec „Stav" je odrezaný a nedá
+   sa k nemu doscrollovať.** Verifikátor to **nameral v headless Chrome na
+   393 px**: minimálna šírka tabuľky **397,9 px** (Rentabilita) a **426,1 px**
+   (Zadĺženosť) proti **313 px** dostupným (393 − 32 `main.px-4` − 48
+   `InfoCard.p-6`). Príčina je `overflow-hidden` na `FinancialRatiosTable.tsx:217`
+   (a `InfoCard.tsx:13`) — **nie je tam `overflow-x-auto`**, takže sa k stĺpcu
+   nedá dostať. Rovnaká trieda o kus ďalej: **Porovnanie so sektorom** — celý
+   odvodený stĺpec „Rozdiel" je neviditeľný a nedostupný.
+2. **Admin sidebar `w-60` (240 px) nemá responzívny prefix** a je
+   `flex-shrink-0` → na 393 px ostáva **153 px** (po `p-6` 105 px) a obsah sa
+   posúva do strany. `AdminLayout.tsx`. (Verifikátor upozorňuje, že obsah nie
+   je *orezaný*, je *posúvateľný* — to treba držať oddelené.)
+3. **Kompaktný vyhľadávací input má 14 px** (`text-sm`, `SearchBar.tsx:76`) →
+   iOS Safari pri fokuse **zoomuje a ostane priblížený**. Použitý na
+   `pages/Company.tsx:84` a `pages/Person.tsx:151`. Rovnaká trieda: admin
+   formuláre (inputy 14 px, selecty 12 px).
+4. **Dva parser-blokujúce CDN skripty v `<head>`, ktoré nikto nepoužíva**
+   (`index.html:36-37` — three.js r121 a `vanta@latest`). `vanta@latest` je
+   navyše **nepinovaná verzia bez SRI**, takže sa na každej stránke každej
+   session spúšťa cudzí kód, ktorý sa môže pod rukami zmeniť. To je
+   supply-chain expozícia, nie len latencia.
+5. `viewport-fit=cover` chýba a `env(safe-area-inset-*)` sa v projekte
+   nevyskytuje **ani raz** — samotné pridanie meta by teda bolo inertné.
+   `dvh`/`svh` tiež 0×.
+6. `h-screen` na 4 miestach (reálne problémy `AdminLayout.tsx:40`,
+   `ConnectionGraph.tsx:150`); mobilné menu bez `overflow-y-auto`; zatvorené
+   menu ostáva v DOM aj v tab-poradí; `GraphControls` má 32 px tlačidlá;
+   legenda grafu sa na 393 px láme na ~5 riadkov cez plátno.
+
+---
+
+### 9.5 Nálezy, ktoré som našiel a **nezapracúvam**
+
+Mimo zadania; uvádzam ich, neopravujem ich ticho:
+
+- `main.css:63` žiada `'IBM Plex Sans'` pre všetky nadpisy, ale `index.html:35`
+  načíta **len Outfit**; `'Inter'` sa tiež nenačítava → tichý fallback na
+  `system-ui` (nadpisy) a `sans-serif` (názvy v grafe). Dizajnová
+  nekonzistencia, nie rozbité zobrazenie.
+- `pages/ApiDocs.tsx:386` je `opacity-0 group-hover:opacity-100` — na dotyk
+  neviditeľné, kým sa na kód netapne (iOS syntetický `:hover` ho odhalí).
+- `~/.Trash` (TCC), Docker reclaim na Macu a runner id=2 na lenovo — #174,
+  blokované OS, nie mnou.
+
+---
+
+### 9.6 Poradie prác
+
+1. **Graf** (#178) — dva commity; páka **C** alebo **A** podľa tvojho slova.
+2. **„Vypočítať trasu"** (#175) + tmavá variant `.btn-outline` v tom istom
+   commite.
+3. **„Aktualizovať údaje"** (#177) — a overenie staff session na telefóne.
+4. **Tabuľky** (meraný orez) → **admin sidebar a inputy** → **`viewport-fit=cover`
+   + safe-area** → **menu, `h-screen`, legenda grafu**.
+
+Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`),
+štruktúrovaný commit, push na `origin` aj `gitlab-home`.
+
+---
+
+## 10. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
 
