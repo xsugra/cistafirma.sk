@@ -220,12 +220,16 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                         </p>
                     )}
                 </div>
-                <div className="flex items-center gap-4">
+                {/* `flex-wrap` because the refresh button is the fourth control
+                    here: at 393 px (iPhone 14 Pro) the four no longer fit on one
+                    line, and without wrapping they would shrink each other's
+                    labels instead of moving one down. */}
+                <div className="flex flex-wrap items-center gap-4">
                     <StatusBadge status={company.status} />
                     <button
                         onClick={handleExportPDF}
                         disabled={pdfLoading}
-                        className="btn bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300"
+                        className="btn min-h-11 bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300"
                         title="Stiahnuť PDF report"
                     >
                         {pdfLoading ? (
@@ -238,7 +242,7 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                     <button
                         onClick={handleWatchToggle}
                         disabled={watchLoading}
-                        className={`btn ${isWatching ? 'bg-green-600 hover:bg-green-700 text-white' : 'btn-primary'}`}
+                        className={`btn min-h-11 ${isWatching ? 'bg-green-600 hover:bg-green-700 text-white' : 'btn-primary'}`}
                         title={
                             isAuthenticated
                                 ? undefined
@@ -252,6 +256,37 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                         )}
                         {isWatching ? 'Sledované' : 'Sledovať'}
                     </button>
+                    {/* Staff only, and absent -- not disabled -- for everyone else.
+                        This page is public: the company viewset is `AllowAny` and
+                        `/firma/:ico` sits outside `ProtectedRoute`, so a control
+                        rendered for all readers would be a button that 403s for
+                        most of them. A hint would be a second thing that does not
+                        exist for them today.
+
+                        It lives here rather than under the date it refreshes.
+                        It *is* an action, and the value cell it used to sit in is
+                        `font-semibold text-gray-900` -- a value's style, with a
+                        button's padding (`px-2 py-0.5 text-xs`) squeezed inside
+                        it. That came to 22 px against Apple's 44 px minimum, in a
+                        row of text a reader is not looking at for a control.
+
+                        Only `min-height` and `font-size` may be added here: every
+                        other `.btn` property (padding, radius, gap, weight,
+                        cursor) comes from unlayered CSS in `main.css`, which
+                        outranks a Tailwind utility, so a `px-*`/`rounded-*` on
+                        this element would be silently ignored. */}
+                    {user?.isStaff && (
+                        <button
+                            type="button"
+                            onClick={handleRefresh}
+                            disabled={refreshLoading}
+                            title="Znova načítať údaje z verejných registrov"
+                            className="btn btn-outline min-h-11 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 dark:focus-visible:outline-blue-300"
+                        >
+                            <i className={`fas ${refreshLoading ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'}`} aria-hidden="true" />
+                            {refreshLoading ? 'Obnovujem…' : 'Aktualizovať údaje'}
+                        </button>
+                    )}
                 </div>
             </div>
             {watchError && (
@@ -298,30 +333,7 @@ export const CompanyHeader: React.FC<CompanyHeaderProps> = ({ company, profile }
                     icon="fa-calendar-alt" />
                 <DetailItem label="Posledná aktualizácia"
                     value={
-                        <>
-                            {formatDate(orsrProfile?.orsr_aktualizacia_dat) || new Date(company.lastUpdatedFromSource).toLocaleString('sk-SK')}
-                            {/* Staff only, and absent -- not disabled -- for
-                                everyone else. This page is public: the company
-                                viewset is `AllowAny` and `/firma/:ico` sits
-                                outside `ProtectedRoute`, so a control rendered
-                                for all readers would be a button that 403s for
-                                most of them. A hint would be a second thing
-                                that does not exist for them today. */}
-                            {user?.isStaff && (
-                                <span className="mt-1 flex">
-                                    <button
-                                        type="button"
-                                        onClick={handleRefresh}
-                                        disabled={refreshLoading}
-                                        title="Znova načítať údaje z verejných registrov"
-                                        className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/50"
-                                    >
-                                        <i className={`fas ${refreshLoading ? 'fa-spinner fa-spin' : 'fa-arrows-rotate'}`} aria-hidden="true" />
-                                        {refreshLoading ? 'Obnovujem…' : 'Aktualizovať údaje'}
-                                    </button>
-                                </span>
-                            )}
-                        </>
+                        formatDate(orsrProfile?.orsr_aktualizacia_dat) || new Date(company.lastUpdatedFromSource).toLocaleString('sk-SK')
                     }
                     icon="fa-sync-alt" />
             </div>

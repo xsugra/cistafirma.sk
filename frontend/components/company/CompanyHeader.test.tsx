@@ -160,6 +160,23 @@ describe('CompanyHeader — obnovenie údajov', () => {
         expect(screen.queryByRole('button', {name: /Aktualizovať údaje/})).not.toBeInTheDocument();
     });
 
+    it('is an action among the actions, not a value under the date', async () => {
+        const button = await renderAsStaff();
+
+        // It used to be nested inside the "Posledná aktualizácia" value, whose
+        // style is `font-semibold text-gray-900` -- a *value's* style -- with a
+        // button's padding (`px-2 py-0.5 text-xs`) squeezed into it. Measured,
+        // that came to 22 px against Apple's 44 px minimum, sitting in a row of
+        // text a reader is not looking at for a control. Both halves are the
+        // fix, so both are pinned here: it sits with the other actions, and it
+        // is a design-system button rather than the one hand-rolled pill on the
+        // card. `min-h-11` is the class that actually delivers the 44 px -- the
+        // same `.btn` without it measures 38 px.
+        expect(screen.getByRole('button', {name: /PDF/}).parentElement)
+            .toBe(button.parentElement);
+        expect(button).toHaveClass('btn', 'btn-outline', 'min-h-11');
+    });
+
     it('sends the database pk, not the IČO in the URL', async () => {
         const user = userEvent.setup();
         const button = await renderAsStaff();
