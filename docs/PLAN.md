@@ -6355,9 +6355,9 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   neviditeľné, kým sa na kód netapne (iOS syntetický `:hover` ho odhalí).
 - `~/.Trash` (TCC), Docker reclaim na Macu a runner id=2 na lenovo — #174,
   blokované OS, nie mnou.
-- **`pages/ApiDocs.tsx`: 8 zo 40 endpointov** má na 393 px odrezanú cestu
-  a úplne zmiznutý JWT štítok aj šípku rozbalenia. Tabuľka nemá `overflow-x-auto`.
-  **Príčina je teraz presne známa** (2026-09-18, merané v Chromiu na zbuildovanom
+- ~~**`pages/ApiDocs.tsx`: 8 zo 40 endpointov** má na 393 px odrezanú cestu
+  a úplne zmiznutý JWT štítok aj šípku rozbalenia.~~ — **opravené v `7d7bbed`**
+  (2026-09-18). Príčina je presne známa (merané v Chromiu na zbuildovanom
   `frontend/dist`, 393×852 — nie odvodené úvahou): `<code>` na `ApiDocs.tsx:413`
   má `flex-1`, ale flex položka má default `min-width: auto`, takže sa nezmenší
   pod svoju `min-content` šírku — a URL cesta je jeden nezlomiteľný token. Karta
@@ -6365,7 +6365,14 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
   predkov nie je `overflow-x-auto` (jediný výskyt v súbore je na riadku 381
   v CodeBlocku), takže sa k odrezanej časti nedá doskrolovať. Za `flex-1` prvkom
   sú tým vytlačené mimo viditeľnú oblasť aj JWT štítok (r. 417) a šípka
-  rozbalenia (r. 422). **Oprava je `min-w-0` na to `<code>`.**
+  rozbalenia (r. 422). Oprava je `min-w-0` na to `<code>` (dovolí zmenšenie) plus
+  `break-words` (cesta sa zalomí namiesto odrezania). Strážia to tri regresné
+  testy v `pages/ApiDocs.test.tsx` — práve tie dve deklarácie, ktoré pri
+  upratovaní `className` ticho zmiznú a na širokej obrazovke ich vizuálna
+  kontrola nechytí. Tretí test overuje, že karta je naozaj `overflow-hidden`;
+  ak raz začne scrollovať, padne — a to je správne, potom sa oprava prehodnotí,
+  nie dedí naslepo. (`test/setup.ts` pritom dostal stub `IntersectionObserver`,
+  ktorý si `ApiDocs` stavia na scroll-spy obsah a ktorý jsdom nemá.)
 - **`escape_sed()` je definovaná dvakrát, bajt na bajt rovnako** —
   `scripts/local/install_backup_schedule.sh:21-23` a
   `scripts/local/install_ruz_keeper.sh:30-32` (md5 tela
@@ -6427,8 +6434,9 @@ Mimo zadania; uvádzam ich, neopravujem ich ticho:
 nemuselo robiť znova a aby po nich nezostal zoznam mien bez obsahu. Každú
 hľadal jeden vyšetrovateľ a potom ju nezávisle vyvracali dvaja ďalší (17
 agentov, 0 chýb); výsledok: **žiadna nebola vymyslená**, všetkých sedem
-označovalo reálnu vec. Štyri sú živé chyby a sú rozpísané vyššie
-(`IBM Plex Sans`, `.btn` kaskáda, orezy v `ApiDocs`, duplicita `escape_sed`).
+označovalo reálnu vec. **Tri z tých štyroch živých chýb sú stále neopravené**
+a rozpísané vyššie (`IBM Plex Sans`, `.btn` kaskáda, duplicita `escape_sed`);
+štvrtá — orezy ciest v `ApiDocs` — je opravená v `7d7bbed`.
 `companiesbuilder-minw` a `searchbar-drobnosti` boli medzitým opravené
 (`68b4a6f`, resp. `7cd0e7f` — druhé je v 10.1) a
 `mrtvy-gitlab-remote-code-reviews` **vôbec neoznačuje tento repozitár**: je to
