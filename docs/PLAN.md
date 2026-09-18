@@ -6862,7 +6862,8 @@ ktorý zomrel — a presne to je stav, kvôli ktorému resume existuje.
 ľubovoľného ID trvá rádovo dni, `time_limit` je tvrdý SIGKILL, a jeho dvaja
 súrodenci (`start_full_ruz_sync`, `resume_full_ruz_sync`) limit nemajú — bol to
 outlier, nie poistka. (Pozitívna kontrola, že `time_limit` vieme vôbec prečítať:
-`start_repair_sync.time_limit == 86400`.)
+vtedy `start_repair_sync.time_limit == 86400`; o deň neskôr oň prišiel tiež,
+viď §11.8.)
 
 **Nálezy, ktoré som našiel a neopravil** (mimo tohto kroku):
 
@@ -6875,15 +6876,16 @@ outlier, nie poistka. (Pozitívna kontrola, že `time_limit` vieme vôbec preč�
   `resume_gap_repair`, `analyze_ruz_gaps` volajú `call_command` priamo, teda
   bez job riadku a heartbeatu. Ich príkazy si vedú vlastný progres
   (`SyncGapAnalysis`), takže je to iná otázka než `SyncJob` — ale znamená to,
-  že tieto behy watchdog nevidí.
+  že tieto behy watchdog nevidí. **Opravené v §11.8**, okrem `analyze_ruz_gaps`,
+  ktorý tam ostáva zámerne.
 
 ### 11.5 Čo je overené a čo ešte nie
 
-- Backend: **966 testov OK** (`registers.tests_sync_job_singleton` má 33, z toho
-  6 nových na keeper rozhodnutie, 6 na `ruz_keeper_tick` a 11 na oba opravené
-  vstupné body; `registers.tests_sync_pipeline.SyncProgressErrorReasonTests` má
-  2 na dôvod chyby firmy — §11.7), frontend: `npm test` 423 OK, `typecheck` aj
-  `build` čisté.
+- Backend: **1002 testov OK** (`registers.tests_sync_job_singleton` má 56,
+  `registers.tests_repair_job_tracking` 13 — §11.8;
+  `registers.tests_sync_pipeline.SyncProgressErrorReasonTests` má 2 na dôvod
+  chyby firmy — §11.7). Frontend sa v tomto kroku nemenil; jeho tri kontroly
+  (`npm test`, `typecheck`, `build`) bežia v pipeline na pushnutom commite.
 - Mierka behu: job #23 (`ruz_incremental`, 2026-09-13 09:54→11:57) spracoval
   45 306 záznamov za 123 min ≈ **6,1 záznamu/s**. `Companies and SZCO` má
   449 792 riadkov a najvyššie `RUZ ID` 2 624 307. Dell má 423 GB voľných,
@@ -6986,6 +6988,88 @@ Samotné chyby, ktoré sa počítajú, sú **duplicitné IČO**
 (`Companies and SZCO_ICO_key`): register odpovedá jedným IČO na viac subjektov
 a unique index to odmietne. To je zámerný, nefatálny prípad z #83 — okno sa
 cez neho posunie, namiesto aby navždy stálo.
+
+### 11.8 Opravné behy nemali job riadok ani globálny zámok (#186, `59fbf1f`)
+
+`start_repair_sync`, `resume_repair_sync`, `repair_ruz_gaps` a
+`resume_gap_repair` volali `call_command` **priamo**. Následok nebol len
+chýbajúci výpis: taký beh nemal `SyncJob`, teda žiadny heartbeat pre watchdog,
+žiadny výsledok pre `ops-check` ani pre admin zoznam jobov — a predovšetkým
+**nesiahol na `ruz:global`**, jediný kľúč, ktorý drží dvoch zapisovateľov
+firemných dát od seba. `ruz_repair` pritom bol v `JOB_TYPE_CHOICES` celý čas;
+nevytváral ho nikto.
+
+**Prečo to nešlo spraviť inak než zovšeobecnením `_run_ruz_command`.** Tá
+funkcia mala `fetch_ruz_data` napevno a je to jediná vec, ktorá behu dá job
+riadok, heartbeat, výsledok a slot. Meno príkazu je teraz parameter (a ide aj
+do `parameters`, lebo `ruz_repair` pokrýva tri rôzne príkazy).
+
+**Ostrejšia chyba, nájdená pri diagnostike.** `adminapi/views/sync.py`
+vytvoril pri `ruz_repair` riadok s `concurrency_key='ruz:global'` a poslal
+úlohu **bez** `sync_job_id`. Úloha volala príkaz priamo a nikdy riadok
+neclaimla — a `queued` riadok je presne to, čo drží
+`reg_s_one_active_ruz_job`. Riadok by teda ostal `queued` **navždy** a každý
+ďalší RUZ beh by naň narazil, dostal ho späť a vrátil sa bez dispatchu —
+vrátane keeperovho vlastného resume. Dosiahnuteľné jedným klikom v admin
+dropy; overené na delle, že **žiadny `ruz_repair` riadok v produkcii nikdy
+nevznikol**, takže je to „dosiahnuteľné, nikdy nespustené", nie minulá
+nehoda.
+
+**Čo si príkazy museli dorobiť samy:**
+
+- `--sync-job-id` a `beat()` v každej iterácii. Bez toho by ich watchdog
+  zabil v behu: `detect_and_fail_stuck_jobs` berie starý heartbeat ako smrť
+  a jeden batch môže trvať minúty.
+- `set_job_outcome` v `finally`. `SyncProgress` aj `SyncGapAnalysis` si svoj
+  riadok medzi behmi **požičiavajú**, takže ich súčty patria celej oprave;
+  job riadok je per-beh, a dostane preto **rozdiel** oproti stavu na začiatku.
+  Bez toho by resume hlásil celú opravu odznova.
+- `time_limit=86400` je preč zo všetkých štyroch. Je to tvrdý SIGKILL:
+  nevybehne `except`, takže beh sa len prestane hýbať a nechá za sebou
+  `running` riadok. Precedent je `start_full_ruz_sync_from_id` (§11.4).
+
+`REPAIR_RESUMABLE_STATUSES` preto prijíma aj `running` — skutočná brzda proti
+druhému štartu je `ruz:global`, ktorý si `_run_ruz_command` claimne **pred**
+príkazom, takže vylúčenie `running` nebranilo ničomu a bralo presne ten
+prípad, pre ktorý resume existuje.
+
+**Tri tlačidlá v adminovi teraz odmietnu nahlas.** Dispatch, ktorý stretne
+živý job, sa vracia bez toho, aby čokoľvek spravil — takže hlásiť „bolo
+naplánované" je ten istý falošný úspech, aký bol opravený v `resume_sync_view`
+(#185). Týka sa to `repair_view`, `resume_view` (obe `SyncGapAnalysisAdmin`)
+a `trigger_repair_sync_view`. Tlačidlo „Pokracovat" sa pre `running` riadok
+ponúka len vtedy, keď slot nič nedrží — so živým jobom je to beh v pohybe
+a ponuka na jeho reštart.
+
+**Mimo rozsahu, zámerne:** `analyze_ruz_gaps` ostáva bez job riadku. Je
+read-only voči firemným dátam (zapíše len `SyncGapAnalysis`), takže zobrať
+kvôli nemu `ruz:global` by na hodiny zastavilo walk bez jediného úžitku;
+a keďže nemá heartbeat, jeho `time_limit` je jediná hranica, ktorá mu ostáva.
+
+**Dve veci na samostatný krok, nie do tohto:**
+
+- Oba opravné príkazy upsertujú podľa `ico` (nie `ruz_id`) a používajú holý
+  `parse_date` namiesto `apply_ruz_dates`. Pri zhode `ico` teda môžu prepísať
+  uložené `datum_zalozenia` / `datum_zrusenia` / `datum_poslednej_upravy` na
+  `None`. §11.2 to dokumentuje pre `repair_ruz_gaps`; platí to rovnako pre
+  `repair_ruz_sync_v2`. Je to zmena dátovej sémantiky na príkaze, ktorý môže
+  prejsť 449-tisíc riadkov, preto vlastný krok.
+- `_dispatch_job` používa `params.get("start_id", 0)`, takže `ruz_repair`
+  z admin API začína vždy od RUZ ID 0, nie od uloženého kurzora. Nechané tak.
+
+**Testy.** Nový `registers/tests_repair_job_tracking.py` (13) je kontrola
+príkazovej časti: heartbeat, výsledok, rozdiel oproti základu, zápis pri páde,
+a negatívna kontrola pre beh bez `--sync-job-id`. **Proti pôvodnému kódu padá
+10 z 13** — tri, ktoré prejdú, sú práve tie negatívne kontroly, a to je
+správne. V `tests_sync_job_singleton.py` pribudli job riadky pre všetky štyri
+tasky, chýbajúci `time_limit` a štyri admin odmietnutia (vrátane pozitívnej
+kontroly, že s voľným slotom tlačidlo naozaj dispatchuje).
+
+Poznámka k prostrediu testov: oba príkazy fetchujú cez `ThreadPoolExecutor`
+a vlákno si otvorí **vlastné** DB spojenie, ktoré test prežije — stačí to na
+to, aby `DROP DATABASE test_cistafirma` spadol na „being accessed by other
+users" a zobral so sebou celý beh. Testy preto pool nahradzujú inline
+exekútorom (`_InlineExecutor`); o súbežnosť v nich nejde.
 
 ---
 
