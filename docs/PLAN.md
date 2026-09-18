@@ -7410,16 +7410,30 @@ keeper sám (20 376/h).
 
 **Dve pasce pre toho, kto to bude čítať zajtra.**
 
-- **`LLEN ruz_full` je teraz `0`, a to *nie je* dôkaz, že prírastkový sync
-  nemá čo čakať.** `fetch-ruz-data-every-6-hours` posledne bežal 14:07 UTC,
-  teda **predtým**, než walk o 16:02 zabral slot — takže vo fronte ešte nič
-  nie je. Prvá zrážka je **20:07 UTC**. Ani `inspect reserved` nič neukazuje,
-  takže to neleží ani v prefetch bufferi (`worker_prefetch_multiplier = 4`).
-  Nulový front tu znamená „ešte nenastalo", nie „nedeje sa". Zrážka je
+- **`LLEN ruz_full` je `0`, a to *nie je* dôkaz, že prírastkový sync nemá čo
+  čakať.** Toto je teraz **overené, nie predpovedané** — o 20:07:28 UTC som
+  odčítal tri veci naraz:
+
+  | čo | hodnota |
+  |---|---|
+  | `PeriodicTask.last_run_at` pre `fetch-ruz-data-every-6-hours` | `20:07:28.527` UTC |
+  | `LLEN ruz_full` | **0** |
+  | `inspect reserved` na `worker_ruz` | `fetch_ruz_data_task`, `acknowledged=False`, `routing_key=ruz_full` |
+
+  Čiže správa **existuje** a front je pritom nulový, lebo ju worker už
+  prefetchol (`worker_prefetch_multiplier = 4`, concurrency 1 → rezervuje až 4).
+  Presne preto sa `LLEN` na túto otázku nesmie použiť: pred 20:07 znamenala
+  „ešte nenastalo", po 20:07 znamená „je v buffere" — a obe vyzerajú rovnako.
+  Odpoveď dá len `inspect reserved`. Zrážka je
   neškodná a **nemení sa kvôli nej nič v beat schéme**: `ruz_full` číta výhradne
   `celery_ruz` s `concurrency = 1`, takže správa len počká, kým walk dobehne,
   a potom sa ~20 naakumulovaných prírastkov vystrieda za sebou. Zasahovať do
   `PeriodicTask` počas behu by bolo riziko bez úžitku.
+
+  **Overiteľná predpoveď pre toho, kto to číta neskôr:** buffer pojme 4 správy,
+  takže po štvrtom ticku (t. j. po ~2026-09-19 14:07 UTC) sa `LLEN ruz_full`
+  konečne dostane nad nulu — a odvtedy bude rásť o jednu každých 6 h. Ak sa tak
+  nestane, `inspect reserved` niečo neukazuje správne a treba to riešiť.
 - **`SyncProgress` počítadlá sú kumulatívne cez behy**, keď sa riadok recykluje.
   Riadok #2 hlási `total_created = 32 187` pri behu, ktorý trval **3,88 s**
   (14:07:28,578 → 14:07:32,460) — to sa nedá vysvetliť inak než načítaním
