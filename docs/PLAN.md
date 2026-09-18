@@ -6780,7 +6780,138 @@ a názvov ako produkcia (`real_graph.json`), a strážiť, že `canvas.__zoom.k`
 
 ---
 
-## 11. Nemenné pravidlá
+## 11. Plný RUZ resync, ktorý sa musí dokončiť (2026-09-18)
+
+Zadané: tri IČO v produkcii úplne chýbajú (`54381151`, `54187451`, `54572495`),
+doplniť ich jednotlivo, potom spustiť **plný** RUZ sync odznova a nechať ho bežať
+24/7, kým sa nedokončí.
+
+### 11.1 Prečo tie tri chýbali — namerané, nie odhadnuté
+
+Dôvod nebol v dátach, ale v tom, že sa k nim **nikdy nedokráčalo**:
+
+- Jediný walk od nuly v produkcii je `SyncProgress` #1 (`incremental_companies`,
+  `zmenene_od = 2020-01-01`). Zomrel **2026-09-10** na
+  `last_processed_ruz_id = 1 840 215` s `value too long for type character
+  varying(8)`, po prečítaní 1 383 700 záznamov.
+- Tie tri majú RUZ ID **2 026 974 / 2 048 858 / 2 067 916** — všetky **nad**
+  1 840 215, teda za miestom, kde walk skončil.
+- Šesťhodinový inkrementál číta len **pohyblivé okno posledných zmien**, takže
+  ich dobehnúť nemôže: firma, ktorá sa od 2020 nezmenila, sa v okne neobjaví.
+
+**Pozitívny kontrola** (aby „chýbajú" nebola len neprítomnosť dôkazu): na živom
+API `GET /cruz-public/api/uctovne-jednotky?zmenene-od=2000-01-01&max-zaznamov=8&pokracovat-za-id=…`
+pre každé z troch ID vrátil **to ID vnútri svojej stránky** — plný walk sa k nim
+teda naozaj dostane.
+
+### 11.2 Doplnené jednotlivo — a prečo nie `repair_ruz_gaps`
+
+Pred prácou čerstvá overená záloha:
+`/home/sam/.local/state/CistaFirma/backups/cistafirma_20260918T154053Z.dump`
+(157 382 478 B), `make db-backup-verify` → „Backup verified".
+
+Tri firmy doplnené cez `registers.tasks.sync_single_company_from_ruz.run(ico)`
+(`.run`, nie task: je to `BaseSyncTask` s `autoretry_for=(Exception,)`, takže
+mimo request-kontextu by autoretry skončilo výnimkou `Retry` namiesto skutočnej
+chyby). Overené čítaním z DB — **3 z 3**:
+
+| IČO | RUZ ID | Právna forma | Názov | Vznik |
+|---|---|---|---|---|
+| 54187451 | 2026974 | 112 | MM servis Slovakia s. r. o. | 2021-11-13 |
+| 54381151 | 2048858 | 112 | Sirupček s. r. o. | 2022-02-01 |
+| 54572495 | 2067916 | 112 | poctivé sirupy s. r. o. | 2022-04-27 |
+
+`repair_ruz_gaps` použitý **zámerne nebol**: upsertuje kľúčom `ico`, čo je presne
+tá zámena identity, pred ktorou `fetch_ruz_data.py` varuje (jeho upsert je
+kľúčovaný na `ruz_id`), a `parse_date` volá priamo namiesto `apply_ruz_dates`,
+takže uložené dátumy môže prepísať na `None`.
+
+### 11.3 Pasca, ktorá by z „plného" synca spravila jednodňový
+
+`--full-resync --entity-type companies` **nie je** plný resync. `full_companies`
+a `full_individuals` čítajú počiatočný dátum **späť z `SyncProgress`**, takže s
+uloženým `zmenene_od` (napr. 2026-09-18) prejdu jediný deň. Nedá sa na to
+spoliehať ani cez `--entity-type`: správna invokácia je **holý `--full-resync`**
+(`entity_type both`), kde je `zmenene_od = 2000-01-01` zadrátované.
+
+Rovnako `--resume` sám o sebe `full` riadok nikdy nenájde — lookup príkazu je
+kľúčovaný na odvodený `sync_type`.
+
+### 11.4 Dve tiché chyby, kvôli ktorým „Resume" nikdy nič neobnovil (`e6ca0fe`)
+
+Pri príprave 24/7 slučky sa ukázalo, že oba vstupné body do plného walku robia
+niečo iné, než tvrdia:
+
+- **`resume_full_ruz_sync`** (tlačidlo Resume v adminovi) našiel `full` riadok,
+  ohlásil ho v logu, a potom spustil `fetch_ruz_data --resume` **bez**
+  `--full-resync`, čiže hľadal *inkrementálny* riadok. Vrátil sa s
+  „Nenájdený žiadny sync na pokračovanie" — ale príkaz si medzitým stihol
+  zabrať `SyncJob`, a ten dokončuje iba samotný walk, takže po sebe nechal
+  `running` job, ktorý nemal kto dokončiť, a nula presunutých dát.
+- **`start_full_ruz_sync_from_id`** („Full sync od RUZ ID") to isté, a horšie:
+  `incremental` riadok po šesťhodinovom syncu v DB takmer vždy zostáva, takže
+  namiesto no-opu sa mohol ticho rozbehnúť **inkrementálny** walk od
+  inkrementálneho kurzora — nie od ID, ktoré operátor zadal.
+
+Obe teraz idú cez `_run_ruz_command` (jediná cesta, ktorá behu dá job riadok,
+heartbeat a výsledok, a ktorá vďaka `ruz:global` concurrency key odmietne druhý
+beh vedľa živého). Pri `resume` je v filteri stavov aj `running`: worker, ktorý
+je zabitý, po sebe **nič** nezapíše — proces, ktorý by zapísal `failed`, je ten,
+ktorý zomrel — a presne to je stav, kvôli ktorému resume existuje.
+`start_full_ruz_sync_from_id` zároveň prišiel o 24-hodinový `time_limit`: walk od
+ľubovoľného ID trvá rádovo dni, `time_limit` je tvrdý SIGKILL, a jeho dvaja
+súrodenci (`start_full_ruz_sync`, `resume_full_ruz_sync`) limit nemajú — bol to
+outlier, nie poistka. (Pozitívna kontrola, že `time_limit` vieme vôbec prečítať:
+`start_repair_sync.time_limit == 86400`.)
+
+**Nálezy, ktoré som našiel a neopravil** (mimo tohto kroku):
+
+- `admin.py` `resume_sync_view` hlási „pokračuje od RUZ ID …" pre **každý**
+  typ okrem `repair`, ale úloha hľadá výhradne `sync_type='full'`. Pri
+  `full_companies`/`full_individuals` teda admin tvrdí úspech a úloha korektne
+  odmietne (tie typy patria `fetch_ruz_data_firmy_only`/`_szco_only`). Vlajka
+  je v admin UI, nie v úlohe.
+- `start_repair_sync`, `resume_repair_sync`, `repair_ruz_gaps`,
+  `resume_gap_repair`, `analyze_ruz_gaps` volajú `call_command` priamo, teda
+  bez job riadku a heartbeatu. Ich príkazy si vedú vlastný progres
+  (`SyncGapAnalysis`), takže je to iná otázka než `SyncJob` — ale znamená to,
+  že tieto behy watchdog nevidí.
+
+### 11.5 Čo je overené a čo ešte nie
+
+- Backend: **945 testov OK** (`registers.tests_sync_job_singleton` má 14, z
+  toho 9 nových), frontend: `npm test` 423 OK, `typecheck` aj `build` čisté.
+- Mierka behu: job #23 (`ruz_incremental`, 2026-09-13 09:54→11:57) spracoval
+  45 306 záznamov za 123 min ≈ **6,1 záznamu/s**. `Companies and SZCO` má
+  449 792 riadkov a najvyššie `RUZ ID` 2 624 307. Dell má 423 GB voľných,
+  DB 1 320 MB, `registers_companysyncstatus` 296 723 riadkov / 107 MB
+  (~360 B/riadok).
+- **Odhad, kým sa dokončí, je odhad** — potvrdí ho až živý beh. Preto sa
+  postup meria z `SyncProgress.last_processed_ruz_id`, nie z pocitu.
+- Zvyšok (spustenie, keeper, dokončenie) je v §11.6.
+
+### 11.6 Ako to beží 24/7
+
+Zámerne cez Celery na fronte `ruz_full` (`cistafirma_celery_ruz`,
+`--concurrency=1`, vlastný kontajner — jeho zablokovanie nič iné nevyhladuje),
+nie cez odpojený `docker compose exec`: len tak má beh job riadok, heartbeat,
+viditeľnosť vo watchdogu a singletnovú poistku.
+
+Keeper na delle každých ~5 min číta **najnovší** `ruz_full` `SyncJob`:
+
+| stav | akcia |
+|---|---|
+| `completed` | skončiť |
+| `running` s čerstvým heartbeatom | čakať |
+| `failed` / `paused` / `cancelled` | `resume_full_ruz_sync.delay()` |
+| žiadny | `start_full_ruz_sync.delay(reset=False)` |
+
+`resume_full_ruz_sync` je bezpečné dispatchovať opakovane: druhý dispatch stretne
+živý job na `ruz:global` a vráti sa.
+
+---
+
+## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
 
