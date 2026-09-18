@@ -576,3 +576,198 @@ class RuzKeeperTickCommandTests(TestCase):
 
         self.assertIn("cursor=1234567", output)
         self.assertIn("processed=999", output)
+
+
+class ResumeProgressIdTests(TestCase):
+    """A resume continues the row it was asked for, or says why it cannot.
+
+    Both resume tasks used to search by type alone and take the newest match,
+    and the admin handed them nothing -- so "Pokracovat" on an `incremental` row
+    dispatched `resume_full_ruz_sync`, which found a *full* row and continued
+    that, while the page reported the incremental row's own cursor as though it
+    had been the one continued.
+    """
+
+    def _progress(self, **kwargs):
+        defaults = {
+            "sync_type": "full",
+            "status": "paused",
+            "zmenene_od": date(2000, 1, 1),
+            "last_processed_ruz_id": 1000,
+        }
+        defaults.update(kwargs)
+        return SyncProgress.objects.create(**defaults)
+
+    @patch("registers.tasks.call_command")
+    def test_the_row_it_is_given_is_the_row_it_resumes(self, call_command):
+        from registers.tasks import resume_full_ruz_sync
+
+        self._progress(status="paused", last_processed_ruz_id=1900000)
+        asked = self._progress(status="failed", last_processed_ruz_id=1000)
+
+        job, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        with self.assertLogs("registers.tasks", level="INFO") as logs:
+            resume_full_ruz_sync.apply(
+                args=(), kwargs={"sync_job_id": job.pk, "progress_id": asked.pk}
+            )
+
+        call_command.assert_called_once()
+        self.assertIn("1000", "\n".join(logs.output))
+        self.assertNotIn("1900000", "\n".join(logs.output))
+
+    @patch("registers.tasks.call_command")
+    def test_a_row_of_another_type_resumes_nothing(self, call_command):
+        from registers.tasks import resume_full_ruz_sync
+
+        incremental = self._progress(
+            sync_type="incremental", status="paused", last_processed_ruz_id=2624307
+        )
+        # A resumable `full` row is present on purpose: the old type-only search
+        # would have found it, so "dispatched nothing" here cannot pass merely
+        # because there was no candidate to fall back to.
+        self._progress(status="paused", last_processed_ruz_id=42)
+
+        with self.assertLogs("registers.tasks", level="WARNING") as logs:
+            result = resume_full_ruz_sync.apply(
+                args=(), kwargs={"progress_id": incremental.pk}
+            )
+
+        call_command.assert_not_called()
+        self.assertEqual(result.get(), "No sync to resume")
+        self.assertIn("Nothing resumed", "\n".join(logs.output))
+
+    @patch("registers.tasks.call_command")
+    def test_a_finished_row_resumes_nothing(self, call_command):
+        from registers.tasks import resume_full_ruz_sync
+
+        done = self._progress(status="completed")
+
+        result = resume_full_ruz_sync.apply(args=(), kwargs={"progress_id": done.pk})
+
+        call_command.assert_not_called()
+        self.assertEqual(result.get(), "No sync to resume")
+
+    @patch("registers.tasks.call_command")
+    def test_a_vanished_row_resumes_nothing(self, call_command):
+        from registers.tasks import resume_full_ruz_sync
+
+        result = resume_full_ruz_sync.apply(args=(), kwargs={"progress_id": 999999})
+
+        call_command.assert_not_called()
+        self.assertEqual(result.get(), "No sync to resume")
+
+    @patch("registers.tasks.call_command")
+    def test_repair_resumes_the_repair_row_it_is_given(self, call_command):
+        from registers.tasks import resume_repair_sync
+
+        repair = self._progress(
+            sync_type="repair", status="paused", last_processed_ruz_id=555
+        )
+
+        with self.assertLogs("registers.tasks", level="INFO") as logs:
+            resume_repair_sync.apply(args=(), kwargs={"progress_id": repair.pk})
+
+        call_command.assert_called_once_with("repair_ruz_sync_v2", "--workers=3")
+        self.assertIn("555", "\n".join(logs.output))
+
+    @patch("registers.tasks.call_command")
+    def test_repair_will_not_start_a_run_that_is_still_going(self, call_command):
+        """The walk counts `running` as resumable because a killed walk leaves
+        that status behind and nothing clears it. Repair is the other way round:
+        its command continues from its own cursor, so the status is only a gate
+        on whether to start -- and a repair that is really still running must not
+        be started a second time."""
+        from registers.tasks import resume_repair_sync
+
+        repair = self._progress(sync_type="repair", status="running")
+
+        result = resume_repair_sync.apply(args=(), kwargs={"progress_id": repair.pk})
+
+        call_command.assert_not_called()
+        self.assertEqual(result.get(), "No repair sync to resume")
+
+
+class ResumeAdminViewTests(TestCase):
+    """The change list offers a resume only where one exists, and the click
+    reports only what it queued.
+
+    Read off the messages rather than the rendered change list: the operator
+    sees the redirect, and following it would drag the whole admin change list
+    into the assertion.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        self.staff = User.objects.create_superuser(
+            email="admin@example.com", password="x"
+        )
+        self.client.force_login(self.staff)
+
+    def _progress(self, **kwargs):
+        defaults = {
+            "sync_type": "full",
+            "status": "paused",
+            "zmenene_od": date(2000, 1, 1),
+            "last_processed_ruz_id": 1234,
+        }
+        defaults.update(kwargs)
+        return SyncProgress.objects.create(**defaults)
+
+    def _resume(self, progress):
+        from django.contrib.messages import get_messages
+        from django.urls import reverse
+
+        response = self.client.get(
+            reverse("admin:registers_syncprogress_resume", args=[progress.pk])
+        )
+        return response, [str(m) for m in get_messages(response.wsgi_request)]
+
+    @patch("registers.tasks.resume_full_ruz_sync")
+    def test_a_click_resumes_that_row(self, resume_task):
+        progress = self._progress(status="paused", last_processed_ruz_id=1234)
+
+        _, texts = self._resume(progress)
+
+        resume_task.delay.assert_called_once_with(progress_id=progress.pk)
+        self.assertTrue(any("zaradene" in t for t in texts), texts)
+
+    @patch("registers.tasks.resume_full_ruz_sync")
+    def test_a_type_with_no_resume_path_is_refused_not_dispatched(self, resume_task):
+        progress = self._progress(sync_type="full_individuals", status="paused")
+
+        _, texts = self._resume(progress)
+
+        resume_task.delay.assert_not_called()
+        self.assertTrue(any("nema cestu na obnovenie" in t for t in texts), texts)
+
+    @patch("registers.tasks.resume_full_ruz_sync")
+    def test_a_busy_ruz_slot_is_reported_rather_than_queued(self, resume_task):
+        """Every RUZ command claims the one global job before it may write, and a
+        dispatch that meets a live job returns without doing anything -- so
+        reporting a queued resume here would be false twice over."""
+        progress = self._progress(status="paused")
+        live, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        sync_engine.claim_ruz_job(live.pk)
+
+        _, texts = self._resume(progress)
+
+        resume_task.delay.assert_not_called()
+        self.assertTrue(any("neurobilo nic" in t for t in texts), texts)
+
+    @patch("registers.tasks.start_incremental_sync")
+    def test_an_incremental_row_resumes_the_incremental_walk(self, incremental_task):
+        progress = self._progress(sync_type="incremental", status="paused")
+
+        _, texts = self._resume(progress)
+
+        incremental_task.delay.assert_called_once_with()
+        self.assertTrue(any("zaradene" in t for t in texts), texts)
+
+    def test_a_running_or_idle_row_is_not_resumable(self):
+        progress = self._progress(status="running")
+
+        _, texts = self._resume(progress)
+
+        self.assertTrue(any("nie je mozne obnovit" in t for t in texts), texts)

@@ -239,6 +239,20 @@ class SyncGapAnalysisAdmin(UnfoldModelAdmin):
 class SyncProgressAdmin(UnfoldModelAdmin):
     change_list_template = 'admin/registers/syncprogress/change_list.html'
 
+    #: The sync types the "Pokracovat" button can really continue. Everything
+    #: else -- `full_companies`, `full_individuals`, `incremental_companies`,
+    #: `incremental_individuals`, `repair_companies`, `repair_individuals` --
+    #: has no resume path yet, and offering the button for them is how the page
+    #: came to promise a resume it could not perform: the dispatch fell through
+    #: to `resume_full_ruz_sync`, which looks for a `full` row, so a click on an
+    #: `incremental` row restarted a different walk and then reported the
+    #: incremental row's own cursor as though it had been continued.
+    #:
+    #: `incremental` resumes by re-running its own trigger: `start_incremental_sync`
+    #: calls `fetch_ruz_data` without `--full-resync`, which finds the
+    #: `incremental` row and continues from its stored cursor.
+    RESUMABLE_SYNC_TYPES = ('full', 'repair', 'incremental')
+
     list_display = [
         'sync_type_display', 'entity_badge', 'status_display', 'progress_display',
         'stats_display', 'rate_display', 'last_activity', 'actions_display'
@@ -336,7 +350,10 @@ class SyncProgressAdmin(UnfoldModelAdmin):
     @admin.display(description='Akcie')
     def actions_display(self, obj):
         buttons = []
-        if obj.status in ['paused', 'failed']:
+        # The type gate is not decoration: for a type with no resume path the
+        # view now refuses, so offering the button would only produce a refusal
+        # on the next page. Kept in step with `RESUMABLE_SYNC_TYPES`.
+        if obj.status in ['paused', 'failed'] and obj.sync_type in self.RESUMABLE_SYNC_TYPES:
             url = reverse("admin:registers_syncprogress_resume", args=[obj.pk])
             buttons.append(f'<a href="{url}" class="cf-btn cf-btn--success cf-btn--sm">Pokracovat</a>')
         if obj.status == 'running':
@@ -490,19 +507,67 @@ class SyncProgressAdmin(UnfoldModelAdmin):
         return custom_urls + urls
 
     def resume_sync_view(self, request, pk):
-        from registers.tasks import resume_full_ruz_sync, resume_repair_sync
+        """Queue a resume of *this* row, and only report what was queued.
+
+        Two things this has to get right, and neither is visible from the page.
+
+        The dispatch carries `progress.pk`. Without it the task picked the
+        newest row of its own type, so clicking "Pokracovat" on one paused row
+        could continue a different one and report the clicked row's cursor.
+
+        It refuses rather than queues when the RUZ slot is taken. Every RUZ
+        command claims the single global job before it may write company data,
+        and a dispatch that meets a live job returns without doing anything --
+        so saying "obnovenie bolo zaradene" then would be false, and the
+        operator would wait for a resume that was never going to run.
+        """
+        from registers.models import SyncJob
+        from registers.services.sync_engine import RUZ_CONCURRENCY_KEY
+        from registers.tasks import (
+            resume_full_ruz_sync,
+            resume_repair_sync,
+            start_incremental_sync,
+        )
+
         progress = SyncProgress.objects.get(pk=pk)
         if progress.status not in ['paused', 'failed']:
             messages.error(request, 'Synchronizaciu nie je mozne obnovit.')
             return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
+
+        if progress.sync_type not in self.RESUMABLE_SYNC_TYPES:
+            messages.error(
+                request,
+                f'{progress.get_sync_type_display()} zatial nema cestu na '
+                f'obnovenie. Spusti ho znova prislusnym tlacidlom vyssie.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
+
+        live = (
+            SyncJob.objects
+            .filter(concurrency_key=RUZ_CONCURRENCY_KEY, status__in=['queued', 'running'])
+            .order_by('-queued_at')
+            .first()
+        )
+        if live is not None:
+            messages.warning(
+                request,
+                f'RUZ bezi ({live.get_job_type_display()} #{live.pk}, '
+                f'{live.get_status_display()}). Obnovenie by teraz neurobilo nic; '
+                f'skus to, ked dobehne.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
+
         try:
             if progress.sync_type == 'repair':
-                resume_repair_sync.delay()
+                resume_repair_sync.delay(progress_id=progress.pk)
+            elif progress.sync_type == 'incremental':
+                start_incremental_sync.delay()
             else:
-                resume_full_ruz_sync.delay()
+                resume_full_ruz_sync.delay(progress_id=progress.pk)
             messages.success(
                 request,
-                f'{progress.get_sync_type_display()} pokracuje od RUZ ID {progress.last_processed_ruz_id:,}.'
+                f'{progress.get_sync_type_display()}: obnovenie bolo zaradene '
+                f'od RUZ ID {progress.last_processed_ruz_id:,}.'
             )
         except Exception as e:
             messages.error(request, f'Chyba: {str(e)[:100]}')

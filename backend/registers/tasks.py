@@ -649,8 +649,81 @@ def search_and_add_company_by_ico(ico: str):
     """
     return sync_single_company_from_ruz(ico)
 
+#: The progress-row states a resume exists for. `running` is here on purpose: a
+#: run whose worker was killed leaves its row saying `running`, because the
+#: process that would have written `failed` is the one that died. That is
+#: precisely the state a resume is for.
+RESUMABLE_SYNC_STATUSES = ('paused', 'failed', 'running')
+
+
+#: A killed repair also leaves a `running` row, but unlike the walk nothing here
+#: reads that row to resume from -- the command continues from its own stored
+#: cursor. The filter is a gate on *whether to start*, so a repair that is
+#: really still running must not be started a second time.
+REPAIR_RESUMABLE_STATUSES = ('paused', 'failed')
+
+
+def _progress_to_resume(
+    progress_id: int | None,
+    sync_type: str,
+    statuses: tuple[str, ...] = RESUMABLE_SYNC_STATUSES,
+):
+    """The progress row a resume was asked for, or `None` with the reason logged.
+
+    `progress_id` is what makes a resume the one that was asked for. Without it
+    the row is picked by type, newest first -- correct for the keeper, which
+    resumes whatever the walk left behind and has no row in hand, and wrong for
+    the admin, which does have one: the row the operator clicked. Dispatching
+    without it is how a click on an `incremental` row could restart the *full*
+    walk while the page reported the incremental cursor.
+
+    Every refusal is logged with the id and what was found instead, because the
+    caller is a fire-and-forget `.delay()` that cannot read a return value --
+    the log is the only place the operator can see why nothing happened.
+    """
+    from registers.models import SyncProgress
+
+    if progress_id is None:
+        progress = (
+            SyncProgress.objects
+            .filter(sync_type=sync_type, status__in=statuses)
+            .order_by('-id')
+            .first()
+        )
+        if progress is None:
+            logger.info("No resumable %s sync found. Nothing to resume.", sync_type)
+        return progress
+
+    progress = SyncProgress.objects.filter(pk=progress_id).first()
+    if progress is None:
+        logger.warning(
+            "Resume asked for progress #%s, which no longer exists. Nothing resumed.",
+            progress_id,
+        )
+        return None
+    if progress.sync_type != sync_type:
+        logger.warning(
+            "Resume asked for progress #%s, which is %s; this task resumes %s. "
+            "Nothing resumed.",
+            progress_id, progress.sync_type, sync_type,
+        )
+        return None
+    if progress.status not in statuses:
+        logger.warning(
+            "Resume asked for progress #%s, which is %s; only %s can be resumed. "
+            "Nothing resumed.",
+            progress_id, progress.status, "/".join(statuses),
+        )
+        return None
+    return progress
+
+
 @shared_task(bind=True, queue='ruz_full')
-def resume_full_ruz_sync(self, sync_job_id: int | None = None):
+def resume_full_ruz_sync(
+    self,
+    sync_job_id: int | None = None,
+    progress_id: int | None = None,
+):
     """Continue a full RUZ resync from the cursor its interrupted run left.
 
     Two things were wrong here, and both end the same way -- a resume that
@@ -681,16 +754,16 @@ def resume_full_ruz_sync(self, sync_job_id: int | None = None):
     the process that would have written it is the one that died. That is
     precisely the state a resume exists for, and excluding it made this task
     useless in the only case that needs it.
-    """
-    from registers.models import SyncProgress
 
-    progress = SyncProgress.objects.filter(
-        sync_type='full',
-        status__in=['paused', 'failed', 'running'],
-    ).order_by('-id').first()
+    `progress_id` names the row to continue. The admin passes it, so a click
+    resumes the row under the cursor rather than whichever `full` row happens to
+    be newest; the keeper omits it and keeps the search. A `progress_id` that
+    does not name a resumable `full` row resumes nothing and says so in the log
+    -- see `_progress_to_resume`.
+    """
+    progress = _progress_to_resume(progress_id, 'full')
 
     if not progress:
-        logger.info("No paused or failed full sync found. Nothing to resume.")
         return "No sync to resume"
 
     logger.info(
@@ -809,24 +882,38 @@ def start_repair_sync(start_id=None, workers=3):
 
 
 @shared_task(queue='ruz_full')
-def resume_repair_sync(workers=3):
+def resume_repair_sync(workers=3, progress_id: int | None = None):
+    """Continue a paused repair sync from the cursor its run left.
+
+    `progress_id` works as it does in `resume_full_ruz_sync`: the admin passes
+    the row it was clicked on, and a row that is not a resumable `repair` one
+    resumes nothing. Two differences from that task are deliberate rather than
+    oversights.
+
+    It accepts `paused` and `failed` only -- not `running`; see
+    `REPAIR_RESUMABLE_STATUSES`.
+
+    It still calls the command directly rather than through `_run_ruz_command`,
+    so a repair has no `SyncJob` row, no heartbeat and no outcome -- it is
+    invisible to the watchdog, to `ops-check` and to the admin's job list, and
+    it does not take the `ruz:global` lock, which is what would stop it running
+    concurrently with the full walk. That is #186; this task is the one place
+    that has to change with it.
     """
-    Celery task na pokračovanie pozastavenej repair synchronizácie.
-    """
-    from registers.models import SyncProgress
-    
-    progress = SyncProgress.objects.filter(
-        sync_type='repair',
-        status__in=['paused', 'failed']
-    ).first()
-    
-    if not progress:
-        logger.info("No paused repair sync found.")
+    progress = _progress_to_resume(
+        progress_id, 'repair', statuses=REPAIR_RESUMABLE_STATUSES
+    )
+    if progress is None:
+        # Covers both "refused the id it was given" and "found nothing". There is
+        # deliberately no fallback to the newest repair row when an id was given
+        # and refused: that would resume a different run than the one clicked,
+        # which is the confusion `progress_id` exists to remove. The reason is in
+        # the log, which is the only place a `.delay()` caller can see it.
         return "No repair sync to resume"
-    
+
     logger.info(f"Resuming repair sync from RUZ ID {progress.last_processed_ruz_id}...")
     call_command('repair_ruz_sync_v2', f'--workers={workers}')
-    
+
     return f"Resumed repair sync from RUZ ID {progress.last_processed_ruz_id}"
 
 
