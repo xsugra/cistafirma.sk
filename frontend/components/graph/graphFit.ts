@@ -155,8 +155,23 @@ interface Extent {
  * the font by the zoom precisely so that a name stays 13 px on screen — so the
  * extent is not a rectangle that simply scales, and it is computed here rather
  * than solved for in closed form.
+ *
+ * `labelsHorizontal` is what keeps that property from making the fit
+ * unsatisfiable. A name is anchored *below* its disc and centred on it, so it
+ * costs a bounded ~18 px of screen height but half its own width sideways — and
+ * a name can be wider than the window. Requiring such a name to be inside makes
+ * `fits` false at every zoom, and the bisection then returns `minZoom`. With
+ * `labelsHorizontal` false the disc alone sets the horizontal extent: the names
+ * overhang sideways, which `labelLayout` already handles by shrinking and then
+ * dropping the ones that collide — a name is readable or absent, never a smear.
+ * The vertical band is counted either way, because it is bounded.
  */
-function extentAt(nodes: readonly FitNode[], widths: readonly number[], zoom: number): Extent {
+function extentAt(
+  nodes: readonly FitNode[],
+  widths: readonly number[],
+  zoom: number,
+  labelsHorizontal: boolean,
+): Extent {
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -172,7 +187,7 @@ function extentAt(nodes: readonly FitNode[], widths: readonly number[], zoom: nu
     // measured text plus 3 px of padding on each side, 13 px of text plus 1,5 px
     // top and bottom, anchored so its top edge sits `gap - padY` below the disc.
     const metrics = labelMetrics(widths[i], LABEL_FONT_PX, 1);
-    const halfWidth = Math.max(radius, metrics.w / 2);
+    const halfWidth = labelsHorizontal ? Math.max(radius, metrics.w / 2) : radius;
     const labelTop = cy + radius + LABEL_GAP_PX[node.kind] - metrics.padY;
 
     if (cx - halfWidth < minX) minX = cx - halfWidth;
@@ -217,15 +232,14 @@ export function fitTransform(
   // that the fit is genuinely tight, because "the graph fills the window" is the
   // property that makes this worth doing rather than the library's `zoomToFit`.
   const eps = 1e-6;
-  const fits = (zoom: number) => {
-    const { minX, maxX, minY, maxY } = extentAt(drawable, widths, zoom);
-    return maxX - minX <= availableWidth + eps && maxY - minY <= availableHeight + eps;
-  };
+  const solve = (labelsHorizontal: boolean): number => {
+    const fits = (zoom: number) => {
+      const { minX, maxX, minY, maxY } = extentAt(drawable, widths, zoom, labelsHorizontal);
+      return maxX - minX <= availableWidth + eps && maxY - minY <= availableHeight + eps;
+    };
 
-  let zoom: number;
-  if (fits(options.maxZoom)) {
-    zoom = options.maxZoom;
-  } else {
+    if (fits(options.maxZoom)) return options.maxZoom;
+
     // Invariant: `low` may or may not fit (a graph too large for the window at
     // the smallest zoom is clamped, not refused), `high` never does.
     let low = options.minZoom;
@@ -235,10 +249,21 @@ export function fitTransform(
       if (fits(mid)) low = mid;
       else high = mid;
     }
-    zoom = low;
-  }
+    return low;
+  };
 
-  const { minX, maxX, minY, maxY } = extentAt(drawable, widths, zoom);
+  // Frame the names too, as long as that still leaves a zoom that shows the
+  // graph. A fit that comes back at `minZoom` was never satisfiable: the names
+  // are collectively wider than the window, so *no* zoom puts them inside it,
+  // and clamping there drew every disc half a pixel wide. Measured on a real
+  // company — 114 nodes, longest name 124 characters, on a 393 px phone whose
+  // window is 311 px wide — that was `k = 0.02`. Framing the discs instead draws
+  // a graph, and the names overhang.
+  const withNames = solve(true);
+  const namesFit = withNames > options.minZoom;
+  const zoom = namesFit ? withNames : solve(false);
+
+  const { minX, maxX, minY, maxY } = extentAt(drawable, widths, zoom, namesFit);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
 

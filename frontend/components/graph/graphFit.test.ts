@@ -242,6 +242,59 @@ describe('fitTransform — graf sa zmestí do toho, čo je vidieť', () => {
         expect(ink.right - ink.left).toBeCloseTo(available.right - available.left, 1);
     });
 
+    it('keď sú menovky širšie než okno, rámujú sa disky a menovky prečnievajú', () => {
+        // The regression this exists for, at the size it was measured: a real
+        // company's graph is 114 nodes whose longest name is 124 characters, and
+        // on a 393 px phone the window is 311 px wide. Requiring such names to be
+        // inside is unsatisfiable at *every* zoom, so the bisection returned
+        // `minZoom` and the live page drew 26-unit discs 0.52 px across. The
+        // same shape in miniature: two 60-character names, 480 px of pill each.
+        const LONG = 'S'.repeat(60);
+        const apart = [company(-150, 0, LONG), company(150, 0, LONG)];
+        const fit = fitTransform(apart, measure, rect, canvas, FIT_CONFIG)!;
+
+        // Not clamped: the fit is a real zoom that shows the discs.
+        expect(fit.zoom).toBeGreaterThan(FIT_CONFIG.minZoom);
+        // 300 units apart, two discs of 26 -> 352 units of ink into 311 px.
+        expect(fit.zoom).toBeCloseTo(311 / 352, 3);
+
+        // The discs alone fill the window's width exactly -- tight, as before.
+        const discLeft = project(fit, canvas, -150, 0).x - 26 * fit.zoom;
+        const discRight = project(fit, canvas, 150, 0).x + 26 * fit.zoom;
+        expect(discRight - discLeft).toBeCloseTo(available.right - available.left, 1);
+        // And they sit inside it, not on top of the padding.
+        expect(discLeft).toBeGreaterThanOrEqual(available.left - 0.5);
+        expect(discRight).toBeLessThanOrEqual(available.right + 0.5);
+
+        const ink = inkBounds(apart, fit, canvas);
+
+        // And the cost is stated rather than hidden: the names do overhang the
+        // window. `labelLayout` shrinks and drops colliding names, so an
+        // overhanging name is one the reader may lose -- which is what makes this
+        // strictly better than drawing the whole graph half a pixel wide.
+        expect(ink.left).toBeLessThan(available.left);
+        expect(ink.right).toBeGreaterThan(available.right);
+    });
+
+    it('keď sa menovky nezmestia do šírky, na výšku sa stále počítajú', () => {
+        // The fallback drops the names from the *horizontal* extent only. A name
+        // hangs below its disc by a bounded ~18 px of screen, so the bottom row of
+        // names still gets its room -- otherwise the fallback would clip every
+        // name on the lowest disc, which is a cost it does not have to pay.
+        const LONG = 'S'.repeat(60);
+        const vertical = [company(0, -150, LONG), company(0, 150, LONG)];
+        const fit = fitTransform(vertical, measure, rect, canvas, FIT_CONFIG)!;
+        expect(fit.zoom).toBeGreaterThan(FIT_CONFIG.minZoom);
+
+        // 300 units of span plus two discs is 352 units of height; the lowest
+        // name sits a further `LABEL_GAP - padY + h` = 19.5 px below its disc.
+        expect(fit.zoom).toBeCloseTo((available.bottom - available.top - 19.5) / 352, 3);
+
+        const ink = inkBounds(vertical, fit, canvas);
+        expect(ink.bottom).toBeLessThanOrEqual(available.bottom + 0.5);
+        expect(ink.bottom).toBeCloseTo(available.bottom, 1);
+    });
+
     it('ignoruje uzly, ktoré engine ešte neumiestnil', () => {
         const unplaced = [company(0, 0), {x: undefined as unknown as number, y: 0, radius: 26, kind: 'company' as const, label: 'nikde', bold: false}];
         const fit = fitTransform(unplaced, measure, rect, canvas, FIT_CONFIG);
