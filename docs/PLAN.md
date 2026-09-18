@@ -7340,6 +7340,49 @@ k8s cesta a **nesmie sa použiť, kým neexistuje klaster**.
 
 ---
 
+### 11.11 Kontrola behu #46 — má päťdňový beh na čom dobehnúť (2026-09-18 20:12 CEST)
+
+Beh je kritická cesta na ~5 dní, takže sa overovalo, či ju vôbec má na čom
+dokončiť — nie že „beží".
+
+**Čo beží.** `registers.tasks.start_full_ruz_sync` v `worker_ruz@d39813196fb3`,
+`routing_key = ruz_full`, `worker_concurrency = 1` — zaberá jediný slot.
+Že ide o skutočný reštart od nuly, dosvedčuje `SyncProgress` #4:
+`zmenene_od = 2000-01-01`.
+
+**Nič nespadlo.** `RestartCount = 0` na **všetkých 12** kontajneroch a pätica
+workerov + backend naskočila v rozmedzí 1,1 s (16:00:51–52 UTC). Ten reštart
+teda bol jedno zámerné rozhodnutie (nasadenie #183), nie crash-loop — čo je
+jediná vec, ktorá by päťdňový beh ticho zabila.
+
+**Rezerva je dostatočná.** Disk **422 GB voľných** (6 % použitého), databáza
+1 333 MB, Redis 22,94 MB. Redis má `maxmemory = 0` a `noeviction`, takže rásť
+môže neobmedzene — pri 23 MB je to ale bezpredmetné.
+
+**ETA je odvodená, nie prevzatá.** Prírastkový riadok #2 dokončil svoj priechod
+na RUZ id **2 486 558**, čiže id priestor má ~2,49 M. Stav 18:12 UTC: kurzor
+43 600. Zvyšok 2 442 958 pri 20 100/h je **~121 h ≈ 5,0 dňa** → **~2026-09-23
+neskoro večer CEST**. Obe čísla sú namerané, nie odhadnuté: 2 486 558 je
+posledný kurzor dokončeného prírastkového priechodu a 20 100/h je tempo tohto
+behu. Kontrola, že kurzor je naozaj tohto behu a nie naakumulovaný:
+43 600 / 2,17 h = 20 100/h, čo je presne rate, ktorý si ráta keeper sám.
+
+**Dve pasce pre toho, kto to bude čítať zajtra.**
+
+- **`LLEN ruz_full` je teraz `0`, a to *nie je* dôkaz, že prírastkový sync
+  nemá čo čakať.** `fetch-ruz-data-every-6-hours` posledne bežal 14:07 UTC,
+  teda **predtým**, než walk o 16:02 zabral slot — takže vo fronte ešte nič
+  nie je. Prvá zrážka je **20:07 UTC**. Ani `inspect reserved` nič neukazuje,
+  takže to neleží ani v prefetch bufferi (`worker_prefetch_multiplier = 4`).
+  Nulový front tu znamená „ešte nenastalo", nie „nedeje sa".
+- **`SyncProgress` počítadlá sú kumulatívne cez behy**, keď sa riadok recykluje.
+  Riadok #2 hlási `total_created = 32 187` pri behu, ktorý trval **3,88 s**
+  (14:07:28,578 → 14:07:32,460) — to sa nedá vysvetliť inak než načítaním
+  z jeho 89 behov. Čítaj **deltu proti `started_at`**, nikdy surové číslo;
+  presne to už má v docstringu aj opravný príkaz.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
