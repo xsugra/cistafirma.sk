@@ -7313,6 +7313,33 @@ stále posiela len `--workers`, zatiaľ čo `REPAIR_RESUMABLE_STATUSES` prijíma
 
 ---
 
+### 11.10 Čo čaká na nasadenie na dell (stav 2026-09-18)
+
+dell beží na **`8486c03`**; `main` je o **9 commitov vpredu** (`git log --oneline
+8486c03..main` — tento dokument je deviaty). Všetko sa odkladá
+jedným rozhodnutím a z jedného dôvodu: ide o **jeden reštart workera**, a ten
+zastaví bežiaci walk #46 až na ~35 minút (30 min prah watchdogu + 5 min tick
+keepera) a spraví znovu ≤100 záznamov. Hromadí sa to teda do jedného nasadenia
+**po dokončení walku**, nie do ôsmich.
+
+Štyri z nich menia správanie:
+
+| commit | čo mení |
+|---|---|
+| `1e00c66` | dôvod chyby firmy sa dostane na `last_error` počas behu, nielen na konci (§11.7) |
+| `e089c54` | obnovenie syncu pokračuje ten beh, na ktorý sa kliklo |
+| `59fbf1f` | opravné behy dostali `SyncJob`, heartbeat a `ruz:global` (§11.8) |
+| `51482a1` | opravné príkazy ukladajú cez zapisovač walku, nie cez IČO (§11.9) |
+
+Zvyšných päť je `docs(plan)` — vrátane tohto.
+
+**Migrácie: žiadne** (`git diff --name-only 8486c03..main -- 'backend/*/migrations/*'`
+je prázdne), takže nasadenie nepotrebuje `migrate` — je to `git pull` + reštart
+služieb. Recept je v `docs/DEVOPS_CICD.md`; `docs/DEPLOYMENT_RUNBOOK.md` je
+k8s cesta a **nesmie sa použiť, kým neexistuje klaster**.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
