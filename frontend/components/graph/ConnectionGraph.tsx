@@ -151,8 +151,8 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
    * element happens to sit in it: it is the size of the unsafe strip at that
    * edge of the screen, and it does not fall to 0 for an element further down
    * the page. So it may only be used where the element really is against the
-   * edge -- the fullscreen overlay. These three are rendered in the inline card
-   * as well, where the same declaration would shove them ~59 px down for no
+   * edge -- the fullscreen overlay. These are rendered in the inline card as
+   * well, where the same declaration would shove them ~59 px down for no
    * reason at all. Hence the conditional, rather than one class list.
    */
   const edgeTop = isFullscreen ? 'top-[calc(0.75rem_+_env(safe-area-inset-top))]' : 'top-3';
@@ -187,20 +187,34 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
         />
       )}
       <GraphTooltip node={hoveredNode} position={tooltipPos} />
-      <div className={`absolute ${edgeTop} ${edgeLeft} pointer-events-none`}>
-        <GraphLegend />
-      </div>
-      <div className={`absolute ${edgeTop} ${edgeRight} pointer-events-none`}>
-        <GraphControls
-          onZoomIn={() => canvasRef.current?.zoomIn()}
-          onZoomOut={() => canvasRef.current?.zoomOut()}
-          onReset={() => canvasRef.current?.zoomToFit()}
-          onExportPng={() => canvasRef.current?.exportPng()}
-          onToggleFullscreen={() => setIsFullscreen(prev => !prev)}
-          isFullscreen={isFullscreen}
-          nodeCount={graphData.nodes.length}
-          truncated={truncated}
-        />
+      {/*
+        The legend and the controls share one absolutely positioned flex strip,
+        rather than two independent `absolute` corners. Measured before this:
+        at 393 px the legend spanned x 53..352 and the controls x 116..340, both
+        starting at y 37 -- so the controls were drawn *over* the legend's
+        right-hand items and hid them, and the same collision happened at 900 px.
+        Two absolutes in one corner cannot know about each other; one flex row
+        can. On a phone they stack (controls first, they are the actions), from
+        `md` up they sit on one line at either end.
+      */}
+      <div
+        className={`absolute ${edgeTop} ${edgeLeft} ${edgeRight} flex flex-col gap-2 pointer-events-none md:flex-row md:items-start md:justify-between`}
+      >
+        <div className="order-2 min-w-0 md:order-1 md:flex-1">
+          <GraphLegend />
+        </div>
+        <div className="order-1 flex justify-end md:order-2 md:flex-none">
+          <GraphControls
+            onZoomIn={() => canvasRef.current?.zoomIn()}
+            onZoomOut={() => canvasRef.current?.zoomOut()}
+            onReset={() => canvasRef.current?.zoomToFit()}
+            onExportPng={() => canvasRef.current?.exportPng()}
+            onToggleFullscreen={() => setIsFullscreen(prev => !prev)}
+            isFullscreen={isFullscreen}
+            nodeCount={graphData.nodes.length}
+            truncated={truncated}
+          />
+        </div>
       </div>
       <p className={`absolute ${edgeBottom} ${edgeLeft} text-xs text-gray-400 dark:text-gray-500 pointer-events-none`}>
         {isFullscreen ? 'Esc pre zatvorenie. ' : ''}Klikni na firmu pre rozbalenie prepojení. Dvojklik na firmu alebo osobu otvorí jej stránku.

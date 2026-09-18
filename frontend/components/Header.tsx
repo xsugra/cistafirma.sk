@@ -12,12 +12,52 @@ export const Header: React.FC = () => {
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [scrolled, setScrolled] = useState(false);
 
+    // Tailwind's `lg`, which is where the hamburger goes away. Kept as a number
+    // because this is JavaScript asking about the viewport, not CSS.
+    const LG = 1024;
+
     useEffect(() => {
         const handleScroll = () => {
             setScrolled(window.scrollY > 20);
         };
         window.addEventListener('scroll', handleScroll);
         return () => window.removeEventListener('scroll', handleScroll);
+    }, []);
+
+    /**
+     * The overlay is `fixed inset-0`, so the page underneath it scrolled behind
+     * it -- measured before this: `documentElement.scrollTop` went 0 -> 600 on a
+     * wheel gesture with the menu open, which puts a moving page behind a
+     * translucent panel at `bg-white/95`. `overscroll-contain` on the overlay
+     * stops a scroll that reaches the end of the menu from chaining out to that
+     * page.
+     *
+     * The previous value is saved and restored rather than cleared: nothing else
+     * here writes `body.style.overflow` today, but a literal `''` would silently
+     * discard whatever owned it if something ever does.
+     */
+    useEffect(() => {
+        if (!isMobileMenuOpen) return;
+        const previous = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = previous;
+        };
+    }, [isMobileMenuOpen]);
+
+    /**
+     * The menu only exists below `lg`, but `isMobileMenuOpen` outlives a rotation
+     * or a window drag: open it on a phone, widen the window, and the state says
+     * open while CSS hides the panel -- leaving the page scroll-locked by a menu
+     * that is not there. Closing it is the honest resolution: it is not visible,
+     * so it is not open.
+     */
+    useEffect(() => {
+        const onResize = () => {
+            if (window.innerWidth >= LG) setIsMobileMenuOpen(false);
+        };
+        window.addEventListener('resize', onResize);
+        return () => window.removeEventListener('resize', onResize);
     }, []);
 
     const handleNav = (route: string) => {
@@ -114,6 +154,8 @@ export const Header: React.FC = () => {
                                 className="lg:hidden p-2 text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 focus:outline-none transition-colors"
                                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
                                 aria-label="Menu"
+                                aria-expanded={isMobileMenuOpen}
+                                aria-controls="mobile-menu"
                             >
                                 <div className="w-6 h-6 flex flex-col justify-center gap-1.5">
                                     <span
@@ -130,6 +172,7 @@ export const Header: React.FC = () => {
             </header>
 
             <div
+                id="mobile-menu"
                 // `pt-24` (6rem) is what clears the header, and the header is
                 // now taller by the top inset -- so the sum, written out, rather
                 // than `pt-24` beside a `.safe-*` class that would *replace* it
@@ -138,8 +181,21 @@ export const Header: React.FC = () => {
                 // keeps the last item off the home indicator. Underscores are
                 // Tailwind's spaces in an arbitrary value -- `calc(6rem+env(…))`
                 // with no spaces is not valid CSS.
-                className={`fixed inset-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl transition-all duration-300 lg:hidden flex flex-col pt-[calc(6rem_+_env(safe-area-inset-top))] pb-[env(safe-area-inset-bottom)] px-6
-            ${isMobileMenuOpen ? 'opacity-100 pointer-events-auto translate-x-0' : 'opacity-0 pointer-events-none translate-x-full'}`}
+                //
+                // `overflow-y-auto` because the signed-in menu is ~550 px of
+                // content under a 6 rem top pad, which does not fit a phone held
+                // sideways; `overscroll-contain` keeps the scroll it enables from
+                // chaining out to the page behind it.
+                //
+                // `invisible` when closed, not just `opacity-0`: an element at
+                // zero opacity is still in the DOM, still focusable and still
+                // announced, so every link in this panel was a tab stop on a page
+                // where nothing could be seen. `visibility: hidden` takes it out
+                // of both, and because `transition-all` animates visibility as a
+                // step -- staying visible for the whole of a hide and flipping at
+                // once on a show -- the slide and fade are unchanged.
+                className={`fixed inset-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl transition-all duration-300 lg:hidden flex flex-col overflow-y-auto overscroll-contain pt-[calc(6rem_+_env(safe-area-inset-top))] pb-[env(safe-area-inset-bottom)] px-6
+            ${isMobileMenuOpen ? 'opacity-100 pointer-events-auto translate-x-0' : 'opacity-0 pointer-events-none translate-x-full invisible'}`}
             >
                 <nav className="flex flex-col space-y-6 text-center text-lg">
                     <button onClick={() => handleNav(ROUTES.HOME)}

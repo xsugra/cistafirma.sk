@@ -19,7 +19,15 @@ export function GraphControls({
   nodeCount,
   truncated,
 }: GraphControlsProps) {
-  const btnBase = 'px-2.5 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors';
+  // Measured before this: the text buttons were 28-30 x 32 and the two SVG ones
+  // 34 x 26 -- so the icon buttons did not fill the 32 px pill they sit in (their
+  // hover background stopped short of its edges) and nothing here was close to a
+  // thumb-sized target on a phone. `items-center justify-center` plus a minimum
+  // box makes all five the same square, and the box is the tap target rather than
+  // the glyph. 44 px below `md` is Apple's minimum; at `md` and up a pointer is
+  // precise and the control strip keeps the compact size it had.
+  const btnBase =
+    'flex items-center justify-center min-h-11 min-w-11 md:min-h-8 md:min-w-8 px-2.5 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors';
 
   return (
     <div className="flex items-center gap-2 text-sm pointer-events-auto">
