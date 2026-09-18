@@ -7315,8 +7315,11 @@ stále posiela len `--workers`, zatiaľ čo `REPAIR_RESUMABLE_STATUSES` prijíma
 
 ### 11.10 Čo čaká na nasadenie na dell (stav 2026-09-18)
 
-dell beží na **`8486c03`**; `main` je o **9 commitov vpredu** (`git log --oneline
-8486c03..main` — tento dokument je deviaty). Všetko sa odkladá
+dell beží na **`8486c03`** a `main` je pred ním. Celkový počet commitov sa
+nepíše zámerne — každý ďalší `docs(plan)` ho posunie a číslo v dokumente by
+začalo klamať. Rozhodujúce je, že **štyri menia správanie** a sú vypísané
+nižšie; zvyšok sú `docs(plan)`. Aktuálny stav dá `git log --oneline 8486c03..main`.
+Všetko sa odkladá
 jedným rozhodnutím a z jedného dôvodu: ide o **jeden reštart workera**, a ten
 zastaví bežiaci walk #46 až na ~35 minút (30 min prah watchdogu + 5 min tick
 keepera) a spraví znovu ≤100 záznamov. Hromadí sa to teda do jedného nasadenia
