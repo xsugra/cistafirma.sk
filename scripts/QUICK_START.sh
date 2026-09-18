@@ -68,9 +68,9 @@ do
             ;;
         "Dokumentácia - Otvor action plan")
             echo ""
-            echo "📚 Otvára sa: SAFE_PUSH_ACTION_PLAN.md"
+            echo "📚 Otvára sa: docs/archive/SAFE_PUSH_ACTION_PLAN.md"
             echo ""
-            less SAFE_PUSH_ACTION_PLAN.md || cat SAFE_PUSH_ACTION_PLAN.md
+            less docs/archive/SAFE_PUSH_ACTION_PLAN.md || cat docs/archive/SAFE_PUSH_ACTION_PLAN.md
             break
             ;;
         "Ukončiť")

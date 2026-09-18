@@ -77,11 +77,11 @@ grep "frontend/dist" .gitignore
 ```bash
 # ✅ Všetky dokumenty existujú
 ls -1 scripts/PRE_PUSH_CLEANUP_*.md
-ls -1 SAFE_PUSH_ACTION_PLAN.md PRE_PUSH_CLEANUP_SETUP.md
+ls -1 docs/archive/SAFE_PUSH_ACTION_PLAN.md docs/archive/PRE_PUSH_CLEANUP_SETUP.md
 
 # ✅ Všetky sú čitateľné
 file scripts/PRE_PUSH_CLEANUP_*.md
-file SAFE_PUSH_ACTION_PLAN.md
+file docs/archive/SAFE_PUSH_ACTION_PLAN.md
 ```
 
 ---
@@ -149,7 +149,7 @@ git push
 → `scripts/PRE_PUSH_CLEANUP_CHEATSHEET.md`
 
 **Praktický action plan (3-5 minút)**
-→ `SAFE_PUSH_ACTION_PLAN.md` ⭐ ODPORÚČANÉ!
+→ `docs/archive/SAFE_PUSH_ACTION_PLAN.md` ⭐ ODPORÚČANÉ!
 
 **Podrobný guide s príkladami (10-15 minút)**
 → `scripts/PRE_PUSH_CLEANUP_GUIDE.md`
@@ -363,7 +363,7 @@ make clean-pre-push-commit && git push
 
 **Ďalšie info:**
 ```bash
-cat SAFE_PUSH_ACTION_PLAN.md        # Praktický náhľad
+cat docs/archive/SAFE_PUSH_ACTION_PLAN.md        # Praktický náhľad
 cat scripts/PRE_PUSH_CLEANUP_GUIDE.md  # Podrobný guide
 ```
 
