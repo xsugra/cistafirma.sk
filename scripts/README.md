@@ -175,8 +175,10 @@ git diff gitlab-home/main...HEAD           # čo je v nich
 ```
 
 > Pozor: `git log origin/main..HEAD` je v tomto repe zavádzajúce — live vetva
-> a pracovný strom bývajú pred `main`, a produkcia beží z `feat/ai-ready-baseline`
-> (ktorá je *predkom* `main`, nie jeho vetvou).
+> a pracovný strom bývajú pred `main`. Produkcia (`dell`) ale **beží z `main`**;
+> do 2026-09-18 mala vycheckoutovanú `feat/ai-ready-baseline`, tá je však len
+> *predkom* `main` (0 vlastných commitov), takže obe mená ukazujú na tú istú
+> líniu.
 
 ---
 

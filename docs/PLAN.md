@@ -5514,18 +5514,34 @@ História je teda **jedna priamka**, nie dve vetvy:
               → d113a67 (merge) → 7d97d66 → 945fce2 (main)
 ```
 
-**A to isté platí pre `dell`.** Beží na `feat/ai-ready-baseline`, HEAD
-**`6abd4d533d8162ccf491c6c6170e799520c48cc4`**, pracovný strom **čistý**,
-a `git rev-list --count main..6abd4d5` je **0** — nasadený commit je predok
-`main`. `6abd4d5..main` je **25 commitov**, čiže nasadenie je **čistý
-fast-forward**, nie merge a nie rebase. (Predtým som to odhadoval na 15 commitov;
-presné číslo je 25 a je merané, nie odhadnuté.)
+**A to isté platilo pre `dell`** — len to už nie je pravda a toto je
+oprava, nie nový nález. Keď sa toto písalo, `dell` bežal na
+`feat/ai-ready-baseline`, HEAD `6abd4d5`, `git rev-list --count main..6abd4d5`
+bol **0**, čiže nasadenie bolo čistý fast-forward o 25 commitov. **Dnes
+(2026-09-18) je `dell` na `main`, HEAD `5f812c0`** — nasadenie z 2026-09-18
+12:25 (`.env` a `.git` na delle čítané naozaj, nie odhadnuté: pracovný
+adresár `~/cistafirma`, vetva `main`, čistý strom). `main` je odvtedy
+o **14 commitov** napred (`git rev-list --count 5f812c0..main`), a to celé
+mobilná a grafová práca #175–#178 — **frontend a dokumentácia, 0 migrácií**,
+takže nasadenie je rebuild frontendu, nie zmena schémy.
+
+Nasadenie na `dell` je **manuálny krok a zámerne neprebehlo samo**: je to
+produkcia a `docker compose up -d --build` ju na chvíľu zastaví. Čaká na
+slovo. Postup je v `docs/DEVOPS_CICD.md` (sekcia o nasadení na `dell`, okolo
+riadku 223) — **nie** v `docs/DEPLOYMENT_RUNBOOK.md`, to je k8s cesta, ktorá
+sa podľa CLAUDE.md nesmie použiť, kým cluster neexistuje.
+
+`feat/ai-ready-baseline` má stále **0 vlastných commitov** a na `gitlab-home`
+je `fc46001` — je to predok `main`, takže vetva je teraz len druhé meno pre
+`main`. `dell` ju už nemá vycheckoutovanú.
 
 Z toho vyplýva, že „zlúčiť vetvu s `main`" aj „doviesť `dell` na `main`" sú dve
 stránky tej istej veci: **`main` už všetko obsahuje**, obe mená ukazujú na jeho
-predkov. Nič sa nemerguje — len sa posunie ukazovateľ. Nechal som to na tvoje
-slovo, lebo posun `feat/ai-ready-baseline` (vetva, ktorú má `dell` vycheckoutovanú)
-je rozhodnutie o zdieľanej vetve.
+predkov. Nič sa nemerguje — len sa posunie ukazovateľ. Prvá polovica je
+vyriešená: `dell` už na `main` je (viď vyššie), takže na ňom nestojí nič.
+Druhá polovica — posun `feat/ai-ready-baseline` na `main` — **je teraz už len
+kozmetika**: nikto ju nemá vycheckoutovanú, takže nikoho neblokuje. Nechal som
+ju na tvoje slovo, lebo je to rozhodnutie o zdieľanej vetve, nie o kóde.
 
 #### Koľko z tých 22 vetiev je mŕtvych — a či o niečo prídu
 
@@ -5534,8 +5550,9 @@ Pre každú vetvu som zmeral `git rev-list --count main..<vetva>`:
 
 - **14 vetiev má 0 vlastných commitov** — sú celé obsiahnuté v `main` a zmazať sa
   dajú bez straty: `checkpoint/wip-state`, `chore/frontend-assets`,
-  `ci/runner-tags-and-kubectl-image`, `feat/ai-ready-baseline` (pozor — tú drží
-  `dell`), `feat/companies-registers-backend`, `feat/frontend-admin-pages`,
+  `ci/runner-tags-and-kubectl-image`, `feat/ai-ready-baseline` (kedysi ju držal
+  `dell` — dnes už nie, je na `main`), `feat/companies-registers-backend`,
+  `feat/frontend-admin-pages`,
   `feat/frontend-components-overhaul`, `feat/frontend-ts-migration`,
   `feat/new-apps-connections-core`, `feature/admin-overhaul`,
   `feature/frontend-enhancements`, `feature/registers-sync-engine`,
