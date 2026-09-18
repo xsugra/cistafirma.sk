@@ -6227,22 +6227,39 @@ z Tailwindu je mŕtvy z toho istého dôvodu ako nález v 9.5.
 
 Zoradené podľa závažnosti; **prvé dve sú merané**, nie odhadnuté.
 
-1. **Tabuľka pomerových ukazovateľov — celý stĺpec „Stav" je odrezaný a nedá
-   sa k nemu doscrollovať.** Verifikátor to **nameral v headless Chrome na
-   393 px**: minimálna šírka tabuľky **397,9 px** (Rentabilita) a **426,1 px**
-   (Zadĺženosť) proti **313 px** dostupným (393 − 32 `main.px-4` − 48
-   `InfoCard.p-6`). Príčina je `overflow-hidden` na `FinancialRatiosTable.tsx:217`
-   (a `InfoCard.tsx:13`) — **nie je tam `overflow-x-auto`**, takže sa k stĺpcu
-   nedá dostať. Rovnaká trieda o kus ďalej: **Porovnanie so sektorom** — celý
-   odvodený stĺpec „Rozdiel" je neviditeľný a nedostupný.
-2. **Admin sidebar `w-60` (240 px) nemá responzívny prefix** a je
-   `flex-shrink-0` → na 393 px ostáva **153 px** (po `p-6` 105 px) a obsah sa
-   posúva do strany. `AdminLayout.tsx`. (Verifikátor upozorňuje, že obsah nie
-   je *orezaný*, je *posúvateľný* — to treba držať oddelené.)
-3. **Kompaktný vyhľadávací input má 14 px** (`text-sm`, `SearchBar.tsx:76`) →
-   iOS Safari pri fokuse **zoomuje a ostane priblížený**. Použitý na
-   `pages/Company.tsx:84` a `pages/Person.tsx:151`. Rovnaká trieda: admin
-   formuláre (inputy 14 px, selecty 12 px).
+1. ~~**Tabuľka pomerových ukazovateľov — celý stĺpec „Stav" je odrezaný a nedá
+   sa k nemu doscrollovať.**~~ **Hotové v `1f806ee`.** Merané: minimálna šírka
+   tabuľky **397,9 px** (Rentabilita) a **426,1 px** (Zadĺženosť) proti
+   **313 px** dostupným (393 − 32 `main.px-4` − 48 `InfoCard.p-6`). Príčina
+   bola `overflow-hidden` na `FinancialRatiosTable.tsx:217` — **nie `InfoCard`,
+   to je tam správne**. Rovnaká trieda aj v **Porovnaní so sektorom**, kde bol
+   celý odvodený stĺpec „Rozdiel" neviditeľný a nedostupný. **Ako sa to
+   dokázalo:** `scrollWidth > clientWidth` je pravda pri oboch hodnotách
+   `overflow` (je to tvrdenie o obsahu, nie o posúvateľnosti), takže prvý
+   pokus meral nesprávnu vec. Rozhodol až **skutočný gest** — `mouse.wheel`
+   nad prvkom: `overflow-hidden` 0 → 0 (gesto nič neurobí), `overflow-x-auto`
+   0 → 63. `InfoCard.tsx:13` a `Person.tsx:190` sú `overflow-hidden` **správne**
+   a nemenia sa.
+2. ~~**Admin sidebar `w-60` (240 px) nemá responzívny prefix**~~ **Hotové
+   v `68b4a6f`** (aj s `h-screen` → `h-dvh` a pomenovaným prepínačom).
+   Merané na 393 px: obsah **153 → 393 px**, desktop 900 px **nezmenený**
+   (660 px s otvorenou lištou). Zbalený pod `md` lišta **zmizne** — namerané,
+   že 64 px koľajnica prekrývala x 0..64 nad obsahom, ktorý začína na x 0.
+   **Druhá pasca kaskády, iná než v 9.5:** `max-md:hidden` vedľa
+   nepodmieneného `flex` **prehrá** (obe display utility, `flex` sa emituje
+   neskôr) — namerané, `.hidden{display:none}` je pred `.flex{display:flex}`.
+   Drží až `hidden md:flex`, teda variant proti obyčajnej utilite.
+3. ~~**Kompaktný vyhľadávací input má 14 px**~~ **Hotové v `68b4a6f`**, aj
+   14 admin ovládacích prvkov. `SearchBar.tsx:76` je `text-sm` a používa sa na
+   `pages/Company.tsx:84` a `pages/Person.tsx:151` → iOS Safari pri fokuse
+   **zoomuje a ostane priblížený**. **Oprava tohto bodu:** tvrdenie „admin
+   formuláre (inputy 14 px, selecty 12 px)" bolo bez overenia a je
+   **zavádzajúce**. `.app-input` (Login, Register, Contact, Profile)
+   **nemá** `font-size`, dedí z `body`, a `body` je 16 px → **namerané 16 px,
+   tieto stránky nezoomujú a nemenia sa**. Skutočná množina bola presne
+   kompaktný `SearchBar` + 14 admin prvkov, ktoré majú veľkosť na sebe.
+   Overené proti zbuildovanému CSS: na 393 px je `text-base sm:text-sm`
+   16 px a samotné `text-sm` 14 px (kontrola), na 900 px 14 px.
 4. **Dva parser-blokujúce CDN skripty v `<head>`, ktoré nikto nepoužíva**
    (`index.html:36-37` — three.js r121 a `vanta@latest`). `vanta@latest` je
    navyše **nepinovaná verzia bez SRI**, takže sa na každej stránke každej
@@ -6251,10 +6268,15 @@ Zoradené podľa závažnosti; **prvé dve sú merané**, nie odhadnuté.
 5. `viewport-fit=cover` chýba a `env(safe-area-inset-*)` sa v projekte
    nevyskytuje **ani raz** — samotné pridanie meta by teda bolo inertné.
    `dvh`/`svh` tiež 0×.
-6. `h-screen` na 4 miestach (reálne problémy `AdminLayout.tsx:40`,
-   `ConnectionGraph.tsx:150`); mobilné menu bez `overflow-y-auto`; zatvorené
-   menu ostáva v DOM aj v tab-poradí; `GraphControls` má 32 px tlačidlá;
-   legenda grafu sa na 393 px láme na ~5 riadkov cez plátno.
+6. `h-screen` na 4 miestach — **`AdminLayout.tsx:40` je hotové v `68b4a6f`
+   (`h-dvh`), `ConnectionGraph.tsx:150` ostáva**; mobilné menu bez
+   `overflow-y-auto`; zatvorené menu ostáva v DOM aj v tab-poradí;
+   `GraphControls` má 32 px tlačidlá; legenda grafu sa na 393 px láme na
+   ~5 riadkov cez plátno.
+
+**`h-dvh` je odôvodnené, nie merané** — a to treba povedať nahlas. Headless
+Chromium nemá adresnú lištu, takže `100vh`, `dvh` aj `svh` tam vyjdú rovnako
+a meranie by len predstieralo dôkaz. Overiť sa to dá jedine na telefóne.
 
 ---
 
@@ -6332,11 +6354,19 @@ overiť sa dá len proti reálnemu backendu na telefóne, nie z kódu.
    overenia reťaze `is_staff` (serializér → view → `api.ts`). **Ostáva
    neoverené a overiť sa dá len na telefóne:** ktoré z troch vysvetlení
    v 9.3 to je — ideálne `GET /api/auth/profile` z tej telefónnej session.
-4. **Tabuľky** (meraný orez) → **admin sidebar a inputy** → **`viewport-fit=cover`
-   + safe-area** → **menu, `h-screen`, legenda grafu**.
+4. ~~**Tabuľky** (meraný orez)~~ — **hotové v `1f806ee`**.
+   ~~**Admin sidebar a inputy**~~ — **hotové v `68b4a6f`** (8 nových testov
+   v `admin/AdminLayout.test.tsx`; suita 384 testov v 42 súboroch).
+   **Ďalej:** **`viewport-fit=cover` + safe-area** → **menu, zvyšný
+   `h-screen`, legenda grafu**.
 
 Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`),
 štruktúrovaný commit, push na `origin` aj `gitlab-home`.
+
+**Poctivá hranica kroku 2:** `h-dvh` a správanie `env(safe-area-inset-*)` sa
+v headless prehliadači odmerať **nedajú** — chýba adresná lišta aj výrez.
+Zvyšok kroku 2 meraný je (šírky, `display`, `font-size` z computed style proti
+zbuildovanému CSS).
 
 ---
 
