@@ -649,27 +649,62 @@ def search_and_add_company_by_ico(ico: str):
     """
     return sync_single_company_from_ruz(ico)
 
-@shared_task(queue='ruz_full')
-def resume_full_ruz_sync():
-    """
-    Celery task to resume a paused or failed full RUZ sync.
-    Can be triggered manually from admin or scheduled.
+@shared_task(bind=True, queue='ruz_full')
+def resume_full_ruz_sync(self, sync_job_id: int | None = None):
+    """Continue a full RUZ resync from the cursor its interrupted run left.
+
+    Two things were wrong here, and both end the same way -- a resume that
+    resumes nothing.
+
+    It called `fetch_ruz_data --resume` **without** `--full-resync`, so the
+    command derived `sync_type='incremental'` and went looking for an
+    *incremental* progress row to continue. The `full` row this task had just
+    found -- and announced in its own log line -- was never the row the command
+    read, because the command's lookup is keyed on the type and the type was
+    'incremental'. With no such row in paused/failed/running it prints
+    "Nenájdený žiadny sync na pokračovanie" and returns.
+
+    Returning is not free: the command has already enqueued and claimed a
+    `SyncJob` by then, and only the walk's own end paths complete or fail one.
+    So the run left a `running` job behind that nothing would ever finish, and
+    moved no data at all.
+
+    It also called the command directly rather than through `_run_ruz_command`,
+    which is the only thing that gives a RUZ run a job row, a heartbeat and an
+    outcome. Going through it is what makes the resume visible to the watchdog
+    and to the admin, and what makes it safe to dispatch more than once: a
+    second dispatch meets the live job on the concurrency key and returns
+    instead of starting a second import.
+
+    `running` is in the status filter on purpose. A run whose worker was killed
+    leaves its progress row saying `running` -- nothing wrote `failed`, because
+    the process that would have written it is the one that died. That is
+    precisely the state a resume exists for, and excluding it made this task
+    useless in the only case that needs it.
     """
     from registers.models import SyncProgress
-    
+
     progress = SyncProgress.objects.filter(
         sync_type='full',
-        status__in=['paused', 'failed']
-    ).first()
-    
+        status__in=['paused', 'failed', 'running'],
+    ).order_by('-id').first()
+
     if not progress:
-        logger.info("No paused sync found. Nothing to resume.")
+        logger.info("No paused or failed full sync found. Nothing to resume.")
         return "No sync to resume"
-    
-    logger.info(f"Resuming full sync from RUZ ID {progress.last_processed_ruz_id}...")
-    call_command('fetch_ruz_data', '--resume')
-    
-    return f"Resumed sync from RUZ ID {progress.last_processed_ruz_id}"
+
+    logger.info(
+        "Resuming full sync from RUZ ID %s (progress #%s, %s).",
+        progress.last_processed_ruz_id, progress.pk, progress.status,
+    )
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_full",
+        command_args=["--full-resync", "--resume"],
+        # `or ""`: `SyncJob.celery_task_id` is `null=False`, and `.apply()` -- which
+        # is how tests and any eager caller reach this -- has no request id.
+        celery_task_id=self.request.id or "",
+    )
 
 
 @shared_task(bind=True, queue='ruz_full')
@@ -691,34 +726,52 @@ def start_full_ruz_sync(self, reset=False, sync_job_id: int | None = None):
     )
 
 
-@shared_task(queue='ruz_full', time_limit=86400)  # 24h limit
-def start_full_ruz_sync_from_id(start_id: int):
-    """
-    Celery task na spustenie Full Sync od konkrétneho RUZ ID.
-    Užitočné pre opätovné spustenie od určitého bodu.
-    
-    Args:
-        start_id: RUZ ID od ktorého začať synchronizáciu.
+@shared_task(bind=True, queue='ruz_full')
+def start_full_ruz_sync_from_id(self, start_id: int, sync_job_id: int | None = None):
+    """Start a full walk from a chosen RUZ ID rather than from 2000-01-01.
+
+    This carried the same defect as `resume_full_ruz_sync`, and it was worse
+    here. It parked a `full` progress row at `start_id - 1` and then called
+    `fetch_ruz_data --resume` without `--full-resync`, so the command derived
+    `sync_type='incremental'` and went looking for an *incremental* row to
+    continue. The six-hourly incremental leaves one of those behind most days --
+    so instead of a no-op, this could quietly resume the **incremental** walk
+    from the incremental cursor, which is not the id the caller asked for and
+    not the register it meant to read.
+
+    Going through `_run_ruz_command` also gives it the job row, heartbeat and
+    outcome the other full-walk entry points have; called directly, a run was
+    invisible to the watchdog and to the admin.
+
+    The 24-hour `time_limit` is gone with it. A walk from an arbitrary id covers
+    up to ~2M ids at roughly 6 per second, so the limit could not do anything
+    except SIGKILL the run mid-walk -- and `time_limit` is a hard kill, so
+    nothing writes `failed`: the job stays `running` until the watchdog reaps it
+    half an hour later. Neither sibling (`start_full_ruz_sync`,
+    `resume_full_ruz_sync`) has a limit, so this was the outlier rather than the
+    guard. The heartbeat and the stored cursor are what make a long walk safe.
     """
     from registers.models import SyncProgress
-    
-    logger.info(f"Starting full RUZ sync from ID {start_id}...")
-    
-    # Nájdeme alebo vytvoríme full sync progress
+
+    logger.info("Starting full RUZ sync from ID %s...", start_id)
+
     progress, created = SyncProgress.objects.get_or_create(
         sync_type='full',
         defaults={'status': 'idle'}
     )
-    
-    # Nastavíme štartovacie ID
-    progress.last_processed_ruz_id = start_id - 1  # -1 lebo pokračuje ZA týmto ID
+
+    # -1: the walk resumes *after* the stored id, so this makes `start_id` the
+    # first one it reads.
+    progress.last_processed_ruz_id = start_id - 1
     progress.status = 'paused'
     progress.save()
-    
-    # Spustíme --resume ktorý pokračuje od last_processed_ruz_id
-    call_command('fetch_ruz_data', '--resume')
-    
-    return f"Full sync from ID {start_id} started"
+
+    return _run_ruz_command(
+        sync_job_id=sync_job_id,
+        job_type="ruz_full",
+        command_args=["--full-resync", "--resume"],
+        celery_task_id=self.request.id or "",
+    )
 
 
 @shared_task(bind=True, queue='ruz_full')
