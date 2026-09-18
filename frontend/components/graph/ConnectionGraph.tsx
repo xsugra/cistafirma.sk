@@ -107,7 +107,7 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
   const focusRect = useCallback((): Rect | null => {
     const box = containerRef.current?.getBoundingClientRect();
     if (!box || box.width === 0 || box.height === 0) return null;
-    return focusWindow(
+    const window = focusWindow(
       box,
       viewport(),
       {
@@ -115,6 +115,19 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
         bottom: captionRef.current?.getBoundingClientRect() ?? null,
       },
     ).rect;
+    // None of the box is on screen yet -- which is where it is on first load,
+    // a screen and a half below the fold. The window then has no height and the
+    // fit is refused, so the graph would sit at whatever the simulation
+    // produced: spread wider than the canvas and clipped by its edge until the
+    // reader arrives and the debounced refit fires, ~580 ms later.
+    //
+    // Framing the whole box instead means they arrive at a framed graph, and
+    // the refit that follows moves the centre by the 54 px the legend covers --
+    // a small correction rather than a clipped graph snapping into place.
+    if (window.height <= 0) {
+      return {x: 0, y: 0, width: box.width, height: box.height};
+    }
+    return window;
   }, []);
 
   const isMostlyVisible = useCallback(() => {

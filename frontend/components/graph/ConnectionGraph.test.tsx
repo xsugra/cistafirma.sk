@@ -237,6 +237,18 @@ describe('ConnectionGraph — plátno dostane nameranú veľkosť, nie odhad (#1
         expect(props.focusRect()).toEqual({x: 0, y: 0, width: 359, height: 368});
     });
 
+    it('kým box nie je na obrazovke, rámuje sa na celý box', () => {
+        // The first load of the company page: the graph is a screen and a half
+        // below the fold. Refusing to fit there leaves the graph at the
+        // simulation's own spread -- wider than the canvas and clipped by its
+        // edge -- until the reader arrives and the debounced refit fires. So
+        // the whole box is the window while there is no visible part of it.
+        const props = framed({...PHONE, box: domRect(1400, 0, 359, 639),
+                              strip: domRect(1412, 0, 359, 136),
+                              caption: domRect(1999, 0, 359, 32)});
+        expect(props.focusRect()).toEqual({x: 0, y: 0, width: 359, height: 639});
+    });
+
     it('bez merateľného boxu vráti `null`, nie vymyslené číslo', () => {
         // `focusRect` is asked at the moment of a fit, so "cannot measure" is a
         // real state -- and the canvas then frames its whole self, which is what

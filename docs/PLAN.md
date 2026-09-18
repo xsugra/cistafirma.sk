@@ -6643,8 +6643,34 @@ mimo obrazovky vždy**, nech sa skroluje kamkoľvek.
 **Čo to netvrdí.** Že bude vidno každý názov pri každom zoome — to je aritmetika
 z 9.1 (páky B a C) a tej sa to netýka. A že sa vzhľad nemení: fit na kreslený
 rozsah znamená **väčší zoom** než dnes (184,3 px na firmu → 26 px + šírka názvu),
-takže graf bude na obrazovke väčší. Presné čísla po zmene idú do overenia, nie
-do odhadu.
+takže graf bude na obrazovke väčší.
+
+**Po oprave, na zbuildovanej verzii.** `frontend/dist` z `npm run build`, servírovaný
+`vite preview` na 4173 — teda to, čo sa nasadzuje, nie dev server. `ENABLE_MOCK_DATA`
+ostáva v bundle `false`; API odpovedá až prehliadač (route interception), takže sa
+meria naozaj zbuildený kód. Skript:
+`$CLAUDE_JOB_DIR/tmp/graph_built.py`. Prírastok oproti minulému kolu: pri načítaní
+je box grafu celý pod okrajom, takže `focusWindow` vráti okno s nulovou výškou
+a fit sa odmietne — graf by teda sedel v rozložení zo simulácie, **širší než plátno
+a orezaný jeho okrajom**, kým človek nedorazí (namerané: atrament pretiekal na
+všetky štyri hrany). Preto `focusRect` v tom stave rámuje **celý box**; po príchode
+sa prefitne o 54 px, ktoré zaberá legenda.
+
+| | 393 × 852 | 900 × 900 |
+|---|---|---|
+| box grafu | 359 × 639 | 734 × 675 |
+| **plátno** | **359 × 639** (attr 1077 × 1917) | **734 × 675** (attr 734 × 675) |
+| použiteľné okno | y 148..599 = 451 px, stred 373,5 | y 147..726 = 579 px, stred 436,5 |
+| atrament | 312,7 × 324,3 | 474 × 537 |
+| atrament vnútri okna | **áno** (61 hore, 65,7 dole) | **áno** (18 hore, 24 dole) |
+| stred atramentu vs stred okna | **−2,4 px** | **−3,0 px** |
+| vodorovne | −1,8 px | 0,0 px |
+
+Predtým na tých istých miestach: plátno 1100 × 1000 v oboch, stred **+445,2 px**
+(393) a **+192,0 px** (900) vpravo. Krivka „atrament sa doladí až keď engine
+zastaví" je vidieť aj tu: bez skrolovania sa stred boxu trafí na **−1,5 px** až
+okolo t + 20 s, keď simulácia dochladí a `onEngineStop` prefituje druhýkrát —
+fit je presný v okamihu, keď beží, a medzitým sa hýbu uzly, nie rám.
 
 ### 10.5 Poradie prác
 
@@ -6657,8 +6683,11 @@ do odhadu.
    `GraphCanvas.tsx` (+ testy: fit je čistá aritmetika, tá sa testovať dá).
    **Hotové** — `graphFit.ts` (čistá geometria) + `graphFit.test.ts` (13),
    `GraphCanvas.test.tsx` (13, s stavovým dvojníkom `force-graph`),
-   `ConnectionGraph.test.tsx` (8, s podstrčeným `getBoundingClientRect`).
-   Celkovo 45 súborov / 420 testov, `typecheck` aj `build` čisté.
+   `ConnectionGraph.test.tsx` (9, s podstrčeným `getBoundingClientRect`).
+   Celkovo 45 súborov / 421 testov, `typecheck` aj `build` čisté.
+   **Premerané na zbuildovanej verzii** (nie odhad): 393 px → plátno 359 × 639,
+   atrament vnútri okna, stred −2,4 px; 900 px → plátno 734 × 675, stred −3,0 px.
+   Tabuľka a metóda v 10.4.
 4. Ak povie, **desatinná bodka** (10.3) — samostatný commit. **Nespravené**,
    čaká na slovo.
 
