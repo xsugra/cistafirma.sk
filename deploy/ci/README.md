@@ -30,6 +30,13 @@ Nasadené 11. 9. 2026 ako **dva kontajnery** cez `docker compose`.
     └── config.toml           # 0600, obsahuje runner token
 ```
 
+> **Pozor: tento strom je strom na lenovo, nie obsah repozitára.** Zámerne sa
+> líšia na dvoch miestach — v strome je `commit-ci-tags.rb`, o ktorom riadok
+> vyššie hovorí, že sa sem **nekopíruje**, a chýba v ňom `gitlab-ci.yml.new`,
+> ktorý v `deploy/ci/` naopak **je** (viď „Archivovaný artefakt" na konci).
+> `deploy/ci/` obsahuje presne štyri súbory: `README.md`, `docker-compose.yml`,
+> `setup-config.sh`, `gitlab-ci.yml.new`.
+
 ## Ovládanie
 
 ```bash
@@ -73,10 +80,16 @@ job kontajner: /var/run/docker.sock         -> neexistuje
 proxy z runnera:
     GET /version, /containers/json,
         /images/json, /networks            -> 200 OK
-    GET /secrets, /services, /nodes,
-        /info, /build                       -> 403 Forbidden
+    GET /secrets, /services, /nodes, /build -> 403 Forbidden
+    GET /info                                -> 200 OK
     POST /exec/...                          -> 403 Forbidden
 ```
+
+> **Oprava 18. 9. 2026:** `/info` bolo v tomto výpise medzi 403 — to bol stav
+> **pred 16. 9. 2026**. Dnešný `deploy/ci/docker-compose.yml:59` má `INFO: 1`
+> s komentárom, prečo: runner pri *príprave* jobu volá `GET /info`
+> (`docker.go:1396`), a s `INFO: 0` každý job zlyhal na `runner_system_failure`
+> (403). `INFO: 1` je v súbore od prvého commitu `4aa3656` (16. 9.).
 
 ### Dôležité a neintuitívne: proxy sám o sebe nestačí
 
@@ -194,14 +207,17 @@ dni to nikto nevidel.
   ako pripravená alternatíva, keby raz bolo treba runner presunúť inam —
   explicitný `tags:` je viditeľnejší a prežije prenos projektu.
 
-  > **Oprava 17. 9. 2026 — to tvrdenie platí len pre túto vetvu.** Napísal som
-  > ho ako fakt o repozitári a je to fakt len o `feat/ai-ready-baseline`.
-  > Zmerané: `gitlab-home/main` (kanonický remote) má v `.gitlab-ci.yml`
-  > **osem `tags:` riadkov** — od commitu `d8fd936` z 11. 9. 2026 19:55, ktorý
-  > ich pridáva ručne na vetve `ci/runner-tags-and-kubectl-image`. Ten istý
-  > commit v ňom opravil aj `bitnami/kubectl` na `bitnamilegacy/kubectl`, takže
-  > `gitlab-home/main` je v tomto bode **ďalej**, než tvrdí odsek vyššie.
-  > Podrobnosti a dôsledky: `docs/PLAN.md` §7.
+  > **Oprava 18. 9. 2026 — aj táto „oprava" bola nepravdivá.** Stálo tu, že
+  > `gitlab-home/main` má v `.gitlab-ci.yml` **osem `tags:` riadkov** a je preto
+  > „ďalej", než tvrdí odsek vyššie. Zmerané nanovo: má **nula** —
+  > `git show gitlab-home/main:.gitlab-ci.yml | grep -c 'tags:'` → `0`, a
+  > pozitívna kontrola `git show d8fd936:.gitlab-ci.yml | grep -c 'tags:'` → `8`,
+  > takže vzor funguje a nula nie je z pokazeného príkazu. Tých osem riadkov žije
+  > **len v histórii** vetvy `ci/runner-tags-and-kubectl-image` a na `main` sa ako
+  > tip nikdy nedostali. `gitlab-home/main` bol 17. 9. dorovnaný na `d113a67`
+  > a nesie `.gitlab-ci.yml` bez `tags:` — teda presne to, čo tvrdí odsek
+  > vyššie; ten bol správny a táto „oprava" ho zhovorila omylom.
+  > `docs/PLAN.md` §7 hovorí to isté („`main` je dorovnaný … **žiadne `tags:`**").
 
 ## História: prečo nie natívny balík
 
@@ -224,8 +240,10 @@ V tomto adresári je súbor, ktorý **nie je** kópia bežiacej konfigurácie:
 6971 B, `sha256 eff4edb3…`, overené 17. 9. 2026 (`cmp` + `sha256sum`).
 
 **Čo to je.** Pripravená záložná cesta z 11. 9. 2026: to isté `.gitlab-ci.yml`,
-ale s **explicitnými `tags:`** na každom jobe — `lenovo` na validate/test/deploy,
-`macos` na build. Keby runner ostal s `run_untagged = false`, tento súbor by ho
+ale s **explicitnými `tags:`** na ôsmich miestach — šesť jobov (`lenovo` na
+validate/test, `macos` na build) a dve skryté šablóny (`.build_template`,
+`.deploy_template`), z ktorých `tags` dedia build a deploy joby. Keby runner
+ostal s `run_untagged = false`, tento súbor by ho
 donútil joby prevziať. Jeho dokumentovaným konzumentom je `commit-ci-tags.rb`,
 ktorý ho vie commitnúť na `main`; ten sa sem zámerne nekopíruje. Tento súbor
 **napokon použitý nebol** — tagy sa 11. 9. 2026 commitli ručne na vetve
@@ -240,8 +258,8 @@ tento hash. Súvisí to s tým, čím ten súbor vlastne je — `diff` proti
 osem je riadok `tags:`. Jeho súrodenec `gitlab-ci.yml.original` je naproti tomu
 doslova `ab3138e:.gitlab-ci.yml` (`sha256 247169a2…`), takže sa z histórie dá
 vyzdvihnúť kedykoľvek a v repozitári byť nemusí. Tých osem riadkov sa z histórie
-nevyzdvihne — a poskladať ich ručne znamená rozhodnúť pri ôsmich joboch, ktorý
-dostane `lenovo` a ktorý `macos` (a `macos` má jediný z nich).
+nevyzdvihne — a poskladať ich ručne znamená rozhodnúť na ôsmich miestach, ktoré
+dostane `lenovo` a ktoré `macos` (a `macos` má jediné z nich).
 
 `ci-tags.md` (odôvodnenie a patch k tomuto súboru) na lenovo ostáva. Jeho
 podstatný obsah je odteraz odvoditeľný odtiaľto: tabuľka tagov je v archívovanom
@@ -265,27 +283,41 @@ pipeline `8ea1e509` z 11. 9. 2026 19:53 UTC ich má oba `success`. DinD je teda
 prekážkou runnera na lenovo, nie projektového CI ako takého.
 
 Pri `backend_tests` je to naopak a je dobre vedieť prečo. Definícia toho jobu je
-v `.new` a na `gitlab-home/main` **identická** (`diff`), a na `main` **prechádza**
+v `.new` a na `gitlab-home/main` **identická nebola** — do 2026-09-18 tu stálo,
+že je. Dnešný `main` má `services:` (`postgres:16-alpine`, `redis:7-alpine`),
+`DATABASE_URL`, `REDIS_URL` aj `collectstatic`; `.new` nemá ani jedno z toho.
+Identické boli len na `8ea1e50`. Na tom starom `main` job **prechádzal**
 — 11. 9. 2026 `success` v pipelines 11 aj 12, a to bez jedinej CI premennej:
 projektových, skupinových aj inštančných je presne **nula** (`ci_variables`,
 `ci_group_variables`, `ci_instance_variables` pre projekt `web/cistafirma.sk`,
 id 2), takže `DATABASE_URL` neexistuje nikde a `settings.py` ide do SQLite
-vetvy. Rozdiel je v kóde, nie v jobe: `main` končí na `companies/0008`, kým táto
-vetva ich má po `0023` a `companies/0014_add_pattern_ops_structured_indexes` je
-`RunSQL` s `text_pattern_ops` bez vendor guardu — Postgres-only. SQLite teda na
-`main` stačí a tu nestačí: rovnaká definícia jobu, iný strom migrácií (a iné
-testy, ktoré si pýtajú `collectstatic`).
+vetvy. Rozdiel je v kóde, nie v jobe: **na `companies/0008` končil `8ea1e50`**,
+nie dnešný `main` — ten ich má po `0023` rovnako ako táto vetva (`0014` je na
+`main` od commitu `36d80b8` z 9. 9. 2026). Rozhodujúca je vlastnosť tej migrácie:
+`companies/0014_add_pattern_ops_structured_indexes` je `RunSQL` s
+`text_pattern_ops` bez vendor guardu — Postgres-only. SQLite teda na starom
+`main` stačil a dnes nestačí: iný strom migrácií (a iné testy, ktoré si pýtajú
+`collectstatic`).
 
 Navrch `tags: [macos]` na `.build_template` menuje stroj, ktorý sa už neozve.
-`mac-runner` (id 2) je v GitLabe **stále registrovaný, `active`, s tagom
-`macos`** a naposledy komunikoval 15. 9. 2026 20:21:48 UTC. To je horšie než
+`mac-runner` (id 2) je v GitLabe stále registrovaný a s tagom `macos`, ale od
+**17. 9. 2026 21:54:22 je `active = false`** (`Ci::Runner.find(2).update!(active: false)`,
+overené v DB: `active = f`); naposledy komunikoval 15. 9. 2026 20:21:48 UTC.
+Do 2026-09-18 tu stálo, že je `active` — to bola pravda pred tou zmenou. To je horšie než
 odstránený runner: job s tým tagom **nespadne, ostane `pending`** a GitLab ho
 drží na runner, ktorý mlčí. Dnešná vetva preto žiadne `tags:` nemá a spolieha sa
 na `run_untagged = true` na runneri 1 — čo je overené a dnes `true`.
 
 **Nedá sa aplikovať omylom.** `commit-ci-tags.rb` má poistku
 `EXPECTED_SHA = '247169a23b7b5e40'`: zahashuje `.gitlab-ci.yml` na `main`
-v GitLabe a odmietne zapísať, ak nesedí. GitLab `main` dnes drží `8ea1e50`
-(`sha256 3307ee99…`), takže skript **skončí skôr, než čokoľvek zapíše**. Presne
-preto je bezpečné ten súbor tu mať — je inertný, kým ho niekto nepoužije ručne
+v GitLabe a odmietne zapísať, ak nesedí. GitLab `main` dnes drží `196e95c`
+(`sha256 ebaca1f5…`), takže skript **skončí skôr, než čokoľvek zapíše**.
+
+> Do 2026-09-18 tu stálo `8ea1e50` / `sha256 3307ee99…` — to bol `main` z 11. 9.
+> a `gitlab-home/main` sa odvtedy pohol. Záver („skončí skôr, než zapíše")
+> platil predtým aj teraz, ale z iného dôvodu: konštanta `EXPECTED_SHA` je
+> `247169a23b7b5e40`, čo je **prvých 16 hex znakov `sha256` súboru
+> `ab3138e:.gitlab-ci.yml`** — teda verzie *pred* tagmi, nie dnešného `main`.
+
+Preto je bezpečné ten súbor tu mať — je inertný, kým ho niekto nepoužije ručne
 a vedome.
