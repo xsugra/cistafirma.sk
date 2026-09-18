@@ -99,10 +99,22 @@ print(len(ctx))  # Should be 1-2 (not 5-8)
 
 ## 🔄 Rollback (if needed)
 
+⚠️ **`migrate companies 0014` NIE JE bezpečný rollback.** Vráti aj migrácie
+0016–0019, ktoré pridali dátové stĺpce (`profit_after_tax`, `assets_current`,
+`assets_financial_short`, `parser_revision`, `ruz_statement_id`) — reverz
+`AddField` je DROP COLUMN. O tie dáta by si prišiel.
+
+Vrátiť **len** indexy z 0015 sa dá cez SQL:
+
 ```bash
 make docker-shell
-python manage.py migrate companies 0014
-# Done - migration reversed, data intact
+python manage.py dbshell
+```
+```sql
+DROP INDEX IF EXISTS cfr_company_idx;
+DROP INDEX IF EXISTS cfr_company_year_idx;
+DROP INDEX IF EXISTS cfr_year_idx;
+DROP INDEX IF EXISTS cfr_company_year_unique_idx;
 ```
 
 ---

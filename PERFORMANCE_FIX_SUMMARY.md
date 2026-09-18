@@ -163,7 +163,11 @@ make docker-shell
 
 - **Migrácia:** `companies.0015_companyfinancialresult_cfr_company_idx_and_more.py`
 - **Riziko:** 🟢 Nízke (backward compatible)
-- **Rollback:** Jednoduchý (`migrate companies 0014`)
+- **Rollback:** ⚠️ **NIE** `migrate companies 0014` — vráti aj 0016–0019 a ich
+  `AddField` stĺpce sa reverzom ZAHODIA (`profit_after_tax`, `assets_current`,
+  `assets_financial_short`, `parser_revision`, `ruz_statement_id`). Indexy z 0015
+  zruš cez SQL: `DROP INDEX cfr_company_idx, cfr_company_year_idx, cfr_year_idx,
+  cfr_company_year_unique_idx`.
 
 ---
 

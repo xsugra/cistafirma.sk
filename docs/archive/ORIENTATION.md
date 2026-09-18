@@ -2,13 +2,24 @@
 
 **Verzia:** 1.0 | **Dátum:** 2026-04-18 | **Status:** ✅ Ready
 
+> ⚠️ **Toto je archívny dokument** (v `docs/archive/`) — je tu odložený, nie
+> zmazaný. Jeho **cesty k súborom platia voči koreňu repozitára k 18. 4. 2026**
+> a odvtedy sa viaceré posunuli:
+> - `SAFE_PUSH_ACTION_PLAN.md` je dnes v `docs/archive/SAFE_PUSH_ACTION_PLAN.md`
+>   (preto `cat SAFE_PUSH_ACTION_PLAN.md` nižšie už nič nevypíše)
+> - `QUICK_START.sh` je v `scripts/QUICK_START.sh` — **existuje** a je to
+>   interaktívne menu, ktoré volá tie isté `make` targety
+>
+> Nižšie uvedené `make` príkazy fungujú dodnes; je to jediná časť, ktorá
+> nezostarla.
+
 ---
 
 ## 🚀 HNEĎ! (2 MINÚTY)
 
 ```bash
 # Spusť interaktívne menu a vyber akciu
-# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+# Interaktívne menu: bash scripts/QUICK_START.sh
 make clean-pre-push
 
 # Hotovo! 🎉
@@ -62,7 +73,7 @@ git push                      # Push
 
 ### Spôsob 1: Menu (Najjednoduchšie)
 ```bash
-# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+# Interaktívne menu: bash scripts/QUICK_START.sh
 make clean-pre-push
 ```
 
@@ -145,7 +156,7 @@ scripts/
 
 ```
 Keď Sa Ponáhľaš:         ⏱️ 2-3 min
-  └─ # Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+  └─ # Interaktívne menu: bash scripts/QUICK_START.sh
 make clean-pre-push
 
 Keď Máš 5 Minút:         ⏱️ 5 min
@@ -167,7 +178,7 @@ Keď Máš Čas:             ⏱️ 30 min
 
 ```bash
 # Spustiť interactive menu
-# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+# Interaktívne menu: bash scripts/QUICK_START.sh
 make clean-pre-push
 
 # Prehliadka bez zmien
@@ -239,7 +250,7 @@ A: V tomto súbore + v `scripts/` + v root adresári
 # Vyber Jeden:
 
 # Najrýchlejšie
-# Použi Makefile namiesto QUICK_START.sh (súbor už neexistuje):
+# Interaktívne menu: bash scripts/QUICK_START.sh
 make clean-pre-push
 
 # Alebo Priamo

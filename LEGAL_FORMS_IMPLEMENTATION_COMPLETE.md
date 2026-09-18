@@ -409,7 +409,13 @@ backend/
 4. ✅ Automated extraction via management command
 5. ✅ Clear workflow documentation
 6. ✅ Docker-friendly setup
-7. ✅ CI/CD ready (compilemessages in build)
+7. ❌ ~~CI/CD ready (compilemessages in build)~~ — **overené 2026-09-18:
+   NEPLATÍ.** `compilemessages` nie je v žiadnom Dockerfile ani v
+   `.gitlab-ci.yml`, v repozitári nie je ani jeden `.po`/`.mo` súbor
+   (`backend/companies/locale/sk/LC_MESSAGES/` obsahuje iba `.gitkeep`) a v gite
+   nie sú žiadne `.po` (`git ls-files | grep '\.po$'` → 0). Preklady teda nie sú
+   verzionované ani kompilované v builde. Viď `docs/I18N_IMPLEMENTATION.md` →
+   „Stav implementácie".
 
 ### Verification Commands
 

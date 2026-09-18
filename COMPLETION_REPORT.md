@@ -210,11 +210,24 @@ print(f"Queries: {len(ctx)}")  # Should be 1-2
 - ⏳ Integration tests (run after DB available)
 
 ### Rollback
-If any issues:
+⚠️ **Do NOT run `migrate companies 0014`.** It also reverses migrations
+0016–0019, which *added* data columns (`profit_after_tax`, `assets_current`,
+`assets_financial_short`, `parser_revision`, `ruz_statement_id`); reversing an
+`AddField` is a DROP COLUMN, so that is data loss — not the "automatic, no data
+loss" this report originally claimed.
+
+To undo only the 0015 indexes:
+
 ```bash
-python manage.py migrate companies 0014
+make docker-shell
+python manage.py dbshell
 ```
-Migration reversal is automatic, no data loss.
+```sql
+DROP INDEX IF EXISTS cfr_company_idx;
+DROP INDEX IF EXISTS cfr_company_year_idx;
+DROP INDEX IF EXISTS cfr_year_idx;
+DROP INDEX IF EXISTS cfr_company_year_unique_idx;
+```
 
 ---
 

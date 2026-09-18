@@ -16,7 +16,6 @@ SKIP_DIRS = {
     "venv",
     "node_modules",
     "__pycache__",
-    "archive",
 }
 
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")

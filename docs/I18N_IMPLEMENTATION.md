@@ -4,6 +4,26 @@
 
 This document describes the i18n setup for the CistaFirma project, focusing on legal form codes and multi-language support using Django's gettext framework.
 
+> ## ⚠️ Stav implementácie (overené 2026-09-18)
+>
+> Tento dokument je **väčšinou návod, nie opis hotového stavu**. Overené fakty:
+>
+> - **Prekladové katalógy neexistujú.** `backend/companies/locale/sk/LC_MESSAGES/`
+>   obsahuje iba `.gitkeep` — nikde v repozitári nie je ani jeden `.po` alebo
+>   `.mo` súbor (`git ls-files | grep '\.po$'` → 0).
+> - **`compilemessages` nie je v žiadnom Dockerfile ani v CI.** Nájdeš ho len v
+>   dokumentácii (`git grep compilemessages`). `.mo` navyše nie je v
+>   `.gitignore`, takže by sa ani needgovali.
+> - **`LOCALE_PATHS` nie je v `settings.py`** — nastavené je len
+>   `LANGUAGE_CODE = 'en-us'` a `USE_I18N = True`. Vlastný `locale/` adresár má
+>   iba app `companies`.
+> - **Sentry hook je inertný** (viď „Metrics & Monitoring" nižšie).
+>
+> `gettext_lazy()` značky v `LEGAL_FORMS` sú reálne a v poriadku — preklady sa z
+> nich dajú vygenerovať. Ale kým sa tak nestane, **aplikácia beží len v
+> angličtine** a slovenčina je zámer, nie stav. Postup nižšie je teda platný ako
+> návod; ber ho tak.
+
 ## Current Implementation
 
 ### Legal Forms Dictionary
@@ -225,7 +245,10 @@ python manage.py compilemessages  # Compile before serving
 
 ## Docker Support
 
-In the Dockerfile, add compilation step:
+⚠️ **Toto nie je implementované.** `compilemessages` sa nenachádza v žiadnom
+`Dockerfile` (`backend/Dockerfile`, `frontend/Dockerfile`,
+`frontend/Dockerfile.prod`) ani v `.gitlab-ci.yml`. Ak nasadenie preklady
+potrebuje, musíš tento krok **pridať** — nižšie je návrh, nie opis:
 
 ```dockerfile
 # After installing dependencies
@@ -237,7 +260,14 @@ RUN cd /app && python manage.py compilemessages
 The `normalize_legal_form_code()` function includes:
 - **Logging**: Unknown codes are logged to `companies.models` logger
 - **Prometheus**: Counter `unknown_legal_form_codes_total` with labels `code` and `source`
-- **Sentry**: Unknown codes are reported as warnings with tags
+- **Sentry**: ⚠️ **nie je aktívne.** V `companies/models.py` je pripravený hook
+  (`sentry_sdk.capture_message(...)` s tagmi `event_type` a `code`), ale
+  `sentry-sdk` **nie je v `backend/requirements.txt`**, takže `SENTRY_AVAILABLE`
+  je vždy `False` a vetva sa nikdy nevykoná. Je to **zámer**, nie chyba: viď
+  `docs/OBSERVABILITY.md` → „Not implemented: error tracking" — posielať stack
+  traces s firemnými dátami tretej strane je v rozpore s dátovou politikou
+  repozitára. Prípadný budúci error tracking má byť self-hosted alebo výslovne
+  schválený a defaultne vypnutý.
 
 Example Prometheus query:
 ```

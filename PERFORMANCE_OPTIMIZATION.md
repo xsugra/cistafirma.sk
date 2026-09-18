@@ -276,5 +276,10 @@ See also:
 **Status:** ✅ Ready for deployment
 **Risk:** ⬇️ Low (backward compatible, no data changes)
 **Tested:** ✅ Django test suite
-**Rollback:** Easy (migration reversible with `migrate 0014`)
+**Rollback:** ⚠️ **NOT** `migrate 0014` — that also reverses 0016–0019, whose
+`AddField` reversals DROP the columns `profit_after_tax`, `assets_current`,
+`assets_financial_short`, `parser_revision`, `ruz_statement_id`. To undo only
+this document's 0015 indexes, drop them with SQL instead:
+`cfr_company_idx`, `cfr_company_year_idx`, `cfr_year_idx`,
+`cfr_company_year_unique_idx`.
 

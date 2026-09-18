@@ -209,10 +209,21 @@ str(filtered.query)
 If issues arise, rollback is simple:
 
 ### Option 1: Database Only
+⚠️ **This does NOT keep data intact** (as this plan originally said).
+`migrate companies 0014` reverses 0016–0019 as well, and those added data
+columns (`profit_after_tax`, `assets_current`, `assets_financial_short`,
+`parser_revision`, `ruz_statement_id`) — reversing an `AddField` drops the
+column. Use SQL to drop only the four 0015 indexes:
+
 ```bash
 make docker-shell
-python manage.py migrate companies 0014
-# This removes the indexes but keeps data intact
+python manage.py dbshell
+```
+```sql
+DROP INDEX IF EXISTS cfr_company_idx;
+DROP INDEX IF EXISTS cfr_company_year_idx;
+DROP INDEX IF EXISTS cfr_year_idx;
+DROP INDEX IF EXISTS cfr_company_year_unique_idx;
 ```
 
 ### Option 2: Full Code Rollback

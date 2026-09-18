@@ -161,13 +161,17 @@ dump.rdb
 
 ## 🛡️ Bezpečnosť
 
+⚠️ **Čo script NAOZAJ ZMAŽE (over si to: `make clean-pre-push-dry`):**
+- **`.env` a `.env.*`** — skript ich **vymaže** (`rm -rf`, viď `cleanup_patterns`
+  v `scripts/pre-push-cleanup.sh`). `.env` je v `.gitignore`, takže **git ho nemá
+  a nevráti ti ho** — pred spustením si ho skopíruj bokom.
+- `venv`, `node_modules`, `__pycache__`, cache adresáre — pozri `cleanup_patterns`
+
 ✅ **Bezpečné operácie:**
-- Vymazáva iba lokálne súbory (v `.gitignore`)
 - `git rm --cached` nezmení pracujúci adresár, len cache
 - Všetko je možné vrátit cez `git reset`
 
 ❌ **Čo script NEZMENÍ:**
-- `.env`, `.env.local` - ignoruje automaticky (v `.gitignore`)
 - Trackované súbory mimo `.gitignore` - vôbec ich nezmení
 - Tvoja pracovná kopie - iba git cache
 
