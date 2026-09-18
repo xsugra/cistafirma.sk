@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from companies.models import Company
-from registers.models import SyncGapAnalysis
+from registers.models import IndividualEntity, SyncGapAnalysis
 import time
 
 
@@ -68,10 +68,26 @@ class Command(BaseCommand):
             analysis.total_existing = total_count
             analysis.save()
             
-            # Načítame všetky existujúce RUZ ID do setu
+            # Načítame všetky existujúce RUZ ID do setu.
+            #
+            # Z *oboch* tabuliek. `IndividualEntity` drží živnostníkov a iné
+            # fyzické osoby, ktoré register vydáva pod vlastným RUZ ID; ani jedno
+            # z tých ID nie je v `Company` (merané na dell 2026-09-18: 35 339
+            # riadkov a **ani jeden** z nich v `Company`; počet je snímka a rastie
+            # ako beží walk, nulový prienik je to trvalé). Kým sa počítali len
+            # `Company`, celá tá populácia vyzerala ako diera -- analýza ju
+            # hlásila ako chýbajúcu a oprava ju potom donekonečna sťahovala a
+            # znova ukladala. `total_existing` nižšie zostáva počet `Company`
+            # riadkov: je to informatívny údaj, nie vstup do hľadania dier.
             self.stdout.write('Načítavam všetky RUZ ID do pamäte...')
             existing_ids = set(
                 Company.objects.filter(
+                    ruz_id__isnull=False,
+                    ruz_id__gte=min_id,
+                    ruz_id__lte=max_id
+                ).values_list('ruz_id', flat=True)
+            ) | set(
+                IndividualEntity.objects.filter(
                     ruz_id__isnull=False,
                     ruz_id__gte=min_id,
                     ruz_id__lte=max_id

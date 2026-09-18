@@ -1,13 +1,21 @@
 from django.core.management.base import BaseCommand
-from django.utils.dateparse import parse_date
 from django.utils import timezone
-from companies.models import Company
 from registers.integrations.ruz_api import RuzApi
 from registers.models import SyncGapAnalysis, SyncJob
+from registers.services.ruz_repair_writer import (
+    CREATED, REFUSED, SKIPPED, UPDATED, RepairWriter,
+)
 from registers.services.sync_engine import set_job_outcome
+import logging
 import time
 import concurrent.futures
 import threading
+
+logger = logging.getLogger(__name__)
+
+# How many failure reasons one run keeps. `last_error` is a single column, so it
+# has to be bounded.
+ERRORS_KEPT = 20
 
 
 class Command(BaseCommand):
@@ -49,6 +57,11 @@ class Command(BaseCommand):
         batch_size = options['batch_size']
         self.lock = threading.Lock()
         self.batch_stats = {'repaired': 0, 'skipped': 0, 'errors': 0}
+        # Every write goes through the walk's own writer. See
+        # `registers.services.ruz_repair_writer` for why a private `defaults`
+        # dict and an `ico`-keyed upsert were not merely a second style.
+        self.writer = RepairWriter(self.stdout, self.stderr)
+        self.recent_errors = []
         
         # Nájdeme analýzu
         if options['analysis_id']:
@@ -144,13 +157,19 @@ class Command(BaseCommand):
                 analysis.repaired_count += self.batch_stats['repaired']
                 analysis.skipped_count += self.batch_stats['skipped']
                 analysis.error_count += self.batch_stats['errors']
+                # Assigned *before* the save, not after it: this save is what
+                # writes the column, so a reason set afterwards would sit in
+                # memory while the row kept the old one. The same mistake is
+                # recorded on `SyncProgress.record_progress`.
+                if self.recent_errors:
+                    analysis.last_error = '\n'.join(self.recent_errors)
                 analysis.save()
-                
+
                 # Progress výstup
                 elapsed = time.time() - start_time
                 rate = processed / (elapsed / 3600) if elapsed > 0 else 0
                 pct = (processed / len(missing_ids)) * 100
-                
+
                 self.stdout.write(
                     f'[{pct:5.1f}%] {processed:,}/{len(missing_ids):,} | '
                     f'ID {last_id:,} | '
@@ -175,6 +194,10 @@ class Command(BaseCommand):
                 f'Preskočených (404/deleted): {analysis.skipped_count:,}\n'
                 f'Chýb: {analysis.error_count:,}'
             ))
+            if analysis.error_count:
+                self.stdout.write(self.style.ERROR(
+                    f'Dôvody chýb sú v `SyncGapAnalysis(id={analysis.pk}).last_error`.'
+                ))
             
         except KeyboardInterrupt:
             self.stdout.write(self.style.WARNING(
@@ -204,59 +227,58 @@ class Command(BaseCommand):
                     failed=analysis.error_count - baseline[2],
                 )
 
+    def _count_error(self, ruz_id, reason):
+        """Count one failure and keep its reason.
+
+        The old handler counted and threw the exception away: `except Exception
+        as e:` incremented a counter and never read `e`, and the module did not
+        import `logging` at all. A run whose every write was refused therefore
+        ended `completed`, durably, with a number and no cause anywhere.
+        """
+        logger.error("Gap repair failed for RUZ id %s: %s", ruz_id, reason)
+        with self.lock:
+            self.batch_stats['errors'] += 1
+            self.recent_errors.append(f"{ruz_id}: {reason}")
+            del self.recent_errors[:-ERRORS_KEPT]
+
     def _fetch_and_save(self, ruz_id):
         """Stiahne a uloží jednu firmu podľa RUZ ID (thread-safe)."""
+        details = None
         try:
             details = self.api.get_company_details(ruz_id)
-            
+
             if not details:
                 # 404 alebo deleted
                 with self.lock:
                     self.batch_stats['skipped'] += 1
                 return
-            
+
             if 'ico' not in details:
                 with self.lock:
                     self.batch_stats['skipped'] += 1
                 return
-            
-            # Uložíme do DB
-            defaults = {
-                'ruz_id': details.get('id'),
-                'dic': details.get('dic'),
-                'sid': details.get('sid'),
-                'nazov_UJ': details.get('nazovUJ', ''),
-                'mesto': details.get('mesto'),
-                'ulica': details.get('ulica'),
-                'psc': details.get('psc'),
-                'datum_zalozenia': parse_date(details.get('datumZalozenia', '')),
-                'datum_zrusenia': parse_date(details.get('datumZrusenia', '')),
-                'pravna_forma': details.get('pravnaForma'),
-                'sk_NACE': details.get('skNace'),
-                'velkost_organizacie': details.get('velkostOrganizacie'),
-                'druh_vlastnictva': details.get('druhVlastnictva'),
-                'kraj': details.get('kraj'),
-                'okres': details.get('okres'),
-                'sidlo': details.get('sidlo'),
-                'konsolidovana': details.get('konsolidovana', False),
-                'id_uctovnych_zavierok': details.get('idUctovnychZavierok', []),
-                'id_vyrocnych_sprav': details.get('idVyrocnychSprav', []),
-                'zdroj_dat': details.get('zdrojDat'),
-                'datum_poslednej_upravy': parse_date(details.get('datumPoslednejUpravy', '')),
-            }
-            
-            company, created = Company.objects.update_or_create(
-                ico=details['ico'],
-                defaults=defaults
-            )
-            
-            with self.lock:
-                if created:
-                    self.batch_stats['repaired'] += 1
-                else:
-                    # Existujúca firma s iným RUZ ID - aktualizujeme
-                    self.batch_stats['repaired'] += 1
-                    
+
+            # The walk's writer, not a private `defaults` dict. The comment that
+            # used to sit on the `else` below -- "Existujúca firma s iným RUZ ID
+            # - aktualizujeme" -- was this defect written down as the design: an
+            # existing row with a *different* ruz_id was not the same company
+            # being updated, it was another entity taking the row over. Keyed on
+            # `ruz_id` that cannot happen; a second entity under a held IČO is
+            # refused instead, and lands in the error counter.
+            outcome, reason = self.writer.store(ruz_id, details)
         except Exception as e:
-            with self.lock:
-                self.batch_stats['errors'] += 1
+            self._count_error(ruz_id, f"{type(e).__name__}: {e}")
+            return
+
+        with self.lock:
+            if outcome in (CREATED, UPDATED):
+                # `repaired` covers both, and honestly: a gap id is by
+                # construction absent from `Company`, so a create is the normal
+                # case -- an update happens when the record belongs to an entity
+                # the gap analysis does not see, i.e. an `IndividualEntity`.
+                self.batch_stats['repaired'] += 1
+            elif outcome is SKIPPED:
+                self.batch_stats['skipped'] += 1
+
+        if outcome is REFUSED:
+            self._count_error(ruz_id, reason)

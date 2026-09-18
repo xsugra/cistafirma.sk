@@ -343,8 +343,15 @@ def _dispatch_job(job: SyncJob) -> None:
         # constraint, got this job back and returned without dispatching --
         # including the keeper's own resume. `_run_ruz_command` claims what it
         # is given; the id is how it gets there.
+        # No default for `start_id`. It used to default to `0`, which is not a
+        # sentinel the command can tell from a real start point: `0 is not None`,
+        # so `--start-id=0` was appended and the command's own resume branch --
+        # the one that reads the stored cursor -- became unreachable from here.
+        # The trigger panel sends no parameters at all, so every admin-started
+        # repair re-walked the register from RUZ id 0. `None` is what reaches the
+        # command now, and `None` is what it already understood.
         "ruz_repair": (tasks.start_repair_sync, {
-            "start_id": params.get("start_id", 0),
+            "start_id": params.get("start_id"),
             "workers": params.get("workers", 3),
             "sync_job_id": job.pk,
         }),

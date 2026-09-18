@@ -1,14 +1,23 @@
 from django.core.management.base import BaseCommand
-from django.utils.dateparse import parse_date
 from django.utils import timezone
-from django.db import connection
 from companies.models import Company
 from registers.integrations.ruz_api import RuzApi
-from registers.models import SyncJob, SyncProgress
+from registers.models import IndividualEntity, SyncJob, SyncProgress
+from registers.services.ruz_repair_writer import (
+    CREATED, REFUSED, SKIPPED, UPDATED, RepairWriter,
+)
 from registers.services.sync_engine import set_job_outcome
+import logging
 import time
 import concurrent.futures
 import threading
+
+logger = logging.getLogger(__name__)
+
+# How many failure reasons one run keeps. `last_error` is a single column, so it
+# has to be bounded; the last 20 is what an operator reading a 449k-row repair
+# actually gets through.
+ERRORS_KEPT = 20
 
 
 class Command(BaseCommand):
@@ -44,7 +53,12 @@ class Command(BaseCommand):
         batch_size = options['batch_size']
         num_workers = options['workers']
         self.lock = threading.Lock()
-        self.batch_stats = {'created': 0, 'skipped': 0, 'errors': 0}
+        self.batch_stats = {'created': 0, 'updated': 0, 'skipped': 0, 'errors': 0}
+        # Every write goes through the walk's own writer. See
+        # `registers.services.ruz_repair_writer` for why a private `defaults`
+        # dict and an `ico`-keyed upsert were not merely a second style.
+        self.writer = RepairWriter(self.stdout, self.stderr)
+        self.recent_errors = []
         
         # Nájdeme alebo vytvoríme repair progress
         progress, created = SyncProgress.objects.get_or_create(
@@ -58,7 +72,22 @@ class Command(BaseCommand):
         # Určíme štartovacie ID
         if options['start_id'] is not None:
             start_id = options['start_id']
-        elif progress.status in ['paused', 'failed'] and progress.last_processed_ruz_id:
+        elif (
+            progress.status in ['paused', 'failed', 'running']
+            and progress.last_processed_ruz_id
+        ):
+            # `running` belongs here with `paused` and `failed`: a hard kill
+            # leaves `running` behind, `REPAIR_RESUMABLE_STATUSES` deliberately
+            # admits it (a live run is excluded by the `ruz:global` slot, not by
+            # the status), and `resume_repair_sync` logs that it is resuming from
+            # this very cursor. Without it the log named a cursor the command
+            # then ignored, and a resumed repair started at 0.
+            #
+            # `completed` is deliberately NOT here, and that is not an oversight.
+            # A repair's job is to find the ruz_ids the database lacks, and which
+            # those are changes between runs -- ids below a stored cursor would
+            # never be looked at again. The cursor is only meaningful for a run
+            # that was interrupted, where the prefix really was scanned.
             start_id = progress.last_processed_ruz_id
             self.stdout.write(self.style.SUCCESS(
                 f'Pokračujem od RUZ ID {start_id:,}. Doteraz: {progress.total_created:,} nových firiem'
@@ -96,6 +125,7 @@ class Command(BaseCommand):
         baseline = (
             progress.total_processed,
             progress.total_created,
+            progress.total_updated,
             progress.total_skipped,
             progress.total_errors,
         )
@@ -116,35 +146,58 @@ class Command(BaseCommand):
                 
                 company_ids = id_data['id']
                 
-                # Zistíme ktoré ID chýbajú v DB (rýchly SQL query)
-                existing_ids = set(
+                # Which of these the database already holds -- in *either* table.
+                # `Company` alone was the work list's whole idea of "held", and
+                # every `IndividualEntity.ruz_id` is absent from `Company`
+                # (measured on dell 2026-09-18: 35 339 rows and not one of them
+                # in `Company`; the count is a snapshot that only grows while the
+                # walk runs -- the zero overlap is the part that does not).
+                # So the register's natural persons sat in this list
+                # permanently: every run re-fetched all 35k detail pages,
+                # re-upserted rows that were already correct, and reported each
+                # as new work. Excluding them is what makes a repair converge;
+                # the walk is what keeps them current.
+                held_ids = set(
                     Company.objects.filter(ruz_id__in=company_ids)
                     .values_list('ruz_id', flat=True)
+                ) | set(
+                    IndividualEntity.objects.filter(ruz_id__in=company_ids)
+                    .values_list('ruz_id', flat=True)
                 )
-                missing_ids = [cid for cid in company_ids if cid not in existing_ids]
+                missing_ids = [cid for cid in company_ids if cid not in held_ids]
                 
                 # Reset batch stats
-                self.batch_stats = {'created': 0, 'skipped': 0, 'errors': 0}
-                
+                self.batch_stats = {'created': 0, 'updated': 0, 'skipped': 0, 'errors': 0}
+
                 # Paralelne stiahneme chýbajúce
                 if missing_ids:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
                         list(executor.map(self._fetch_and_save, missing_ids))
-                
+
                 # Aktualizujeme progress
                 pokracovat_za_id = company_ids[-1]
                 progress.last_processed_ruz_id = pokracovat_za_id
                 progress.total_processed += len(company_ids)
                 progress.total_created += self.batch_stats['created']
+                progress.total_updated += self.batch_stats['updated']
                 progress.total_skipped += self.batch_stats['skipped']
                 progress.total_errors += self.batch_stats['errors']
+                # Assigned *before* the save, not after it: this save is what
+                # writes the column, and a reason set afterwards would sit in
+                # memory while the row kept the old one. The model's own
+                # `record_progress` carries the same note, from the same mistake.
+                if self.recent_errors:
+                    progress.last_error = '\n'.join(self.recent_errors)
                 progress.save()
-                
+
                 # Výpis progresu
                 self.stdout.write(
                     f'[{progress.total_processed:,}] ID {pokracovat_za_id:,} | '
-                    f'exist: {len(existing_ids)} | miss: {len(missing_ids)} | '
-                    f'new: +{self.batch_stats["created"]} | total: {progress.total_created:,}'
+                    f'exist: {len(held_ids)} | miss: {len(missing_ids)} | '
+                    f'new: +{self.batch_stats["created"]} | '
+                    f'upd: {self.batch_stats["updated"]} | '
+                    f'err: {self.batch_stats["errors"]} | '
+                    f'total: {progress.total_created:,}'
                 )
                 
                 if not id_data.get('existujeDalsieId'):
@@ -162,9 +215,18 @@ class Command(BaseCommand):
                 f'\n=== REPAIR DOKONČENÝ ===\n'
                 f'Skontrolovaných: {progress.total_processed:,}\n'
                 f'Nových firiem: {progress.total_created:,}\n'
+                f'Aktualizovaných: {progress.total_updated:,}\n'
                 f'Preskočených: {progress.total_skipped:,}\n'
                 f'Chýb: {progress.total_errors:,}'
             ))
+            if progress.total_errors:
+                # The last line of a long run is the one an operator reads, and a
+                # count on its own has never been enough to act on. `last_error`
+                # holds the most recent reasons; this is where they are pointed
+                # at, rather than left for someone to think to look.
+                self.stdout.write(self.style.ERROR(
+                    f'Dôvody chýb sú v `SyncProgress(id={progress.pk}).last_error`.'
+                ))
             
         except KeyboardInterrupt:
             progress.status = 'paused'
@@ -189,63 +251,65 @@ class Command(BaseCommand):
                 set_job_outcome(
                     sync_job_id,
                     processed=progress.total_processed - baseline[0],
-                    succeeded=progress.total_created - baseline[1],
-                    skipped=progress.total_skipped - baseline[2],
-                    failed=progress.total_errors - baseline[3],
+                    succeeded=(
+                        progress.total_created - baseline[1]
+                        + progress.total_updated - baseline[2]
+                    ),
+                    skipped=progress.total_skipped - baseline[3],
+                    failed=progress.total_errors - baseline[4],
                 )
+
+    def _count_error(self, ruz_id, reason):
+        """Count one failure and keep its reason.
+
+        The old handler counted and threw the exception away: `except Exception
+        as e:` incremented a counter and never read `e`, and the module did not
+        import `logging` at all. A run whose every write was refused therefore
+        ended `completed`, durably, with a number and no cause anywhere -- not on
+        the row, not in a log, not on stderr.
+        """
+        logger.error("Repair failed for RUZ id %s: %s", ruz_id, reason)
+        with self.lock:
+            self.batch_stats['errors'] += 1
+            self.recent_errors.append(f"{ruz_id}: {reason}")
+            # The most recent ones, not the first ones: a run that fails for
+            # 40 000 records has one cause, and it is at the end too.
+            del self.recent_errors[:-ERRORS_KEPT]
 
     def _fetch_and_save(self, ruz_id):
         """Stiahne a uloží jednu firmu (thread-safe)."""
+        details = None
         try:
-            # Každé vlákno potrebuje vlastné DB connection
             details = self.api.get_company_details(ruz_id)
-            
+
             if not details:
+                # 404 alebo deleted
                 with self.lock:
                     self.batch_stats['skipped'] += 1
                 return
-            
+
             if 'ico' not in details:
                 with self.lock:
                     self.batch_stats['skipped'] += 1
                 return
-            
-            # Uložíme do DB
-            defaults = {
-                'ruz_id': details.get('id'),
-                'dic': details.get('dic'),
-                'sid': details.get('sid'),
-                'nazov_UJ': details.get('nazovUJ', ''),
-                'mesto': details.get('mesto'),
-                'ulica': details.get('ulica'),
-                'psc': details.get('psc'),
-                'datum_zalozenia': parse_date(details.get('datumZalozenia', '')),
-                'datum_zrusenia': parse_date(details.get('datumZrusenia', '')),
-                'pravna_forma': details.get('pravnaForma'),
-                'sk_NACE': details.get('skNace'),
-                'velkost_organizacie': details.get('velkostOrganizacie'),
-                'druh_vlastnictva': details.get('druhVlastnictva'),
-                'kraj': details.get('kraj'),
-                'okres': details.get('okres'),
-                'sidlo': details.get('sidlo'),
-                'konsolidovana': details.get('konsolidovana', False),
-                'id_uctovnych_zavierok': details.get('idUctovnychZavierok', []),
-                'id_vyrocnych_sprav': details.get('idVyrocnychSprav', []),
-                'zdroj_dat': details.get('zdrojDat'),
-                'datum_poslednej_upravy': parse_date(details.get('datumPoslednejUpravy', '')),
-            }
-            
-            company, created = Company.objects.update_or_create(
-                ico=details['ico'],
-                defaults=defaults
-            )
-            
-            with self.lock:
-                if created:
-                    self.batch_stats['created'] += 1
-                else:
-                    self.batch_stats['skipped'] += 1
-                    
+
+            # The walk's writer, not a private `defaults` dict. It keys on
+            # `ruz_id`, so a second entity under an IČO we already hold is refused
+            # instead of taking the row over; it carries `apply_ruz_dates`, so an
+            # unreadable date cannot overwrite a stored one; it routes SZCO legal
+            # forms to `IndividualEntity`; and it strips the IČO.
+            outcome, reason = self.writer.store(ruz_id, details)
         except Exception as e:
-            with self.lock:
-                self.batch_stats['errors'] += 1
+            self._count_error(ruz_id, f"{type(e).__name__}: {e}")
+            return
+
+        with self.lock:
+            if outcome is CREATED:
+                self.batch_stats['created'] += 1
+            elif outcome is UPDATED:
+                self.batch_stats['updated'] += 1
+            elif outcome is SKIPPED:
+                self.batch_stats['skipped'] += 1
+
+        if outcome is REFUSED:
+            self._count_error(ruz_id, reason)
