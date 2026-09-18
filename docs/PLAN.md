@@ -3109,7 +3109,7 @@ a rovnicu neposudzuje — nesľubuje teda viac, než vie.
   > `cistafirma` majú obrazy `localhost:5050/web/cistafirma/*` — z GitLab
   > registra na Macu, ktorý už neexistuje (kontajner je preč, `~/gitlab`
   > s 1,6 GB dát ostal). Obrazy sú zakešované na uzloch, takže pody bežia, ale
-  > nový pod by potreboval pull. Nie je to teda len „osud klastra" z §8 nižšie,
+  > nový pod by potreboval pull. Nie je to teda len „osud klastra" z §9 nižšie,
   > ale aj to, že runbook opisuje pull z lokálneho registra, ktorý dnes **nič
   > nepoužíva**. Zámerne to neprepisujem na niečo, čo som neoveril — čo s
   > klastrom, je rozhodnutie pre človeka.
@@ -5130,7 +5130,7 @@ nebolo.** Cez sedem nezávislých protivníkov, ktorých úlohou bolo môj záve
 
 1. **`runner-*-cache-*` volume (26 ks).** Cieľ je v poriadku — `LINKS 0`, žiadny
    kontajner ich nemontuje, obsah je prebuildovateľná CI cache. Vyvrátená bola
-   ale **cesta**: zmazať ich znamená `docker volume rm`, čo §8 zakazuje
+   ale **cesta**: zmazať ich znamená `docker volume rm`, čo §9 zakazuje
    bezvýhradne a `.claude/settings.json` to blokuje na permission vrstve.
    A je dôvod: `cistafirma_postgres_data` je na Macu tiež `LINKS 0` — visí na
    **žiadnom** kontajneri — takže plošný `docker volume prune` by ho vzal so
@@ -5464,7 +5464,7 @@ zmazaním `~/gitlab` zmizne bez kópie, a je zapísaná v `README.md` archívu.
 > Číslo 18 pochádzalo z dotazu, ktorý sa na commity nepozeral; rozdiel som
 > odhalil až agregátom cez celú tabuľku. Presné číslo je **39**.
 
-**A jedna korekcia, ktorú si tento dokument nesie ďalej.** `CLAUDE.md` aj §8
+**A jedna korekcia, ktorú si tento dokument nesie ďalej.** `CLAUDE.md` aj §9
 nižšie tvrdili, že Mac má „zamrznutú záložnú" databázu. **Nemá.**
 `docker volume ls` ju neuvádza a `docker volume inspect` vracia `no such volume`;
 `cistafirma_postgres_data` aj ostatné cistafirma a GitLab volumes zmizli
@@ -5669,7 +5669,291 @@ ktorý práve bežal** — a to je jediné okno, kedy sa trace dá vôbec preč�
 
 ---
 
-## 8. Nemenné pravidlá
+## 8. Nálezy z konsolidácie dokumentácie (2026-09-18)
+
+Pri sťahovaní 19 koreňových dokumentov do `docs/archive/` (#169) sa ich tvrdenia
+overovali proti kódu. Táto sekcia drží to, čo z nich **v kóde neplatí** alebo čo
+kód potvrdzuje a inde v dokumentácii to nie je. Je to zoznam nálezov, nie
+zoznam opráv — nič z toho nebolo zmenené.
+
+Spoločná trieda: **dokument tvrdí „hotové / production ready", kód to
+nepotvrdzuje** — a v troch prípadoch to nie je len zastaraný text, ale tichá
+porucha za behu (8.2 `verify_implementation.sh`, 8.3 kolízia syncu, 8.4
+`szco_count`).
+
+### 8.1 Kombinovaný filter — koreňová príčina a oprava
+
+Prevzaté z archívneho jednostranného záznamu
+`docs/archive/COMBINED_FILTER_FIX_COMPLETE.md` (2026-08) a **overené proti kódu
+2026-09-18**. Toto je jediné miesto v repozitári, ktoré vysvetľuje **prečo**
+kombinovaný filter visel, nielen čo sa zmenilo.
+
+#### Ako sa to prejavovalo
+
+Na ostrej databáze (1,2 mil. firiem) kombinovaný filter — mesto + NACE + dlh +
+ORSR — nevracal výsledok **30–60 s**, alebo rovno spadol na timeout. Databáza
+išla na **135 % CPU** (oversubscribed), backend na 57 % a čakal na ňu.
+
+#### Koreňová príčina
+
+`Company → OrsrCompanyProfile` je 1:N. Keď anotácia chýbala, filter na „má ORSR
+profil" sa aplikoval ako `.filter(orsr_profile__isnull=False)` — teda
+**implicitný OUTER JOIN**. Postgres potom musel materializovať
+`Company × Related` riadkov a výsledok deduplikovať. Pôvodný záznam uvádza
+„50M+ intermediate rows"; je to **odhad, nie meranie**.
+
+#### Oprava
+
+Náhrada za `Exists()` + `OuterRef("pk")`: existencia sa kontroluje korelovaným
+poddotazom po riadkoch, bez joinu a bez deduplikácie. V
+`backend/adminapi/services/company_filters.py` je dnes **27 výskytov `Exists(`**
+a na riadku 120 je pravidlo zapísané doslovne v komentári:
+
+```python
+# Optimized: Use annotated flags if available, else use Exists subqueries (never use __isnull joins)
+```
+
+Zvyšné `__isnull` v tom súbore sú na **vlastných stĺpcoch** (`datum_zrusenia`,
+`latest_profit`, `latest_revenue`, `sync_failures`), nie na reláciách — tie sú
+v poriadku.
+
+**Staré (pomalé):**
+
+```sql
+SELECT DISTINCT c.id FROM "Companies and SZCO" c
+INNER JOIN registers_orsrcompanyprofile o ON c.id = o.company_id
+WHERE c.mesto = 'Bratislava'
+GROUP BY c.id ORDER BY -c.id LIMIT 100;
+```
+
+**Nové (rýchle):**
+
+```sql
+SELECT c.id FROM "Companies and SZCO" c
+WHERE c.mesto = 'Bratislava'
+  AND EXISTS (SELECT 1 FROM registers_orsrcompanyprofile o WHERE o.company_id = c.id)
+ORDER BY -c.id LIMIT 100;
+```
+
+| Hľadisko | `__isnull` join | `Exists()` poddotaz |
+|---|---|---|
+| Materializácia | plný JOIN + agregácia | korelovaná kontrola |
+| Riadkov na spracovanie | `Company × Related` | `Company` |
+| Plánovač | Hash/Sort Group | anti-join |
+| Zložitosť | O(n²) s rastúcimi reláciami | O(n) |
+
+#### Čo je zmerané a čo nie
+
+⚠️ **Toto je dôležité, lebo pôvodný dokument končí „✅ PRODUCTION READY".**
+
+Čísla `0,001–0,002 s` a „1 dotaz" sú z **umelej množiny 100 firiem**
+s pripravenými relačnými dátami. Jeho vlastný deployment checklist má
+**nezaškrtnuté** presne tie kroky, ktoré by tvrdenie potvrdili:
+
+- [ ] Deploy to staging/production
+- [ ] Test with real 1.2M company dataset
+- [ ] Monitor performance metrics
+- [ ] Document in changelog
+
+Overenie na **ostrých 1,2 mil. riadkoch sa teda nikdy nestalo**. Presné
+tvrdenie je „korekčný vzor je nasadený v `company_filters.py` a na 100 firmách
+merateľne rýchly"; tvrdenie „30–60 s visenie je natrvalo odstránené" je
+**predpoklad, nie meranie**. Ak sa má uzavrieť, treba ho zmerať na `dell`.
+
+#### Stále otvorené: admin filtre idú okolo hotových anotácií
+
+`backend/companies/admin.py` **už `Exists()` má** — `CompanyAdmin.get_queryset()`
+(`:520-525`) anotuje `_has_orsr` a `_has_financials` cez
+`Exists(...OuterRef('pk'))`. Lenže filtrová cesta tie anotácie **nepoužíva**
+a spadne na ten istý `__isnull` join, navyše s `.distinct()`:
+
+| Kde | Riadky | Vzor |
+|---|---|---|
+| `DataCompletenessFilter.queryset()` | `:135, 137, 139, 141` | `orsr_profile__isnull`, `financial_results__isnull` (+`.distinct()`) |
+| `CompanyAdmin.get_filtered_queryset()` | `:597, 599, 603, 605` | vetvy `has_orsr` / `has_financials` |
+| `CompanyAdmin.get_filtered_queryset()` | `:623, 625, 627` | vetvy `data_state` |
+
+Nejde teda o „vzor v admine chýba" — ide o to, že **rýchla cesta je na tom
+istom querysete k dispozícii a filter ju obchádza**. Oprava je mechanická:
+`_has_orsr` / `_has_financials` namiesto `__isnull` a `.distinct()` preč.
+Overené **čítaním kódu**, nie meraním — dopad na admin changelist nebol zmeraný.
+
+Pôvodný dokument uvádzal riadky `121, 123, 560, 562, 580, 582, 584`; tie sa
+medzitým posunuli, v tabuľke vyššie sú **aktuálne k 2026-09-18**.
+
+### 8.2 `verify_implementation.sh` — skript, ktorý nemôže zlyhať
+
+`verify_implementation.sh` (v koreni, trackovaný) je overovací skript pre
+funkciu Firmy/SZCO. Má **15 blokov `if grep -q … then … fi`** — a ani jeden
+`else`, ani jeden `exit 1`, ani jeden čítač. Na konci (`:79`) **bezpodmienečne**
+vytlačí `✅ Implementation Verification Complete!` a skončí s 0.
+
+Ak by všetkých 15 hľadaných symbolov z kódu zmizlo, výstup aj exit kód sú
+identické. `README_FIRMY_SZCO_IMPLEMENTATION.md:213-218` pritom navádza:
+`bash verify_implementation.sh` → `# Expected output: All ✓ checks pass`. Je to
+teda **dôkaz, ktorý sa nedá vyvrátiť** — presne trieda z
+[[a-count-that-cannot-show-failure]] a [[silent-failure-is-the-defect-class]]:
+kontrola musí súdiť výsledok, nie zápis.
+
+Toto je najcennejší jednotlivý nález z celej konsolidácie, pretože nejde
+o zastaraný text — skript je spustiteľný dnes a klame.
+
+### 8.3 Firmy a SZCO sa **nedajú** synchronizovať súčasne — a UI to tvrdí opak
+
+`FIRMY_SZCO_ARCHITECTURE.md:406` hovorí *„Can run both simultaneously"*
+a `FIRMY_SZCO_QUICK_START.md:6-9` predáva SZCO sync ako nezávislý. Kód hovorí
+inak — je vynútený **jeden aktívny RUZ job globálne**:
+
+- `backend/registers/models.py:705-710` — partial unique constraint
+  `reg_one_active_ruz_job` na `concurrency_key` v stavoch `queued|running`.
+- `backend/registers/services/sync_engine.py:49,52` — `ruz_full_firmy` aj
+  `ruz_full_szco` sú v `RUZ_JOB_TYPES` a oba dostávajú **tú istú**
+  konštantu `RUZ_CONCURRENCY_KEY = "ruz:global"`, nie kľúč podľa typu.
+- CLI to odmietne nahlas (`fetch_ruz_data.py:89-92` → `CommandError(…refusing
+  concurrent import.)`).
+
+**Tichá porucha, ktorá z toho vyplýva a nie je zapísaná nikde:** admin API pri
+kolízii **nevráti chybu, ale HTTP 200 s existujúcim (cudzím) jobom** —
+`backend/adminapi/views/sync.py:64-65`:
+
+```python
+if not created:
+    return Response(SyncJobSerializer(job).data, status=status.HTTP_200_OK)
+```
+
+Frontend na 200 zobrazí hlášku o úspechu
+(`frontend/admin/pages/Data.tsx:29-31`), a `try/catch` o riadok nižšie ju
+nechytí, lebo 200 nie je výnimka. Výsledok: používateľ klikne „FULL RUZ SYNC –
+SZCO", dostane `✓ Synchronizácia pre SZCO bola spustená (ID: N)` — kde `N` je ID
+**bežiaceho Firmy jobu**. SZCO sync sa nikdy nespustí a UI tvrdí opak.
+
+### 8.4 Firmy/SZCO — meranie a klasifikácia
+
+**`szco_count` meria nesprávnu tabuľku.** `backend/adminapi/views/dashboard.py:66-67`
+počíta obe čísla cez `Company.objects`. Ale RUZ od zavedenia oddelenia ukladá
+SZCO do **vlastnej tabuľky** `IndividualEntity` (`registers/models.py:757`,
+`db_table "Individual Entities"`, zápis `fetch_ruz_data.py:562-566`).
+`IndividualEntity` sa v celom `backend/adminapi/` **nevyskytuje ani raz**
+(pozitívna kontrola: v `backend/` ho má 9 súborov, takže grep funguje).
+Dôsledok: pre novo synchronizované dáta je `szco_count` ≈ 0, `firmy_count` ≈
+všetko — a pomer „68 % / 32 %", ktorý propagujú `README…:22-23`
+a `QUICK_START.md:93-94`, je fikcia. Podľa `docs/SOURCE_DATA_INTEGRITY.md:439`
+sú SZCO pritom „that third of the RUZ surface".
+
+**`SZCO_LEGAL_FORMS` existuje v troch nezhodných podobách:**
+
+| Kde | Obsah |
+|---|---|
+| `backend/companies/models.py:224` | `100–110` — **bez `422`** |
+| `backend/registers/management/commands/fetch_ruz_data.py:16-19` | `100–110` **+ `422`** („Foreign natural person") |
+| `backend/adminapi/views/dashboard.py:66-67` | inline literál `100–110`, konštantu vôbec nepoužíva |
+
+`422` (zahraničná fyzická osoba) teda ide do `IndividualEntity`, ale dashboard
+ho ráta ako Firmu. Navyše `is_szco_company()` / `is_company_company()`
+(`companies/models.py:227,241`) **nemajú žiadneho volajúceho v produkčnom
+kóde** — routing v skutočnosti robí `fetch_ruz_data.py:523`. Sú to mŕtve
+funkcie, na ktoré sa `verify_implementation.sh` (8.2) odvoláva.
+
+**„FULL RUZ SYNC" nezačína od 2000-01-01.** `fetch_ruz_data.py:184` ošetruje
+`if sync_type == 'full'`, ale `--entity-type companies` s `--full-resync` dáva
+`sync_type = 'full_companies'` (`:68-69`) — teda `else` vetva, ktorá číta
+`progress.zmenene_od`, alebo najnovší `datum_poslednej_upravy`. Obe tlačidlá
+Firmy/SZCO preto robia **inkrementálny** prechod, nie plný rescan; tvrdenie
+„starting from 2000-01-01" (`RUZ_SYNC_ENTITY_SEPARATION_COMPLETE.md:99,121`)
+neplatí. Vlastný komentár v kóde divergenciu priznáva (`fetch_ruz_data.py:383-386`).
+
+**Progress % pre SZCO sa delí počtom firiem.**
+`SyncProgress.get_progress_percentage()` (`registers/models.py:266-269`) delí
+`total_processed` konštantou `RUZ_ESTIMATED_COMPANY_COUNT = 400_000`
+(`backend/core/constants.py:3`) pre **všetky** sync types — `full_individuals`
+teda ukazuje percento voči počtu firiem.
+
+**Chýba dátová migrácia SZCO riadkov.** Legacy tabuľka `Company` je
+`"Companies and SZCO"` (`backend/companies/models.py:635`) a **stále obsahuje
+SZCO riadky**. Prešel som všetky `RunPython`/`RunSQL` v projekte: ani jedna sa
+nedotýka `IndividualEntity` ani nepresúva riadky medzi tabuľkami
+(`registers/migrations/0010_add_individual_entity.py` je len `CreateModel` +
+`AlterField`). Sám dokument to priznáva — `RUZ_SYNC_ENTITY_SEPARATION_COMPLETE.md:363`
+má „Data migration script to move existing SZCO…" medzi **Future Enhancements**.
+Je to jediná zmienka o tejto diere v celom repozitári.
+
+**Dve nezlučiteľné cesty zápisu `pravna_forma`.** `normalize_legal_form_code()`
+sa volá len v `backend/registers/tasks.py:573` (per-firma `sync_company_now`)
+a `registers/eligibility.py:34`; hromadný walk `fetch_ruz_data.py:549` ukladá
+**raw** `data.get('pravnaForma')`. Test `registers/tests.py:738-758` overuje len
+tú prvú cestu, takže rozdiel je v testoch neviditeľný.
+
+### 8.5 Admin panel — čo príručky sľubujú a kód nemá
+
+`ADMIN_DEPLOYMENT_GUIDE.md` a `ADMIN_IMPLEMENTATION_COMPLETE.md` sa navzájom
+rozchádzajú a oba sľubujú veci, ktoré v kóde nie sú:
+
+| Tvrdenie | Realita |
+|---|---|
+| API `/api/sync/start/`, `/status/`, `/resume/{id}/` s hotovými `curl` príkladmi (`ADMIN_DEPLOYMENT_GUIDE.md:420-446`) | **Neexistujú** — `git grep` naprieč `backend/` aj `frontend/` → 0. `ADMIN_IMPLEMENTATION_COMPLETE.md:426-431` ich správne vedie ako „Phase 3" (budúce) |
+| Tlačidlá „🏢 Full Companies" / „👤 Full Individuals" | **Neexistujú** — `registers/admin.py:572-577` registruje štyri iné (`trigger_full_url`, `incremental`, `repair`, `gap_analysis`) |
+| Index `idx_sync_type_status` na `registers_syncprogress` | **Nie je** — `SyncProgress.Meta` (`registers/models.py:257-260`) nemá `indexes` |
+| Dashboard štatistika „Total Individuals (SZCO)" | **Nie je** — `registers/admin.py:570-599` agreguje výhradne `Company.objects` |
+| 2FA na admin účtoch (`:460`, ako „⚠️ Recommended") | **V kóde neexistuje** (`git grep -i "2fa\|totp\|django-otp"` → 0) |
+
+Posledný bod má reálnu váhu, lebo `create_admin.py:21` **natvrdo zakladá**
+`create_superuser(username='admin', password='admin')`. Odporúčanie „zapni 2FA"
+tak nie je formalita.
+
+Naopak overene **správne** a zachovania hodné je v tých príručkách toto:
+bezpečnostný postoj (čo je implementované vs odporúčané,
+`ADMIN_DEPLOYMENT_GUIDE.md:454-464`), DO/DON'T prevádzková politika syncu
+(`:279-301`, 16 bodov — jediná formulácia v repe), troubleshooting „Running bez
+progresu" (`:346-364`) a zdôvodnenie zrkadlových tabuliek
+(`ADMIN_IMPLEMENTATION_COMPLETE.md:258-281, 369-386`). Tie zostávajú
+v `docs/archive/`.
+
+### 8.6 Performance dokumenty — čo bolo namerané a čo sa len tvrdilo
+
+Konsolidovaných bolo sedem performance dokumentov. Prekryv je **sémantický, nie
+textový** (max. Jaccardova podobnosť riadkov 0,068 — žiadny pár nie je kópia),
+ale tie isté „štyri bottlenecky" sú prerozprávané v šiestich zo siedmich.
+Čísla, ktoré po nich zostali, sú **odhady, nie merania**:
+
+| Tvrdenie | Kde | Stav |
+|---|---|---|
+| `30,000x faster` | `PERFORMANCE_FIX_ACTION_PLAN.md:10` | extrapolácia z 100-firmovej množiny |
+| `1500% rýchlejšie` (lead scoring) | `PERFORMANCE_FIX_SUMMARY.md:45,127` | bez merania |
+| `100-1000x` / `300-500%` / `400%` | `FIX_SUMMARY:119`, `OPTIMIZATION:172`, `QUICK_REFERENCE:66` | neoverené, navzájom nekonzistentné |
+| `~100-200 companies/second`, `~50MB` | `LEAD_SCORING_IMPLEMENTATION.md:352-353` | **nepodložené** — žiadny benchmark ani `psutil` v `backend/` |
+| `> 90% coverage` | `LEAD_SCORING_CHECKLIST.md:327` | **nepodložené** — žiadny coverage nástroj nie je nakonfigurovaný |
+
+Ani jeden z tých dokumentov nemá dokončený vlastný deployment checklist:
+`PERFORMANCE_FIX_ACTION_PLAN.md:182-187` má 6× `- [ ]`, `COMPLETION_REPORT.md:133-142`
+nezaškrtnuté kroky 1–5, `:254-260` má všetkých päť „Actual" = `Pending`,
+`DEPLOYMENT_PLAN.md:353-361` má 5 zo 6 `⏳ Pending`. **Test na reálnych
+1,2 mil. firmách sa nikdy nestal.**
+
+Pozor aj na pätičky, ktoré oprava z Fázy 0 minula: `COMPLETION_REPORT.md:277`
+stále tvrdí `Rollback Time: <1 minute` a `DEPLOYMENT_PLAN.md:367`
+`Rollback: 🟢 Easy (1 command reverses migration)` — obe v priamom rozpore
+s opraveným telom toho istého dokumentu. `DEPLOYMENT_PLAN.md:231` navyše radí
+`git revert HEAD~1`, čo je dnes nebezpečné: zmeny sú v `36d80b8`, veľkom WIP
+checkpointe, nie v perf-only commite.
+
+### 8.7 i18n — gettext značky sú 2 z 54
+
+`docs/I18N_IMPLEMENTATION.md:22-23` tvrdí, že `gettext_lazy()` značky
+v `LEGAL_FORMS` sú „reálne a v poriadku — preklady sa z nich dajú vygenerovať".
+Zmerané proti kódu (`backend/companies/models.py`):
+
+| | položiek | v `_()` | holých |
+|---|---|---|---|
+| `LEGAL_FORMS` (`:10`) | 54 | **2** (`:11-12`) | 52 |
+| `LEGAL_FORMS_SHORT` (`:68`) | 53 | **0** | 53 |
+
+`makemessages` by teda vyextrahoval **2 reťazce**, nie 54 — a zo
+`LEGAL_FORMS_SHORT` ani jeden. Veta bola v Fáze 0 moja a je meraním vyvrátená;
+opravená je v tom dokumente.
+
+---
+
+## 9. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
 
