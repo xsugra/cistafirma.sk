@@ -52,6 +52,27 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     (globalThis as {ResizeObserver?: unknown}).ResizeObserver = ResizeObserverStub;
 }
 
+// jsdom has no IntersectionObserver, and `ApiDocs` constructs one on mount to
+// drive its scroll-spy table of contents -- without a stub, merely rendering the
+// page throws `IntersectionObserver is not defined`.
+//
+// A no-op is not a fudge here: jsdom has no scrolling and no layout, so nothing
+// can ever intersect and the real observer would fire just as little. The effect
+// only ever calls `setActiveSection`, so the stub leaves `activeSection` at its
+// initial 'auth' -- which is exactly the state a browser shows before the reader
+// scrolls. No assertion in the suite reads that state.
+class IntersectionObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    takeRecords(): [] {
+        return [];
+    }
+}
+if (typeof globalThis.IntersectionObserver === 'undefined') {
+    (globalThis as {IntersectionObserver?: unknown}).IntersectionObserver = IntersectionObserverStub;
+}
+
 // jsdom has no 2D context either: `getContext('2d')` returns null *and* prints
 // "Not implemented: HTMLCanvasElement.prototype.getContext" on the virtual
 // console, once per call. `GraphCanvas` probes for one to measure label text and

@@ -410,7 +410,14 @@ function EndpointCard({ endpoint }: { endpoint: Endpoint }) {
         className={`w-full flex items-center gap-3 px-4 py-3 text-left ${hasDetails ? 'cursor-pointer' : 'cursor-default'}`}
       >
         <MethodBadge method={endpoint.method} />
-        <code className="text-sm font-mono text-gray-900 dark:text-gray-100 flex-1">
+        {/* `min-w-0` is load-bearing: a flex item defaults to `min-width: auto`,
+            so without it this <code> refuses to shrink below the path's
+            min-content width. An endpoint path is one unbreakable token, so on a
+            narrow screen it pushed the JWT badge and the chevron out of the
+            `overflow-hidden` card and there was no `overflow-x-auto` anywhere in
+            the ancestor chain to scroll to them. `break-words` lets the path wrap
+            instead of being clipped. */}
+        <code className="text-sm font-mono text-gray-900 dark:text-gray-100 flex-1 min-w-0 break-words">
           {endpoint.path}
         </code>
         {endpoint.auth && (
