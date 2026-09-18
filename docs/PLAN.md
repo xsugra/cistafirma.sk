@@ -6672,7 +6672,76 @@ zastaví" je vidieť aj tu: bez skrolovania sa stred boxu trafí na **−1,5 px*
 okolo t + 20 s, keď simulácia dochladí a `onEngineStop` prefituje druhýkrát —
 fit je presný v okamihu, keď beží, a medzitým sa hýbu uzly, nie rám.
 
-### 10.5 Poradie prác
+### 10.5 Nález: pri názve širšom než okno bol fit nesplniteľný (regresia z `4886c81`)
+
+**Namerané na živej produkcii, nie odvodené.** Po nasadení `4886c81` na `dell`
+(2026-09-18) sa stránka „Prepojenia" pre IČO 31355161 — 114 uzlov, 148 hrán,
+najdlhší názov 124 znakov — vykreslila ako **guľa z čiastočiek veľkosti ~40 px**
+s jedným čitateľným názvom. `canvas.__zoom.k` bolo **0,02**, teda presne
+`FIT_CONFIG.minZoom`; uzol s polomerom 26 jednotiek sa kreslil ako **0,52 px**;
+atrament bol pás **331 × 36 px**. Po usadení (t ≈ 13 s) sa už nemenil.
+
+**Príčina je v `extentAt`.** Menovka je ukotvená *pod* diskom a naň vycentrovaná,
+takže vodorovne zaberá **polovicu svojej vlastnej šírky** — a tá sa so zoomom
+nemení (`painter` delí font zoomom, aby názov ostal 13 px). Názov 124 znakov je
+teda ~870 px široký a jeho polovica (435 px) je širšia než celé okno (311 px).
+`fits(zoom)` potom neplatí pri **žiadnom** zoome, bisekcia ostane na `low =
+minZoom` a vráti 0,02. Fit, ktorý nemá riešenie, vyzerá ako fit, ktorý sa vzdal.
+
+**Prečo to #179 nechytilo.** Akceptačné meranie z 10.4 bežalo na 9-uzlovom
+stube s názvami, ktoré sa do okna zmestia — taký graf nemá ako ten stav vyvolať.
+Regresia teda prešla tromi CI kontrolami aj vlastným akceptačným testom a našla
+sa až na produkcii, na skutočných 114 uzloch.
+
+**Oprava.** `solve(labelsHorizontal)` je tá istá bisekcia dvakrát:
+
+1. najprv s menovkami v **oboch** osiach. Ak vráti viac než `minZoom`, je to
+   platné riešenie a správanie sa nemení;
+2. ak vráti presne `minZoom`, fit nebol splniteľný — potom sa rámujú **len disky**
+   (`labelsHorizontal = false`) a názvy prečnievajú. Zvislý pruh menovky sa
+   počíta v oboch prípadoch, lebo je **ohraničený** (~19,5 px), takže ani
+   v fallbacku sa názov na najspodnejšom disku neodreže.
+
+Prečnievajúce názvy nie sú strata: `labelLayout` ich najprv zmenší na 0,75 a potom
+**zahodí** — názov je čitateľný alebo nie je, nikdy nie je rozmazaný.
+
+**Namerané na tom istom reálnom grafe** (`real_graph.json`, rovnakých 114 uzlov,
+route interception, `vite preview` na zbuildenom bundle):
+
+| | starý build `5f812c0` | nasadené `4886c81` | oprava |
+|---|---|---|---|
+| plátno | 1100 × 1000 | 359 × 639 | 359 × 639 |
+| `k` | 0,618 | **0,020** (na `minZoom`) | **0,159** |
+| disk 26 jednotiek | 16,07 px | 0,52 px | **4,14 px** |
+| atrament | 1086,7 × 969,3 | 331 × 36 (pás) | 336 × 285,7 |
+| pixelov atramentu | 2 242 280 | 52 456 | 334 064 |
+| zložiek atramentu | — | 3 (najväčšia 99,8 %) | **116** |
+| stred vs okno | — | — | x −11,5, **y −4,7** px |
+
+Starý build mal plátno 1100 × 1000, lebo vôbec nemal responzívnu veľkosť plátna —
+jeho `k` preto nie je porovnateľné a je v tabuľke len pre úplnosť. Rozhodujúce sú
+posledné dva stĺpce: **na tom istom plátne a tých istých dátach** je to 8× väčší
+zoom, 6,4× viac atramentu a 116 oddelených zložiek namiesto jednej gule.
+
+**Metodická poznámka.** Prvé meranie opravy hlásilo odchýlku **+31,3 px**, čo
+vyzeralo ako nedotiahnutá oprava. Nebolo: `onEngineStop` prefituje **druhýkrát**
+až keď simulácia dochladí (pri 114 uzloch t ≈ 13 s), takže meranie v 9. s čítalo
+rám, ktorý ešte nebol usadený — `k` sa medzi dvoma behmi líšilo (0,1733 vs
+0,1756), čo bolo prvé podozrenie. Vzorkovanie v čase to ukázalo priamo: do 10. s
+sa atrament hýbe, v 13. s `k` spadne na 0,15934 a potom je **Δ 0 px**.
+Namerané po usadení: stred y **−4,7 px**.
+
+**Čo zostáva (nie je opravené).** Prečnievajúce meno názvu sa **odreže okrajom
+plátna**, lebo `labelLayout` o hraniciach plátna nevie — testuje len kolízie medzi
+menovkami. Namerané: atrament siaha na ľavý okraj plátna, a na snímke je
+„Ing. Alexander Holénia" vykreslené ako „g. Ing. Alexander Holénia". Je to daň
+za fallback a je to viditeľné len pre uzly blízko okraja. Možná oprava je posunúť
+menovku dovnútra a kolízny test potom pustiť na posunutý obdĺžnik — ale vyžaduje
+si hranice plátna v **grafových** súradniciach (`globalScale` mení mierku, takže
+sa to nedá spočítať raz pri fite) a to je samostatná zmena s vlastnými testami,
+nie prívesok k tejto. **Zámerme neopravené.**
+
+### 10.6 Poradie prác
 
 1. **Tlačidlo „Overiť"** — `components/SearchBar.tsx` + regresný test, ktorý
    stráži invariant (pilulka musí byť obsahujúci blok, inak sa `right-*` zase
@@ -6681,13 +6750,18 @@ fit je presný v okamihu, keď beží, a medzitým sa hýbu uzly, nie rám.
    **Hotové** (`4691fbe`).
 3. **Graf „Prepojenia"** — `components/graph/ConnectionGraph.tsx` +
    `GraphCanvas.tsx` (+ testy: fit je čistá aritmetika, tá sa testovať dá).
-   **Hotové** — `graphFit.ts` (čistá geometria) + `graphFit.test.ts` (13),
+   **Hotové** — `graphFit.ts` (čistá geometria) + `graphFit.test.ts` (15),
    `GraphCanvas.test.tsx` (13, s stavovým dvojníkom `force-graph`),
    `ConnectionGraph.test.tsx` (9, s podstrčeným `getBoundingClientRect`).
-   Celkovo 45 súborov / 421 testov, `typecheck` aj `build` čisté.
+   Celkovo 45 súborov / 423 testov, `typecheck` aj `build` čisté.
    **Premerané na zbuildovanej verzii** (nie odhad): 393 px → plátno 359 × 639,
-   atrament vnútri okna, stred −2,4 px; 900 px → plátno 734 × 675, stred −3,0 px.
+   atrament vnútri okna, stred −2,1 px; 900 px → plátno 734 × 675, stred −3,0 px.
    Tabuľka a metóda v 10.4.
+   **Druhé kolo (10.5):** nasadenie `4886c81` ukázalo na reálnych 114 uzloch
+   regresiu — fit sa zasekol na `minZoom`. Opravené dvojstupňovým `solve`;
+   dva nové regresné testy padajú na starom kóde (`0.02 to be greater than 0.02`).
+   Na 9-uzlovom stube sa čísla **nezmenili** (393 px: 308 × 319,3 a −2,1 px;
+   900 px: 474 × 537 a −3,0 px), na reálnych 114 uzloch `k` 0,02 → 0,159.
 4. Ak povie, **desatinná bodka** (10.3) — samostatný commit. **Nespravené**,
    čaká na slovo.
 
@@ -6696,6 +6770,13 @@ Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`)
 premerať **to isté**, čo je namerané vyššie, na zbuildovanej verzii — nie okom:
 na 393 px musí byť plátno 359 × 639 a atrament vnútri použiteľného okna, na 900 px
 plátno 734 × 675 a stred odchýlený do 10 px.
+
+**A premerať aj na reálnych dátach, nie len na stube.** Presne o to prišlo #179:
+stub s krátkymi názvami nemôže vyvolať stav, ktorý nastane len vtedy, keď je názov
+širší než okno. Akceptačný test preto musí bežať aj na grafe, ktorý má uzlov
+a názvov ako produkcia (`real_graph.json`), a strážiť, že `canvas.__zoom.k`
+**nie je** `minZoom` — a to **po usadení** (t ≥ 15 s), nie v 9. s, keď je
+`onEngineStop` ešte pred sebou.
 
 ---
 
