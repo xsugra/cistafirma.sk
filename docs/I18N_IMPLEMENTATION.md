@@ -19,10 +19,12 @@ This document describes the i18n setup for the CistaFirma project, focusing on l
 >   iba app `companies`.
 > - **Sentry hook je inertný** (viď „Metrics & Monitoring" nižšie).
 >
-> `gettext_lazy()` značky v `LEGAL_FORMS` sú reálne a v poriadku — preklady sa z
-> nich dajú vygenerovať. Ale kým sa tak nestane, **aplikácia beží len v
-> angličtine** a slovenčina je zámer, nie stav. Postup nižšie je teda platný ako
-> návod; ber ho tak.
+> `gettext_lazy()` značky sú ale **len 2 z 54** v `LEGAL_FORMS` a **0 z 53**
+> v `LEGAL_FORMS_SHORT` (`backend/companies/models.py:10,68`) — `makemessages` by
+> teda vyextrahoval **dva** reťazce, nie 54. Markery treba najprv doplniť
+> a až potom generovať katalógy. A kým sa tak nestane, **aplikácia beží len
+> v angličtine** a slovenčina je zámer, nie stav. Postup nižšie je teda platný
+> ako návod; ber ho tak.
 
 ## Current Implementation
 
