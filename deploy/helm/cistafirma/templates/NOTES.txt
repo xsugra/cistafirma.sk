@@ -14,5 +14,6 @@ Useful commands:
 - Safe upgrade pattern:
   helm upgrade --install --wait --atomic {{ .Release.Name }} . -f values.yaml -f values-<env>.yaml
 
-- If DB schema changes are included, the pre-upgrade migration Job is executed automatically.
+- If DB schema changes are included, the migration Job is executed automatically
+  as a post-upgrade hook -- i.e. after the Deployments become ready, not before them.
 
