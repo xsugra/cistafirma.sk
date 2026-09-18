@@ -6265,18 +6265,36 @@ Zoradené podľa závažnosti; **prvé dve sú merané**, nie odhadnuté.
    navyše **nepinovaná verzia bez SRI**, takže sa na každej stránke každej
    session spúšťa cudzí kód, ktorý sa môže pod rukami zmeniť. To je
    supply-chain expozícia, nie len latencia.
-5. `viewport-fit=cover` chýba a `env(safe-area-inset-*)` sa v projekte
-   nevyskytuje **ani raz** — samotné pridanie meta by teda bolo inertné.
-   `dvh`/`svh` tiež 0×.
-6. `h-screen` na 4 miestach — **`AdminLayout.tsx:40` je hotové v `68b4a6f`
-   (`h-dvh`), `ConnectionGraph.tsx:150` ostáva**; mobilné menu bez
-   `overflow-y-auto`; zatvorené menu ostáva v DOM aj v tab-poradí;
-   `GraphControls` má 32 px tlačidlá; legenda grafu sa na 393 px láme na
-   ~5 riadkov cez plátno.
+5. ~~**`viewport-fit=cover` chýba a `env(safe-area-inset-*)` sa v projekte
+   nevyskytuje ani raz**~~ **Hotové v `4f0df9d`.** Meta atribút a insety sú
+   jedna zmena, nie dve: `cover` bez insetov je horší než stav pred ním
+   (lišta pod hodinami), insety bez `cover` sú inertné (`env()` je vždy 0).
+   Insety dostali `.safe-frame` (admin shell), `.header-wrapper`,
+   mobilné menu (ako **súčet** `calc(6rem + env(...))`, aby sa prirátal a nie
+   nahradil — pasca 9.5), admin lišta pod `md` zvlášť (absolútny box sa
+   umiestňuje proti padding boxu containing blocku) a ovládanie grafu **len
+   v režime celej obrazovky** (`env()` je vlastnosť viewportu, nie prvku —
+   na inline karte by tie isté triedy posunuli ovládanie o ~59 px).
+   **Overené proti zbuildovanému CSS:** všetkých 5 arbitrary hodnôt je
+   v balíku a `max-md:` varianty sedia vo
+   `@media not all and (min-width:48rem)`. Prvý kontrolný grep vrátil samé
+   nuly — **chybná maska**, Tailwind escapuje aj `(`, `)`, nie chýbajúce
+   pravidlá. **Invariant, overený:** `--spacing` je `.25rem`, takže pri
+   insete 0 je `calc(6rem+0px)` = `pt-24`, `calc(0.75rem+0px)` = `top-3`,
+   `calc(0.5rem+0px)` = `bottom-2` — na desktope a na telefóne bez výrezu je
+   tento commit **no-op**.
+6. `h-screen` — **`AdminLayout.tsx:40` hotové v `68b4a6f`,
+   `ConnectionGraph.tsx:150` v `4f0df9d`**; ostáva: mobilné menu bez
+   `overflow-y-auto` a bez zámku skrolovania pozadia; zatvorené menu ostáva
+   v DOM aj v tab-poradí; `GraphControls` má 32 px tlačidlá; legenda grafu sa
+   na 393 px láme na ~5 riadkov cez plátno.
 
-**`h-dvh` je odôvodnené, nie merané** — a to treba povedať nahlas. Headless
-Chromium nemá adresnú lištu, takže `100vh`, `dvh` aj `svh` tam vyjdú rovnako
-a meranie by len predstieralo dôkaz. Overiť sa to dá jedine na telefóne.
+**Hranica dôkazu pre kroky 2 a 3 — `dvh` a insety sú odôvodnené, nie
+merané,** a to treba povedať nahlas. Headless Chromium nemá adresnú lištu ani
+výrez, takže `100vh`, `dvh` aj `svh` tam vyjdú rovnako a `env()` je tam 0;
+meranie by len predstieralo dôkaz. Overiť sa to dá jedine na telefóne.
+Namerané je to, že pravidlá sú v balíku, že `max-md:` varianty sedia
+v správnej media query, a že pri insete 0 nič nemenia.
 
 ---
 
@@ -6357,16 +6375,22 @@ overiť sa dá len proti reálnemu backendu na telefóne, nie z kódu.
 4. ~~**Tabuľky** (meraný orez)~~ — **hotové v `1f806ee`**.
    ~~**Admin sidebar a inputy**~~ — **hotové v `68b4a6f`** (8 nových testov
    v `admin/AdminLayout.test.tsx`; suita 384 testov v 42 súboroch).
-   **Ďalej:** **`viewport-fit=cover` + safe-area** → **menu, zvyšný
-   `h-screen`, legenda grafu**.
+   ~~**`viewport-fit=cover` + safe-area**~~ — **hotové v `4f0df9d`** (meta
+   atribút, `.safe-frame`, `.header-wrapper`, mobilné menu, admin lišta pod
+   `md`, ovládanie grafu v celoobrazovkovom režime, `h-dvh` v grafe).
+   **Ďalej:** mobilné menu — `overflow-y-auto` a zámok skrolovania pozadia
+   (ten je aj v 9.5); zatvorené menu von z DOM a z tab-poradia;
+   `GraphControls` 32 px tlačidlá; legenda grafu na 393 px.
 
 Každý krok: tri CI kontroly (`npm test`, `npm run typecheck`, `npm run build`),
 štruktúrovaný commit, push na `origin` aj `gitlab-home`.
 
-**Poctivá hranica kroku 2:** `h-dvh` a správanie `env(safe-area-inset-*)` sa
-v headless prehliadači odmerať **nedajú** — chýba adresná lišta aj výrez.
-Zvyšok kroku 2 meraný je (šírky, `display`, `font-size` z computed style proti
-zbuildovanému CSS).
+**Poctivá hranica krokov 2 a 3:** `h-dvh` a správanie
+`env(safe-area-inset-*)` sa v headless prehliadači odmerať **nedajú** — chýba
+adresná lišta aj výrez. Zvyšok krokov 2 a 3 meraný je (šírky, `display`,
+`font-size` z computed style proti zbuildovanému CSS; pri kroku 3 navyše to,
+že pravidlá sú v balíku, sedia v správnej media query a pri insete 0 sú
+no-op — viď 9.4 bod 5).
 
 ---
 
