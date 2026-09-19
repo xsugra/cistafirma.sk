@@ -18,7 +18,8 @@ backend_validate:
     - if: '$CI_COMMIT_TAG'
   before_script:
     - python --version
-    - pip install --no-cache-dir --retries 3 --timeout 120 -r backend/requirements.txt
+    # Opakovanie celého kroku, nie spojenia — viď docstring skriptu.
+    - bash scripts/ci/pip_install.sh
   script:
     - python -m compileall backend
 
@@ -157,7 +158,10 @@ backend_tests:
     REDIS_URL: "redis://redis:6379/0"
     DEBUG: "true"
   before_script:
-    - pip install --no-cache-dir --retries 3 --timeout 120 -r backend/requirements.txt
+    # Opakovanie celého kroku, nie spojenia — viď docstring skriptu. Je to
+    # práve tento job, ktorý 19. 9. 2026 zomrel v `pip install` na
+    # `ReadTimeoutError` a nikdy nespustil ani jeden test.
+    - bash scripts/ci/pip_install.sh
     # Runner na otvorenie portu service kontajnera čaká sám; táto slučka je
     # poistka, ktorá z prípadných pretekov spraví zrozumiteľnú vetu namiesto
     # `connection refused` z prostriedku testovacej sady.

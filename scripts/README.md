@@ -4,7 +4,7 @@ Pomocné skripty pre vývoj, deployment a **prevádzku dát** (zálohy, off-site
 replikácia, restore drilly, ops gate).
 
 > **Oprava 2026-09-18** (konsolidácia dokumentácie, #169): tento README bol
-> neúplný a čiastočne zastaraný. Dokumentoval **6** zo **39** trackovaných
+> neúplný a čiastočne zastaraný. Dokumentoval **6** zo **40** trackovaných
 > súborov a adresár `scripts/local/` (24 súborov) nespomínal vôbec, hoci práve
 > v ňom žije celá zálohovacia a prevádzková logika. Zároveň odkazoval na K8s
 > cestu bez upozornenia, že nie je nasadená. Prepísané nižšie.
@@ -14,6 +14,7 @@ replikácia, restore drilly, ops gate).
 | Adresár | Súborov | Čo tam je |
 |---|---|---|
 | `scripts/` | 6 | pre-push cleanup + generovanie favicon |
+| `scripts/ci/` | 1 | inštalácia závislostí pre CI, s opakovaním kroku |
 | `scripts/docs/` | 2 | audit interných odkazov a citácií v markdown |
 | `scripts/k8s/` | 8 | K8s/Helm deploy — **nenasadené**, viď nižšie |
 | `scripts/local/` | 16 | zálohy, off-site, restore drilly, ops gate, RUZ keeper |
@@ -123,6 +124,41 @@ make docs-audit   # EXIT 0 = všetky odkazy aj citácie sedia
 
 ---
 
+## `scripts/ci/` — inštalácia závislostí
+
+- **`pip_install.sh`** — nainštaluje `backend/requirements.txt` a pri zlyhaní
+  zopakuje **celý krok**, nie len spojenie. Volajú ho `backend_validate`
+  aj `backend_tests`.
+
+  `pip` sa opakuje sám (`--retries 3 --timeout 120`, commit `e9be132`
+  zo 7. 5. 2026) — ale to je opakovanie na úrovni *spojenia*. Keď PyPI
+  neodpovie v rámci limitu, pip to vzdá a job zomrie. Stalo sa to 19. 9. 2026
+  (pipeline 193, build 1360): `ReadTimeoutError` z `files.pythonhosted.org`
+  a `Ran 0 tests` — job teda zlyhal **pred prvým testom** a jeho červená
+  nenesie o kóde nič.
+
+  Zámerne sa **NEopakuje job ako celok** (`retry: when: script_failure`):
+  tým by sa opakovali aj testy, a červená pipeline by prestala znamenať
+  „test neprešiel". Opakovanie patrí sieťovému kroku, nie kontrolnému.
+
+  Zámerne tiež **nepoužíva `exit 0`** v tele slučky: GitLab Runner zliepa
+  `before_script` a `script` do jedného shell skriptu, takže `exit 0`
+  v `before_script` by ukončil celý job ako **úspešný** a testy by sa nikdy
+  nespustili. Preto `break` a kontrola až za slučkou
+  (`scripts/ci/pip_install.sh:71-82`).
+
+  ```bash
+  # logika opakovania sa dá overiť bez inštalácie čohokoľvek:
+  # `pip` sa nahradí stubom, ktorý zlyhá presne N-krát
+  bash scripts/ci/pip_install.sh --selftest 2   # zlyhá 2×, potom uspeje → EXIT 0
+  bash scripts/ci/pip_install.sh --selftest 5   # zlyhá vždy → EXIT 1 po 3 pokusoch
+  ```
+
+  `CI_PIP_INSTALL_ATTEMPTS` (default 3) a `CI_PIP_INSTALL_RETRY_DELAY`
+  (default 20 s, rastie lineárne) prepínajú počet pokusov a pauzu.
+
+---
+
 ## `scripts/k8s/` — nenasadené
 
 > ⚠️ **Táto cesta nebeží.** Neexistuje klaster. Produkcia na `dell` beží cez
@@ -195,4 +231,4 @@ git diff gitlab-home/main...HEAD           # čo je v nich
 
 ---
 
-**Naposledy aktualizované:** 2026-09-18
+**Naposledy aktualizované:** 2026-09-19
