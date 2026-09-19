@@ -7066,7 +7066,8 @@ assertion po dobehnutí walku by prešla aj s pôvodným defektom. Overené prot
 kódu bez opravy: padajú na `'' != 'refused'`.
 
 **Zámerne sa to nenasadzuje počas walku.** Reštart `celery_worker_ruz` by beh
-zastavil až na ~35 minút (30 min prah watchdogu + 5 min tick keepera) a znovu
+zastavil až na ~45–50 minút (30 min prah watchdogu + 15 min
+`KEEPER_REDISPATCH_AFTER` + 0–5 min tick keepera) a znovu
 by spravil ≤100 záznamov — za zlepšenie *výpisu*, nie správania. Dovtedy je
 dôvod stále dosiahnuteľný z logu. Nasadí sa po dokončení walku.
 
@@ -7399,7 +7400,7 @@ svoje rozhodnutie):
   Reálny postup pritom čitateľný je — `SyncProgress` #4 ho má a keeper ho loguje
   ako `RUZ_KEEPER_STATE` — takže to nie je stratený signál, ale riadok, ktorý
   vyzerá zaseknuto. **Neopravovať počas behu**: zmena v ceste walku chce
-  reštart workera a ten zastaví beh až na ~35 minút.
+  reštart workera a ten zastaví beh až na ~45–50 minút.
 
 **Bezpečnostná poznámka k oprave:** po zmene stojí ochrana proti súbežnému behu
 na unique obmedzení `ruz:global`, nie na zozname statusov — `resume_repair_sync`
@@ -7416,8 +7417,9 @@ začalo klamať. Rozhodujúce je, že **štyri menia správanie** a sú vypísan
 nižšie; zvyšok sú `docs(plan)`. Aktuálny stav dá `git log --oneline 8486c03..main`.
 Všetko sa odkladá
 jedným rozhodnutím a z jedného dôvodu: ide o **jeden reštart workera**, a ten
-zastaví bežiaci walk #46 až na ~35 minút (30 min prah watchdogu + 5 min tick
-keepera) a spraví znovu ≤100 záznamov. Hromadí sa to teda do jedného nasadenia
+zastaví bežiaci walk #46 až na ~45–50 minút (30 min prah watchdogu + 15 min
+`KEEPER_REDISPATCH_AFTER` + 0–5 min tick keepera) a spraví znovu ≤100 záznamov.
+Hromadí sa to teda do jedného nasadenia
 **po dokončení walku**, nie do ôsmich.
 
 Štyri z nich menia správanie:
@@ -7610,24 +7612,100 @@ Focus Mode nerobil nič. Nasadenie si počká na #188 spolu s ostatnými; keeper
 sa síce chytil bez reštartu walku (používa ho výhradne `ruz_keeper_tick`,
 overené grepom), ale celý balík aj tak odchádza naraz.
 
-**Neoverené kandidáty — menovite, aby sa nehľadali znova, ale NIE ako zoznam
-úloh.** Každý prišiel od pomenovaného agenta s citáciou, ktorú som **neoveril**;
-kto na nich chce stavať, musí najprv overiť, či existujú:
+**Kandidáty 1–7 — overené 19. 9. 2026 v kóde.** Každý prišiel od pomenovaného
+agenta s citáciou, ktorú som vtedy neoveril. Overil som ich teraz, jeden po
+druhom: **štyri sú pravda, dva sú vyvrátené a jeden je vyvrátený v premise a vo
+zvyšku horší**. Poradie je pôvodné, aby sa dalo porovnať s tým, čo agenti
+tvrdili — a aby bolo vidieť, že „agent to povedal" nie je dôkaz.
 
-1. `resume` môže dispatchovať do prázdna každých 15 min — verdikt sa číta z **job**
-   riadku, ale či niečo beží, rozhoduje **progress** riadok.
-2. Zastavený walk je neviditeľný pre jedinú bránu, keď je jeho najnovší riadok
-   starší než 24 h; `full` progress riadok sa pravidlom okna neposudzuje nikdy.
-3. Pri `full` walku je „podrž okno a prečítaj znova" pri zlyhanom čítaní no-op —
-   kurzor aj tak prejde za stratený záznam a nič ho už nehľadá.
-4. Nasadený walk nevie stratený záznam pomenovať z databázy — id a dôvod žijú len
-   v stderr kontajnera, ktorý je zastropovaný na 100 MB a zaniká s ním.
-5. Admin view „Full sync from RUZ ID" prepisuje kurzor a stav **živého** walku
-   v tom istom `SyncProgress` riadku a `ruz:global` zámok ho nechráni.
-6. `progress.notes` sa prepisuje, nie pripája — každý obnovený segment zmaže
-   predchádzajúci ledger neuložiteľných záznamov.
-7. Dokumentovaná pokuta za reštart („~35 min") nezahŕňa `KEEPER_REDISPATCH_AFTER`,
-   takže reálne zdržanie je 45–60 min.
+1. **VYVRÁTENÉ.** `ruz_full_keeper_decision` číta `SyncJob`, a to je správny
+   zdroj, nie chyba: práve job riadok drží `concurrency_key=ruz:global`.
+   Divergencia „job hovorí `failed`, ale walk beží" nemôže nastať —
+   `fetch_ruz_data` odmietne bežať bez claimnutého riadku a `_run_ruz_command`
+   ho claimuje pred spustením. Dispatchnutý resume sa navyše zrazí na unique
+   indexe (`enqueue_ruz_job` chytá `IntegrityError`) a vráti sa bez importu.
+   `wait` zámerne pokrýva aj `running` so starým heartbeatom, lebo ten prechod
+   vlastní watchdog. Kandidát žiadal opak toho, čo docstring vysvetľuje.
+
+2. **OVERENÉ — a vážnejšie, než kandidát tvrdil.** `sync_health.py:257-261`
+   filtruje `triggered_via=beat_schedule, queued_at__gte=failed_cutoff`
+   (`cutoff = now - 24 h`). Okno sa teda meria od **začiatku behu**, nie od
+   zlyhania. Walk #46 má `queued_at = 09-18 16:02`; o 24 h od neho táto
+   podmienka nemôže uvidieť jeho `failed` **nikdy**, lebo `queued_at` je
+   zafixovaný na začiatku päťdňového behu. Podmienka, ktorá má chytiť mŕtvy
+   walk, teda môže zabrať len v prvom dni — presne v tom, v ktorom sa ešte nič
+   nestihlo pokaziť. A `full` progress riadok neposudzuje ani štvrtá podmienka
+   (`sync_type__startswith="incremental"`). **Dokumentácia brány je navyše
+   zastaraná:** `sync_health.py:32-34` tvrdí „measured on 2026-09-10 … exactly
+   one beat-scheduled type (`ruz_incremental`)" — dnes má `ruz_full` tiež
+   `triggered_via=beat_schedule` (job #46, overené v DB), lebo
+   `_run_ruz_command` tú značku prirazuje **každému** auto-zaradenému jobu,
+   teda aj keeperovmu obnoveniu. Kto si prečíta docstring, vyvodí, že walk je
+   mimo rozsahu; on je v rozsahu, len nedosiahnuteľný.
+
+3. **VYVRÁTENÉ v premise.** „Podrž okno a prečítaj znova" pri `full` walku
+   neexistuje, takže nemôže byť no-op: `fetch_ruz_data.py:408` je
+   `holds_window = sync_type.startswith('full') or run["unreadable"] > 0`, čiže
+   `full` okno **nespravuje vôbec** a drží ho vždy — a komentár na `:399-403`
+   vysvetľuje prečo (zapisovať do `zmenene_od` by zmenšilo ďalší full resync na
+   jeden deň). Podržanie okna patrí incremental vetve. **Zvyšok je však horší
+   než pôvodné tvrdenie:** `record_progress(ruz_id=company_id, …)` je v oboch
+   `except` vetvách (`:331-333`, `:342-344`), takže kurzor ide **za** zlyhaný
+   záznam — dočasne nečitateľný záznam už tento walk neuvidí, a keďže `full`
+   `zmenene_od` nikdy neposunie, neuvidí ho ani nikto iný. Jediná pamäť na dieru
+   je `notes` — a tú zabíja bod 6.
+
+4. **VYVRÁTENÉ.** Id aj dôvod **sú** v databáze:
+   `record_progress(ruz_id=company_id, error=True, error_message=str(e))`
+   (`:331-333`, `:342-344`) zapisuje `last_processed_ruz_id` a `last_error`
+   každých 100 záznamov — presne tá oprava, ktorá kedysi chýbala — a `notes`
+   nesie až 50 dvojíc `id (ico)` s celkovým počtom. Čo naozaj chýba: `last_error`
+   drží len **poslednú** chybu dávky (last writer wins), takže dôvody
+   predchádzajúcich zlyhaní v tej istej stovke sa stratia, a `notes` je
+   zastropované na 50 a prepisované (bod 6). Kandidát sa teda mýlil v mieste,
+   nie v smere: strata je reálna, ale je v `notes`, nie v stderr.
+
+5. **OVERENÉ — a toto je najkonkrétnejší nález z celej sedmičky.**
+   `trigger_full_sync_from_id_view` (`registers/admin.py:641`) je **jediná**
+   RUZ akcia v tom súbore bez `_live_ruz_job()` kontroly — `resume_sync_view`,
+   `trigger_repair_sync_view` aj obe gap akcie ju majú, s komentárom, ktorý
+   presne tento omyl pomenúva. A `start_full_ruz_sync_from_id`
+   (`registers/tasks.py:852-861`) prepíše `SyncProgress(sync_type='full')`
+   — teda **ten istý riadok, z ktorého beží walk #46** — skôr, než sa vôbec
+   pokúsi získať slot: `last_processed_ruz_id = start_id - 1`,
+   `status = 'paused'`, plný `save()`. Až potom volá `_run_ruz_command`, ktorý
+   sa zrazí na `ruz:global` a vráti sa bez behu. **Zámok teda nechráni to, čo
+   sa stihlo zapísať pred ním.** Dôsledky sú tri a líšia sa trvaním:
+   (a) kurzor sa vráti, ale walk si ho zapíše sám pri ďalšom stovkovom uložení
+   (`record_progress`) — do ~100 záznamov, ~18 s, sa zahojí;
+   (b) `status='paused'` **sa nezahojí**, lebo `status` nie je v `update_fields`
+   toho uloženia — riadok tak zostane `paused` celé dni, kým walk beží, a admin
+   ho tak aj zobrazí, čo je presne kontrola, ktorá klame;
+   (c) ak je walk práve zastavený (medzi zberom watchdogu a tickom keepera),
+   vrátený kurzor je ten, z ktorého sa bude pokračovať — a `start_id` **vyššie**
+   než skutočný kurzor ticho preskočí celý interval medzi nimi, čo je presne to,
+   pred čím `--full-resync` chráni.
+   (c) je strata dát, (b) je lož, (a) je neškodná.
+
+6. **OVERENÉ.** `fetch_ruz_data.py:455-459` je `progress.notes = f'…'` a
+   `save(update_fields=['notes'])` — priradenie, nie pripájanie. Zdrojový
+   komentár o pár riadkov vyššie (`:441-444`) pritom hovorí, prečo tam ten
+   záznam je: „it is named here, on the row that survives, and written out —
+   otherwise the hole is invisible and a later fix would have nothing to
+   backfill from." Každý obnovený segment teda zmaže presne to, na čo bol
+   zapísaný. Nekonzistentné je to aj vnútri modelu: `SyncProgress.pause()`
+   (`models.py:320`) robí `f"Pozastavené: {reason}\n{self.notes}"`, čiže
+   pripája — jeden z dvoch zápisov do toho istého poľa drží históriu a druhý
+   ju zahadzuje.
+
+7. **OVERENÉ.** `KEEPER_REDISPATCH_AFTER = timedelta(minutes=15)`
+   (`sync_engine.py:744`) a `ruz_full_keeper_decision` ho aplikuje **po**
+   skončení behu (`:798`), takže k oneskoreniu patrí. Dokumentácia na troch
+   miestach (`PLAN.md:7069`, `:7403`, `:7420`) počíta „~35 minút (30 min prah
+   watchdogu + 5 min tick keepera)" — aritmetika, ktorá je o 15 minút krátka
+   a dá sa overiť proti kódu. Reálne: 30 (watchdog zberie) + 15
+   (`KEEPER_REDISPATCH_AFTER`) + 0–5 (granularita timera) = **45–50 min**, nie
+   35 a nie 45–60.
 8. Keeperove riadky v journali tlačia `last_heartbeat` v UTC vedľa CEST časových
    značiek journald, takže 6 s starý heartbeat sa číta ako dve hodiny starý.
 9. `ops_check.sh` overuje týždenný backup timer, ale keeper timer ním nekontroluje
@@ -7669,8 +7747,27 @@ kto na nich chce stavať, musí najprv overiť, či existujú:
    znova po oprave. Vetvy, ktoré sa na zdravom hoste nedajú spustiť, sú zároveň
    tie, ktoré nikdy nebežali ani raz.
 
-Body 8 a 9 sú teda overené (9. je aj opravený); bod 8 je napriek tomu kozmetika
-logu. Zvyšok, body 1–7, sú hypotézy.
+Body 8 a 9 sú overené (9. je aj opravený); bod 8 je napriek tomu kozmetika logu.
+Zvyšok, body 1–7, je overený vyššie: **pravda sú 2, 5, 6, 7**, body 1, 3 a 4 sú
+vyvrátené (3 a 4 v premise, ale s horším zvyškom, ktorý je nižšie pomenovaný).
+Diagnóza je teda hotová a **žiadna z tých opráv nie je urobená** — z bodov 2, 5
+a 6 vyplývajú tri zmeny, každá malá a každá s vlastným testom:
+
+- **(2) okno brány merať od zlyhania, nie od zaradenia.** `sync_health.py`
+  filtruje `queued_at__gte=cutoff`; pre päťdňový walk je to po 24 h mŕtva
+  podmienka. Okno patrí na `completed_at` (ktorý je pri terminálnom riadku vždy
+  nastavený), inak brána nevidí práve ten beh, kvôli ktorému existuje.
+  A docstring na `:32-34` treba prepísať — jeho meranie z 2026-09-10 už neplatí.
+- **(5) guard do `trigger_full_sync_from_id_view`** a v `start_full_ruz_sync_from_id`
+  presunúť zápis do progress riadku **za** získanie slotu: dnes sa kurzor a stav
+  živej behu prepíšu pred ním. Guard je vo všetkých susedných view už teraz;
+  chýba len tu, kde je škoda najväčšia.
+- **(6) `notes` pripájať, nie prepisovať** (`+=` ako v `pause()`), aby ledger
+  dier prežil obnovenie segmentu — inak je celý mechanizmus na jedno použitie.
+
+Body 3, 4 a 7 sú tiež pravda o stave, ale menia dokumentáciu alebo nič:
+7 je prepis troch čísel, 3 a 4 menia to, čo sa o `notes` a `last_error` smie
+tvrdiť. Ani jedno z toho nie je dôvod odkladať #188.
 
 ---
 
