@@ -7591,6 +7591,34 @@ nerestartuje, a práve to #188 odkladá na koniec behu. Tento walk teda nechrán
 chráni ten ďalší. Zvyšok odstavca vyššie (medium, nie high; strata je čas, nie
 dáta) platí naďalej.
 
+**Odklad nasadenia na koniec behu má druhý dôvod, a ten je meraný 19. 9. 2026.**
+`unstorable_ids` je lokálny zoznam v `fetch_ruz_data.py` a do `notes` sa
+zapisuje **raz, po `progress.complete()`**, nie po segmentoch — takže bežiaci
+walk ho celý drží v pamäti. Walk #46 ich má 66 a všetky sú z jednej cesty:
+`docker logs cistafirma_celery_ruz --since 48h | grep -c "Unstorable record ID"`
+= 66, `grep -c "duplicate key"` = 66, `grep -c "Error processing company ID"` = 0,
+`total_errors` = 66 — teda samé kolízie na `Companies and SZCO_ICO_key`, žiadna
+iná chyba. `notes` je prázdne nie preto, že by diery neboli, ale preto, že ich
+zoznam ešte čaká na koniec behu.
+
+To je však všetko, čo sa z tej vety dá vyčítať: tú istú hlášku má v tomto repe
+**dva nezávislé pôvody** — kolíziu podľa návrhu (#83: register vydá jedno IČO
+pre dva subjekty, okno ide ďalej) a get-then-create race v `update_or_create`
+z vláknového poolu (§11.7). Oddeľuje ich otázka na dáta, nie na log: existuje to
+IČO už pod **iným** RUZ ID? Pre jednu z tých 66 je odpoveď zmeraná — RUZ 324678
+kolidoval na IČO 42061628, ktoré tabuľka držala pod RUZ 1754002, teda #83. Pre
+zvyšok nezmerané, a práve preto je zoznam v `notes` dôležitý: trieda, ktorá je
+diera na backfill, sa od triedy, ktorá je podľa návrhu, líši len dátami.
+
+Reštart workera (čo je #188) ten beh preruší. Zoznam v pamäti zmizne a obnovený
+segment začne s prázdnym; `total_errors` na riadku ostane 66, ale bez identity.
+Nie je to kópia *jediná* — tie ID sú aj v logu kontajnera (`Unstorable record
+ID <id>`, na stderr), lenže `docker compose up -d --build` kontajner
+**rekreuje** a jeho log zmizne spolu s ním — čo je presne ten krok, ktorým #188
+nasadenie robí. Po nasadení pred koncom walku teda z tých 66 zostane len číslo.
+(Oprava (6) nemení, kedy sa zoznam zapisuje; mení len to, že ho ďalší segment
+prepíše namiesto pripojenia.)
+
 **Overené mnou, z kódu aj živého stavu — Focus Mode vypne watchdog a keeper
 potom čaká navždy.** `ruz_full_keeper_decision` vracia pri `queued`/`running`
 **vždy** `wait` a celý prechod na `failed` necháva na `detect_stuck_sync_jobs`
