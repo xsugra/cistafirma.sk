@@ -15,11 +15,23 @@ logger = logging.getLogger(__name__)
 
 # Dotted task paths, ktoré majú naďalej bežať aj počas focus mode.
 # Pozor: musí ísť o presný `name` ktorý Celery vidí (dotted path k @shared_task).
+#
+# `detect_stuck_sync_jobs` je tu z iného dôvodu než tie štyri: tie sa držia
+# preto, že ich práca je rozpracovaná. Tento nevyrába dáta vôbec -- je to
+# jediný vlastník prechodu `running` -> `failed`, a `ruz_full_keeper_decision`
+# mu ho výslovne prenecháva (pri `queued`/`running` vracia "wait" a nič
+# nepretrhne, aby ten prechod nemal dvoch vlastníkov). Focus Mode vypína každý
+# `PeriodicTask` mimo tohto zoznamu, takže bez neho by vstup do Focus Mode
+# odstránil to jediné, čo dokáže ukončiť walk, ktorému zomrel worker -- keeper
+# by naň čakal navždy a prerušený import by vyzeral presne ako pokojný.
+# Je to poistka, ktorá stráži náš vlastný stav, nie práca proti cudziemu
+# serveru, takže pauzu prečkať nemá.
 FOCUS_KEEP_TASKS: frozenset[str] = frozenset({
     "registers.tasks.sync_company_orsr_data",
     "registers.tasks.schedule_missing_orsr_sync",
     "registers.tasks.sync_company_financials_from_ruz",
     "registers.tasks.schedule_ruz_financials_sync",
+    "registers.tasks.detect_stuck_sync_jobs",
 })
 
 # Queues kde keep-tasky bežia. Konstanty zostávajú dostupné pre read-only
