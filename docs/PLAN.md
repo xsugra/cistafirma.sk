@@ -7942,8 +7942,12 @@ Nález nevzišiel z auditu, ale z jedného riadku `make ops-check`:
 | 2026-09-21 | 4 | **FAIL** |
 | 2026-09-27 (ďalšia nedeľa) | 10 | **FAIL**, ak dovtedy neprebehne nový inkrementál |
 
-Walk má ETA ~2026-09-23. Týždenná brána (`sk.cistafirma.backup.timer`, nedeľa
-03:17) teda 20. 9. prejde a 27. 9. by spadla len keby walk prekročil 26. 9.
+Walk má ETA **~2026-09-24 skoro ráno CEST** — §11.12 ju odvodzuje z overeného
+stropu id priestoru 2 624 307 a nameraného tempa a druhá vzorka to potvrdzuje
+(19. 9. 10:24 UTC, kurzor 372 200, tempo ~20 000/h). Je to *skorší* okraj, nie
+sľub: zdroj môže mať medzitým id vyššie. Týždenná brána
+(`sk.cistafirma.backup.timer`, nedeľa 03:17) teda 20. 9. prejde a 27. 9. by
+spadla len keby walk prekročil 26. 9.
 Falošný FAIL ale nastane na **každom manuálnom `make ops-check` od 21. 9. do
 konca walku** — a to je presne to čítanie, ktorému má brána slúžiť. Zelená
 brána, ktorá po dva dni hlási poruchu, ktorá neexistuje, učí ľudí ignorovať
