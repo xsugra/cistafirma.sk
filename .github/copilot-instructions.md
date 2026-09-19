@@ -72,7 +72,7 @@ owner approval and must be removed once the disk is encrypted.
 ### Pre-push checks
 
 ```bash
-make docs-audit                              # Validate Markdown link integrity
+make docs-audit                              # Validate Markdown links + inline citations
 helm lint deploy/helm/cistafirma             # Validate Helm chart syntax
 ```
 
@@ -91,7 +91,7 @@ Django 6 REST API (localhost:8000)
     ↓
 PostgreSQL (production) / SQLite (local)
     ├── Redis broker/backend
-    │   ├── Celery Workers (3 queues: high_priority, low_priority, default)
+    │   ├── Celery Workers (5 queues: ruz_full, orsr, financials, insurance, celery)
     │   └── Celery Beat (periodic task scheduler)
     │
 External Data Sources:
@@ -115,17 +115,17 @@ External Data Sources:
 | `api` | Shared/cross-app endpoints | (ViewSets, serializers) |
 
 **Key config files:**
-- `backend/backend/settings.py` – Django settings, installed apps, middleware
-- `backend/backend/celery.py` – Celery config, queue definitions
+- `backend/backend/settings.py` – Django settings, installed apps, middleware, **Celery queue definitions** (`CELERY_TASK_QUEUES` / `CELERY_TASK_ROUTES`)
+- `backend/backend/celery.py` – Celery app wiring (the queues themselves are in `settings.py`)
 - `backend/backend/urls.py` – Root URL routing
 
 ### Frontend Architecture
 
 **React 19 + TypeScript + Vite SPA:**
 
-- `frontend/src/services/` – API client layer (fetch wrappers for backend endpoints)
-- `frontend/src/types.ts` – Shared TypeScript types mirroring backend API contracts
-- `frontend/src/` – React components and pages
+- `frontend/lib/apiClient.ts` + `frontend/api.ts` – API client layer (fetch wrappers for backend endpoints)
+- `frontend/types.ts` – Shared TypeScript types mirroring backend API contracts
+- `frontend/` – React components and pages (**there is no `frontend/src/`** — sources live directly under `frontend/`)
 - **Routing:** React Router 7 (`createBrowserRouter`)
 
 ### Data Flow
@@ -157,12 +157,19 @@ External Data Sources:
 
 ### CI/CD (GitLab)
 
-Pipeline stages: `validate` → `test` → `build` → `deploy`
+Pipeline stages: `validate` → `test`, and that is all.
 
-- **Validate:** backend compile check, frontend build, Helm render + K8s dry-run
-- **Test:** Django test suite runs
-- **Build:** backend + frontend Docker images built/pushed to registry
-- **Deploy:** auto-deploy from `dev` branch; manual prod deploy from `v*.*.*` tags
+- **Validate:** backend compile check (`compileall`), frontend build, Markdown +
+  inline-citation audits, Helm lint/render + rendered-manifest runtime check
+- **Test:** Django test suite (against Postgres + Redis service containers),
+  frontend Vitest + typecheck
+
+There is **no `build` stage and no `deploy` stage**: nothing consumes registry
+images (production builds from source on `dell`), and the K8s deploy job could
+never pass because no cluster exists. Both were removed on 2026-09-15 — the
+reasoning is preserved in the comment at the end of `.gitlab-ci.yml`.
+Deploy is a **manual** step on `dell` (`git pull gitlab-home <branch>` +
+`docker compose up -d --build` + `migrate`).
 
 See `.gitlab-ci.yml` and `docs/DEVOPS_CICD.md` for details.
 
@@ -172,8 +179,12 @@ See `.gitlab-ci.yml` and `docs/DEVOPS_CICD.md` for details.
 
 - Feature work: `feature/<scope>-<name>` (e.g., `feature/auth-oauth-integration`)
 - Urgent fixes: `hotfix/<scope>-<name>`
-- Integration: merge to `dev`
-- Production releases: tag as `vX.Y.Z` (e.g., `v1.2.3`)
+- **Integration branch is `main`.** A `dev` branch exists but is dormant: its
+  last commit is 2026-05-20 and `main` has run ~457 commits ahead of it since.
+  Do not treat `dev` as a merge target.
+- **Release tags are not in use.** The repo has no tags at all and production
+  deploys from `main` by hand, so `vX.Y.Z` describes an intent rather than a
+  step anyone performs. Name a branch after the work, not a version.
 
 ### Commit Messages
 
@@ -238,8 +249,8 @@ Critical docs (read before major changes):
 - Auth: SimpleJWT (validate token in request headers)
 
 **Frontend components:**
-- API calls: `frontend/src/services/api.ts` (centralized fetch layer)
-- Types: `frontend/src/types.ts` (sync with backend models/serializers)
+- API calls: `frontend/api.ts` plus the JWT-aware `frontend/lib/apiClient.ts` (centralized fetch layer)
+- Types: `frontend/types.ts` (sync with backend models/serializers)
 - Pages/components: organized by feature, use React Router hooks (`useParams`, `useLocation`)
 
 ### Testing Tips
@@ -258,7 +269,7 @@ Critical docs (read before major changes):
 **Frontend not updating:**
 - Clear browser cache or use hard refresh (`Cmd+Shift+R`)
 - Check browser console for errors and network tab for API response status
-- Verify API endpoint in `frontend/src/services/api.ts`
+- Verify API endpoint in `frontend/api.ts`
 
 ## Pre-Push Workflow
 

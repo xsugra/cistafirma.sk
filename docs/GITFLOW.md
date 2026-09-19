@@ -6,8 +6,12 @@ Tento dokument popisuje workflow, vetvy, commit konvencie a povinný štandard p
 
 - Feature práce rob na vetvách `feature/<scope>-<name>`.
 - Urgentné opravy na `hotfix/<scope>-<name>`.
-- Integrácia prebieha do `dev`.
-- Produkčné releasy idú cez tagy `vX.Y.Z`.
+- **Integračná vetva je `main`.** Vetva `dev` existuje, ale je nečinná — jej
+  posledný commit je z 20. 5. 2026 a `main` je odvtedy o ~457 commitov pred ňou.
+  Za merge cieľ ju nepovažuj.
+- **Release tagy sa nepoužívajú.** Repo nemá ani jeden tag a produkcia sa
+  nasadzuje z `main` ručne, takže `vX.Y.Z` popisuje zámer, nie krok, ktorý
+  niekto vykonáva.
 
 ## 2. Povinný štandard pre každý MR
 
