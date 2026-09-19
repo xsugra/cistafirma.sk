@@ -137,15 +137,40 @@ class SyncJobViewSet(viewsets.ReadOnlyModelViewSet):
         *those* is a real feature and a different one -- for `insurance_batch`
         it would mean re-running tens of thousands of companies that the source
         has already refused -- so it is not being introduced here by a rename.
+
+        RUZ job types go through `enqueue_ruz_job`, not `enqueue_job`. That is
+        not a preference: a RUZ job is claimed by `claim_ruz_job`, which filters
+        on `concurrency_key="ruz:global"`, and `enqueue_job` leaves that column
+        at its `""` default. A row enqueued that way can never be claimed, so
+        this endpoint used to create a job that silently never ran and stayed
+        `queued` for ever -- and because `cancel` refuses RUZ types, nothing in
+        the UI could clear it. `create()` already branches on `RUZ_JOB_TYPES`
+        for the same reason; this is that branch, mirrored.
         """
         job = self.get_object()
-        new_job = sync_engine.enqueue_job(
-            job_type=job.job_type,
-            parameters={**(job.parameters or {})},
-            triggered_by_id=request.user.id,
-            triggered_via="admin_ui",
-            notes=f"Re-run of job #{job.pk} ({job.job_type})",
-        )
+        if job.job_type in sync_engine.RUZ_JOB_TYPES:
+            new_job, created = sync_engine.enqueue_ruz_job(
+                job_type=job.job_type,
+                parameters={**(job.parameters or {})},
+                triggered_by_id=request.user.id,
+                triggered_via="admin_ui",
+                notes=f"Re-run of job #{job.pk} ({job.job_type})",
+            )
+            if not created:
+                # Another RUZ job holds the global slot. Handing it back is the
+                # honest answer to "retry this one": a RUZ run cannot start
+                # beside it, so the active job is the only thing that will.
+                return Response(
+                    SyncJobSerializer(new_job).data, status=status.HTTP_200_OK
+                )
+        else:
+            new_job = sync_engine.enqueue_job(
+                job_type=job.job_type,
+                parameters={**(job.parameters or {})},
+                triggered_by_id=request.user.id,
+                triggered_via="admin_ui",
+                notes=f"Re-run of job #{job.pk} ({job.job_type})",
+            )
         try:
             _dispatch_job(new_job)
         except Exception as exc:
