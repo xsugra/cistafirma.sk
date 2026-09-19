@@ -7750,24 +7750,49 @@ tvrdili — a aby bolo vidieť, že „agent to povedal" nie je dôkaz.
 Body 8 a 9 sú overené (9. je aj opravený); bod 8 je napriek tomu kozmetika logu.
 Zvyšok, body 1–7, je overený vyššie: **pravda sú 2, 5, 6, 7**, body 1, 3 a 4 sú
 vyvrátené (3 a 4 v premise, ale s horším zvyškom, ktorý je nižšie pomenovaný).
-Diagnóza je teda hotová a **žiadna z tých opráv nie je urobená** — z bodov 2, 5
-a 6 vyplývajú tri zmeny, každá malá a každá s vlastným testom:
+Diagnóza je hotová a **všetky štyri opravy sú urobené** — z bodov 2, 5 a 6
+vyplývali tri zmeny v kóde, bod 7 bol prepis troch čísel:
 
-- **(2) okno brány merať od zlyhania, nie od zaradenia.** `sync_health.py`
-  filtruje `queued_at__gte=cutoff`; pre päťdňový walk je to po 24 h mŕtva
-  podmienka. Okno patrí na `completed_at` (ktorý je pri terminálnom riadku vždy
-  nastavený), inak brána nevidí práve ten beh, kvôli ktorému existuje.
-  A docstring na `:32-34` treba prepísať — jeho meranie z 2026-09-10 už neplatí.
-- **(5) guard do `trigger_full_sync_from_id_view`** a v `start_full_ruz_sync_from_id`
-  presunúť zápis do progress riadku **za** získanie slotu: dnes sa kurzor a stav
-  živej behu prepíšu pred ním. Guard je vo všetkých susedných view už teraz;
-  chýba len tu, kde je škoda najväčšia.
-- **(6) `notes` pripájať, nie prepisovať** (`+=` ako v `pause()`), aby ledger
-  dier prežil obnovenie segmentu — inak je celý mechanizmus na jedno použitie.
+- **(2) okno brány od konca behu, nie od zaradenia** — hotové v `9e43e75`.
+  Filter je `Q(completed_at__gte=cutoff) | Q(completed_at__isnull=True)`;
+  druhá polovica je nutná, inak by päťdňový walk z brány vypadol úplne a
+  „najnovším pokusom" typu `ruz_full` by bol naposledy zaradený krátky beh.
+  Riziko, ktoré prináša — starý `running` riadok je v beat sekcii vždy a jeho
+  status je OK — pinuje test, že ho stále failuje podmienka o heartbeat.
+  Docstring na `:32-34` je prepísaný: meranie z 2026-09-10 („práve jeden typ")
+  je zastarané a `triggered_via='beat_schedule'` **neznamená** „bezobslužný" —
+  `_run_ruz_command` ho dáva každému jobu, ktorý sám zaradí, a to sú aj tlačidlá
+  v Django admine. Namerané 19. 9. 2026 sú v použití tri hodnoty: `beat_schedule`
+  (beat, keeper, tlačidlá v Django admine, opravy), `admin_ui` (DRF admin API
+  a legacy endpointy v `registers/views.py`, ktoré si riadok zaradia samy a id
+  si odovzdajú, takže stamp prežije) a `cli`. Filter teda tie dve naozaj
+  operátorské cesty vylučuje; nerozlišuje však beh spustený tlačidlom v Django
+  admine od naozaj bezobslužného. Ostáva, ale FAIL na type spustenom odtiaľto je
+  „beh, ktorý nikto nenahradil", nie „beh, na ktorý sa nikto nepozeral" —
+  zúženie by znamenalo dať tlačidlám čestný trigger, čo je zmena dispatch cesty.
+- **(5) guard a poradie zápisu kurzora** — hotové v `be33950`. Guard dostali
+  **tri** tlačidlá, nie jedno: `full`, `full-from-id` aj `incremental` boli
+  jediné RUZ akcie v `admin.py` bez `_live_ruz_job()`, hoci všetky tri radia
+  príkaz, ktorý slot zaberá — a všetky tri hlásili „bol naplanovany" o behu,
+  ktorý sa nikdy nespustí. Parkovanie kurzora sa presunulo do nového
+  `before_command` v `_run_ruz_command`, ktorý beží až po získaní slotu
+  a vnútri `try` (zlyhanie označí job `failed` s dôvodom, nie `running` pre
+  watchdog). Sedem testov; štyri z nich padajú na starej podobe — jeden na
+  `1999999 != 349100`, teda na kurzor živej behu posunutý dopredu.
+- **(6) `notes` pripája, nie prepisuje** — hotové v `caf1188`. `append_notes`
+  drží strop `NOTES_KEEP_BLOCKS = 20` a odstránenie **pomenúva** („… N starších
+  blokov odstránených"); značka sa pri ďalšom pripojení číta, takže číslo je
+  kumulatívne a skutočné, nie per-segmentové a o jedna nafúknuté. `pause()`
+  píše na začiatok ďalej; jej riadok sa spája s prvým blokom jedným `\n`, takže
+  ak prvým blokom bola značka, jej číslo sa pri pauze stráca — strata presnosti
+  v čísle, nie v ledgeri.
+- **(7) tri čísla „~35 minút" → „~45–50 minút"** — hotové v `2843136`
+  (`PLAN.md:7069`, `:7403`, `:7420`).
 
-Body 3, 4 a 7 sú tiež pravda o stave, ale menia dokumentáciu alebo nič:
-7 je prepis troch čísel, 3 a 4 menia to, čo sa o `notes` a `last_error` smie
-tvrdiť. Ani jedno z toho nie je dôvod odkladať #188.
+Bod 8 (heartbeat v UTC vedľa CEST v journali) zostáva ako kozmetika logu;
+body 3 a 4 menia to, čo sa o `notes` a `last_error` smie tvrdiť — bod 3 je
+navyše dôvod, prečo musí byť `notes` čitateľné po celý beh, nie len na konci.
+Ani jedno z toho nie je dôvod odkladať #188; všetky štyri opravy idú s ním.
 
 ---
 
