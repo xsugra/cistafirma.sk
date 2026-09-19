@@ -7949,6 +7949,13 @@ konca walku** — a to je presne to čítanie, ktorému má brána slúžiť. Ze
 brána, ktorá po dva dni hlási poruchu, ktorá neexistuje, učí ľudí ignorovať
 červenú; to je tá istá trieda chyby, akou bolo 11. 9. mŕtve CI.
 
+> **Oprava účinkuje až na `dell`.** Táto zmena ide do produkcie s #188 (deploy
+> je odložený na koniec walku), takže kým sa tak nestane, manuálny
+> `make ops-check` na `dell` môže ten falošný FAIL ešte ukázať — a je to
+> očakávané, nie regresia. Plánovač to nezasiahne: najbližší beh je
+> **2026-09-20 03:17 CEST**, kedy je vek 3 a `3 > 3` je nepravda; ďalší
+> (27. 9.) už walk bude za sebou a okno posunú naakumulované inkrementály.
+
 **Prečo je to falošný FAIL a nie skutočný.** Okno sa nemá ako pohnúť, lebo
 počas walku nebeží žiadny inkrementálny beh — a to nie je porucha, ale dôvod,
 prečo bol walk spustený. `fetch_ruz_data` číta všetko od `2000-01-01`, teda
