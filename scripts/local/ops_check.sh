@@ -44,6 +44,26 @@ API_TIMEOUT="${CISTAFIRMA_API_TIMEOUT:-10}"
 LABEL="sk.cistafirma.backup"
 OUT_LOG="$(log_dir)/backup.out.log"
 
+# The RUZ keeper's systemd user timer. A second label rather than the same one:
+# the two jobs are installed by different scripts, fire on different clocks
+# (weekly against every five minutes) and are judged by different sections
+# below, so sharing a name would only make them look like one control.
+#
+# How long a gap between keeper ticks is still "it is running". The timer fires
+# every five minutes (`OnCalendar=*:0/5`, `AccuracySec=30s`), so this is six
+# missed ticks -- the same order of tolerance `RUN_GAP_MAX_DAYS` gives the
+# weekly job. It has to stay comfortably above the worst legitimate gap, which
+# is a tick that is itself slow plus the accuracy window, or the gate reddens
+# on a healthy keeper and gets ignored.
+#
+# One limit covers two readings, and deliberately so: a keeper whose last tick
+# is older than this, and a keeper that has never ticked at all and was
+# installed longer ago than this. Both mean the same thing -- nothing has
+# restarted the walk within a window this control exists to bound -- so giving
+# the second a wider tolerance than the first would be a hole, not leniency.
+KEEPER_LABEL="sk.cistafirma.ruz-keeper"
+KEEPER_STALE_MINUTES="${CISTAFIRMA_KEEPER_STALE_MINUTES:-30}"
+
 failures=0
 warnings=0
 
@@ -368,6 +388,249 @@ if docker compose ps --status running --services 2>/dev/null | grep -qx 'backend
 else
     bad "the backend is not running, so no sync job can be judged"
 fi
+
+# --- RUZ keeper ----------------------------------------------------------
+# The section above reads the `SyncJob` row, so it answers "is a running import
+# really running". It cannot answer "is anything left that would restart one",
+# and on this host nothing else does: the keeper is a systemd *user* timer, not
+# a Celery beat entry (deliberately -- it recovers a stack Celery is already in,
+# so it must not depend on Celery still dispatching), which puts it outside
+# every check in this file. The weekly backup timer *is* checked, and the
+# keeper is the same kind of control with a much shorter deadline: it is what
+# turns a died walk into a walk that resumes five minutes later instead of a
+# walk nobody notices died.
+#
+# A stopped keeper is indistinguishable from a finished walk by every other
+# signal here -- the queue drains, `sync_health` sees no active job, the API
+# answers -- which is exactly the shape this gate exists to refuse.
+section "RUZ keeper"
+
+ruz_keeper_systemd() {
+    local unit_dir timer_unit service_unit
+    local timer_out timer_rc service_out service_rc
+    local load unitfile active last last_raw linger
+    local result status installed_minutes stamp_kind
+    local now_epoch trigger_epoch stale_minutes
+
+    unit_dir=$(scheduler_unit_dir)
+    timer_unit="$unit_dir/$KEEPER_LABEL.timer"
+    service_unit="$unit_dir/$KEEPER_LABEL.service"
+
+    if [ ! -f "$timer_unit" ]; then
+        bad "the RUZ keeper timer is not installed (run: scripts/local/install_ruz_keeper.sh)"
+        return 0
+    fi
+
+    ok "the RUZ keeper timer unit is installed"
+
+    if [ ! -f "$service_unit" ]; then
+        bad "the keeper timer is installed but its service unit is missing: $service_unit"
+        return 0
+    fi
+
+    # Captured in one call, not piped, for the same reason the weekly check
+    # captures: a filter that exits early can SIGPIPE the producer and abort the
+    # gate mid-report under `pipefail`.
+    #
+    # `--timestamp=unix` is asked for deliberately, and only here. It turns
+    # `LastTriggerUSec` into a plain epoch (`@1789807202`) instead of a
+    # localized date string (`Sat 2026-09-19 10:40:02 CEST`). The staleness
+    # check below is the one place in this file that has to do arithmetic on a
+    # timestamp, and parsing a locale- and timezone-dependent string is how a
+    # control quietly reads a healthy keeper as stale on a host whose locale
+    # differs -- the same class of mistake as comparing a UTC log against a
+    # CEST clock. The flag needs systemd >= 247 (measured on dell: 259.5); an
+    # older systemd does not degrade to "fine", it is reported as unreadable
+    # below, which is the same fail-closed direction as everything else here.
+    set +e
+    timer_out=$(systemctl --user show \
+        -p LoadState -p UnitFileState -p ActiveState \
+        -p LastTriggerUSec --timestamp=unix \
+        "$KEEPER_LABEL.timer" 2>&1)
+    timer_rc=$?
+    set -e
+
+    if [ "$timer_rc" -ne 0 ]; then
+        # Fail closed. An unreachable user manager is precisely what a timer
+        # installed from a session that no longer exists looks like, and it is
+        # also what the keeper looks like after a logout with lingering off.
+        bad "the keeper timer is installed but 'systemctl --user' cannot report on it (is a user manager running?)"
+        return 0
+    fi
+
+    load=$(printf '%s\n' "$timer_out" | sed -n 's/^LoadState=//p' | tail -n 1)
+    unitfile=$(printf '%s\n' "$timer_out" | sed -n 's/^UnitFileState=//p' | tail -n 1)
+    active=$(printf '%s\n' "$timer_out" | sed -n 's/^ActiveState=//p' | tail -n 1)
+
+    # The `@` is stripped here rather than in the `sed` on purpose, and the
+    # difference is the whole point of the `unreadable` verdict below. Matching
+    # `^LastTriggerUSec=@` in the filter would print only a properly epoch-
+    # formatted line and silently drop the raw date string an older systemd
+    # returns -- leaving an EMPTY value, which is indistinguishable from
+    # `n/a`, which means "never fired". The check would then report the wrong
+    # cause for the one case it cannot exercise on a modern host. Capture the
+    # line whatever it holds; classify it afterwards.
+    last_raw=$(printf '%s\n' "$timer_out" | sed -n 's/^LastTriggerUSec=//p' | tail -n 1)
+    case "$last_raw" in
+        '@'*) last="${last_raw#@}" ;;
+        *) last="$last_raw" ;;
+    esac
+
+    if [ "$load" != "loaded" ]; then
+        bad "the keeper timer unit is not loaded (re-run: scripts/local/install_ruz_keeper.sh)"
+        return 0
+    fi
+
+    # Linger first among the "will it still be here tomorrow" facts, because it
+    # is the one that fails without any visible symptom: with lingering off, the
+    # timer goes on reading `active` and `enabled` in the session that installed
+    # it, and stops the moment that session ends -- and it does not come back at
+    # boot, since the user manager that would start it is not running. The
+    # installer refuses to install without lingering; this is the same refusal
+    # re-checked on a host that was installed correctly and has drifted since.
+    if command -v loginctl >/dev/null 2>&1; then
+        linger=$(loginctl show-user "${USER:-$(id -un)}" -p Linger --value 2>/dev/null || true)
+        if [ "$linger" != "yes" ]; then
+            bad "lingering is off for ${USER:-$(id -un)}, so the keeper stops at logout and does not start at boot (sudo loginctl enable-linger ${USER:-$(id -un)})"
+            return 0
+        fi
+    else
+        # No loginctl is not evidence of lingering, and the whole point of the
+        # check is the case where the answer is invisible.
+        bad "loginctl is not available, so it cannot be confirmed that the keeper survives logout"
+        return 0
+    fi
+    ok "lingering is on, so the keeper survives logout and starts at boot"
+
+    if [ "$unitfile" != "enabled" ] && [ "$unitfile" != "enabled-runtime" ]; then
+        bad "the keeper timer is installed but not enabled (re-run: scripts/local/install_ruz_keeper.sh)"
+        return 0
+    fi
+    if [ "$active" != "active" ]; then
+        bad "the keeper timer is enabled but not active -- nothing is scheduled (re-run: scripts/local/install_ruz_keeper.sh)"
+        return 0
+    fi
+    ok "the keeper timer is enabled and active"
+
+    now_epoch=$(date -u +%s)
+
+    # Three readings, not two, because "systemd did not tell me" and "systemd
+    # told me it never ran" are different facts and only one of them is about
+    # the keeper. A gate that names the wrong cause is worse than one that names
+    # none -- it sends the reader to the installer for a problem the installer
+    # cannot fix.
+    #
+    # The stub sweep caught this twice, and the second time is the one worth
+    # remembering: fixing the classification below was not enough, because the
+    # collapse had happened one step earlier, in the `sed` that produced `$last`
+    # (see the extraction above). A verdict is only as honest as the value it is
+    # handed -- when a branch reports the wrong cause, check what it was given
+    # before rewriting what it concludes. Hence the three arms here *and* the
+    # unconditional capture above; either one alone still lies.
+    case "$last" in
+        n/a | '') stamp_kind="never" ;;
+        *[!0-9]*) stamp_kind="unreadable" ;;
+        *) stamp_kind="readable" ;;
+    esac
+
+    if [ "$stamp_kind" = "unreadable" ]; then
+        bad "the keeper's last-trigger stamp is not a machine-readable time (LastTriggerUSec=${last:-<empty>}); the --timestamp=unix this check asks for needs systemd >= 247"
+        return 0
+    fi
+
+    if [ "$stamp_kind" = "never" ]; then
+        # Never fired. A keeper installed minutes ago legitimately has no tick
+        # behind it yet (`Persistent=true` fires the first one at the next
+        # five-minute mark), so the verdict is drawn from how long the unit has
+        # existed -- that is the one moment `warn` is the honest word.
+        #
+        # Minutes, not days. This read `age_days` first, which makes the
+        # tolerance a whole day wide and the message wrong in both directions:
+        # dell's keeper had been installed ~15 hours when this was measured, so
+        # the day-granularity reading was 0 and it reported "installed today --
+        # its first tick is still pending" about a timer that fires every five
+        # minutes and had not fired once. A keeper silent for fifteen hours is
+        # not pending, it is broken, and the gate was calling it pending. The
+        # same limit as the staleness check above: if "no tick in N minutes" is
+        # failure for a running keeper, it is failure for one that has never
+        # ticked at all.
+        #
+        # The weekly job's equivalent branch below keeps `age_days`, and that is
+        # not an inconsistency to tidy up: its tolerance is `RUN_GAP_MAX_DAYS`,
+        # so days is its native unit. The unit follows the tolerance, not the
+        # other way round.
+        installed_minutes=$(age_minutes "$timer_unit")
+        if [ "$installed_minutes" -lt 0 ]; then
+            bad "the keeper has never fired and its install time is unreadable"
+        elif [ "$installed_minutes" -gt "$KEEPER_STALE_MINUTES" ]; then
+            bad "the keeper timer has never fired although it was installed ${installed_minutes} minute(s) ago"
+        else
+            warn "the keeper timer has not fired yet (installed ${installed_minutes} minute(s) ago) -- its first tick is still pending"
+        fi
+        return 0
+    fi
+
+    trigger_epoch="$last"
+    if [ "$trigger_epoch" -gt "$now_epoch" ]; then
+        # A stamp in the future would make the subtraction below negative and
+        # sail straight through the limit comparison, reporting the worst
+        # possible reading as the best one.
+        bad "the keeper's last-trigger stamp is in the future (${trigger_epoch} > ${now_epoch}); the clock or the unit's record cannot be trusted"
+        return 0
+    fi
+
+    stale_minutes=$(( (now_epoch - trigger_epoch) / 60 ))
+    printf '  last tick        : %s minute(s) ago\n' "$stale_minutes"
+
+    if [ "$stale_minutes" -gt "$KEEPER_STALE_MINUTES" ]; then
+        bad "the keeper last fired ${stale_minutes} minute(s) ago (limit ${KEEPER_STALE_MINUTES}) although it fires every 5 -- the walk is unguarded"
+        return 0
+    fi
+    ok "the keeper timer is firing (last tick ${stale_minutes} minute(s) ago)"
+
+    # A timer that fires and a tick that *works* are two different facts, and
+    # the trigger stamp above moves for both -- it records that the unit was
+    # activated, not that it succeeded. Without this, a keeper whose every tick
+    # fails (docker no longer reachable by this user, the backend container
+    # stopped, the database unreachable) reports "firing every 5 minutes" for as
+    # long as it stays installed. That is the failure this whole mechanism
+    # exists to end, so it is the one this check must not share.
+    set +e
+    service_out=$(systemctl --user show -p Result -p ExecMainStatus "$KEEPER_LABEL.service" 2>&1)
+    service_rc=$?
+    set -e
+
+    if [ "$service_rc" -ne 0 ]; then
+        bad "the keeper timer is firing but 'systemctl --user' cannot report on its last tick"
+        return 0
+    fi
+
+    result=$(printf '%s\n' "$service_out" | sed -n 's/^Result=//p' | tail -n 1)
+    status=$(printf '%s\n' "$service_out" | sed -n 's/^ExecMainStatus=//p' | tail -n 1)
+
+    if [ -z "$result" ]; then
+        bad "the keeper's last tick reported no result"
+        return 0
+    fi
+
+    if [ "$result" != "success" ]; then
+        bad "the keeper's last tick did not succeed (Result=$result, exit=${status:-unreadable}) -- a tick failing every 5 minutes looks exactly like a walk with nothing to do"
+        return 0
+    fi
+    ok "the keeper's last tick succeeded"
+}
+
+case "$CISTAFIRMA_OS" in
+    linux) ruz_keeper_systemd ;;
+    # Not a failure, and not an OK either: this is the one platform where the
+    # keeper is deliberately absent, because it dispatches Celery tasks at
+    # whatever stack happens to be running and production is `dell`. Counting
+    # it as unmet would put a permanent failure in the gate on a developer
+    # machine -- the "gate everyone learns to ignore" shape the header warns
+    # about. The installer refuses on macOS for the same reason.
+    macos) printf '  RUZ keeper       : not applicable on macOS (Linux-only; it belongs on dell)\n' ;;
+    *) bad "no RUZ keeper check exists for platform '$CISTAFIRMA_OS'" ;;
+esac
 
 # --- backup and off-site controls ---------------------------------------
 section "Backup and off-site controls"

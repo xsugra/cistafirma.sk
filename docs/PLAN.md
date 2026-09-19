@@ -7631,11 +7631,46 @@ kto na nich chce stavať, musí najprv overiť, či existujú:
 8. Keeperove riadky v journali tlačia `last_heartbeat` v UTC vedľa CEST časových
    značiek journald, takže 6 s starý heartbeat sa číta ako dve hodiny starý.
 9. `ops_check.sh` overuje týždenný backup timer, ale keeper timer ním nekontroluje
-   ani jednou — hoci päťdňový mandát stojí práve na ňom.
+   ani jednou — hoci päťdňový mandát stojí práve na ňom. **Overené 19. 9. 2026:
+   pravda** (`grep -n 'keeper' scripts/local/ops_check.sh` nenašiel nič, kým
+   `weekly_job_systemd` kontroluje backup timer). Doplnené tou istou cestou:
+   sekcia „RUZ keeper" overuje inštaláciu oboch unitov, `Linger` (bez neho user
+   manager po reštarte nenabehne a timer sa dovtedy tvári ako `active`),
+   `enabled`, `active`, vek posledného ticku (limit 30 min) a `Result`
+   posledného ticku. Ten posledný údaj je podstatný a nie je to duplicita:
+   pečiatka posledného triggeru sa pohne **aj pri ticku, ktorý zlyhal**, takže
+   bez `Result` by keeper, ktorému päť minút padá `docker compose exec`, hlásil
+   „beží každých päť minút" presne tak dlho, ako je nainštalovaný.
 
-Bod 8 je jediný, ktorý sa dá overiť jedným pohladením oka (a sedí: `hb_stale_s`
-je malé, kým časová značka vyzerá o dve hodiny inde), ale aj tak je to kozmetika
-logu. Zvyšok sú hypotézy.
+   **Prehodenie vetiev cez stub našlo v prvom návrhu ešte dve chyby, obe
+   v nemenovaní správnej príčiny** — a to je presne to, čo táto kontrola nesmie
+   robiť, lebo nesprávna príčina vyzerá akčne a pošle človeka preinštalovať
+   fungujúcu vec:
+
+   - **Rozpad dvoch faktov nastal v extrakcii, nie vo verdikte.** `sed -n
+     's/^LastTriggerUSec=@//p'` vypíše len riadok, ktorý sa naozaj začína
+     `LastTriggerUSec=@`; keď `--timestamp=unix` nič neurobí (systemd < 247),
+     hodnota je `Sat 2026-09-19 10:40:02 CEST`, výpis je **prázdny** a prázdno
+     sa mapovalo na „nikdy nebežal". Oprava `case` na tri vetvy to nevyriešila —
+     hodnota bola pokazená o krok skôr. Surová hodnota sa preto teraz číta bez
+     filtra a `@` sa strháva v shelli (`${last_raw#@}`); buď to jedna, alebo
+     druhá oprava samotná stále klame.
+   - **Verdikt „nikdy nebežal" mal denné rozlíšenie.** `age_days` vráti pri
+     čomkoľvek pod 24 h nulu, takže keeper nainštalovaný 15 hodín a ani raz
+     nespustený vyšel ako „nainštalovaný dnes — prvý tick ešte len čaká" a
+     prešel ako `warn`. To je obrátená chyba než tá prvá: nie falošný poplach,
+     ale **tichá zhovievavosť** voči presne tomu stavu, kvôli ktorému kontrola
+     existuje. Nový `age_minutes` v `lib/backup_time.sh` (ten istý python3
+     idiom, ten istý `-1` sentinel) ho porovnáva s tým istým
+     `KEEPER_STALE_MINUTES`; namerané na delle 30 min → `warn`, 31 min → `fail`.
+
+   Obe chyby prežili prvý beh stubu. Prvý beh ich odhalil len preto, že sa
+   púšťal každý scenár proti **skutočnému skriptu** — druhý preto, že sa pustil
+   znova po oprave. Vetvy, ktoré sa na zdravom hoste nedajú spustiť, sú zároveň
+   tie, ktoré nikdy nebežali ani raz.
+
+Body 8 a 9 sú teda overené (9. je aj opravený); bod 8 je napriek tomu kozmetika
+logu. Zvyšok, body 1–7, sú hypotézy.
 
 ---
 

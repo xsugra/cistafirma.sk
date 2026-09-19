@@ -148,8 +148,9 @@ make ops-check                                  # Every operational control, one
 
 `make ops-check` is the single read-only gate over the whole protection story
 (stack, database, queue depths, per-source scrape health, sync jobs, backups,
-off-site controls, drill record, whether the weekly job is still firing, and one
-live API request through the published frontend port). It starts no container and
+off-site controls, drill record, whether the weekly job is still firing, whether
+the RUZ keeper timer is still ticking, and one live API request through the
+published frontend port). It starts no container and
 writes nothing. The weekly job runs the same gate and, on failure, writes
 `~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
 non-zero. See `docs/DATA_PROTECTION.md` for the two deliberate asymmetries that

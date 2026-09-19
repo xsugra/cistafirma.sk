@@ -424,8 +424,9 @@ to record somewhere else.
 `make ops-check` answers one question in one command: is everything this
 document depends on actually working? It covers the stack, the database, Celery
 queue depths, active sync jobs, the local backup and its checksum, every
-off-site control, the drill record, whether the weekly job is still firing, and
-one live API request through the published frontend port. It is read-only — it
+off-site control, the drill record, whether the weekly job is still firing,
+whether the RUZ keeper timer is still ticking, and one live API request through
+the published frontend port. It is read-only — it
 starts no container and writes nothing — so it is safe to run at any time, and it
 exits non-zero when a control is unmet.
 
@@ -487,6 +488,26 @@ Two deliberate asymmetries keep that alert trustworthy:
   time — never an OK, because a manual run writes that line too. The strict
   verdict is not lost: the weekly run reaches the gate with a non-zero counter
   and is judged on the log alone.
+
+The RUZ keeper is asked the same "who says it fired?" question, in its own
+section, because it is a different mechanism: a systemd user timer of its own
+(`sk.cistafirma.ruz-keeper`), not the weekly job, and the only thing that
+restarts a full RUZ walk that has died. Two facts are read, and one is not
+enough. The first is the timer's last-trigger stamp — `LastTriggerUSec`, asked
+for with `--timestamp=unix` so that the age is arithmetic on an epoch rather than
+on a date string whose format follows the host's locale. The second is the
+result of the tick that stamp refers to, because **a stamp moves for a tick that
+failed**: without the second reading, a keeper whose every tick dies (docker no
+longer reachable by that user, the backend container stopped, the database
+unreachable) reports "firing every five minutes" for as long as it is installed.
+The staleness window is `CISTAFIRMA_KEEPER_STALE_MINUTES` (default 30 — six
+missed ticks), and it applies to a timer that has *never* fired as well: a keeper
+installed longer ago than the window and still without a single tick is not a
+first run that has not had its chance, it is the same failure, so it gets no
+wider grace than one that stopped. Checked before either is `loginctl` lingering,
+which is the version of this that has no symptom at all: with lingering off, the
+timer goes on reading `active` and `enabled` in the session that installed it,
+stops when that session ends, and does not start at boot.
 
 The gate does not read the off-site report's prose. `offsite_status.sh` publishes
 two summary lines of its own — `Off-site backup controls: N unmet` and

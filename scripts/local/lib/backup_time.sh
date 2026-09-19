@@ -22,6 +22,30 @@ print(int((time.time() - mtime) // 86400))
 PY
 }
 
+# Whole minutes since the file was last modified. Prints -1 for a missing file.
+#
+# The same reading as `age_days` at a finer unit, and it exists because days is
+# the wrong instrument for a control that fires every five minutes: `age_days`
+# returns 0 for anything under a day, so a keeper unit installed fifteen hours
+# ago and never fired is indistinguishable from one installed a minute ago.
+# That collapses "it has not had a chance yet" with "it is broken", and it is
+# the second of those this check is for.
+age_minutes() {
+    python3 - "$1" <<'PY'
+import os
+import sys
+import time
+
+try:
+    mtime = os.path.getmtime(sys.argv[1])
+except OSError:
+    print(-1)
+    raise SystemExit(0)
+
+print(int((time.time() - mtime) // 60))
+PY
+}
+
 # Whole days since an ISO-8601 timestamp. Prints -1 when it cannot be parsed,
 # so a caller can tell "old" from "unreadable" and fail closed on the latter.
 iso_age_days() {

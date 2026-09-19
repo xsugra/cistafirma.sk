@@ -14,11 +14,11 @@ replikácia, restore drilly, ops gate).
 | Adresár | Súborov | Čo tam je |
 |---|---|---|
 | `scripts/` | 6 | pre-push cleanup + generovanie favicon |
-| `scripts/docs/` | 1 | audit interných odkazov v markdown |
+| `scripts/docs/` | 2 | audit interných odkazov a citácií v markdown |
 | `scripts/k8s/` | 8 | K8s/Helm deploy — **nenasadené**, viď nižšie |
-| `scripts/local/` | 15 | zálohy, off-site, restore drilly, ops gate |
+| `scripts/local/` | 16 | zálohy, off-site, restore drilly, ops gate, RUZ keeper |
 | `scripts/local/lib/` | 6 | knižnica, ktorú `scripts/local/` zdiela |
-| `scripts/local/systemd/` | 2 | `.service` + `.timer` šablóny (Linux) |
+| `scripts/local/systemd/` | 4 | `.service` + `.timer` šablóny pre dva joby (Linux) |
 | `scripts/local/launchd/` | 1 | `.plist` šablóna (macOS) |
 
 **Väčšinu z toho nemusíš volať priamo** — `Makefile` a `CLAUDE.md` na ne majú
@@ -45,6 +45,7 @@ Toto je najdôležitejšia časť adresára a do 2026-09-18 nebola zdokumentovan
 | `gpg_backup_key.sh` | Práca s GPG kľúčom záloh |
 | `install_backup_schedule.sh` / `uninstall_backup_schedule.sh` | Inštalácia/odstránenie plánovača |
 | `backup_schedule_status.sh` | Či plánovač naozaj beží |
+| `install_ruz_keeper.sh` | Inštalácia **RUZ keepera** — systemd user timer, ktorý každých 5 min znovu naštartuje spadnutý full RUZ walk (Linux, len `dell`) |
 | `ops_check.sh` | **Jediný read-only gate** cez celý ochranný príbeh (`make ops-check`) |
 | `cleanup_mac_docker.sh` | Čistenie Dockeru na Macu (nie je súčasť záloh) |
 
@@ -54,7 +55,11 @@ je ten, vďaka ktorému funguje aj **launchd job**, ktorý štartuje takmer bez
 prostredia.
 
 `systemd/` a `launchd/` sú dve implementácie toho istého plánovača pre dva
-systémy: Mac používa launchd, `dell` (Ubuntu) systemd.
+systémy: Mac používa launchd, `dell` (Ubuntu) systemd. Zálohovací job má
+šablónu v oboch; **RUZ keeper je len v `systemd/`** — reštartuje walk na tom
+hoste, kde beží produkcia, a inštalovať ho na vývojársky stroj by znamenalo
+timer, ktorý dispatchuje Celery tasky do hocijakého stacku, ktorý tam práve
+beží. `install_ruz_keeper.sh` preto na macOS odmietne inštalovať.
 
 > ⚠️ **Pred čímkoľvek nad dátami si prečítaj
 > [`docs/DATA_PROTECTION.md`](../docs/DATA_PROTECTION.md).** Nikdy
