@@ -7504,6 +7504,85 @@ keeper sám (20 376/h).
 
 ---
 
+### 11.12 Audit odolnosti päťdňového behu (2026-09-19 05:15 CEST)
+
+Beh je kritická cesta na ~5 dní a beží bez dozoru, tak sa neskúmalo „je zdravý",
+ale **čo ho za tých päť dní môže zastaviť a či si to niekto všimne**. Pustených
+5 vyšetrovateľov (jedna dimenzia na každého) a k nim dvaja nezávislí
+protirečitelia na každý nález.
+
+**Audit sa nedokončil a jeho výstup sa NESMIE čítať ako overenie.** Došiel kredit
+na API („402 Insufficient Balance") a zabil **23 z 35** agentov — vrátane takmer
+všetkých protirečiteľov. A moja vlastná logika to **premenila na falošný verdikt**:
+zlyhaný protirečiteľ sa vráti ako `null`, `votes.filter(Boolean)` ho zahodí,
+`survives` vyjde `false` a nález pristane medzi „vyvrátenými". **Zlyhaný
+protirečiteľ vyzerá presne ako vyvrátenie** — tá istá trieda chyby ako
+`grep -c` na spadnutom príkaze. Preto tu nie je zoznam „potvrdených nálezov";
+je tu len to, čo som overil **sám**, a menovite to, čo zostalo neoverené.
+
+**Overené mnou, do detailu — per-batch heartbeat vs. 30-minútový prah.**
+Návrh: `beat()` sa v slučke firiem volá len na `index % 50 == 0`
+(`fetch_ruz_data.py:342`), takže najhoršia legitímna medzera môže prekročiť prah
+watchdogu a ten zabije **živý** walk. Čísla sedia:
+
+- najhorší záznam = `Retry(total=4, backoff_factor=0.6)` (`http_client.py:26-31`)
+  = 5 pokusov × `timeout=20` (`ruz_api.py:172`) + ~9 s backoff ≈ **110 s**;
+  `respect_retry_after_header=True` vie jeden záznam natiahnuť ešte viac,
+- 50 × 110 s ≈ **92 min > 30 min** (`CISTAFIRMA_STUCK_HEARTBEAT_MINUTES`).
+
+**Ale je to medium, nie high, a strata je čas, nie dáta.** Aby to nastalo, musí
+**50 záznamov v rade** zhorieť na plný retry rozpočet — teda RUZ musí byť
+trvajúco nedostupný, a vtedy walk aj tak nerobí pokrok. Kurzor sa ukladá per
+záznam (`record_progress`), takže falošný zber nič nestratí: watchdog zapíše
+`failed`, keeper o 15 min obnoví a beh pokračuje od kurzora. Je to **týranie
+času počas dlhého výpadku** (~45–60 min na cyklus, nie 35), nie korupcia.
+Normálna medzera je pritom **~9 s**: 50 záznamov pri nameraných 5,66 z/s
+(20 391/h). Že je to zámer, je napísané v kóde (`fetch_ruz_data.py:341-343`).
+**Neopravujem to teraz** — zmena `fetch_ruz_data.py` sa v bežiacom workeri
+neprejaví, kým walk nezačne odznova, takže tento beh neochráni ani keby som ju
+nasadil; patrí k #188.
+
+**Overené mnou, z kódu aj živého stavu — Focus Mode vypne watchdog a keeper
+potom čaká navždy.** `ruz_full_keeper_decision` vracia pri `queued`/`running`
+**vždy** `wait` a celý prechod na `failed` necháva na `detect_stuck_sync_jobs`
+(`sync_engine.py:770-771`). Ten ale **nie je** v `FOCUS_KEEP_TASKS`
+(`focus_mode.py:20-25`) a `_set_periodic_tasks_enabled` zakáže každý `PeriodicTask`
+mimo tohto zoznamu — takže so zapnutým Focus Mode sa walk, ktorému zomrel worker,
+**nikdy neobnoví**. Dnes je to latentné: `SyncFocusModeState` riadok neexistuje
+(Focus Mode nikdy nebol aktivovaný), `detect-stuck-sync-jobs-every-10-min` má
+`enabled=True` a `last_run` pred 154 s, žiadna `PeriodicTask` nie je zakázaná.
+Nemením to počas behu (keeper sa síce nasadí bez reštartu walku — používa ho
+výhradne `ruz_keeper_tick`, overené grepom — ale niet kam sa ponáhľať).
+
+**Neoverené kandidáty — menovite, aby sa nehľadali znova, ale NIE ako zoznam
+úloh.** Každý prišiel od pomenovaného agenta s citáciou, ktorú som **neoveril**;
+kto na nich chce stavať, musí najprv overiť, či existujú:
+
+1. `resume` môže dispatchovať do prázdna každých 15 min — verdikt sa číta z **job**
+   riadku, ale či niečo beží, rozhoduje **progress** riadok.
+2. Zastavený walk je neviditeľný pre jedinú bránu, keď je jeho najnovší riadok
+   starší než 24 h; `full` progress riadok sa pravidlom okna neposudzuje nikdy.
+3. Pri `full` walku je „podrž okno a prečítaj znova" pri zlyhanom čítaní no-op —
+   kurzor aj tak prejde za stratený záznam a nič ho už nehľadá.
+4. Nasadený walk nevie stratený záznam pomenovať z databázy — id a dôvod žijú len
+   v stderr kontajnera, ktorý je zastropovaný na 100 MB a zaniká s ním.
+5. Admin view „Full sync from RUZ ID" prepisuje kurzor a stav **živého** walku
+   v tom istom `SyncProgress` riadku a `ruz:global` zámok ho nechráni.
+6. `progress.notes` sa prepisuje, nie pripája — každý obnovený segment zmaže
+   predchádzajúci ledger neuložiteľných záznamov.
+7. Dokumentovaná pokuta za reštart („~35 min") nezahŕňa `KEEPER_REDISPATCH_AFTER`,
+   takže reálne zdržanie je 45–60 min.
+8. Keeperove riadky v journali tlačia `last_heartbeat` v UTC vedľa CEST časových
+   značiek journald, takže 6 s starý heartbeat sa číta ako dve hodiny starý.
+9. `ops_check.sh` overuje týždenný backup timer, ale keeper timer ním nekontroluje
+   ani jednou — hoci päťdňový mandát stojí práve na ňom.
+
+Bod 8 je jediný, ktorý sa dá overiť jedným pohladením oka (a sedí: `hb_stale_s`
+je malé, kým časová značka vyzerá o dve hodiny inde), ale aj tak je to kozmetika
+logu. Zvyšok sú hypotézy.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
