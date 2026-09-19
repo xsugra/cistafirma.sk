@@ -393,9 +393,26 @@ class Command(BaseCommand):
             #   per-company row at all, so the window is the only thing that
             #   remembers it was skipped -- and moving the window would drop it
             #   silently and permanently. Holding the window re-reads it next
-            #   run. Measured before relying on this: no RUZ job in this
-            #   database has ever recorded a failed or skipped item, so the
-            #   condition costs nothing in practice.
+            #   run.
+            #
+            #   This used to say the condition "costs nothing in practice",
+            #   on a measurement that no RUZ job had ever recorded a failed or
+            #   skipped item. That measurement is stale: it predates
+            #   `set_job_outcome` (a89f158), since when every run records its
+            #   per-record failures. Measured again on 2026-09-19 across the
+            #   whole production history: exactly one job carries any --
+            #   `ruz_incremental` #23, `completed`, 1 failed and 1 skipped. So
+            #   the hold has cost one held window ever, and it is no longer
+            #   free: it fires whenever a record cannot be read, which is what
+            #   it is for.
+            #
+            #   Note the class it covers. `unreadable` is the per-company call
+            #   that raised; the `unstorable` class (an over-long value, or a
+            #   second RUZ entity under a held ICO) is deliberately *not* held,
+            #   because re-reading returns the same value and the window would
+            #   stay pinned for ever. Those records are named on stderr and in
+            #   the `SyncProgress.notes` ledger instead, and no control reads
+            #   either.
             # - **Only the incremental walk.** The `full*` types choose their
             #   start elsewhere: `full` hardcodes 2000-01-01, while
             #   `full_companies` and `full_individuals` read it back out of
