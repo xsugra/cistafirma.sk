@@ -15,7 +15,7 @@ help:
 	@echo "    make test           - Run the test suite manually"
 	@echo "    make freeze         - Freeze dependencies to requirements.txt"
 	@echo "    make clean          - Remove temporary files and venv"
-	@echo "    make docs-audit     - Validate internal Markdown links"
+	@echo "    make docs-audit     - Validate Markdown links and inline citations"
 	@echo "---------------------------------------------------------------------------"
 	@echo "  Pre-Push Cleanup (Git):"
 	@echo "    make clean-pre-push      - Clean and prepare git for push"
@@ -118,6 +118,8 @@ clean-pre-push-commit:
 docs-audit:
 	@echo "Running Markdown link audit..."
 	@python3 scripts/docs/check_markdown_links.py
+	@echo "Running inline citation audit..."
+	@python3 scripts/docs/check_inline_citations.py
 
 db-backup:
 	@scripts/local/backup_postgres.sh

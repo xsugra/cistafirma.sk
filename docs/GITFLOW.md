@@ -22,6 +22,7 @@ Tento dokument popisuje workflow, vetvy, commit konvencie a povinný štandard p
 ```bash
 # z root adresára projektu
 python3 scripts/docs/check_markdown_links.py
+python3 scripts/docs/check_inline_citations.py
 helm lint deploy/helm/cistafirma
 ```
 

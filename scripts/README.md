@@ -103,9 +103,17 @@ Skript má shebang `#!/usr/bin/env zsh` (používa zsh arrays). Overenie syntaxe
 
 - **`check_markdown_links.py`** — overí interné markdown odkazy a kotvy.
   Spúšťa ho `make docs-audit` aj CI job `docs_audit`.
+- **`check_inline_citations.py`** — overí cesty v backtickoch
+  (`` `docs/archive/<MENO>.md:22` ``), teda tú druhú triedu odkazu, ktorú
+  markdownový audit nevidí: pri presune súboru sa odkaz rozbije viditeľne,
+  kým citácia v backtickoch ostane ticho ukazovať do neexistujúcej cesty.
+  Kontroluje dve pravidlá — koreňovú cestu (existuje súbor? nie je citovaný
+  riadok za koncom?) a holé meno, ktoré žije už len v `docs/archive/`.
+  Zámerne **nekontroluje** dokumenty vnútri `docs/archive/`, kde holé meno
+  správne mieri na súrodenca. Viď docstring skriptu.
 
 ```bash
-make docs-audit   # EXIT 0 = všetky odkazy sedia
+make docs-audit   # EXIT 0 = všetky odkazy aj citácie sedia
 ```
 
 ---
