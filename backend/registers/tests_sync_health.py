@@ -557,3 +557,71 @@ class SyncWindowTests(TestCase):
         judged, code = self._run(window_max_age_days=3)
         self.assertEqual(code, 1)
         self.assertIn("no longer covers its changes", judged)
+
+    def _full_walk(self, *, sync_type="full", stale_minutes=0):
+        walk = SyncProgress.objects.create(
+            sync_type=sync_type,
+            status="running",
+            zmenene_od=timezone.localdate(),
+        )
+        if stale_minutes:
+            # `last_activity` je `auto_now`, takže ho prepíše každé `save()`;
+            # queryset `update()` auto_now neobchádza len tak mimochodom --
+            # je to jediný spôsob, ako ho v teste posunúť do minulosti.
+            SyncProgress.objects.filter(pk=walk.pk).update(
+                last_activity=timezone.now() - timedelta(minutes=stale_minutes)
+            )
+        return walk
+
+    def test_a_full_walk_does_not_redden_the_window_it_supersedes(self):
+        """Plný walk číta každú zmenu sám, takže inkrementál sa počas neho
+        nemá ako pohnúť -- a jeho vek teda nie je zastaranosť.
+
+        Všetky RUZ joby zdielajú jediný slot `ruz:global`, takže
+        `enqueue_ruz_job` 6-hodinový `fetch_ruz_data_task` odrazí a ten čaká
+        v rezerve svojho workera (`celery inspect reserved` ich tam 19. 9. 2026
+        ukazoval nahromadené). Bez tejto výnimky by brána sčervenala za beh,
+        ktorý operátor sám spustil, a vysvetlila by ho vetou „every run since
+        has reported success" -- vetou, ktorá je nepravdivá práve preto, že
+        žiadny beh nebol.
+        """
+        self._window(days_old=40)
+        self._full_walk()
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Sync jobs: 0 unmet", output)
+        self.assertIn("a full RUZ walk is running", output)
+        self.assertIn("not judged for: incremental", output)
+
+    def test_the_walk_carve_out_lapses_when_the_walk_stops(self):
+        """Výnimka platí presne tak dlho ako stav, ktorý ju ospravedlňuje.
+
+        `last_activity` píše `record_progress` každý stý záznam, takže požiadavka
+        na čerstvosť je to, čo bráni tomu, aby výnimka prežila walk. Bez nej by
+        riadok `full` ponechaný v `running` mŕtvym behom umlčal okno navždy --
+        a brána, ktorá navždy stíchla, je presne tá chyba, ktorú má tento príkaz
+        odhaliť. Toto je tá vetva, ktorá na zdravom hoste nenastane.
+        """
+        self._window(days_old=40)
+        self._full_walk(stale_minutes=60)
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 1)
+        self.assertIn("no longer covers its changes", output)
+
+    def test_a_companies_only_walk_does_not_supersede_the_window(self):
+        """`full_companies` je `--entity-type companies`, teda firmy.
+
+        Okno inkrementálu pokrýva aj SZCO, takže firmy-only walk ho
+        nenahrádza -- potlačiť tu by znamenalo skryť naozajstné zastaranie.
+        """
+        self._window(days_old=40)
+        self._full_walk(sync_type="full_companies")
+
+        output, code = self._run(window_max_age_days=3)
+
+        self.assertEqual(code, 1)
+        self.assertIn("no longer covers its changes", output)

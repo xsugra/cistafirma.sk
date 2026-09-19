@@ -22,7 +22,11 @@ Four conditions fail a job, and each is a control that looks alive but is not:
   schedule is unattended, so a run that dies has nobody watching it;
 - an incremental sync window that has stopped moving -- the run that is meant
   to advance it completes, so nothing looks wrong, and the source is read
-  through a window that grows older every day.
+  through a window that grows older every day. Two states make that age
+  *meaningless* rather than stale -- Focus Mode, which switches the run off,
+  and a running unrestricted full walk, which reads every change itself -- and
+  both are named on screen with `--` instead of judged. Each carve-out lasts
+  exactly as long as the state that justifies it.
 
 The third is judged on the newest attempt, not on any failed one: a failing run
 that the next run supersedes is history, and a gate that stays red for it would
@@ -371,8 +375,18 @@ class Command(BaseCommand):
         # reported success" -- a sentence that is false precisely because there
         # were no runs. The sibling control settled this first: `source_health`
         # names the sources Focus Mode silences instead of judging them.
+        #
+        # The running full walk is the same situation reached another way, and
+        # it is why this carve-out exists: `enqueue_ruz_job` gives every RUZ job
+        # the one `ruz:global` slot, so while a full walk holds it the 6-hourly
+        # `fetch_ruz_data_task` is *deferred* -- `celery inspect reserved` shows
+        # the copies stacked in the worker's reserve, unacknowledged -- and no
+        # run moves the window. Judging it would redden the gate for the walk
+        # the operator deliberately started, with the same false sentence.
         focus_mode_active = self._focus_mode_active()
         paused_by_focus_mode: list[str] = []
+        full_walk = self._full_walk_holding_windows(now)
+        held_by_full_walk: list[str] = []
 
         for progress in windows:
             if progress.zmenene_od is None:
@@ -389,6 +403,9 @@ class Command(BaseCommand):
             if judged and focus_mode_active:
                 verdict = "--"
                 paused_by_focus_mode.append(progress.sync_type)
+            elif judged and full_walk is not None:
+                verdict = "--"
+                held_by_full_walk.append(progress.sync_type)
             elif judged and age_days > window_max_age_days:
                 verdict = "FAIL"
                 unmet += 1
@@ -438,6 +455,13 @@ class Command(BaseCommand):
                 f"{', '.join(paused_by_focus_mode)})"
             )
 
+        if held_by_full_walk:
+            self.stdout.write(
+                "  (a full RUZ walk is running and reads every change itself, "
+                "so no incremental run is meant to move this window while it "
+                f"lasts -- not judged for: {', '.join(held_by_full_walk)})"
+            )
+
         for note in notes:
             self.stdout.write(f"  ({note})")
 
@@ -460,3 +484,45 @@ class Command(BaseCommand):
             .values_list("active", flat=True)
             .first()
         )
+
+    def _full_walk_holding_windows(self, now) -> SyncProgress | None:
+        """The live unrestricted full walk, which supersedes the windows.
+
+        While it runs, no incremental run is meant to move the window: every RUZ
+        job shares the one `ruz:global` slot, so `enqueue_ruz_job` makes the
+        6-hourly `fetch_ruz_data_task` bounce off it and the task waits in its
+        worker's reserve instead of running. Its age is therefore not staleness
+        -- the walk is reading every change the incremental would have read, and
+        far more.
+
+        **Only `full`, not every full-ish walk.** `full_companies` reads
+        companies alone (`--entity-type companies`), and an incremental window
+        covers SZCO too, so it does *not* supersede the window; suppressing
+        there would hide real staleness.
+
+        **The walk has to be alive.** `record_progress` writes `last_activity`
+        every hundredth record (verified on the running walk, 2026-09-19: five
+        seconds old), so requiring it inside the watchdog's staleness threshold
+        is what stops this carve-out outliving the walk it describes. Without
+        that, a `full` row left `running` by a dead walk would silence the
+        window for ever -- and a gate that has gone quiet for ever is the very
+        defect this command exists to catch. The stuck-job condition already
+        fails the dead walk itself; this carve-out must not cover for it.
+
+        The same trade-off the stuck-job threshold makes applies here: the live
+        walk's writer flushes every hundred records rather than continuously, so
+        a register answering slowly enough could put `last_activity` outside the
+        threshold while the walk is healthy — and then the window is judged
+        again. That is the safe direction: it fails loudly rather than staying
+        quiet, which is what a threshold on a periodic writer has to choose.
+        """
+        walk = (
+            SyncProgress.objects.filter(sync_type="full", status="running")
+            .order_by("-last_activity")
+            .first()
+        )
+        if walk is None or walk.last_activity is None:
+            return None
+        if now - walk.last_activity > stuck_heartbeat_threshold():
+            return None
+        return walk
