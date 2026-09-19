@@ -26,12 +26,39 @@ Four conditions fail a job, and each is a control that looks alive but is not:
 
 The third is judged on the newest attempt, not on any failed one: a failing run
 that the next run supersedes is history, and a gate that stays red for it would
-be reporting a scar rather than a state. A later successful run clears it. It
-is scoped to `triggered_via='beat_schedule'` because that is the whole
-distinction -- a manual run that fails has an operator in front of it, and the
-one that fails at 00:22 does not. Measured on 2026-09-10, the job table holds
-exactly one beat-scheduled type (`ruz_incremental`) and every one of its rows
-carries that trigger, so the scope is a real reading rather than a guess.
+be reporting a scar rather than a state. A later successful run clears it.
+
+**The window runs from when an attempt ended, and a run still in flight is
+always in scope.** Both halves matter for the same reason: the walk this stack
+now runs takes five days. Anchored on `queued_at`, a run that long leaves the
+window on its first day and its failure is never reported; anchored on
+`completed_at`, the failure stays visible for the whole window after it
+happens. And judging only *ended* runs would drop the walk out of the gate
+entirely, leaving the newest attempt of `ruz_full` to be whichever short run
+was queued last. See the comment above the query.
+
+**On the `triggered_via='beat_schedule'` scope.** It was measured on 2026-09-10
+as selecting exactly one job type (`ruz_incremental`), and that reading is now
+stale in a way that changes what a FAIL means. `_run_ruz_command` stamps
+`triggered_via='beat_schedule'` on **every** job it auto-enqueues -- the beat
+schedule, the keeper's resume, the Django-admin buttons, and the repair
+dispatches -- so the value does not mean "unattended". Measured on the
+production table 2026-09-19, the three values in use are:
+
+- `beat_schedule`: the beat schedule, the keeper, the Django-admin sync buttons,
+  and every repair dispatch;
+- `admin_ui`: the DRF admin API (`POST /api/admin/sync/jobs/`) and the legacy
+  endpoints in `registers/views.py`, both of which enqueue the row themselves
+  and pass its id on, so the stamp survives;
+- `cli`: the management command run by hand.
+
+So the filter does separate the auto-enqueued runs from two genuinely
+operator-initiated paths -- which is most of what the rule wants -- but a FAIL
+on a type an operator started from the Django admin is this gate reporting a run
+nobody replaced, not a run nobody was watching. The filter is kept because it
+still selects every unattended run. Narrowing it means giving the Django-admin
+buttons an honest trigger, which is a change to the dispatch path rather than to
+this gate.
 
 Judged on `failed` only. A `paused` run is resumable and was stopped by an
 operator who knows; a `cancelled` one cannot happen to a RUZ job at all, since
@@ -77,6 +104,7 @@ import sys
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
 
 from registers.models import SyncFocusModeState, SyncJob, SyncProgress
@@ -254,9 +282,26 @@ class Command(BaseCommand):
         # the window. Ordered by `-queued_at` and de-duplicated in Python
         # rather than with a `Max()` subquery: the table holds tens of rows,
         # and reading it whole keeps the rule legible.
+        #
+        # The window is anchored on when an attempt *ended*, not on when it was
+        # queued, and a run that has not ended is always in scope. It used to
+        # filter `queued_at__gte=failed_cutoff`, which put the full walk out of
+        # reach of this control for all but its first day: job #46 was queued
+        # five days before it could possibly end, so on the day it finally
+        # failed it would already have been outside the window -- the one run
+        # this gate most needs to see, invisible exactly when it matters. A
+        # `completed_at` anchor keeps a failure visible for the whole window
+        # after it happens, whatever its queue time.
+        #
+        # A live run is kept in scope deliberately. Its status is not `failed`,
+        # so it judges OK, and a run in progress genuinely is not a failure --
+        # but leaving it out would mean the newest attempt of a five-day type
+        # was whichever *short* run happened to be queued last, and the long one
+        # would be absent rather than merely fine.
         beat_attempts = list(
             SyncJob.objects.filter(
-                triggered_via=BEAT_TRIGGER, queued_at__gte=failed_cutoff
+                Q(triggered_via=BEAT_TRIGGER),
+                Q(completed_at__gte=failed_cutoff) | Q(completed_at__isnull=True),
             ).order_by("-queued_at")
         )
         newest_beat: dict[str, SyncJob] = {}

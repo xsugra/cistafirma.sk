@@ -187,9 +187,10 @@ class FailedBeatJobTests(TestCase):
     both on screen while the gate said zero.
     """
 
-    def _beat_job(self, *, status, age, **kwargs):
+    def _beat_job(self, *, status, age, queued_age=None, job_type="ruz_incremental",
+                  **kwargs):
         job = SyncJob.objects.create(
-            job_type="ruz_incremental",
+            job_type=job_type,
             status=status,
             triggered_via="beat_schedule",
             started_at=timezone.now() - age,
@@ -197,7 +198,9 @@ class FailedBeatJobTests(TestCase):
             completed_at=timezone.now() - age,
             **kwargs,
         )
-        SyncJob.objects.filter(pk=job.pk).update(queued_at=timezone.now() - age)
+        SyncJob.objects.filter(pk=job.pk).update(
+            queued_at=timezone.now() - (queued_age if queued_age is not None else age)
+        )
         job.refresh_from_db()
         return job
 
@@ -296,6 +299,72 @@ class FailedBeatJobTests(TestCase):
         self.assertEqual(code, 0)
         self.assertIn("beat-scheduled job types", output)
         self.assertIn("none recorded in the window", output)
+
+    def test_a_long_run_that_ended_failed_is_judged_though_its_queue_time_is_old(self):
+        """The window runs from when an attempt *ended*, not when it was queued.
+
+        The walk this stack now runs takes five days. Anchored on `queued_at`,
+        it left the window on its first day, so on the day it finally failed
+        this gate would already have stopped looking -- the one run it most
+        needs to see, invisible exactly when it matters.
+        """
+        self._beat_job(
+            status="failed",
+            age=timedelta(hours=1),
+            queued_age=timedelta(days=5),
+            job_type="ruz_full",
+            last_error="ReadTimeoutError: registeruz.sk",
+        )
+
+        output, code = self._run(failed_job_hours=24)
+
+        self.assertEqual(code, 1)
+        self.assertIn("Sync jobs: 1 unmet", output)
+        self.assertIn("the newest beat-scheduled run", output)
+
+    def test_a_five_day_run_still_in_flight_is_seen_and_is_not_a_failure(self):
+        """The other half of the same anchor.
+
+        Judging only *ended* runs would drop the walk out of the gate entirely:
+        the newest attempt of `ruz_full` would become whichever short run was
+        queued last, and the long one would be absent rather than merely fine.
+        A run in progress is not a failure, and this says so by judging it OK.
+        """
+        job = self._beat_job(
+            status="running",
+            age=timedelta(seconds=5),
+            queued_age=timedelta(days=5),
+            job_type="ruz_full",
+        )
+
+        output, code = self._run()
+
+        self.assertEqual(code, 0)
+        self.assertIn(f"ruz_full", output)
+        self.assertIn(f"job #{job.pk}", output)
+        self.assertIn("running", output)
+
+    def test_an_abandoned_long_run_is_still_the_reapers_complaint(self):
+        """The risk the `completed_at IS NULL` branch introduces, pinned.
+
+        A five-day-old `running` row with a frozen heartbeat is now always in
+        the beat section, where its status judges OK -- so if that were the only
+        control looking at it, reaping would have been traded away for the
+        window fix. The heartbeat condition is a separate one and still fails
+        it; this test is what keeps that from silently becoming untrue.
+        """
+        job = self._beat_job(
+            status="running",
+            age=timedelta(days=5),
+            job_type="ruz_full",
+        )
+
+        output, code = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertIn("Sync jobs: 1 unmet", output)
+        self.assertIn(f"#{job.pk}", output)
+        self.assertIn("heartbeat", output)
 
 
 class SyncWindowTests(TestCase):
