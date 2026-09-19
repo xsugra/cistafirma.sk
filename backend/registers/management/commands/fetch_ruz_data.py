@@ -445,6 +445,12 @@ class Command(BaseCommand):
             # this company's dates", and 9 244 rows of it currently say that
             # succeeded. Mixing a walk failure into it would make both readings
             # wrong at once.
+            #
+            # `append_notes`, nie priradenie: keeper počas päťdňového behu obnoví
+            # walk desiatkykrát a každý segment má vlastný ledger. Priradenie by
+            # zahodilo presne ten záznam, kvôli ktorému sa sem píše -- overené
+            # 2026-09-19, keď ten istý omyl stál aj `last_error` (text priradený
+            # po `record_progress` sa do riadku nedostal vôbec).
             if unstorable_ids:
                 listed = ', '.join(unstorable_ids[:50])
                 more = (
@@ -452,7 +458,7 @@ class Command(BaseCommand):
                     if len(unstorable_ids) > 50
                     else ''
                 )
-                progress.notes = (
+                progress.append_notes(
                     f'{len(unstorable_ids)} záznamov sa nedalo uložiť, '
                     f'okno ich preskočilo: {listed}{more}'
                 )

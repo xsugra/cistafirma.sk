@@ -999,6 +999,52 @@ class RuzIncrementalWindowTests(TestCase):
         self.assertIn("Unstorable", out)
         self.assertIn("222", progress.notes)
 
+    def test_a_new_ledger_does_not_erase_the_previous_one(self):
+        """The ledger is the only trace a skipped record leaves, and it is
+        written on the row that survives -- which is the entire reason it is
+        written there. A five-day `full` walk is resumed by the keeper dozens of
+        times, so a plain assignment left one segment's ledger on the row and
+        destroyed every earlier one: a mechanism built to be read later could
+        only ever be read once.
+
+        Seeded rather than driven by two runs on purpose. A finished row is
+        neither `running` nor `idle`, so a second run creates its own
+        `SyncProgress` row -- the assertion would then be about two rows instead
+        of about the single row the keeper keeps returning to.
+        """
+        progress = self._progress(
+            zmenene_od=date(2026, 8, 4),
+            notes='1 záznamov sa nedalo uložiť, okno ich preskočilo: 999',
+        )
+        api = _FakeRuzApi([[111, 222]], unstorable_ids={222})
+
+        self._run(api, self._job())
+
+        progress.refresh_from_db()
+        # This segment's ledger is there ...
+        self.assertIn("222", progress.notes)
+        # ... and it did not replace the one that was already on the row.
+        self.assertIn("999", progress.notes)
+
+    def test_the_note_ledger_is_bounded_and_says_that_it_is(self):
+        """`notes` is a `TextField` the admin loads whole, and the keeper appends
+        to it for days, so it needs a bound.
+
+        The bound has to be *named in the field*: a ledger that is silently
+        trimmed reads exactly like a run in which nothing was skipped, and this
+        field exists precisely so that a skipped record is not invisible.
+        """
+        progress = self._progress()
+        total = SyncProgress.NOTES_KEEP_BLOCKS + 4
+        for i in range(total):
+            progress.append_notes(f"blok {i}")
+
+        blocks = progress.notes.split("\n\n")
+        self.assertEqual(len(blocks), SyncProgress.NOTES_KEEP_BLOCKS)
+        self.assertIn("5 starších blokov odstránených", blocks[0])
+        # The newest block is the one just appended -- the trim is at the front.
+        self.assertEqual(blocks[-1], f"blok {total - 1}")
+
     def test_a_record_we_cannot_store_does_not_stop_the_walk(self):
         """One bad record must not cost the rest of the page.
 

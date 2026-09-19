@@ -1,3 +1,5 @@
+import re
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
@@ -319,6 +321,76 @@ class SyncProgress(models.Model):
         if reason:
             self.notes = f"Pozastavené: {reason}\n{self.notes}"
         self.save()
+
+    #: Koľko blokov sa v `notes` udrží. Každý obnovený segment full walku
+    #: pripája vlastný ledger neuložiteľných záznamov, a ten ledger je jediná
+    #: pamäť na dieru, ktorú kurzor preskočil -- viď `append_notes`.
+    NOTES_KEEP_BLOCKS = 20
+
+    #: Predpona značky, ktorou `append_notes` ohlasuje, že staršie bloky
+    #: odpadli. Je to konštanta, nie literál na dvoch miestach, lebo ten istý
+    #: text sa raz píše a raz číta (`_notes_trim_count`) -- a keby sa tie dve
+    #: líšili, značka by sa počítala ako obyčajný ledger a jej číslo by rástlo
+    #: samo o sebe.
+    NOTES_TRIM_MARK = '… '
+
+    _NOTES_TRIM_RE = re.compile(r'^… (\d+) starších blokov odstránených$')
+
+    @classmethod
+    def _notes_trim_count(cls, block):
+        """Koľko blokov už z `notes` odpadlo, ak je `block` značka; inak 0."""
+        m = cls._NOTES_TRIM_RE.match(block or '')
+        return int(m.group(1)) if m else 0
+
+    def append_notes(self, text):
+        """Pripája blok k `notes` namiesto prepísania.
+
+        `fetch_ruz_data` zapisuje na tento riadok menovitý zoznam záznamov,
+        ktoré prečítal a nevedel uložiť, s odôvodnením, že práve tento riadok
+        prežije a neskoršia oprava sa z neho má z čoho vyplniť dieru. Priradenie
+        (`self.notes = …`) ale znamenalo, že každý obnovený segment -- a keeper
+        ich počas päťdňového behu spraví desiatky -- zahodil presne to, na čo
+        bol ledger zapísaný. Preto sa pripája.
+
+        `pause()` píše opačne, na začiatok, a zostáva to tak: jej text je jediná
+        vec, ktorú človek v tom poli hľadá, a má byť prvá. Zvyšok poľa je
+        chronologický. Dôsledok je, že `pause()` spája svoj riadok s prvým
+        blokom jedným `\\n`, takže ak práve prvý blok bola značka, splynie
+        s textom pauzy a jej číslo sa stráca -- počítadlo potom začína od nuly.
+        Je to strata presnosti v čísle, nie v ledgeri: menovité zoznamy
+        záznamov sa nehýbu, len sa o nich prestane tvrdiť, koľko ich už odpadlo.
+
+        Strop `NOTES_KEEP_BLOCKS` tam je preto, že `notes` je TextField, ktorý sa
+        celý načítava do adminu; bez neho by pole rástlo s každým obnovením.
+        Platí na **celé pole** vrátane značky, ktorá odstránenie ohlasuje --
+        ``keep + 1`` blokov by inak vyzeralo ako ``keep``. Odstránenie je
+        v poli **pomenované**, nie tiché: zamlčaný strop vyzerá ako „nič
+        nechýba", a to je pri tomto poli to isté ako zahodený dôkaz.
+        """
+        blocks = [b for b in (self.notes or '').split('\n\n') if b.strip()]
+        # Značka nie je ledger a nesmie sa počítať ako blok, inak by sa počítala
+        # do vlastného čísla a hlásila by o jeden odstránený blok viac, než
+        # koľko ich naozaj zmizlo. Jej číslo sa prenáša ďalej.
+        dropped = self._notes_trim_count(blocks[0]) if blocks else 0
+        if dropped:
+            blocks = blocks[1:]
+        blocks.append(text)
+
+        room = self.NOTES_KEEP_BLOCKS
+        # Značka, ak ju budeme písať, zaberie jeden z `room` slotov -- preto sa
+        # do `room` počíta a preto sa obsah musí zmestiť do `room - 1`. Rozhoduje
+        # sa raz, pred rezom: keby sa `- 1` pridalo až po ňom, značka by sa
+        # pripočítala navrch a pole by malo `room + 1` blokov.
+        if dropped or len(blocks) > room:
+            drop = len(blocks) - (room - 1)
+            if drop > 0:
+                blocks = blocks[drop:]
+                dropped += drop
+            blocks.insert(
+                0,
+                f'{self.NOTES_TRIM_MARK}{dropped} starších blokov odstránených',
+            )
+        self.notes = '\n\n'.join(blocks)
     
     def resume(self):
         """Pokračuje v synchronizácii"""
