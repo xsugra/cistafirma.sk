@@ -7924,6 +7924,86 @@ Ani jedno z toho nie je dôvod odkladať #188; všetky štyri opravy idú s ním
 
 ---
 
+### 11.13 Brána by od 21. 9. spadla na okne, ktoré walk sám prekrýva (2026-09-19)
+
+Nález nevzišiel z auditu, ale z jedného riadku `make ops-check`:
+
+```
+  incremental sync windows (judged: window may be at most 3d old)
+    incremental            completed  2026-09-17    2d old  OK
+```
+
+`2d old` je 19. 9. Brána súdi `now.date() - zmenene_od > window_max_age_days`
+(default 3), a riadok má `zmenene_od = 2026-09-17`, takže:
+
+| deň | vek | verdikt |
+|---|---|---|
+| 2026-09-20 (nedeľa) | 3 | `3 > 3` je nepravda → **OK** |
+| 2026-09-21 | 4 | **FAIL** |
+| 2026-09-27 (ďalšia nedeľa) | 10 | **FAIL**, ak dovtedy neprebehne nový inkrementál |
+
+Walk má ETA ~2026-09-23. Týždenná brána (`sk.cistafirma.backup.timer`, nedeľa
+03:17) teda 20. 9. prejde a 27. 9. by spadla len keby walk prekročil 26. 9.
+Falošný FAIL ale nastane na **každom manuálnom `make ops-check` od 21. 9. do
+konca walku** — a to je presne to čítanie, ktorému má brána slúžiť. Zelená
+brána, ktorá po dva dni hlási poruchu, ktorá neexistuje, učí ľudí ignorovať
+červenú; to je tá istá trieda chyby, akou bolo 11. 9. mŕtve CI.
+
+**Prečo je to falošný FAIL a nie skutočný.** Okno sa nemá ako pohnúť, lebo
+počas walku nebeží žiadny inkrementálny beh — a to nie je porucha, ale dôvod,
+prečo bol walk spustený. `fetch_ruz_data` číta všetko od `2000-01-01`, teda
+oveľa viac než inkrementál. Kód to sám priznáva v komentári: „two different
+states look identical from the date alone". Toto je **tretí** taký stav —
+prvé dva rieši výnimka pre Focus Mode.
+
+**Čo sa s tým taskom naozaj deje — merané, nie odvodené.** `enqueue_ruz_job`
+dáva **každému** RUZ jobu ten istý `concurrency_key = 'ruz:global'`, takže
+počas walku sa 6-hodinový `fetch_ruz_data_task` neodmieta — **odloží sa**:
+
+| čo | hodnota (2026-09-19 ~10:01 UTC) |
+|---|---|
+| `LLEN ruz_full` | `0` |
+| `inspect reserved` na `worker_ruz` | **4**× `fetch_ruz_data_task`, `acknowledged=False`, `worker_pid=None` |
+| z toho duplicita | `e7d7b28f…` **dvakrát**, raz `redelivered=True` |
+| `cistafirma_celery_ruz` štartoval | 2026-09-18 16:00:50 UTC |
+| walk (#46) prevzal slot | 16:02:07 UTC |
+
+Ticky od štartu walku boli tri (20:07, 02:07, 08:07 UTC), takže buffer
+s `worker_prefetch_multiplier = 4` bol **plný po troch tickoch, nie po
+štyroch** — jeden slot spotrebovala redelivery (visibility timeout vypršal,
+lebo `acks_late` a worker nič nepotvrdzuje, kým beží walk). To spresňuje
+predpoveď z §11.11: `LLEN ruz_full` sa dostane nad nulu pri **štvrtom** ticku
+(14:07 UTC), ale mechanizmus je „buffer je plný a broker už nedoručuje", nie
+„štvrtá správa naplní buffer". Predpoveď teda platí, jej vysvetlenie nie.
+
+**Dôsledok, ktorý §11.11 označil správne.** Po skončení walku sa naakumulované
+prír. spustia za sebou; pri ~4 s na beh (job #43: 3,2 s, #45: 4,0 s) a ~20
+tickoch za päť dní je to ~80 s, a posledný z nich okno posunie. Do beat schémy
+sa preto nezasahuje — to zostáva platiť.
+
+**Oprava (tento commit, `sync_health`).** Druhá výnimka tej istej triedy ako tá
+pre Focus Mode: kým stav trvá, žiadny beh nemá okno pohnúť, takže jeho vek nie
+je zastaranosť. Riadok sa vypíše s `--` a s vetou, ktorá povie prečo. Dve
+obmedzenia, bez ktorých by výnimka bola horšia než chyba, ktorú rieši:
+
+- **Len `full`, nie `full_companies`.** Firmy-only walk (`--entity-type
+  companies`) okno inkrementálu nenahrádza — to pokrýva aj SZCO — takže tam by
+  potlačenie skrylo ozajstné zastaranie.
+- **Walk musí byť živý.** `last_activity` píše `record_progress` každý stý
+  záznam (overené na bežiacom walku: 5 s staré), takže požiadavka na čerstvosť
+  v rámci prahu watchdogu je to, čo bráni výnimke prežiť walk. Bez nej by riadok
+  `full` ponechaný v `running` mŕtvym behom umlčal okno **navždy** — a brána,
+  ktorá navždy stíchla, je presne tá chyba, ktorú má tento príkaz odhaliť.
+  Mŕtvy walk si nájde vlastná podmienka (zaseknutý heartbeat); táto výnimka za
+  neho nesmie kryť.
+
+Tri testy, z toho jeden na vetvu, ktorá na zdravom hoste nenastane (a práve tá
+je tá, čo klame): `test_a_full_walk_does_not_redden_the_window_it_supersedes`,
+`test_the_walk_carve_out_lapses_when_the_walk_stops`,
+`test_a_companies_only_walk_does_not_supersede_the_window`.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
