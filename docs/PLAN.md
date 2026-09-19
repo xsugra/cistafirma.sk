@@ -8015,6 +8015,154 @@ je tá, čo klame): `test_a_full_walk_does_not_redden_the_window_it_supersedes`,
 
 ---
 
+### 11.14 Re-derivácia odložených nálezov — čo z nich je pravda (2026-09-19)
+
+Za celú session sa nazbieral zoznam nálezov, ktoré som **odložil**, nie opravil:
+veci, čo vyzerali ako chyby, ale každá potrebovala vlastné rozhodnutie. Zoznam
+mien však sám nič netestuje. Preto som každý nález znovu odvodil proti kódu,
+ako je **dnes**, a potom ho dal nezávislému agentovi **vyvrátiť** — 7 nálezov,
+12 agentov, 0 chýb. Výsledok: **5 potvrdených, 1 zastaraný, 1 úplne vyvrátený**
+a ani jedno potvrdené tvrdenie neprešlo bez zúženia alebo rozšírenia.
+
+| nález | verdikt | dopad |
+|---|---|---|
+| `retry_failed` pre RUZ typy | **nový, opravený tu** | fantómový `queued` riadok → brána natrvalo červená |
+| zastarané meranie vo `fetch_ruz_data` | **opravené tu** | nepravda ospravedlňujúca držanie okna |
+| `complete_job` a `failed_items` | potvrdené | zaznamenané, ale **nikým nesúdené** |
+| RPO/ORSR `_parse_date` | potvrdené | nečitateľný dátum **vymaže** uložený |
+| Focus Mode povrchy | potvrdené (nízka) | inzerujú počítadlo, ktoré môže byť len 0 |
+| `triggered_via='beat_schedule'` | potvrdené (nízka) | text brány nenesie výhradu z docstringu |
+| repair tasky bez job riadku (#186) | **zastarané** | opravené v `59fbf1f`; zvyšok inde |
+| `update_fs_data` → `fs_data_handlers` | **vyvrátené** | obe menované mechaniky sú nepravdivé |
+
+**Poznámka k metóde.** Aj táto správa bola v jednom bode nepresná a musel som ju
+opraviť čítaním kódu: tvrdila, že chyby walku „žijú len vo `failed_items`".
+Nepravda — `fetch_ruz_data.py:496-502` píše `failed_items` vo `finally:`, takže
+walk #46 má nulu len preto, že **ešte beží**. Presnejšie znenie je nižšie. Ani
+adversariálne overenie nie je fakt, kým si ho neprečítam.
+
+#### Opravené v tomto commite
+
+**1. `retry_failed` vytváral pre RUZ typy riadok, ktorý sa nedá nárokovať.**
+Endpoint volal `sync_engine.enqueue_job`, ktorý `concurrency_key` **nenastavuje**
+(`models.py:779-783`, default `""`), kým `claim_ruz_job` filtruje na
+`ruz:global` (`sync_engine.py:499-517`). Riadok sa teda nikdy nechytil: task
+bežal, nenašiel čo nárokovať, zalogoval „not runnable" a vrátil sa. Nič sa
+neimportovalo. Tri dôsledky z toho robia viac než no-op:
+
+- riadok zostal `queued` **navždy** a `cancel` pre RUZ typy vracia 409, takže
+  ho nevedelo vyčistiť žiadne obrazovko;
+- po `DEFAULT_QUEUED_MINUTES` (720) ho `sync_health` ráta ako nesplnenú
+  kontrolu — filter je len `status="queued"`, bez typu (`sync_health.py:213`,
+  `:252`) — takže fantóm **natrvalo** zfarbí `make ops-check` do červena. To je
+  presne tá výstraha, ktorá naučí svojho čitateľa ju ignorovať;
+- operátor, ktorý klikol „Retry Failed", dostal beh, ktorý nikdy nebežal.
+
+Unikátny index `reg_one_active_ruz_job` (`models.py:794-802`) fantóma **nekryje**
+— jeho podmienka je len na `ruz:global` — takže neblokoval nič ďalšie, len
+visel. `create()` pritom na `RUZ_JOB_TYPES` vetví už dávno a z toho istého
+dôvodu; oprava je tá istá vetva zrkadlom. Meranie: produkcia **0 fantómov**
+teraz, 4 historické `ruz_full_firmy` s prázdnym kľúčom (2026-08-04) sú všetky
+terminálne — latentná pasca, nie požiar. Prvý z troch testov je pozitívna
+kontrola: `claim_ruz_job(new.pk) is not None`. Testovať `status` by chybu
+**nechytilo** — fantóm bol tiež `queued`, a práve to ho robilo zdravým.
+
+**2. Zastarané meranie, ktoré ospravedlňovalo držanie okna.**
+`fetch_ruz_data.py` tvrdil *„no RUZ job in this database has ever recorded a
+failed or skipped item, so the condition costs nothing in practice"*. To
+predchádza `set_job_outcome` (`a89f158`) a odvtedy je to nepravda. Nové
+meranie (2026-09-19, celá produkčná história): failed/skipped položky má
+**presne jeden** beh — `ruz_incremental` #23, `completed`, 1 + 1. Podmienka teda
+doteraz stála jedno držané okno a **už nie je zadarmo**. Doplnené aj to, ktorú
+triedu kryje: `unreadable` áno, `unstorable` zámerne nie (opakované čítanie
+vráti tú istú hodnotu, okno by zostalo pripnuté navždy).
+
+#### Potvrdené, neopravené — čaká na rozhodnutie
+
+**A. `complete_job` a `failed_items`: zaznamenané, ale nikým nesúdené.**
+Presné znenie, ktoré som si musel opraviť: `SyncProgress.total_errors` je živý
+signál počas behu (walk #46 má dnes 72) a `SyncJob.failed_items` sa zapíše pri
+ukončení. Ani jedno však pre `full` walk **nečíta žiadna kontrola** —
+`sync_health.py:355` filtruje `sync_type__startswith="incremental"` a `:520`
+berie `full` len pre výnimku z §11.13. Walk teda môže zhodiť N pomenovaných
+záznamov a skončiť `completed` so všetkým zeleným. Pre `incremental` je trieda
+`unreadable` chytená držaným oknom po 3 dňoch (`sync_health.py:422` ju aj
+pomenuje), ale `unstorable` je z držania vyňatá → neviditeľná.
+
+*Prečo to neopravujem sám:* najlacnejšia čestná verzia je podmienka „najnovší
+walk s `failed_items > 0`". Lenže walk #46 po dobehnutí ponesie ~72 a taká
+podmienka by **okamžite a natrvalo** sfarbila týždennú výstrahu do červena, kým
+sa každý odmietnutý záznam neopraví. To je horšia chyba než tá, ktorú rieši.
+
+**B. RPO/ORSR `_parse_date`: nečitateľný dátum vymaže uložený.** `_parse_date`
+(`rpo_sync.py:597-604`, `orsr_scraper.py:659-669`) vracia `None` pre
+neprítomné **aj** nečitateľné, a to `None` ide priamo do `defaults` →
+`update_or_create` ho zapíše a **zmaže dátum, ktorý tam bol**, ticho, pri
+každom priechode. To je presne trieda, ktorú projekt už pomenoval a na RUZ
+strane opravil („A date we cannot read must not erase a date we hold",
+`ruz_api.py:284-349`) — RPO a ORSR tú opravu nikdy nedostali. Frontend to
+maskuje: `CompanyHeader.tsx:332` pri NULL zobrazí `datum_zalozenia` z RUZ pod
+menovkou „Dátum vzniku", takže čitateľ vidí vierohodný dátum, ktorý nie je z
+toho registra. Meranie: 27 448 riadkov s `den_zapisu`, **0 prejavených škôd**
+(12 ORSR-written riadkov, všetky čisté; RPO 27 436 zápisov, 0 strát) — latentné,
+nie horiace. Polovica opravy je mechanická (nečitateľné → kľúč z `defaults`
+vynechať, uložená hodnota zostane; + `logger.error` + počítadlo odmietnutí),
+polovica je **rozhodnutie**: má RPO neprítomnosť vymazať, alebo držať? RUZ
+vymazáva, lebo neprítomnosť je tam spôsob, akým sa odvoláva zrušenie; pre
+`establishment` to nemusí platiť.
+
+**C. Focus Mode inzeruje počítadlo, ktoré môže byť len 0.**
+`revoke_non_focus_tasks`/`purge_broker_queues` sa zámerne nevolajú a je to
+pripnuté testom (`tests_focus_mode_safety.py:31-46`), ale tri povrchy
+(`models.py:545-549`, `admin.py:806-810`, `sync_dashboard.html:69`) hlásia
+„revokovaných 0 taskov" ako výsledok kroku, ktorý neexistuje. Žiadna ochrana sa
+nestráca — len sa číta mechanizmus, ktorý niet. Rozhodnutie: povrchy odstrániť,
+alebo funkciám dať vedomý vstupný bod (vzor `celery-purge` s potvrdzovacím
+tokenom) — nie ich zapojiť do `enter_focus_mode`, to by zhodené správy z brokera
+nechalo neúplný import (§9.5).
+
+**D. `triggered_via='beat_schedule'` pre Django-admin behy.** Potvrdené, ale
+**zámerne** ponechané (`9e43e75` to aj zdokumentoval v `sync_health.py:44-62`);
+verdikt je vecne pravdivý, pokazená je len atribúcia. Reálna časť je malá: text,
+ktorý `make ops-check` vypíše, nenesie výhradu z docstringu („reporting a run
+nobody replaced, not a run nobody was watching"), takže čitateľ výstrahy musí
+mať prečítaný zdroj. Opraviť sa to má na strane pečiatky (admin vetva nech ide
+cez `enqueue_ruz_job(..., triggered_via="admin_ui")`), **nie** zúžením filtra —
+to by `ruz_full`/`ruz_repair` z brány vyhodilo úplne.
+
+#### Zastarané a vyvrátené — nech sa to znova neodvodzuje
+
+**#186 je naozaj opravené** (`59fbf1f`, `git merge-base --is-ancestor` proti
+HEAD). Ale dve veci stoja za zapísanie. Prvá: **dell je stále na `8486c03`**, kde
+`59fbf1f` nie je — kto si prečíta „#186 hotové" a usúdi „produkcia je krytá",
+číta repozitár, nie hostiteľa. Druhá, reziduum dosiahnuteľné aj po nasadení:
+**ručne** spustené `manage.py repair_ruz_sync_v2|repair_ruz_gaps` si neberú job
+riadok ani slot — a `repair_ruz_gaps.py:205` to operátorovi priamo odporúča
+(„Pokračujte: python manage.py repair_ruz_gaps --resume"). Správny vzor je o
+kus vedľa: `fetch_ruz_data.py:75-98` si pri chýbajúcom flagu sám nárokuje slot a
+pri kolízii vyhodí `CommandError`. Toto je jediné reziduum, ktoré si podľa mňa
+zaslúži opravu bez rozhodnutia — je to tá istá get-then-create trieda, ktorú
+projekt už raz meral.
+
+**`update_fs_data` → `fs_data_handlers` je vyvrátené.** Obe menované mechaniky
+sú nepravdivé: field sety **sedia** vrátane zámernej `vat_payer` asymetrie
+(`tests_fs_data_integrity.py:133-158` ju pinuje) a výnimky sa počítajú
+(`update_fs_data.py:115-117`). Kto by podľa toho nálezu „opravoval"
+`UPDATE_FIELDS_MAP`, rozbil by opravu DPH. Reziduum je inde a je iné:
+`if not items:` (`update_fs_data.py:84-87`) vypíše pri totálnom zlyhaní
+sťahovania „0 errors" — na nerozoznanie od nezmeneného datasetu — a 10 z 15
+datasetov v `FS_DATASET_URLS` sa ticho preskočí. Oboje je už zapísané v
+`docs/SOURCE_DATA_INTEGRITY.md:34-40`.
+
+#### Nové, čo vyplávalo pri overovaní
+
+`adminapi/views/dashboard.py:119-127` číta `failed_items` a skladá z neho graf
+`throughput_24h.failed_per_hour`. Čítadlo teda **jedného** čitateľa má — ale je
+to graf, nie súd: jedna chyba v okne so 47 800 položkami je v ňom neviditeľná.
+Zapisujem to preto, aby budúce „nikto to nečíta" bolo presné.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
