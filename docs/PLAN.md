@@ -7075,6 +7075,15 @@ Samotné chyby, ktoré sa počítajú, sú **duplicitné IČO**
 a unique index to odmietne. To je zámerný, nefatálny prípad z #83 — okno sa
 cez neho posunie, namiesto aby navždy stálo.
 
+**Namerané 19. 9. 2026 na walku #46** (24 h, `total_errors=66`, všetkých 66
+je tá istá constraint): posledný výskyt je `Unstorable record ID 324678` na
+IČO 42061628 — a to IČO v tabuľke už drží **iné** RUZ ID, 1754002 („MAXIFIT
+KLUB Ružomberok, občianske združenie"). Dva rôzne RUZ záznamy, jedno IČO:
+presne prípad #83. Zámerne sa to sem píše aj s tým, čím to **nie** je —
+súbežný get-then-create race nižšie by potreboval dve súrodené ID na *jednej*
+stránke súčasne, a tento dôkaz ho nepreukazuje. Kto vidí v logu `duplicate
+key` a chce z toho spraviť race: takto vyzerá meranie, ktoré to rozhodne.
+
 ### 11.8 Opravné behy nemali job riadok ani globálny zámok (#186, `59fbf1f`)
 
 `start_repair_sync`, `resume_repair_sync`, `repair_ruz_gaps` a
