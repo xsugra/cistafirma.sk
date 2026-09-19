@@ -281,6 +281,60 @@ class StartFullRuzSyncFromIdTests(TestCase):
                 f"{task.name} would be SIGKILLed mid-walk at {task.time_limit}s",
             )
 
+    @patch("registers.tasks.call_command")
+    def test_a_live_walk_keeps_its_cursor_when_the_dispatch_bounces(self, call_command):
+        """This is the production path: the admin calls `.delay(start_id=...)`
+        with no `sync_job_id`, so the task enqueues, meets the running walk on
+        the concurrency key and returns without claiming anything.
+
+        It used to park the cursor *before* that, on the live walk's own row.
+        The walk is what made it survivable -- it overwrites the field every
+        hundred records -- but a walk stopped in that window left the cursor
+        ahead of the ids it had actually read, and nothing recorded the gap.
+        """
+        from registers.tasks import start_full_ruz_sync_from_id
+
+        live, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        self.assertIsNotNone(sync_engine.claim_ruz_job(live.pk, celery_task_id="walk"))
+        walk = SyncProgress.objects.create(
+            sync_type="full",
+            status="running",
+            zmenene_od=date(2000, 1, 1),
+            last_processed_ruz_id=349100,
+        )
+
+        start_full_ruz_sync_from_id.apply(args=(), kwargs={"start_id": 2000000})
+
+        walk.refresh_from_db()
+        self.assertEqual(walk.last_processed_ruz_id, 349100)
+        self.assertEqual(walk.status, "running")
+        call_command.assert_not_called()
+
+    @patch("registers.tasks.call_command")
+    def test_the_cursor_still_moves_when_the_slot_is_free(self, call_command):
+        """The positive control for the test above.
+
+        "The live walk keeps its cursor" is also true of a task that never
+        writes one, so the write has to be shown happening on the path that
+        does claim the slot -- against a `full` row that already exists, not
+        only against the empty table the other test starts from.
+        """
+        from registers.tasks import start_full_ruz_sync_from_id
+
+        walk = SyncProgress.objects.create(
+            sync_type="full",
+            status="completed",
+            zmenene_od=date(2000, 1, 1),
+            last_processed_ruz_id=349100,
+        )
+
+        start_full_ruz_sync_from_id.apply(args=(), kwargs={"start_id": 2000000})
+
+        walk.refresh_from_db()
+        self.assertEqual(walk.last_processed_ruz_id, 1999999)
+        self.assertEqual(walk.status, "paused")
+        call_command.assert_called_once()
+
 
 class RuzFullKeeperDecisionTests(TestCase):
     """The rule the 24/7 keeper ticks on.
@@ -1005,3 +1059,97 @@ class RepairAdminRefusalTests(TestCase):
 
         gap_task.delay.assert_called_once_with(analysis_id=self.analysis.pk, workers=5)
         self.assertTrue(any("bola naplanovana" in t for t in texts), texts)
+
+
+class SyncProgressButtonRefusalTests(TestCase):
+    """The three sync buttons on the progress list, which had no guard at all.
+
+    All three queue a command that takes `ruz:global`, and `_run_ruz_command`
+    meets the live walk on the concurrency key and returns -- so during the
+    five days the walk runs, every one of these clicks was a success message
+    for a run that never started. The `from_id` button was worse than a lie:
+    it moved the *live* walk's cursor before dispatching, which is why the
+    window between the two ids could be skipped with nothing recording it.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        self.staff = get_user_model().objects.create_superuser(
+            email="admin@example.com", password="x"
+        )
+        self.client.force_login(self.staff)
+
+    def _click(self, url_name, data=None):
+        from django.contrib.messages import get_messages
+        from django.urls import reverse
+
+        url = reverse(url_name)
+        response = self.client.post(url, data) if data else self.client.get(url)
+        return [str(m) for m in get_messages(response.wsgi_request)]
+
+    def _take_the_slot(self):
+        job, _ = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        sync_engine.claim_ruz_job(job.pk)
+        return job
+
+    @patch("registers.tasks.start_full_ruz_sync")
+    def test_full_sync_is_refused_while_the_walk_runs(self, full_task):
+        self._take_the_slot()
+
+        texts = self._click("admin:registers_syncprogress_trigger_full")
+
+        full_task.delay.assert_not_called()
+        self.assertTrue(any("neurobil nic" in t for t in texts), texts)
+
+    @patch("registers.tasks.start_full_ruz_sync_from_id")
+    def test_full_sync_from_id_is_refused_while_the_walk_runs(self, from_id_task):
+        self._take_the_slot()
+
+        texts = self._click(
+            "admin:registers_syncprogress_trigger_full_from_id", {"start_id": "2000000"}
+        )
+
+        from_id_task.delay.assert_not_called()
+        self.assertTrue(any("neurobil nic" in t for t in texts), texts)
+
+    @patch("registers.tasks.start_incremental_sync")
+    def test_incremental_sync_is_refused_while_the_walk_runs(self, incremental_task):
+        self._take_the_slot()
+
+        texts = self._click("admin:registers_syncprogress_trigger_incremental")
+
+        incremental_task.delay.assert_not_called()
+        self.assertTrue(any("neurobil nic" in t for t in texts), texts)
+
+    def test_the_buttons_still_work_when_the_slot_is_free(self):
+        """The positive control for all three: the refusal is the live job, not
+        the button. Without this, `assert_not_called` passes just as well
+        against a view that never dispatches anything."""
+        cases = (
+            ("admin:registers_syncprogress_trigger_full",
+             "registers.tasks.start_full_ruz_sync", None),
+            ("admin:registers_syncprogress_trigger_incremental",
+             "registers.tasks.start_incremental_sync", None),
+            ("admin:registers_syncprogress_trigger_full_from_id",
+             "registers.tasks.start_full_ruz_sync_from_id", {"start_id": "2000000"}),
+        )
+        for url_name, target, data in cases:
+            with self.subTest(url=url_name):
+                with patch(target) as task:
+                    texts = self._click(url_name, data)
+
+                task.delay.assert_called_once()
+                self.assertTrue(any("naplanovany" in t for t in texts), texts)
+
+    @patch("registers.tasks.start_full_ruz_sync_from_id")
+    def test_a_non_numeric_id_is_still_a_parse_error(self, from_id_task):
+        """The guard sits between the parse and the dispatch, so the two
+        failures stay distinguishable -- a typo must not read as a busy slot,
+        and must not queue anything."""
+        texts = self._click(
+            "admin:registers_syncprogress_trigger_full_from_id", {"start_id": "abc"}
+        )
+
+        from_id_task.delay.assert_not_called()
+        self.assertTrue(any("Neplatne RUZ ID" in t for t in texts), texts)

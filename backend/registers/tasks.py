@@ -46,6 +46,7 @@ def _run_ruz_command(
     command_args: list[str],
     celery_task_id: str = "",
     command: str = "fetch_ruz_data",
+    before_command=None,
 ):
     """Claim the global RUZ job before any command can write company data.
 
@@ -55,6 +56,17 @@ def _run_ruz_command(
     `repair_ruz_gaps`, and this function is the only thing that gives a RUZ run
     a job row, a heartbeat, an outcome, and the `ruz:global` slot that keeps it
     from writing company data beside the full walk.
+
+    `before_command` is a zero-argument callable run after the slot is claimed
+    and before the command starts. It exists for entry points that have to put
+    something in the database for the command to find -- `start_full_ruz_sync_from_id`
+    parks the walk's cursor. That write used to happen *before* the dispatch,
+    which meant a dispatch that then bounced off the slot had already rewound
+    the cursor of the walk it failed to replace. Anything that only makes sense
+    if the run actually starts belongs here, not before the call.
+
+    It runs inside the `try`, so a raise fails the claimed job with its reason
+    rather than leaving it `running` for the watchdog.
 
     Any command named here has to accept `--sync-job-id`: that is how it beats
     the heart of the job claimed below. A command that does not beat it looks
@@ -79,6 +91,8 @@ def _run_ruz_command(
         return f"RUZ job #{sync_job_id} not runnable"
 
     try:
+        if before_command is not None:
+            before_command()
         call_command(command, *command_args, sync_job_id=job.pk)
     except Exception as exc:
         fail_job(job, error=f"{type(exc).__name__}: {exc}")
@@ -844,27 +858,40 @@ def start_full_ruz_sync_from_id(self, start_id: int, sync_job_id: int | None = N
     half an hour later. Neither sibling (`start_full_ruz_sync`,
     `resume_full_ruz_sync`) has a limit, so this was the outlier rather than the
     guard. The heartbeat and the stored cursor are what make a long walk safe.
+
+    The cursor write is the third thing, and it is the reason this task takes
+    `before_command`. It used to run before the dispatch, so a dispatch that
+    then met the live walk on the concurrency key had already moved that walk's
+    cursor to `start_id - 1` -- and set the row to `paused`, which nothing heals
+    (`record_progress`'s `update_fields` does not carry `status`), so the admin
+    showed a running walk as paused until the next segment. The cursor itself
+    usually recovered within a hundred records, but only because the walk it
+    clobbered went on writing; if it was stopped in between, the interval
+    between the two ids was skipped with no note anywhere. Parking the cursor
+    now happens only on the path that actually claims the slot. See the
+    `before_command` paragraph in `_run_ruz_command`.
     """
     from registers.models import SyncProgress
 
     logger.info("Starting full RUZ sync from ID %s...", start_id)
 
-    progress, created = SyncProgress.objects.get_or_create(
-        sync_type='full',
-        defaults={'status': 'idle'}
-    )
-
-    # -1: the walk resumes *after* the stored id, so this makes `start_id` the
-    # first one it reads.
-    progress.last_processed_ruz_id = start_id - 1
-    progress.status = 'paused'
-    progress.save()
+    def park_cursor():
+        progress, _ = SyncProgress.objects.get_or_create(
+            sync_type='full',
+            defaults={'status': 'idle'}
+        )
+        # -1: the walk resumes *after* the stored id, so this makes `start_id`
+        # the first one it reads.
+        progress.last_processed_ruz_id = start_id - 1
+        progress.status = 'paused'
+        progress.save()
 
     return _run_ruz_command(
         sync_job_id=sync_job_id,
         job_type="ruz_full",
         command_args=["--full-resync", "--resume"],
         celery_task_id=self.request.id or "",
+        before_command=park_cursor,
     )
 
 

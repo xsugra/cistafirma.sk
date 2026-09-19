@@ -631,6 +631,16 @@ class SyncProgressAdmin(UnfoldModelAdmin):
 
     def trigger_full_sync_view(self, request):
         from registers.tasks import start_full_ruz_sync
+        # A full walk claims the global RUZ slot, so while one is already
+        # running this dispatch does nothing at all -- `_run_ruz_command` meets
+        # the live job on the concurrency key and returns. Reporting it as
+        # planned would be the false success `resume_sync_view` was fixed for.
+        if _live_ruz_job() is not None:
+            messages.warning(
+                request,
+                'RUZ bezi. Full Sync by teraz neurobil nic; skus to, ked dobehne.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
         try:
             start_full_ruz_sync.delay(reset=False)
             messages.success(request, 'Full Sync bol naplanovany.')
@@ -645,10 +655,26 @@ class SyncProgressAdmin(UnfoldModelAdmin):
             if start_id:
                 try:
                     start_id = int(start_id)
-                    start_full_ruz_sync_from_id.delay(start_id=start_id)
-                    messages.success(request, f'Full Sync od RUZ ID {start_id:,} bol naplanovany.')
                 except ValueError:
                     messages.error(request, 'Neplatne RUZ ID.')
+                    return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
+                # This button is the one that used to be actively harmful, not
+                # merely wrong: it parked the `full` cursor on the *live* walk's
+                # row before dispatching, so a dispatch that then bounced off
+                # the slot had already rewound a running five-day walk and
+                # marked it paused. The task now parks the cursor only after it
+                # claims the slot; this guard is what keeps the button from
+                # promising a walk it cannot start.
+                if _live_ruz_job() is not None:
+                    messages.warning(
+                        request,
+                        'RUZ bezi. Sync od zvoleneho ID by teraz neurobil nic; '
+                        'skus to, ked dobehne.'
+                    )
+                    return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
+                try:
+                    start_full_ruz_sync_from_id.delay(start_id=start_id)
+                    messages.success(request, f'Full Sync od RUZ ID {start_id:,} bol naplanovany.')
                 except Exception as e:
                     messages.error(request, f'Chyba: {str(e)[:100]}')
             else:
@@ -657,6 +683,14 @@ class SyncProgressAdmin(UnfoldModelAdmin):
 
     def trigger_incremental_sync_view(self, request):
         from registers.tasks import start_incremental_sync
+        # Same slot, same silence: the six-hourly incremental already bounces
+        # off the walk, and a click during the walk is no different.
+        if _live_ruz_job() is not None:
+            messages.warning(
+                request,
+                'RUZ bezi. Inkrementalny Sync by teraz neurobil nic; skus to, ked dobehne.'
+            )
+            return HttpResponseRedirect(reverse('admin:registers_syncprogress_changelist'))
         try:
             start_incremental_sync.delay()
             messages.success(request, 'Inkrementalny Sync bol naplanovany.')
