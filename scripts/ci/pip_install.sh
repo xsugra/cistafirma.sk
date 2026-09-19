@@ -39,12 +39,38 @@
 # `exit 0` v `before_script` by teda ukončil **celý job ako úspešný** a testy
 # by sa nikdy nespustili — zelená pipeline bez testov. Preto `break` a kontrola
 # až za slučkou.
+#
+# PREČO JE CESTA ODVODENÁ OD SKRIPTU (a nie `/backend/...` ani `backend/...`)
+# -------------------------------------------------------------------------
+# Prvá verzia tohto skriptu mala `pozadovane="/backend/requirements.txt"` —
+# absolútnu cestu. Runner ale klonuje do `/builds/<skupina>/<projekt>` a spúšťa
+# job v **koreni repa**, takže `/backend/` tam neexistuje. Pipeline 194 (build
+# 1362) preto zlyhala takto:
+#
+#     ERROR: Could not open requirements file: [Errno 2]
+#     No such file or directory: '/backend/requirements.txt'
+#
+# Opakovanie pritom fungovalo presne ako malo (20 s, 40 s) — červená bola len
+# a výhradne z cesty. Relatívna cesta `backend/requirements.txt` by v CI vyšla,
+# ale rozbila by sa v každom jobe, ktorý si predtým spraví `cd` (napr.
+# `backend_tests` má `cd backend` v `script`, a ten istý `before_script` sa
+# spúšťa pre oba joby). Preto sa cesta skladá z umiestnenia skriptu: je
+# správna z ľubovoľného cwd.
+#
+# Poučenie, ktoré stojí za zapísanie: `--selftest` stubuje `pip`, takže sa
+# pôvodne cesty **vôbec nedotkol** a prepustil práve tú chybu, na ktorej
+# záležalo. Kontrola existencie nižšie preto beží aj v `--selftest` — self-test
+# musí preveriť aj argumenty, nielen návratové kódy.
 
 set -uo pipefail
 
 POKUSOV="${CI_PIP_INSTALL_ATTEMPTS:-3}"
 Cakanie="${CI_PIP_INSTALL_RETRY_DELAY:-20}"
-pozadovane="/backend/requirements.txt"
+
+# Cesta k repu odvodená z umiestnenia skriptu (`scripts/ci/` → o dve vyššie),
+# aby bola správna bez ohľadu na to, odkiaľ sa skript volá.
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+pozadovane="${CI_PIP_REQUIREMENTS:-$repo_root/backend/requirements.txt}"
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -62,6 +88,15 @@ if [ "${1:-}" = "--selftest" ]; then
         [ "$volani" -le "$zlyhani" ] && return 1
         return 0
     }
+fi
+
+# Beží v OBoch režimoch, vrátane `--selftest`: práve preto, že stubovaný `pip`
+# by zlú cestu ticho prehliadol. Toto je kontrola, ktorá by odhalila pipeline
+# 194 ešte na mojom stroji.
+log "Závislosti: $pozadovane"
+if [ ! -f "$pozadovane" ]; then
+    log "CHYBA: $pozadovane neexistuje — niet čo inštalovať."
+    exit 1
 fi
 
 pokus=1
