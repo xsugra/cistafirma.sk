@@ -7509,20 +7509,32 @@ stále posiela len `--workers`, zatiaľ čo `REPAIR_RESUMABLE_STATUSES` prijíma
 
 ---
 
-### 11.10 Čo čaká na nasadenie na dell (stav 2026-09-18)
+### 11.10 Nasadenie na dell je vykonané (2026-09-19) — a inventár tejto sekcie bol zastaraný
 
-dell beží na **`8486c03`** a `main` je pred ním. Celkový počet commitov sa
-nepíše zámerne — každý ďalší `docs(plan)` ho posunie a číslo v dokumente by
-začalo klamať. Rozhodujúce je, že **štyri menia správanie** a sú vypísané
-nižšie; zvyšok sú `docs(plan)`. Aktuálny stav dá `git log --oneline 8486c03..main`.
-Všetko sa odkladá
-jedným rozhodnutím a z jedného dôvodu: ide o **jeden reštart workera**, a ten
-zastaví bežiaci walk #46 až na ~45–50 minút (30 min prah watchdogu + 15 min
-`KEEPER_REDISPATCH_AFTER` + 0–5 min tick keepera) a spraví znovu ≤100 záznamov.
-Hromadí sa to teda do jedného nasadenia
-**po dokončení walku**, nie do ôsmich.
+**Sekcia bola zoznam „čo čaká". Už nečaká.** dell je na **`04eaea4`**. Nasadenie
+sa pritom neodkladalo na koniec walku, ako tu stálo; spravilo sa **v jeho
+priebehu**, a to z dôvodu mimo techniky — Samuel odlietal na dovolenku
+a potreboval, aby web bežal samostatne. Namiesto čakania sa teda zaplatil jeden
+výpadok walku, zmeraný v §11.10.1. Predmet sekcie sa tým mení z plánu na
+**záznam**; recept je v `docs/DEVOPS_CICD.md`, zatiaľ čo
+`docs/DEPLOYMENT_RUNBOOK.md` je k8s cesta a **nesmie sa použiť, kým neexistuje
+klaster**.
 
-Štyri z nich menia správanie:
+**Inventár v nej bol neúplný ešte pred nasadením.** Stálo tu, že rozsah má
+„štyri commity meniace správanie" a „zvyšok sú `docs(plan)`". Premerané
+`git log 8486c03..04eaea4`: **44 commitov — 28 `docs`, 14 `fix`, 1 `ops`,
+1 `ci`**, čiže **16 nemenniacich len prózu**, nie štyri. Tabuľka nižšie
+vypisovala tie štyri, lebo sekcia vznikla skôr než ostatných desať; čitateľ
+však nemal ako zistiť, že je neúplná — práve preto, že bola tabuľkou.
+
+Je to tá istá chyba, na ktorú tá sekcia o odsek vyššie sama upozorňovala, len
+o úroveň nižšie: zakázala si písať **celkový** počet commitov („každý ďalší
+`docs(plan)` ho posunie") a potom hardkódovala počet **tých, na ktorých
+záleží**. Ten sa posúva rovnako. Ak má v dokumente ostať číslo, musí mať pri
+sebe príkaz, ktorý ho vie premerať.
+
+Pôvodná tabuľka (štyri commity, ktoré vtedy existovali — všetky sú súčasťou
+nasadeného rozsahu, takže platia ďalej):
 
 | commit | čo mení |
 |---|---|
@@ -7531,12 +7543,59 @@ Hromadí sa to teda do jedného nasadenia
 | `59fbf1f` | opravné behy dostali `SyncJob`, heartbeat a `ruz:global` (§11.8) |
 | `51482a1` | opravné príkazy ukladajú cez zapisovač walku, nie cez IČO (§11.9) |
 
-Zvyšných päť je `docs(plan)` — vrátane tohto.
+**Migrácie: žiadne** — `git diff --name-only 8486c03..04eaea4 --
+'backend/*/migrations/*'` je prázdne, a `make docker-migrate` na hoste to
+potvrdil vetou `No migrations to apply`. Nasadenie bolo `git fetch gitlab-home`
++ `git merge --ff-only` + `docker compose up -d --build`, teda bez `migrate`.
 
-**Migrácie: žiadne** (`git diff --name-only 8486c03..main -- 'backend/*/migrations/*'`
-je prázdne), takže nasadenie nepotrebuje `migrate` — je to `git pull` + reštart
-služieb. Recept je v `docs/DEVOPS_CICD.md`; `docs/DEPLOYMENT_RUNBOOK.md` je
-k8s cesta a **nesmie sa použiť, kým neexistuje klaster**.
+#### 11.10.1 Výpadok walku bol zmeraný, nie odhadnutý: 00:46:07.755349
+
+Sekcia predpovedala ~45–50 minút a predpoveď vyšla. To sa však neoplatí
+zapisovať — zapisujem **zmerané** hodnoty, lebo odhad, ktorý vyjde, ešte
+nedokazuje, že mechanika je pochopená. Namerané priamo v `registers_syncjob`
+(rozdiel spočítaný v SQL, nie v hlave):
+
+| medzník | čas (UTC) |
+|---|---|
+| #46 naposledy zapísal heartbeat | `2026-09-19 12:58:56.371691` |
+| #46 označený watchdogom ako `failed` | `2026-09-19 13:29:24.634574` |
+| #47 začal | `2026-09-19 13:45:04.127040` |
+| prah watchdogu: heartbeat → `failed` | `00:30:28.262883` |
+| `KEEPER_REDISPATCH_AFTER`: `failed` → obnovenie | `00:15:39.492466` |
+| **spolu: heartbeat → obnovenie** | **`00:46:07.755349`** |
+
+Rozklad sedí na komponenty, ktoré sekcia vymenovala. Prah je 30 minút
+(`CISTAFIRMA_STUCK_HEARTBEAT_MINUTES` nie je v dell `.env`, takže platí default
+30) a označenie prišlo `28,26 s` po jeho prekročení — to je fázový posun
+10-minútového `detect-stuck-sync-jobs-every-10-min`, nie odchýlka. Zvyšných
+`00:15:39` je práve to oneskorenie, ktoré `KEEPER_REDISPATCH_AFTER` existuje
+preto, aby dalo watchdogu prednosť.
+
+**Overovací reťaz pred nasadením.** Každý článok sa čítal v kóde, ktorý sa
+**naozaj nasadzoval**, nie v starom — `e089c54` aj `59fbf1f` sú v rozsahu
+a oba siahajú na resume cestu, takže starý kód by nič nedokazoval:
+
+- keeper vráti pre `running` verdikt `wait` (`sync_engine.py:747-800`);
+- slot `ruz:global` je **partial unique index** nad `status__in=["queued",
+  "running"]` (`models.py:786-799`), takže sa uvoľní v okamihu, keď watchdog
+  zapíše `failed` — nie je to zoznam statusov, ktorý by sa mohol rozísť
+  s realitou;
+- `RESUMABLE_SYNC_STATUSES` obsahuje aj `running` (`tasks.py:685`);
+- `_progress_to_resume(None, 'full')` vyberie priebeh #4 (`tasks.py:701-760`);
+- `_run_ruz_command(sync_job_id=None)` založí a nárokuje nový job
+  (`tasks.py:42-102`).
+
+Watchdog sa navyše overil **pozorovaním, nie čítaním**: riadok
+`detect-stuck-sync-jobs-every-10-min` v `django_celery_beat_periodictask`,
+`enabled=t`, 1157 behov. Plán sa z kódu prečítať nedá — to je dôvod, prečo tu
+jediný článok reťaze nemá oporu v zdrojáku.
+
+**Jediné FAIL po nasadení bolo moje vlastné.** `make db-backup` — ktorý som
+pred nasadením spravil — vyrobil `cistafirma_20260919T125538Z.dump`, a brána
+`ops-check` potom hlásila `FAIL no off-site replica of the newest dump`, lebo
+o najnovšej zálohe to bola pravda. Po `make db-backup-replicate` → exit 0
+a `ops-check` **SATISFIED**. Zapisujem to preto, aby „po nasadení spadla jedna
+kontrola" nevyzeralo ako následok nasadenia. Nebolo.
 
 ---
 
@@ -8133,9 +8192,12 @@ to by `ruz_full`/`ruz_repair` z brány vyhodilo úplne.
 #### Zastarané a vyvrátené — nech sa to znova neodvodzuje
 
 **#186 je naozaj opravené** (`59fbf1f`, `git merge-base --is-ancestor` proti
-HEAD). Ale dve veci stoja za zapísanie. Prvá: **dell je stále na `8486c03`**, kde
-`59fbf1f` nie je — kto si prečíta „#186 hotové" a usúdi „produkcia je krytá",
-číta repozitár, nie hostiteľa. Druhá, reziduum dosiahnuteľné aj po nasadení:
+HEAD) — a od 2026-09-19 aj **na hostiteľovi**: dell je na `04eaea4`, ktorý
+`59fbf1f` obsahuje. Zapisujem to preto, lebo tá veta tu deň stála v opačnom znení
+(„dell je stále na `8486c03`") a vtedy bola pravdivá: kto si prečíta „#186
+hotové" a usúdi „produkcia je krytá", číta repozitár, nie hostiteľa. To
+rozlíšenie platí ďalej — tentoraz len náhodou vychádza. Druhá vec, reziduum
+dosiahnuteľné aj po nasadení:
 **ručne** spustené `manage.py repair_ruz_sync_v2|repair_ruz_gaps` si neberú job
 riadok ani slot — a `repair_ruz_gaps.py:205` to operátorovi priamo odporúča
 („Pokračujte: python manage.py repair_ruz_gaps --resume"). Správny vzor je o
@@ -8160,6 +8222,59 @@ datasetov v `FS_DATASET_URLS` sa ticho preskočí. Oboje je už zapísané v
 `throughput_24h.failed_per_hour`. Čítadlo teda **jedného** čitateľa má — ale je
 to graf, nie súd: jedna chyba v okne so 47 800 položkami je v ňom neviditeľná.
 Zapisujem to preto, aby budúce „nikto to nečíta" bolo presné.
+
+---
+
+### 11.15 Keeper po každej obnove vypíše rýchlosť, ktorá je ~900× väčšia (2026-09-19)
+
+Nájdené pri overovaní nasadenia, v logu samotného keepera. Jeho `--dry-run` po
+obnovení walku vypísal:
+
+```
+RUZ_KEEPER_STATE: progress #4 running cursor=423700 processed=423700 errors=74 rate=17580474/h
+```
+
+**17,5 milióna záznamov za hodinu.** Skutočná rýchlosť walku je ~19 500/h.
+
+**Prečo.** `SyncProgress.get_rate()` (`models.py:280-286`) delí **kumulatívny**
+kurzor `total_processed` **dĺžkou aktuálneho behu**:
+
+- `get_rate()` = `total_processed / hours`,
+- `hours` z `get_duration()` (`models.py:273-278`) = `(completed_at or now) − started_at`,
+- a `start()` (`models.py:313`) na obnovenie nastaví `self.started_at = timezone.now()`.
+
+Kurzor je spoločný pre celý päťdňový walk, ale menovateľ sa každou obnovou
+vynuluje. Po obnove je teda rýchlosť nafúknutá približne o
+`(celý walk) / (aktuálny beh)` — a to je presne chvíľa, keď ju keeper zapisuje.
+
+**Zmerané naživo** (priebeh #4, beh #47): `started_at = 2026-09-19
+13:45:04.147081`, kým walk začal `2026-09-18 16:02Z` — menovateľ ~21,8 h sa
+skrátil na ~2 min. Odtiaľ tých ~900×.
+
+**Dopad je informačný, ale nie nulový.** `get_rate()` čítajú len štyri miesta:
+`registers/admin.py:381`, `:431`, `:454` (zobrazenie v adminovi) a
+`ruz_keeper_tick.py:136` (riadok `RUZ_KEEPER_STATE`). `get_duration()` okrem
+toho `admin.py:446` a `:499`. **Žiadna brána na nich nestojí** — `ops-check` ani
+watchdog ich nečítajú, takže nejde o tichú dieru v kontrole. Je to však to
+číslo, ktoré by si operátor prečítal v logu, ktorý keeper píše **pre operátora**,
+a je pokazené práve vtedy, keď ho keeper zapisuje — po obnove. Preto je
+zapísané tu a nie odložené ako „kozmetika".
+
+**Neopravené, zámerne.** Oprava znamená ďalšie nasadenie, a to ďalší výpadok
+walku ~46 minút (§11.10.1). Dve možné podoby, keď na to dôjde:
+
+1. `start()` nech `started_at` pri obnove **nemení** — potom je `get_duration()`
+   dĺžka celého walku a rýchlosť je správna; `started_at` tým ale prestane
+   znamenať „kedy začal tento beh".
+2. Ponechať `started_at` a viesť **osobitý** akumulovaný čas behu (nový stĺpec),
+   z ktorého sa ráta rýchlosť. Nevyžaduje zmenu významu existujúceho stĺpca, ale
+   migráciu.
+
+Do rozhodnutia platí: **rýchlosť walku sa nečíta z `rate=`**. Zdrojom je
+`registers_syncprogress` (`last_processed_ruz_id` a `total_processed` v dvoch
+vzorkách za sebou). Susediaca pasca je `SyncJob.processed_items` — ten je počas
+celého behu `0` a po zabitom behu `0` navždy (§11.9.1, `e7758eb`), takže
+„rýchlosť z job riadku" vyjde ako `0/h` na zdravom walku.
 
 ---
 
