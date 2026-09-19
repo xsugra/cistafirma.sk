@@ -2855,11 +2855,29 @@ administrátorský zásah **presne počas** focus mode, takže výskyt je úzky.
 **Označujem to ako najslabší nález** a neodporúčam naň siahať skôr než na A–C.
 
 > **Aby to nikto „neopravil":** `revoke_non_focus_tasks` a `purge_broker_queues`
-> sú v `focus_mode.py` definované, ale **nikto ich nevolá** — a
-> `registers/tests_focus_mode_safety.py:42-43` to **explicitne testuje**
-> (`assert_not_called`). Je to zámerná, otestovaná invariantná záruka, že focus
-> mode nikdy nesiaha na broker správy, **nie mŕtvy kód**. Zapisujem to sem, aby
-> ich niekto nezapojil v dobrej viere.
+> sú v `focus_mode.py` definované a **`enter_focus_mode` nevolá ani jednu z nich**
+> — `registers/tests_focus_mode_safety.py` to explicitne testuje
+> (`revoke_tasks.assert_not_called()` / `purge_queues.assert_not_called()`). Je to
+> zámerná, otestovaná invariantná záruka, že focus mode nikdy nesiaha na broker
+> správy, **nie mŕtvy kód**. Zapisujem to sem, aby ich niekto nezapojil v dobrej
+> viere.
+>
+> **Dve veci, ktoré tá veta predtým zlievala dohromady (opravené 19. 9. 2026):**
+>
+> - **`purge_broker_queues` nevolá naozaj nikto** — ani test. Jeho jediný výskyt
+>   mimo definície je `patch(...)` v bezpečnostnom teste, ktorý overuje, že sa
+>   *ne*zavolá.
+> - **`revoke_non_focus_tasks` je otestovaná**, takže „nikto ju nevolá" o nej
+>   neplatí: `registers.tests.FocusModeTests.test_revoke_skips_keep_list_tasks`
+>   ju volá priamo s podvrhnutým `inspect` a **pripína jej keep-list sémantiku**
+>   (revokuje práve tie dve úlohy mimo keep-listu a žiadne iné). Nemá
+>   produkčného volajúceho, ale má krytie — a keby niekto zmenil, čo revokuje,
+>   spadne test, nie ticho niečo iné.
+>
+> Odkaz je zámerne na **mená testov, nie na čísla riadkov**: pôvodná verzia
+> citovala `tests_focus_mode_safety.py:42-43`, kým asserty sú dnes na 39–40 —
+> čísla sa posunú pri každej úprave a poznámka, ktorej celý zmysel je „nesaň na
+> to", sa tým rozpadne.
 
 #### Čo z toho plynie
 
