@@ -5699,8 +5699,77 @@ medzi **jobovými** premennými, nie medzi CI/CD premennými projektu; preto sa
 „žiadne CI premenné" a „beží na SQLite" dali zlúčiť do jednej vety. Opravil to
 `6e219e5` (15. 9. 2026 23:19) a jeho vlastný komentár v CI to aj vysvetľuje.
 Živý dôkaz z jobu 1060: `Ran 934 tests in 210.298s`, `Creating test database for
-alias 'default'` → `Destroying test database`. **Stav je overený z tracu jobu,
-ktorý práve bežal** — a to je jediné okno, kedy sa trace dá vôbec prečítať.
+alias 'default'` → `Destroying test database`. **Stav je overený z tracu jobu.**
+
+> **Oprava 2026-09-19.** Stálo tu, že bežiaci job je „jediné okno, kedy sa trace
+> dá vôbec prečítať". **To je nesprávne**, a stálo to na zámene dvoch vecí:
+> trace *nie je v databáze* po archivácii (`ci_build_trace_chunks` aj
+> `p_ci_build_trace_metadata` boli pre build 1360 prázdne), ale je na
+> **filesystéme** GitLabu a čítať sa dá kedykoľvek — aj dávno po skončení jobu:
+>
+>     /var/opt/gitlab/gitlab-rails/shared/artifacts/<2>/<2>/<64>/<rrrr_mm_dd>/<build_id>/<project_id>/job.log
+>
+> Overené na build 1360 (pipeline 193): `wc -l` = 181 riadkov, `grep -c
+> "Ran .* tests"` = 0, `tail -1` = `ERROR: Job failed: exit code 2` — celé
+> prečítané **po** skončení jobu. Cesta sa hľadá `find`-om na kontajneri
+> `gitlab-server`; hashové prefixy sa z ID odvodiť nedajú.
+> ([[querying-gitlab-ci-state]])
+
+### Inštalácia závislostí v CI vedela zhodiť pipeline pred prvým testom (2026-09-19)
+
+19. 9. 2026 o 09:35 UTC zlyhal `backend_tests` v pipeline 193 (build 1360) na
+`d7fe037` — commite, ktorý sa dotýka **len `docs/PLAN.md`**. To je samo o sebe
+podozrivé, takže sa to čítalo, nie hádalo.
+
+Trace (ako sa k nemu dostať, je v oprave vyššie):
+
+```
+pip._vendor.urllib3.exceptions.ReadTimeoutError:
+HTTPSConnectionPool(host='files.pythonhosted.org', port=443): Read timed out.
+ERROR: Job failed: exit code 2
+```
+
+`grep -c "Ran .* tests"` v traci = **0**. Job teda zomrel v `pip install`
+v `before_script` a **nespustil ani jeden test**. A
+`git diff --quiet 24b1345 d7fe037 -- backend frontend` je prázdny, takže
+pipeline 192 testovala **bajt-identický** kód a bola zelená. Červená 193 teda
+o kóde nenesie **nič** — je to zlyhanie prostredia, nie regresia.
+
+**Prečo to nie je len smola.** `pip` sa už raz opakuje sám —
+`--retries 3 --timeout 120` pribudlo 7. 5. 2026 (`e9be132`) **presne ako
+mitigácia tohto problému**. Nepokrylo však presne ten prípad, ktorý nastal:
+`--retries` opakuje *spojenie*, ale keď PyPI neodpovie v rámci limitu, pip to
+vzdá a job zomrie. Tri pokusy na úrovni spojenia nie sú tri pokusy na úrovni
+kroku.
+
+**Oprava** (`cbf7276`, `scripts/ci/pip_install.sh`): opakuje sa **celý krok** —
+znovu sa spustí `pip`, teda aj rozlíšenie mena, aj celý prenos. To je jediná
+účinná vec aj na výpadok DNS, ktorý tento projekt už raz zažil (viď riadok 2
+`registers_syncprogress`). Vnútorné flagy zostávajú presne tie isté
+(`--retries 3 --timeout 120`), aby sa nemenilo naraz viac vecí.
+
+Dve veci, ktoré tá oprava zámerne **nerobí**:
+
+- **Neopakuje job ako celok** (`retry: when: script_failure` v `.gitlab-ci.yml`).
+  Tým by sa opakovali aj testy — a červená pipeline by prestala znamenať „test
+  neprešiel". Opakovanie patrí sieťovému kroku, nie kontrolnému.
+- **Nepoužíva `exit 0`** v tele slučky: GitLab Runner zliepa `before_script`
+  a `script` do jedného shell skriptu, takže `exit 0` v `before_script` by
+  ukončil celý job ako **úspešný** a testy by sa nikdy nespustili. Preto
+  `break` a kontrola až za slučkou.
+
+Logika je testovateľná mimo CI cez `--selftest N` (stub `pip`, ktorý zlyhá
+N-krát): zlyhá 2× → `EXIT 0` po 3 volaniach, zlyhá vždy → `EXIT 1` po 3
+pokusoch. Bez toho by sa skript, ktorý rozhoduje o tom, či sa testy vôbec
+spustia, testoval až tým, že raz za čas zhodí pipeline.
+
+**A jedna prevádzková poznámka k tomu.** Pipeline 193 sa podarilo dokončiť len
+ručným retry-om cez `Ci::RetryJobService` v `gitlab-rails` na `lenovo` —
+`glab` ani API token tu nie sú. Rails runner sa rozbieha ~45 s a jeho výstup
+(`RETRY project=web/cistafirma.sk new_build= status=success`) prichádza skôr,
+než je retry build v DB — `new_build` je teda prázdne aj vtedy, keď retry
+naozaj prebehol; spoľahlivý dôkaz je nový riadok v `p_ci_builds`
+(`retried=true` na pôvodnom, nový build s tým istým menom).
 
 ---
 
