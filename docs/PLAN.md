@@ -5763,6 +5763,37 @@ N-krát): zlyhá 2× → `EXIT 0` po 3 volaniach, zlyhá vždy → `EXIT 1` po 3
 pokusoch. Bez toho by sa skript, ktorý rozhoduje o tom, či sa testy vôbec
 spustia, testoval až tým, že raz za čas zhodí pipeline.
 
+**Oprava opravy (2026-09-19, pipeline 194, build 1362).** Prvá verzia skriptu
+zhodila `backend_validate` — job, ktorý dovtedy prechádzal vždy:
+
+```
+ERROR: Could not open requirements file: [Errno 2]
+No such file or directory: '/backend/requirements.txt'
+```
+
+Skript mal `pozadovane="/backend/requirements.txt"` — **absolútnu** cestu.
+Runner klonuje do `/builds/web/cistafirma.sk` a job spúšťa v **koreni repa**,
+takže `/backend/` tam neexistuje; pôvodný riadok bol relatívny
+(`-r backend/requirements.txt`). Opakovanie pritom fungovalo presne ako malo
+(`pokus 1 … o 20s`, `pokus 2 … o 40s`, potom `vzdávam to`) — červená bola len
+a výhradne z cesty. Relatívna cesta by sa ale rozbila v `backend_tests`, ktorý
+má `cd backend` v `script` a zdieľa ten istý `before_script`; cesta sa preto
+skladá z umiestnenia skriptu (`scripts/ci/` → o dve vyššie), takže je správna
+z ľubovoľného cwd (`scripts/ci/pip_install.sh:96-100`).
+
+Poučenie je o **self-teste, nie o ceste**: `--selftest` stubuje `pip`, takže sa
+cesty nikdy nedotkol — a prepustil presne tú chybu, na ktorej záležalo.
+Kontrola existencie cieľového súboru preto teraz beží **aj v `--selftest`**,
+a je zároveň pozitívnou kontrolou proti tejto regresii:
+
+```bash
+# tá istá chyba, akú poslal do CI build 1362 — musí zlyhať:
+CI_PIP_REQUIREMENTS=/backend/requirements.txt \
+  bash scripts/ci/pip_install.sh --selftest 2   # EXIT 1, „neexistuje"
+```
+
+Voľba `CI_PIP_REQUIREMENTS` je len pre tento test; v CI sa nepoužíva.
+
 **A jedna prevádzková poznámka k tomu.** Pipeline 193 sa podarilo dokončiť len
 ručným retry-om cez `Ci::RetryJobService` v `gitlab-rails` na `lenovo` —
 `glab` ani API token tu nie sú. Rails runner sa rozbieha ~45 s a jeho výstup

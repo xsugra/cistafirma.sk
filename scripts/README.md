@@ -145,13 +145,24 @@ make docs-audit   # EXIT 0 = všetky odkazy aj citácie sedia
   `before_script` a `script` do jedného shell skriptu, takže `exit 0`
   v `before_script` by ukončil celý job ako **úspešný** a testy by sa nikdy
   nespustili. Preto `break` a kontrola až za slučkou
-  (`scripts/ci/pip_install.sh:71-82`).
+  (`scripts/ci/pip_install.sh:111-114`).
+
+  Cesta k `requirements.txt` sa **skladá z umiestnenia skriptu**, nie z cwd —
+  prvá verzia mala absolútnu `/backend/requirements.txt` a 19. 9. 2026 tým
+  zhodiła `backend_validate` v pipeline 194 (build 1362): runner klonuje do
+  `/builds/web/cistafirma.sk` a job beží v koreni repa. Skript preto pred
+  slučkou overí, že cieľový súbor existuje, a to **aj v režime `--selftest`** —
+  stubovaný `pip` by inak cestu ticho prehliadol, čo je presne to, čo sa stalo.
 
   ```bash
   # logika opakovania sa dá overiť bez inštalácie čohokoľvek:
   # `pip` sa nahradí stubom, ktorý zlyhá presne N-krát
   bash scripts/ci/pip_install.sh --selftest 2   # zlyhá 2×, potom uspeje → EXIT 0
   bash scripts/ci/pip_install.sh --selftest 5   # zlyhá vždy → EXIT 1 po 3 pokusoch
+
+  # pozitívna kontrola proti regresii z pipeline 194 — musí zlyhať:
+  CI_PIP_REQUIREMENTS=/backend/requirements.txt \
+    bash scripts/ci/pip_install.sh --selftest 2
   ```
 
   `CI_PIP_INSTALL_ATTEMPTS` (default 3) a `CI_PIP_INSTALL_RETRY_DELAY`
