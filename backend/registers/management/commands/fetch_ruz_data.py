@@ -204,7 +204,7 @@ class Command(BaseCommand):
             f'Pokračujem za ID: {pokracovat_za_id or 0}'
         ))
 
-        from registers.services.sync_engine import set_job_outcome
+        from registers.services.sync_engine import heartbeat_gate, set_job_outcome
 
         # Nothing else beats this job's heart. Heartbeats were meant to come
         # from `record_item`, called by the per-company `tracked_sync_task`
@@ -213,10 +213,23 @@ class Command(BaseCommand):
         # multi-hour resync looked exactly like a dead job. That is why the
         # watchdog could not be switched on until this explicit beat existed.
         job_row = SyncJob.objects.filter(pk=sync_job_id).first()
+        if job_row is None:
+            # Only reachable if the row went away under a running walk, and it
+            # has to stop the walk rather than be shrugged off: with no row
+            # there is no heartbeat, so the job the watchdog would reap does not
+            # exist at all -- and `set_job_outcome` below is a
+            # `filter(pk=...).update()`, which reports nothing when the row it
+            # writes to is gone. The run would import into `SyncProgress` while
+            # the keeper, seeing no live job, dispatched a second walk over the
+            # same window. Loud beats silent here.
+            raise CommandError(
+                f"RUZ sync job #{sync_job_id} is gone; refusing to walk untracked."
+            )
 
-        def beat() -> None:
-            if job_row is not None:
-                job_row.heartbeat()
+        # Gated on the clock, so it can be called on every record without
+        # writing a row each time. See `HEARTBEAT_INTERVAL_SECONDS` for why
+        # this replaced an `index % 50` count.
+        beat = heartbeat_gate(job_row)
 
         # This run's own numbers. `progress` cannot supply them: its row is
         # reused between runs and `start()` resets only `started_at`, so its
@@ -276,7 +289,7 @@ class Command(BaseCommand):
                 company_ids = id_data['id']
                 self.stdout.write(f"Found {len(company_ids)} company IDs to process.")
 
-                for index, company_id in enumerate(company_ids, start=1):
+                for company_id in company_ids:
                     # Bound before the call so the handler below can name the
                     # record from whatever arrived, without risking a NameError
                     # on the first iteration if the fetch itself is what raised.
@@ -336,11 +349,13 @@ class Command(BaseCommand):
                     # Be a good API citizen
                     time.sleep(0.1)
 
-                    # A page is up to 1000 companies, so at 0.1s each the
-                    # per-page beat alone would be minutes apart. Every 50
-                    # keeps the gap far below any sane staleness threshold.
-                    if index % 50 == 0:
-                        beat()
+                    # Called on every record, and writes only when the clock
+                    # says a write is due. A page is up to 1000 companies, so
+                    # the per-page beat alone would be minutes apart -- but so
+                    # would "every 50 records" once a record can cost two
+                    # minutes instead of 0.1s, which is why the gate is on the
+                    # gap rather than on a count of items.
+                    beat()
 
                 if not id_data.get('existujeDalsieId'):
                     self.stdout.write(self.style.SUCCESS("Reached the end of the list."))

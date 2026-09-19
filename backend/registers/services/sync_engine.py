@@ -649,6 +649,27 @@ def stuck_heartbeat_threshold() -> timedelta:
     )
 
 
+# How long a long-running walk may go between `SyncJob.heartbeat()` writes.
+#
+# A clock rather than a count of iterations, because what has to stay below
+# `stuck_heartbeat_threshold()` is a *gap*, and one iteration's cost here is
+# not a constant. The RUZ walk is the caller: an ordinary record costs its
+# 0.1s sleep plus one API call, but `RUZApi` builds its session with
+# `Retry(total=4, backoff_factor=0.6)` over a 20s timeout, so a record read
+# against a register that is answering slowly can occupy five attempts and
+# around 110s before it raises -- three orders of magnitude above the floor.
+# A count of records cannot promise "well below the threshold" across that
+# spread; a clock can.
+#
+# What it buys: the worst honest gap is one interval plus the slowest single
+# record, so a walk inside a sustained register outage reads as slow rather
+# than as dead, and the watchdog does not fail it underneath itself. The
+# coupling to the threshold is one decision split across two hosts -- the walk
+# is a management command, the threshold a setting the watchdog reads -- so
+# `HeartbeatGateTests` is what ties them.
+HEARTBEAT_INTERVAL_SECONDS = 60.0
+
+
 def stuck_cutoff():
     """The instant before which a heartbeat means the job is dead.
 
@@ -785,19 +806,53 @@ def ruz_full_keeper_decision(*, now=None) -> tuple[str, SyncJob | None]:
 # ---------------------------------------------------------------------------
 
 
+def heartbeat_gate(
+    job: SyncJob, interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS
+):
+    """Return a `beat()` that writes a heartbeat at most once per interval.
+
+    The single definition of "beat no more often than this", so a loop that
+    already has a per-item call site for its own reasons can call `beat()`
+    unconditionally instead of inventing a second way to decide when a write is
+    due. `heartbeat_loop` below wraps the same gate for loops that have no such
+    call site.
+
+    Safe to call as often as you like; the clock decides, not the caller. The
+    first call always writes, so a walk that starts and then stalls is at least
+    visible as a job that started -- and one that never completes a whole
+    interval is not left with no heartbeat at all, which is the state the
+    watchdog reads as "the worker died".
+
+    `time.monotonic()` rather than `time.time()`: a write is due after an
+    elapsed interval, and a walk runs for days, so a clock step from NTP must
+    not be able to move the next beat into the past or the far future.
+    """
+    last = [time.monotonic() - interval_seconds]
+
+    def beat() -> None:
+        now = time.monotonic()
+        if now - last[0] < interval_seconds:
+            return
+        last[0] = now
+        job.heartbeat()
+
+    return beat
+
+
 @contextmanager
-def heartbeat_loop(job: SyncJob, interval_seconds: int = 30):
+def heartbeat_loop(
+    job: SyncJob, interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS
+):
     """Context manager that keeps the job's last_heartbeat fresh while iterating.
 
     Use this around long-running loops that pass long enough between natural
-    checkpoints for the watchdog's staleness threshold to be reached.
+    checkpoints for the watchdog's staleness threshold to be reached, and that
+    have no per-item call site of their own; otherwise take `heartbeat_gate`
+    directly. The final write on the way out is not gated, so a loop that ends
+    leaves the job looking alive at the moment it stopped rather than up to an
+    interval earlier.
     """
-    last = [time.time()]
-
-    def beat():
-        if time.time() - last[0] >= interval_seconds:
-            job.heartbeat()
-            last[0] = time.time()
+    beat = heartbeat_gate(job, interval_seconds)
 
     try:
         yield beat

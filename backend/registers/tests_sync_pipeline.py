@@ -4,6 +4,7 @@ from io import StringIO
 from unittest.mock import patch, MagicMock
 import requests
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from companies.models import Company
@@ -566,6 +567,70 @@ class RuzCommandHeartbeatTests(TestCase):
         self.assertEqual(sync_engine.detect_and_fail_stuck_jobs(), 0)
         job.refresh_from_db()
         self.assertEqual(job.status, "running")
+
+    def test_the_gap_between_beats_is_a_clock_not_a_record_count(self):
+        """The gate has to survive slow records, not only ordinary ones.
+
+        It used to be `index % 50`, and a count of records bounds the gap only
+        while a record costs about what a record usually costs. It does not:
+        `RUZApi` builds its session with `Retry(total=4, backoff_factor=0.6)`
+        over a 20s timeout, so one read against a register that is answering
+        slowly occupies five attempts and around 110s before it raises -- and
+        fifty of those is over ninety minutes, three times what
+        `detect_and_fail_stuck_jobs` reaps on. A healthy walk inside a register
+        outage would have been failed underneath itself by the watchdog written
+        to protect it, and the keeper would then have had nothing to resume.
+
+        The slowness is simulated on the clock rather than slept through: each
+        record costs 60s of wall clock, so the count-based gate it replaced
+        would leave a 50-minute hole where this one leaves one of a minute.
+        """
+        record_seconds = 60.0
+        clock = [0.0]
+        beats = []
+        job = self._job()
+
+        def _slow_sleep(_seconds):
+            clock[0] += record_seconds
+
+        def _record_beat(_job_row):
+            beats.append(clock[0])
+
+        with patch("time.sleep", side_effect=_slow_sleep), patch.object(
+            sync_engine.time, "monotonic", lambda: clock[0]
+        ), patch.object(SyncJob, "heartbeat", _record_beat):
+            self._run(job, [list(range(1000, 1120))])
+
+        self.assertGreater(len(beats), 1, "the run recorded no heartbeat at all")
+
+        worst = max(b - a for a, b in zip(beats, beats[1:]))
+        self.assertLess(
+            worst,
+            sync_engine.stuck_heartbeat_threshold().total_seconds(),
+            "a beat gap reached the threshold the watchdog reaps on",
+        )
+        # And not merely under it: one interval plus one record is the honest
+        # ceiling, with the rest of the threshold left as headroom.
+        self.assertLessEqual(
+            worst, sync_engine.HEARTBEAT_INTERVAL_SECONDS + record_seconds
+        )
+
+    def test_a_walk_whose_job_row_is_gone_refuses_to_start(self):
+        """A walk that cannot beat its heart is one the watchdog later fails.
+
+        With no row there is no heartbeat at all, and `set_job_outcome` is a
+        `filter(pk=...).update()` -- which reports nothing when the row it
+        writes to has vanished. The run would import into `SyncProgress` while
+        the keeper, seeing no live job, dispatched a second walk over the same
+        window. Refusing is the only outcome that does not lie.
+        """
+        with self.assertRaises(CommandError):
+            call_command(
+                "fetch_ruz_data",
+                sync_job_id=999_999,
+                stdout=StringIO(),
+                stderr=StringIO(),
+            )
 
     def test_the_run_records_what_it_actually_did(self):
         """`processed_items=0` on a run that created companies is the defect

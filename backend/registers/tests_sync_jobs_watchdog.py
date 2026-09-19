@@ -145,6 +145,79 @@ class StuckJobDetectionTests(TestCase):
         self.assertEqual(job.status, "running")
 
 
+class HeartbeatGateTests(TestCase):
+    """How often a walk must write a heartbeat, and why it is a clock.
+
+    The gate the RUZ walk used to carry counted records (`index % 50`), which
+    bounds the gap only while a record costs what a record usually costs. The
+    cost is not bounded that way: `RUZApi` retries a failing read four times
+    with `backoff_factor=0.6` over a 20s timeout, so one record can occupy five
+    attempts and around 110s -- and fifty of those is over ninety minutes,
+    three times the default threshold. A healthy walk inside a register outage
+    would have been reaped underneath itself.
+    """
+
+    INTERVAL = 60.0
+
+    def _gated(self, clock):
+        """A gate over a real job, reading a clock the test moves by hand."""
+        job = _job()
+        patcher = patch.object(sync_engine.time, "monotonic", lambda: clock[0])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return job, sync_engine.heartbeat_gate(job, interval_seconds=self.INTERVAL)
+
+    def test_the_first_call_always_writes(self):
+        """A walk that starts and then stalls still reads as a job that started.
+
+        The opposite convention -- wait a whole interval before the first write
+        -- leaves a run that dies early with no heartbeat at all, which is
+        indistinguishable from a job whose worker never came up.
+        """
+        clock = [0.0]
+        job, beat = self._gated(clock)
+
+        beat()
+
+        job.refresh_from_db()
+        self.assertIsNotNone(job.last_heartbeat)
+
+    def test_a_call_inside_the_interval_does_not_write(self):
+        """Which is what lets the walk call it on every record for free."""
+        clock = [0.0]
+        job, beat = self._gated(clock)
+
+        beat()
+        job.refresh_from_db()
+        first = job.last_heartbeat
+
+        clock[0] = self.INTERVAL - 1
+        beat()
+        job.refresh_from_db()
+        self.assertEqual(job.last_heartbeat, first)
+
+        clock[0] = self.INTERVAL
+        beat()
+        job.refresh_from_db()
+        self.assertGreater(job.last_heartbeat, first)
+
+    def test_the_interval_stays_well_inside_the_reap_threshold(self):
+        """The gate and the reaper are one decision split across two hosts.
+
+        The walk is a management command holding the interval in code; the
+        threshold is an environment variable a beat task reads. Nothing makes
+        the two agree by construction, so this is the tie: four intervals still
+        fit inside the threshold, which leaves room for an interval plus the
+        slowest single record and still keeps a healthy walk out of the
+        reaper's reach.
+        """
+        threshold = sync_engine.stuck_heartbeat_threshold()
+
+        self.assertLessEqual(
+            sync_engine.HEARTBEAT_INTERVAL_SECONDS * 4, threshold.total_seconds()
+        )
+
+
 class IsStuckRuleTests(TestCase):
     """`is_stuck` is the single owner of the rule; the gate asks it too.
 
