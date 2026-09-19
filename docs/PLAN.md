@@ -5824,7 +5824,7 @@ funkciu Firmy/SZCO. Má **15 blokov `if grep -q … then … fi`** — a ani jed
 vytlačí `✅ Implementation Verification Complete!` a skončí s 0.
 
 Ak by všetkých 15 hľadaných symbolov z kódu zmizlo, výstup aj exit kód sú
-identické. `README_FIRMY_SZCO_IMPLEMENTATION.md:213-218` pritom navádza:
+identické. `docs/archive/README_FIRMY_SZCO_IMPLEMENTATION.md:213-218` pritom navádza:
 `bash verify_implementation.sh` → `# Expected output: All ✓ checks pass`. Je to
 teda **dôkaz, ktorý sa nedá vyvrátiť** — presne trieda z
 [[a-count-that-cannot-show-failure]] a [[silent-failure-is-the-defect-class]]:
@@ -5835,8 +5835,8 @@ o zastaraný text — skript je spustiteľný dnes a klame.
 
 ### 8.3 Firmy a SZCO sa **nedajú** synchronizovať súčasne — a UI to tvrdí opak
 
-`FIRMY_SZCO_ARCHITECTURE.md:406` hovorí *„Can run both simultaneously"*
-a `FIRMY_SZCO_QUICK_START.md:6-9` predáva SZCO sync ako nezávislý. Kód hovorí
+`docs/archive/FIRMY_SZCO_ARCHITECTURE.md:406` hovorí *„Can run both simultaneously"*
+a `docs/archive/FIRMY_SZCO_QUICK_START.md:6-9` predáva SZCO sync ako nezávislý. Kód hovorí
 inak — je vynútený **jeden aktívny RUZ job globálne**:
 
 - `backend/registers/models.py:705-710` — partial unique constraint
@@ -5871,9 +5871,15 @@ SZCO do **vlastnej tabuľky** `IndividualEntity` (`registers/models.py:757`,
 `IndividualEntity` sa v celom `backend/adminapi/` **nevyskytuje ani raz**
 (pozitívna kontrola: v `backend/` ho má 9 súborov, takže grep funguje).
 Dôsledok: pre novo synchronizované dáta je `szco_count` ≈ 0, `firmy_count` ≈
-všetko — a pomer „68 % / 32 %", ktorý propagujú `README…:22-23`
-a `QUICK_START.md:93-94`, je fikcia. Podľa `docs/SOURCE_DATA_INTEGRITY.md:439`
-sú SZCO pritom „that third of the RUZ surface".
+všetko — a pomer „68 % / 32 %", ktorý propagujú
+`docs/archive/README_FIRMY_SZCO_IMPLEMENTATION.md:22-23`
+a `docs/archive/FIRMY_SZCO_QUICK_START.md:93-94`, je fikcia. Podľa
+`docs/SOURCE_DATA_INTEGRITY.md:439` sú SZCO pritom „that third of the RUZ
+surface". (Cesta bola doplnená 19. 9. 2026 — oba dokumenty sa pri konsolidácii
+presunuli do `docs/archive/` a odkazy naďalej ukazovali na koreň repa, kde už
+nič nebolo. **Čísla riadkov pritom sedia dodnes**, overené: `:22` nesie
+`"Počet Firiem: 8,500 (68%)"` a `:93` `Firmy: 8,500 (68%)` — stratila sa len
+cesta, nie obsah.)
 
 **`SZCO_LEGAL_FORMS` existuje v troch nezhodných podobách:**
 
@@ -5908,7 +5914,7 @@ teda ukazuje percento voči počtu firiem.
 SZCO riadky**. Prešel som všetky `RunPython`/`RunSQL` v projekte: ani jedna sa
 nedotýka `IndividualEntity` ani nepresúva riadky medzi tabuľkami
 (`registers/migrations/0010_add_individual_entity.py` je len `CreateModel` +
-`AlterField`). Sám dokument to priznáva — `RUZ_SYNC_ENTITY_SEPARATION_COMPLETE.md:363`
+`AlterField`). Sám dokument to priznáva — `docs/archive/RUZ_SYNC_ENTITY_SEPARATION_COMPLETE.md:363`
 má „Data migration script to move existing SZCO…" medzi **Future Enhancements**.
 Je to jediná zmienka o tejto diere v celom repozitári.
 
@@ -5920,12 +5926,12 @@ tú prvú cestu, takže rozdiel je v testoch neviditeľný.
 
 ### 8.5 Admin panel — čo príručky sľubujú a kód nemá
 
-`ADMIN_DEPLOYMENT_GUIDE.md` a `ADMIN_IMPLEMENTATION_COMPLETE.md` sa navzájom
+`docs/archive/ADMIN_DEPLOYMENT_GUIDE.md` a `docs/archive/ADMIN_IMPLEMENTATION_COMPLETE.md` sa navzájom
 rozchádzajú a oba sľubujú veci, ktoré v kóde nie sú:
 
 | Tvrdenie | Realita |
 |---|---|
-| API `/api/sync/start/`, `/status/`, `/resume/{id}/` s hotovými `curl` príkladmi (`ADMIN_DEPLOYMENT_GUIDE.md:420-446`) | **Neexistujú** — `git grep` naprieč `backend/` aj `frontend/` → 0. `ADMIN_IMPLEMENTATION_COMPLETE.md:426-431` ich správne vedie ako „Phase 3" (budúce) |
+| API `/api/sync/start/`, `/status/`, `/resume/{id}/` s hotovými `curl` príkladmi (`docs/archive/ADMIN_DEPLOYMENT_GUIDE.md:420-446`) | **Neexistujú** — `git grep` naprieč `backend/` aj `frontend/` → 0. `docs/archive/ADMIN_IMPLEMENTATION_COMPLETE.md:426-431` ich správne vedie ako „Phase 3" (budúce) |
 | Tlačidlá „🏢 Full Companies" / „👤 Full Individuals" | **Neexistujú** — `registers/admin.py:572-577` registruje štyri iné (`trigger_full_url`, `incremental`, `repair`, `gap_analysis`) |
 | Index `idx_sync_type_status` na `registers_syncprogress` | **Nie je** — `SyncProgress.Meta` (`registers/models.py:257-260`) nemá `indexes` |
 | Dashboard štatistika „Total Individuals (SZCO)" | **Nie je** — `registers/admin.py:570-599` agreguje výhradne `Company.objects` |
@@ -5937,7 +5943,7 @@ tak nie je formalita.
 
 Naopak overene **správne** a zachovania hodné je v tých príručkách toto:
 bezpečnostný postoj (čo je implementované vs odporúčané,
-`ADMIN_DEPLOYMENT_GUIDE.md:454-464`), DO/DON'T prevádzková politika syncu
+`docs/archive/ADMIN_DEPLOYMENT_GUIDE.md:454-464`), DO/DON'T prevádzková politika syncu
 (`:279-301`, 16 bodov — jediná formulácia v repe), troubleshooting „Running bez
 progresu" (`:346-364`) a zdôvodnenie zrkadlových tabuliek
 (`ADMIN_IMPLEMENTATION_COMPLETE.md:258-281, 369-386`). Tie zostávajú
@@ -5952,22 +5958,22 @@ ale tie isté „štyri bottlenecky" sú prerozprávané v šiestich zo siedmich
 
 | Tvrdenie | Kde | Stav |
 |---|---|---|
-| `30,000x faster` | `PERFORMANCE_FIX_ACTION_PLAN.md:10` | extrapolácia z 100-firmovej množiny |
+| `30,000x faster` | `docs/archive/PERFORMANCE_FIX_ACTION_PLAN.md:10` | extrapolácia z 100-firmovej množiny |
 | `1500% rýchlejšie` (lead scoring) | `PERFORMANCE_FIX_SUMMARY.md:45,127` | bez merania |
-| `100-1000x` / `300-500%` / `400%` | `FIX_SUMMARY:119`, `OPTIMIZATION:172`, `QUICK_REFERENCE:66` | neoverené, navzájom nekonzistentné |
-| `~100-200 companies/second`, `~50MB` | `LEAD_SCORING_IMPLEMENTATION.md:352-353` | **nepodložené** — žiadny benchmark ani `psutil` v `backend/` |
-| `> 90% coverage` | `LEAD_SCORING_CHECKLIST.md:327` | **nepodložené** — žiadny coverage nástroj nie je nakonfigurovaný |
+| `100-1000x` / `300-500%` / `400%` | `docs/archive/PERFORMANCE_FIX_SUMMARY.md:119`, `docs/archive/PERFORMANCE_OPTIMIZATION.md:172`, `docs/archive/QUICK_REFERENCE.md:66` | neoverené, navzájom nekonzistentné |
+| `~100-200 companies/second`, `~50MB` | `docs/archive/LEAD_SCORING_IMPLEMENTATION.md:352-353` | **nepodložené** — žiadny benchmark ani `psutil` v `backend/` |
+| `> 90% coverage` | `docs/archive/LEAD_SCORING_CHECKLIST.md:327` | **nepodložené** — žiadny coverage nástroj nie je nakonfigurovaný |
 
 Ani jeden z tých dokumentov nemá dokončený vlastný deployment checklist:
-`PERFORMANCE_FIX_ACTION_PLAN.md:182-187` má 6× `- [ ]`, `COMPLETION_REPORT.md:133-142`
+`docs/archive/PERFORMANCE_FIX_ACTION_PLAN.md:182-187` má 6× `- [ ]`, `docs/archive/COMPLETION_REPORT.md:133-142`
 nezaškrtnuté kroky 1–5, `:254-260` má všetkých päť „Actual" = `Pending`,
-`DEPLOYMENT_PLAN.md:353-361` má 5 zo 6 `⏳ Pending`. **Test na reálnych
+`docs/archive/DEPLOYMENT_PLAN.md:353-361` má 5 zo 6 `⏳ Pending`. **Test na reálnych
 1,2 mil. firmách sa nikdy nestal.**
 
-Pozor aj na pätičky, ktoré oprava z Fázy 0 minula: `COMPLETION_REPORT.md:277`
-stále tvrdí `Rollback Time: <1 minute` a `DEPLOYMENT_PLAN.md:367`
+Pozor aj na pätičky, ktoré oprava z Fázy 0 minula: `docs/archive/COMPLETION_REPORT.md:277`
+stále tvrdí `Rollback Time: <1 minute` a `docs/archive/DEPLOYMENT_PLAN.md:367`
 `Rollback: 🟢 Easy (1 command reverses migration)` — obe v priamom rozpore
-s opraveným telom toho istého dokumentu. `DEPLOYMENT_PLAN.md:231` navyše radí
+s opraveným telom toho istého dokumentu. `docs/archive/DEPLOYMENT_PLAN.md:231` navyše radí
 `git revert HEAD~1`, čo je dnes nebezpečné: zmeny sú v `36d80b8`, veľkom WIP
 checkpointe, nie v perf-only commite.
 

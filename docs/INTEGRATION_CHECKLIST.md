@@ -155,7 +155,7 @@ git push
 → `scripts/PRE_PUSH_CLEANUP_GUIDE.md`
 
 **Info o setup-e (5 minút)**
-→ `PRE_PUSH_CLEANUP_SETUP.md`
+→ `docs/archive/PRE_PUSH_CLEANUP_SETUP.md`
 
 ---
 
