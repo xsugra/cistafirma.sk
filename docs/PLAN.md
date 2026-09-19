@@ -1,6 +1,6 @@
 # Plán prác — CistaFirma
 
-**Aktualizované:** 2026-09-18
+**Aktualizované:** 2026-09-19
 **Vetva:** `main` — na oboch remotech (`gitlab-home` aj GitHub), lokálne na tom
 istom commite
 **Autor:** Samuel Šugra + Claude Code
@@ -7537,10 +7537,24 @@ záznam (`record_progress`), takže falošný zber nič nestratí: watchdog zap�
 `failed`, keeper o 15 min obnoví a beh pokračuje od kurzora. Je to **týranie
 času počas dlhého výpadku** (~45–60 min na cyklus, nie 35), nie korupcia.
 Normálna medzera je pritom **~9 s**: 50 záznamov pri nameraných 5,66 z/s
-(20 391/h). Že je to zámer, je napísané v kóde (`fetch_ruz_data.py:341-343`).
-**Neopravujem to teraz** — zmena `fetch_ruz_data.py` sa v bežiacom workeri
-neprejaví, kým walk nezačne odznova, takže tento beh neochráni ani keby som ju
-nasadil; patrí k #188.
+(20 391/h).
+
+**Opravené v `0f5a667`.** `beat()` je teraz `heartbeat_gate()` v `sync_engine`:
+brzda na `time.monotonic()`, nie na počte záznamov. Volá sa pri každom zázname
+a sama rozhodne, či zápis patrí tomuto úderu — prvý raz zapíše vždy, takže walk,
+ktorý začne a hneď zamrzne, je vidieť ako job, ktorý začal. `heartbeat_loop()`
+bol dovtedy jediným držiteľom tejto brzdy a nemal ani jedného volajúceho
+(overené grep-om na celom repe), takže pravidlo teraz existuje raz. Test meria
+najväčšiu medzeru pri simulovaných 60 s na záznam; so starou brzdou padá
+(pozitívna kontrola: so zväčšeným intervalom `beats == 1`). `fetch_ruz_data`
+navyše odmietne bežať, keď mu riadok jobu zmizol — bez riadku nie je heartbeat
+vôbec a `set_job_outcome` o chýbajúcom riadku mlčí.
+
+**V tomto behu to však účinné nie je a ani nemôže byť** — zmena
+`fetch_ruz_data.py` sa v už bežiacom workeri neprejaví, kým sa worker
+nerestartuje, a práve to #188 odkladá na koniec behu. Tento walk teda nechráni;
+chráni ten ďalší. Zvyšok odstavca vyššie (medium, nie high; strata je čas, nie
+dáta) platí naďalej.
 
 **Overené mnou, z kódu aj živého stavu — Focus Mode vypne watchdog a keeper
 potom čaká navždy.** `ruz_full_keeper_decision` vracia pri `queued`/`running`
@@ -7550,9 +7564,18 @@ potom čaká navždy.** `ruz_full_keeper_decision` vracia pri `queued`/`running`
 mimo tohto zoznamu — takže so zapnutým Focus Mode sa walk, ktorému zomrel worker,
 **nikdy neobnoví**. Dnes je to latentné: `SyncFocusModeState` riadok neexistuje
 (Focus Mode nikdy nebol aktivovaný), `detect-stuck-sync-jobs-every-10-min` má
-`enabled=True` a `last_run` pred 154 s, žiadna `PeriodicTask` nie je zakázaná.
-Nemením to počas behu (keeper sa síce nasadí bez reštartu walku — používa ho
-výhradne `ruz_keeper_tick`, overené grepom — ale niet kam sa ponáhľať).
+`enabled=True` a `total_run_count=1128`, žiadna `PeriodicTask` nie je zakázaná.
+
+**Opravené v `5600c6b`.** `registers.tasks.detect_stuck_sync_jobs` je
+v `FOCUS_KEEP_TASKS`. Je tam z iného dôvodu než tie štyri: tie sa držia preto,
+že ich práca je rozpracovaná, tento nevyrába dáta vôbec — je to poistka nad
+naším vlastným stavom, nie práca proti cudziemu serveru, takže pauzu prečkať
+nemá. Jeden test sa viaže na `CELERY_BEAT_SCHEDULE` (premenovanie tasku ho
+zhodí), druhý overuje mechanizmus a má pozitívnu kontrolu — v tom istom behu sa
+iný `PeriodicTask` naozaj vypne, inak by „nezakázaný watchdog" prešiel aj keby
+Focus Mode nerobil nič. Nasadenie si počká na #188 spolu s ostatnými; keeper by
+sa síce chytil bez reštartu walku (používa ho výhradne `ruz_keeper_tick`,
+overené grepom), ale celý balík aj tak odchádza naraz.
 
 **Neoverené kandidáty — menovite, aby sa nehľadali znova, ale NIE ako zoznam
 úloh.** Každý prišiel od pomenovaného agenta s citáciou, ktorú som **neoveril**;
