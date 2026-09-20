@@ -8225,7 +8225,7 @@ Zapisujem to preto, aby budúce „nikto to nečíta" bolo presné.
 
 ---
 
-### 11.15 Keeper po každej obnove vypíše rýchlosť, ktorá je ~900× väčšia (2026-09-19)
+### 11.15 Keeper po každej obnove vypíše rýchlosť nafúknutú o (celý walk)/(aktuálny beh) (2026-09-19)
 
 Nájdené pri overovaní nasadenia, v logu samotného keepera. Jeho `--dry-run` po
 obnovení walku vypísal:
@@ -8251,6 +8251,15 @@ vynuluje. Po obnove je teda rýchlosť nafúknutá približne o
 13:45:04.147081`, kým walk začal `2026-09-18 16:02Z` — menovateľ ~21,8 h sa
 skrátil na ~2 min. Odtiaľ tých ~900×.
 
+**Faktor ale nie je konštanta — klesá, ako beh starne**, lebo čitateľ rastie
+s kurzorom a menovateľ s dĺžkou aktuálnej nohy. To isté overenie preto nameralo
+o dve minúty po obnove ~900× a o ~25 minút neskôr už len **~51×**. Rekonštrukcia
+sadla na 0,1 %: `431600 / 1501 s = 1 035 147/h` proti zalogovanému `1 035 034/h`
+a `429900 / 1199 s = 1 290 788/h` proti `1 289 904/h`. Dva keeperove tikky 302 s
+od seba pritom dávajú `(431600 − 429900) / 302 s` = 5,63 ID/s = **20 268/h**.
+Hlavička preto neuvádza pevný násobok: číslo je pokazené tým viac, čím kratšie
+beh beží, a najhoršie je presne v okamihu obnovy.
+
 **Dopad je informačný, ale nie nulový.** `get_rate()` čítajú len štyri miesta:
 `registers/admin.py:381`, `:431`, `:454` (zobrazenie v adminovi) a
 `ruz_keeper_tick.py:136` (riadok `RUZ_KEEPER_STATE`). `get_duration()` okrem
@@ -8275,6 +8284,207 @@ Do rozhodnutia platí: **rýchlosť walku sa nečíta z `rate=`**. Zdrojom je
 vzorkách za sebou). Susediaca pasca je `SyncJob.processed_items` — ten je počas
 celého behu `0` a po zabitom behu `0` navždy (§11.9.1, `e7758eb`), takže
 „rýchlosť z job riadku" vyjde ako `0/h` na zdravom walku.
+
+---
+
+### 11.16 „Držať 24/7" je dozor, nie neprerušený beh (2026-09-19)
+
+Päť nezávislých verifikácií (read-only, výhradne `ssh dell` + `SELECT`) overovalo
+tvrdenie „full RUZ resync od 2000-01-01 beží a udrží sa 24/7 bez človeka".
+Štyri z piatich tvrdení potvrdili; piate — to podstatné — **vyvrátili**. Samotný
+beh je v poriadku a obhájiteľné je aj „beží to". Neobhájiteľné je „neprerušene
+a bez človeka".
+
+Čo potvrdené je:
+
+- **Okno od 2000-01-01** je doložené kódom aj riadkom. `fetch_ruz_data.py` pre
+  `sync_type == 'full'` hardcoduje `zmenene_od = '2000-01-01'`, `ruz_api.py` ho
+  posiela ako `zmenene-od`, a `holds_window = sync_type.startswith('full') or …`
+  znamená, že sa **nikdy neposúva**. Pozor na čítanie: `--resume` nastaví
+  `pokracovat_za_id = progress.last_processed_ruz_id`, takže táto noha nezačína
+  na ID 0 — „od 2000-01-01" je dátumové okno, nie „prečíta všetko odznova".
+- **Beh postupuje**: tri vzorky 430 400 @ 14:06:37Z → 431 400 → 432 300 @
+  14:12:01Z = 5,86 ID/s (~21 100/h), a medzi tými istými vzorkami rástli aj
+  `total_created`, `total_updated`, `total_skipped` aj `total_errors`, takže
+  nejde len o posun pointera. Heartbeat 15,8–31,2 s.
+- **Keeper je ozbrojený**: `OnCalendar=*:0/5`, `Persistent=true`, `Linger=yes`,
+  267 tickov za 24 h proti očakávaným 267,6 (jednotka existovala 22,3 h).
+- **Obnova po nasadení bola autonómna** a je doložená na sekundu: #46 →
+  `detect_stuck_sync_jobs` (13:29:24.604914, 30 ms pred `completed_at` #46) →
+  `RUZ_KEEPER_DISPATCHED` 15:45:04 → #47 `queued_at` 15:45:04.110728. Oneskorenie
+  00:15:39,492466 sedí na `KEEPER_REDISPATCH_AFTER = 15 min` (`sync_engine.py:744`).
+  Bol to zatiaľ **jediný** autonómny zásah keepera v celej histórii behu.
+
+#### 11.16.1 Keeper neobnoví beh, ktorému zomrel worker — a už raz to nastalo
+
+`ruz_full_keeper_decision` vracia `wait` pre **každý** riadok v stave
+`queued`/`running` bez ohľadu na vek heartbeatu (`sync_engine.py:791-792`).
+Obnovu vlastní výhradne watchdog `detect_stuck_sync_jobs` na fronte `celery`
+(`tasks.py:1590`) — teda presne tá Celery mašinéria, pred ktorou mal byť keeper
+nezávislý. Ak zomrie `celery_beat` alebo `celery_worker_default`, walk zostane
+mŕtvy a keeper donekonečna tlačí `wait`, ticho a bez chyby.
+
+Zmerané, nie domnelé: kontajnery sa prekreslili **12:59:12Z** (`docker inspect`
+`StartedAt`), heartbeat #46 naposledy **12:58:56.371691Z** (5 s po reštarte),
+watchdog ho zabil **13:29:24.634574Z**, keeper obnovil **13:45:04.127040Z**. Walk
+bol mŕtvy **50 minút**. `restart: unless-stopped` nezachránil nič — reštartuje
+kontajner, nie celery úlohu.
+
+#### 11.16.2 Host sa sám reštartuje o 04:30
+
+`/etc/apt/apt.conf.d/52-unattended-server` má
+`Unattended-Upgrade::Automatic-Reboot "true"`, `Automatic-Reboot-WithUsers
+"true"` a `Automatic-Reboot-Time "04:30"`; `apt-daily-upgrade.timer` beží denne.
+Podľa 11.16.1 každý taký reštart znamená ~50 minút výpadku. Pri ETA ~4,3 dňa
+(§11.13) sú do konca walku v okne ešte 4–5 nocí o 04:30. Je to vlastnosť
+prostredia, nie porucha mechaniky — ale patrí do odpovede na „udrží sa to samo".
+
+#### 11.16.3 Keeper nikdy nezreape `queued` riadok
+
+`ruz_full_keeper_decision` vracia `wait` aj pre `queued`, a
+`detect_and_fail_stuck_jobs` iteruje len `status='running'` (`sync_engine.py:713`).
+Stratená správa (redis `appendonly no`; celery bez `task_acks_late`, takže
+prednačítané nevykonané správy sú nepotvrdené) nechá `ruz_full` riadok v `queued`,
+ktorý drží `ruz:global` — keeper potom navždy hovorí `wait` a partial unique index
+`reg_one_active_ruz_job` (`models.py:793-801`) zablokuje každý ďalší RUZ job, lebo
+všetky RUZ typy zdieľajú jeden kľúč. `ops-check` presne tento stav kontroluje
+(„queued one never claimed") — ale na delle ho nič nespúšťa (11.16.4).
+
+#### 11.16.4 Nič na delle výsledok nesleduje
+
+`crontab -l` = `no crontab for sam`; v `/etc/cron.d` je len `.placeholder`
+a `e2scrub_all`; `systemctl --user list-timers --all` ukazuje presne tri časovače
+(`ruz-keeper`, `backup`, `launchpadlib-cache-clean`). Žiadny `ops-check`, žiadny
+`sync_health`, žiadny `source_health`. Jediný výstup keepera je journald, ktorý
+nikto nečíta. `server-health.timer` existuje, ale každú hodinu padá na
+`WARN 56/65 dangling docker images`, takže jeho exit kód nemá signál.
+
+Brána pritom existuje: `scripts/local/ops_check.sh:408` má `ruz_keeper_systemd`
+a kontroluje installed/loaded/enabled/active na `:420`, `:480`, `:506`, `:510`.
+**Existuje a nie je nikde ozbrojená** — spolu s ňou ani kontrola „queued one
+never claimed", scrape health a keeper timer. (Session cron tento dokument
+spisujúceho agenta `make ops-check` na delle volá, ale je viazaný na session
+a expiruje; host sám nemá nič.)
+
+#### 11.16.5 Inkrementálny sync počas walku nebeží, hoci beat tvrdí, že áno
+
+`fetch-ruz-data-every-6-hours`: `total_run_count = 92`, `last_run_at =
+2026-09-19 08:07:28`. Ale posledný vytvorený `ruz_incremental` riadok je **#45
+z 2026-09-18 14:07:28** a `incremental` `SyncProgress` má `last_activity =
+2026-09-18 14:07:32`. Štyri plánované behy (18. 20:07, 19. 02:07, 08:07, 14:07)
+nepriniesli ani riadok. Príčina: `celery_worker_ruz` má `--concurrency=1` a drží
+ho walk; v jeho logu sú dve `received` pre `fetch_ruz_data_task`, ale `task_name`
+je na 100 % `resume_full_ruz_sync` a žiadne `succeeded` tam nie je.
+
+Register teda **po celý čas walku nedostáva inkrementálne aktualizácie**
+a `total_run_count` to nezobrazí — je to tá istá trieda ako
+`beat-schedule-is-the-db-table` a `a-count-that-cannot-show-failure`: počítadlo
+meria dispeč, nie vykonanie.
+
+#### 11.16.6 Walk zapisuje do DVoch tabuliek — pozitívna kontrola musí brať obe
+
+Walk má dva zápisové ciele: SZCO/FO do `IndividualEntity`
+(`registers/models.py:1103`, `db_table="Individual Entities"`), firmy do
+`Company` (`companies/models.py:635`, `db_table="Companies and SZCO"`).
+
+Zmerané naživo: za 150,5 s sa `"Individual Entities"` posunula 154 905 → 155 249
+(**+344**) a `total_created` 133 807 → 134 154 (+347) — counters teda neluhajú.
+Ale `"Companies and SZCO"` bola 449 795 → 449 795 (**+0**) naprieč ~10 minútami
+a ~3 900 ID.
+
+Dôsledok pre každého, kto si walk overuje: **vzorka len na `"Companies and
+SZCO"` vyjde ako „walk nezapisuje"** — a to je nepravda. Prvá vzorka kritika
+takto dopadla; zachránila ju až kontrola oboch tabuliek. Pozitívna kontrola na
+obe tabuľky chýbala vo všetkých piatich verdiktoch.
+
+#### 11.16.7 Medzera 143 120 má konečne pomenovanú triedu
+
+§11.9 a `a-counter-gap-can-be-an-unlabelled-class` hovoria, že dieru treba
+pomenovať, nie nazvať dierou. Overenie ju pomenovalo a zmeralo:
+
+- v práve bežiacom segmente (kontajner od 12:59, kurzor 423 200 → posledný skíp
+  na ID 437 435) je v logu workera **4 565** riadkov `Skipping record with RUZ ID
+  … because it has no usable ICO`, čo je 4 565 / ~14 235 = **32,1 % ID**;
+- celý walk: `total_processed` 433 400 proti súčtu bucketov
+  132 590 + 135 106 + 22 507 + 77 = 290 280, teda medzera **143 120 = 33,0 %**.
+
+Kód nedovoľuje nič iné: `update_or_create_company` končí na
+`return created, not created`, takže jeden z dvoch bucketov je vždy nastavený;
+jediná cesta k `(False, False)` je predčasný návrat `if not ico`
+(`fetch_ruz_data.py:559`).
+
+**Skoro tretina práce walku nevyprodukuje ani riadok** a jej jediná stopa je
+stderr, ktorý zmizne s kontajnerom — a ten bol 2026-09-19 12:59 naozaj
+prekreslený, takže dôkaz predošlého segmentu je **už stratený**. To je dôvod,
+prečo sa to zapisuje teraz a nie „keď bude čas".
+
+#### 11.16.8 Terminálna podmienka a najvyššie RUZ ID nie sú zmerané
+
+Každá ETA v tomto dokumente stojí na dvoch neoverených vstupoch:
+
+1. **Najvyššie RUZ ID 2 624 307** sa v repozitári nevyskytuje ako meraný údaj —
+   len v testoch (`tests_sync_pipeline.py:844`, `:882`,
+   `tests_sync_job_singleton.py:142`) a v dokumentácii (`docs/PLAN.md:87`,
+   `docs/SOURCE_DATA_INTEGRITY.md:210`), všade ako príklad kurzora. Nikto ho
+   nezmeral voči živému registru.
+2. **Terminálna podmienka** `existujeDalsieId` (`fetch_ruz_data.py:360`, `:367`)
+   nebola na živom registri testovaná. Je to jediná podmienka, ktorá walk ukončí
+   inak než pádom — a `fetch_ruz_data` sa spolieha výhradne na príznak registra,
+   nikde neoveruje, že kurzor dosiahol maximum. Prázdna odpoveď (`200` s prázdnym
+   zoznamom) by sa zapísala ako dokončený walk a keeper by povedal `done`.
+
+Overiť sa to dá jediným čítacím requestom na `get_changed_company_ids` so
+`zmenene-od=2000-01-01` a `pokracovat-za-id=2624307` — presne ten test, ktorý
+`docs/PLAN.md:87-91` už raz opisuje pre inkrementálne okno.
+
+#### 11.16.9 Produkčná záloha: stav `failed` 4 dni a prvý úspešný beh celého reťazca
+
+`sk.cistafirma.backup.service` bol na delle od 2026-09-15 11:40 v stave `failed`.
+Boli to **dva** zlyhané pokusy, oba pri inštalácii:
+
+- 11:37:03 — `permission denied while trying to connect to the docker API at
+  unix:///var/run/docker.sock` → `ERROR: cistafirma_db must be running and
+  healthy before backup.` (user manager vtedy ešte nemal skupinu `docker`);
+- 11:40:05 — **dump sa vytvoril**, zlyhal až operačný gate: vtedy neexistoval ani
+  restore drill, ani žiadna replika.
+
+Stav 2026-09-19: `sam` (`uid=1000`, skupina `983(docker)`) aj bežiaci user manager
+(`/proc/1629/status`, `Groups: 4 24 27 30 46 100 101 983 1000`) skupinu majú;
+drill záznam existuje; **6 replík** vrátane dnešnej; a gate prechádza (`exit 0`).
+Ručné spustenie `systemctl --user start sk.cistafirma.backup.service` prešlo
+**celý reťazec**, doložené artefaktmi a nie exit kódom: nový dump
+`cistafirma_20260919T143211Z.dump` (177 048 747 B) + manifest, replika
+`…143211Z.dump.gpg` zapísaná `2026-09-19T14:34:31Z` na `/mnt/cistafirma-offsite`,
+marker `LAST_FAILURE` neexistuje, `Result=success`, v logu
+`Operational controls: SATISFIED` a `scheduled backup finished`.
+
+Dve veci, ktoré z toho treba mať v hlave:
+
+- **Poradie je backup → verify → replika → gate.** Gate teda beží **až po**
+  dumpе, takže jeho zlyhanie zálohu nemôže stratiť — len označí beh za zlyhaný.
+  Presne to sa stalo 15. 9. o 11:40: beh zlyhal, ale dump vznikol a bol použitý
+  aj v restore drille o 11:43:05.
+- **Reťazec nikdy predtým neprešiel celý** a najbližší plánovaný pokus bol až
+  2026-09-20 03:17 — v strede walku. Preto bol spustený ručne.
+
+Off-site volume `/mnt/cistafirma-offsite` je **pripojený** (dnešná replika je
+dôkaz); hláška `not mounted … is not a directory` v starom výpise `ops-check` je
+stav spred pripojenia, nie dnešok.
+
+#### 11.16.10 Rozhodnutia, ktoré čakajú na Samuela
+
+Toto sú zmeny správania, ktoré si overenie našlo, ale samo ich nespraví:
+
+- **A. Má keeper zreapať aj `queued` a `running` s mŕtvym heartbeatom?** Dnes to
+  za neho robí výhradne celery watchdog (11.16.1, 11.16.3). Rozšírenie rozhodnutia
+  by keepera naozaj osamostatnilo — ale práve preto, že `running` s čerstvým
+  heartbeatom sa zabiť nesmie, je to zmena s rizikom.
+- **B. Vypnúť `Automatic-Reboot`, alebo posunúť `Automatic-Reboot-Time`?** Každý
+  reboot je ~50 minút výpadku walku (11.16.2). Alternatíva je nechať to a počítať
+  s tým.
+- **C. Ozbrojiť `ops-check` na delle?** Brána existuje a nič ju nespúšťa
+  (11.16.4). Bez notifikačnej cesty na hoste by ale len zapisovala do logu, ktorý
+  nikto nečíta — čiže otázka je skôr „kam má kričať", nie „či ju zapnúť".
 
 ---
 
