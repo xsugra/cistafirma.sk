@@ -8486,6 +8486,57 @@ Toto sú zmeny správania, ktoré si overenie našlo, ale samo ich nespraví:
   (11.16.4). Bez notifikačnej cesty na hoste by ale len zapisovala do logu, ktorý
   nikto nečíta — čiže otázka je skôr „kam má kričať", nie „či ju zapnúť".
 
+### 11.17 Walk dobehol na koniec (2026-09-22)
+
+Dlhodobý cieľ sekcie 11 je splnený. Plný RUZ resync od `2000-01-01` **dobehol
+na koniec**, nie že sa len zastavil.
+
+Namerané (výhradne z tabuliek na delle, 2026-09-22):
+
+| Zdroj | Stav |
+|---|---|
+| `registers_syncprogress` #4 (`sync_type='full'`) | `completed`, `last_processed_ruz_id` = **2 624 307** (= najvyššie RUZ ID), `total_processed` = 1 929 104, `total_errors` = 617, `zmenene_od` = `2000-01-01`, `last_activity` = 2026-09-22 15:00:45Z |
+| `registers_syncjob` #47 | `completed`, `processed_items` = 1 505 904, `last_heartbeat` = 2026-09-22 15:00:45 |
+
+Prečo to je dokázané, a nie len prečítané z príznaku:
+
+- **Kurzor došiel presne na najvyššie RUZ ID** (2 624 307), teda na hornú hranicu
+  vesmíru, ktorý mal prejsť — nie na náhodné číslo pred koncom.
+- **Dva nezávislé riadky sa zhodujú na sekunde**: `syncjob #47.last_heartbeat`
+  aj `syncprogress #4.last_activity` sú `15:00:45`. Terminálny prechod jobu
+  a terminálny zápis progresu nastali v tej istej sekunde.
+- **`incremental` (progres #2) skončil o 30 s neskôr**, `15:01:15Z`. To sa môže
+  stať len vtedy, ak bol slot `ruz:global` uvoľnený **terminálnym** prechodom.
+  Po páde by slot držal a inkrementálny beh by ostal čakať.
+- Následné joby #48–#67 (`completed`, `15:00:50`–`15:01:15Z`) sú dočisťovanie po
+  behu, nie pokračovanie walku.
+
+Kontrola chýb: `celery_worker_ruz`, okno **2026-09-22T14:50:00Z → 15:01:15Z**
+(posledných 4 000 riadkov; pozitívna kontrola — 3 999 riadkov s reálnymi
+timestampami, takže nula nie je prázdny výstup) obsahuje **0×**
+`Error processing company ID`. Nový riadok v okne je
+`Task registers.tasks.fetch_ruz_data_task[…] succeeded … 'RUZ job #67 completed'`.
+Predchádzajúce dve alarmové kolá (2× a 8× v brzkých ranných UTC hodinách,
+všetko `registeruz.sk` ConnectTimeout) teda ostali bez ďalšieho výskytu.
+
+`make ops-check` na delle: `Operational controls: SATISFIED`,
+`Off-site backup controls: SATISFIED`, 0 warnings.
+
+**Čo tým padá a čo nie.** Odpadá hlavný dôvod odkladať nasadenie: každý deploy
+~46 minút zastaví walk — a walk už nebeží, takže nález §11.15 (`get_rate()`)
+a §11.9.1 / `e7758eb` (`processed_items`) sa dajú opraviť bez tej ceny.
+Zostávajú v platnosti všetky rozhodnutia z §11.16.10 a §11.14, ktoré čakajú na
+Samuelovo slovo — tie sa týmto behom nemenia.
+
+**Poznámka k nástroju, nie k behu.** SSH na dell na porte 22 bol počas tejto
+kontroly opakovane nestabilný: `nc -z` hlásil `closed`, ssh striedavo
+`Operation timed out` a `Connection reset by peer`, pričom `tailscale ping dell`
+odpovedal (61 ms cez DERP(fra), 105 ms priamo na `46.34.226.13:17043`). Host je
+teda zdravý a vadná je cesta — opakovanie pokusu zaberie (overenie jobu #47
+prešlo na 2. pokus, `ops-check` na 3.). Toto je tá istá trieda ako
+`ssh-resets-are-not-host-down`: **ticho zlyhaná hliadka vyzerá presne ako
+zdravý walk**, preto každé ssh volanie nesie `ServerAliveInterval`.
+
 ---
 
 ## 12. Nemenné pravidlá
