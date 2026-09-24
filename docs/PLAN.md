@@ -8818,6 +8818,11 @@ opravou). Oba nové testy majú pozitívnu kontrolu: proti kódu pred opravou pa
 pre `--sync-job-id`), a po obnovení opravených súborov prechádzajú — vrátane
 kontrolného súčtu, nie len behu.
 
+Push do `gitlab-home` aj `origin` (`8c09fe2..2f433e1`); pipeline **206** na
+`2f433e1` **success**, 7 jobov, 0 zlyhaní. **Nasadenie na `dell` neprebehlo** —
+je manuálne a táto oprava sa prejaví až pri ručnom spustení príkazu na hoste,
+takže kým sa nenasadí, produkcia beží s pôvodným kódom.
+
 **Čo zostáva otvorené.** Dve write cesty vyššie (majú dostať slot, alebo byť
 výslovne vyňaté?) a jedna drobnosť vnútri nového helpera: keby `claim_ruz_job`
 vrátil `None`, `claim_ruz_slot_for_cli` vyhodí `CommandError` a jeho vlastný,
