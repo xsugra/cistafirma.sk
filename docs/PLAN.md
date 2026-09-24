@@ -8882,6 +8882,9 @@ beh odmietne (`RUZ sync job #999999 does not exist`) a nič nezapíše. Má jedn
 závislosť: keď neexistuje `SyncGapAnalysis` v stave `ready`/`repairing`, príkaz
 sa vráti skôr (`repair_ruz_gaps.py:84`) a guard sa vôbec nespustí.
 
+Push do `gitlab-home` aj `origin` (`9a8af0f..4e21fd7`); pipeline **208** na
+`4e21fd7` **success**, 7 jobov, 0 zlyhaní.
+
 **Rollback** je `git checkout 04eaea4 && docker compose up -d --build`.
 
 ---
