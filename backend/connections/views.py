@@ -131,11 +131,17 @@ def _candidate_rows(bases):
     `contains` is a superset of the answer and the exact filter removes what it
     over-matched: `novak` fetches `novakova`.
 
-    One query for all the bases, not one per base, and no row limit on it. Base
-    name groups are small: measured on production 2026-09-24, 143 397 distinct
-    base names, of which 187 have ten rows or more and none has fifty. The
-    commonest (`jan kovac`, 40 rows) fetches 72 rows by `contains`, and the widest
-    company (187 distinct officer names) fetches 421 in 1.12 s.
+    One query for all the bases, not one per base, and no row limit on it. What
+    sizes the query is the company, not the table: measured on production
+    2026-09-24, the widest company has 187 distinct officer names and its OR'd
+    query fetches 422 rows in 1.15 s, of which the exact filter keeps 352 -- so
+    `contains` over-matched 17%, which is what that filter is there for. Base
+    name groups are small: 143 617 distinct base names, of which 188 have ten
+    rows or more and **none has fifty**; the commonest (`jan kovac`, 40 rows)
+    fetches 72. Those counts are a snapshot -- the table grows by thousands of
+    rows a day, and the same probes read 143 282 bases against 198 585 rows
+    earlier the same day -- but the property that matters is structural: one
+    company's officer names bound the fetch, so it does not grow with the table.
 
     The limit that used to stand here, `CLUSTER_CANDIDATE_LIMIT = 500`, was
     applied *before* the exact filter -- so a name common enough to overflow it
