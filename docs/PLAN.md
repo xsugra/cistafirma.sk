@@ -8819,9 +8819,9 @@ pre `--sync-job-id`), a po obnovení opravených súborov prechádzajú — vrá
 kontrolného súčtu, nie len behu.
 
 Push do `gitlab-home` aj `origin` (`8c09fe2..2f433e1`); pipeline **206** na
-`2f433e1` **success**, 7 jobov, 0 zlyhaní. **Nasadenie na `dell` neprebehlo** —
-je manuálne a táto oprava sa prejaví až pri ručnom spustení príkazu na hoste,
-takže kým sa nenasadí, produkcia beží s pôvodným kódom.
+`2f433e1` **success**, 7 jobov, 0 zlyhaní, a **207** na `9a8af0f` (7 jobov,
+0 zlyhaní). Nasadenie je manuálny krok a v čase písania tejto vety ešte
+neprebehlo — vykonalo sa **ešte v ten istý deň**, pozri **§11.20**.
 
 **Čo zostáva otvorené.** Dve write cesty vyššie (majú dostať slot, alebo byť
 výslovne vyňaté?) a jedna drobnosť vnútri nového helpera: keby `claim_ruz_job`
@@ -8830,6 +8830,59 @@ práve vložený `queued` riadok ostane držať slot — okno pod milisekundu, k
 `detect_and_fail_stuck_jobs` uprace a `sync_health` medzitým hlási ako „queued
 a nikdy nenárokovaný". Nie je to blocker; patrí k tomu jednořádkový komentár, ak
 sa toho kódu niekto dotkne.
+
+---
+
+### 11.20 Nasadenie `9a8af0f` na dell (2026-09-24)
+
+§11.19 sa nasadila ručne na hoste, podľa receptu `docs/DEVOPS_CICD.md:210`:
+`git pull gitlab-home main` → `docker compose up -d --build` → `docker compose
+exec backend python manage.py migrate`.
+
+**Rozsah bol väčší než tá jedna oprava.** dell bol na `04eaea4`, nový HEAD je
+`9a8af0f`, teda **10 commitov** (`git rev-list --count 04eaea4..9a8af0f`) — v
+tom istom kroku teda do produkcie išiel aj graf „Prepojenia" (§11.18, `687a559`)
+a slider výberu sekcií na profile (`bd00294`). Migrácie v rozsahu **žiadne**
+(`git diff --name-only 04eaea4..9a8af0f -- 'backend/*/migrations/*'` je
+prázdne) a `migrate` to potvrdil vetou `No migrations to apply` — schéma sa
+nemení, takže brána „pred migráciou zálohu" neplatila.
+
+**Okno bolo čisté — overené, nie predpokladané.** Najnovší `ruz:global` riadok
+bol `SyncJob` #75 (`ruz_incremental`, `beat_schedule`, `completed`
+2026-09-24 14:07:33Z) a ďalší beat mal prísť okolo 20:07Z, takže reštart
+workerov neprerušil žiadny beh.
+
+**`--build` nebol voliteľný a je to jediné, čo drží kód naozaj živý.**
+`backend`, `celery_worker_ruz` a `celery_beat` majú `./backend:/app` bind mount,
+takže po `git pull` sú nové *súbory* na mieste, ale bežiace procesy držia staré
+moduly — zmena sa neprejaví a nič nehlási chybu
+([[restart-the-worker-that-consumes-a-new-task]]). Frontend bind mount nemá
+vôbec (`docker-compose.prod.yml` ho ruší), tam je build jediná cesta. Výstup:
+**8 image-ov postavených, 18 kontajnerov rekreovaných**, `backend` aj `frontend`
+`healthy`.
+
+**Overenie.** `git log --oneline -1` → `9a8af0f`; `docker compose ps` → všetkých
+12 služieb `Up`; `make ops-check` → **`Operational controls: SATISFIED`**, `0
+unmet` v každej sekcii, `0` zaseknutých jobov, `0` unmet source health, `0`
+off-site warningov.
+
+Jedna vec na tom overovaní **zlyhala a bola to moja chyba, nie nasadenia** — a
+patrí sem, lebo je to pasca na znovupoužitie. Sonda
+`docker compose exec backend python -c "import registers.services.sync_engine
+…"` spadne na `ImproperlyConfigured: Requested setting USE_I18N`. Nie preto, že
+by symbol chýbal: `python -c` nemá `DJANGO_SETTINGS_MODULE` a import
+`sync_engine` vtiahne `backend/companies/models.py:127`, ktorý volá `gettext` už
+pri importe. Každá takáto sonda patrí cez `manage.py shell -c`, nikdy cez holé
+`python -c`. Behaviorálny dôkaz, ktorý nič nepotrebuje:
+
+    docker compose exec backend python manage.py repair_ruz_gaps --sync-job-id 999999
+
+Guard na `repair_ruz_gaps.py:109` stojí pred nárokom na slot aj pred `try`, takže
+beh odmietne (`RUZ sync job #999999 does not exist`) a nič nezapíše. Má jednu
+závislosť: keď neexistuje `SyncGapAnalysis` v stave `ready`/`repairing`, príkaz
+sa vráti skôr (`repair_ruz_gaps.py:84`) a guard sa vôbec nespustí.
+
+**Rollback** je `git checkout 04eaea4 && docker compose up -d --build`.
 
 ---
 
