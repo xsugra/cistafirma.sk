@@ -32,6 +32,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any, Iterable
 
+from django.core.management.base import CommandError
 from django.db import IntegrityError, transaction
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
@@ -513,6 +514,47 @@ def claim_ruz_job(job_id: int, *, celery_task_id: str = "") -> SyncJob | None:
     if not claimed:
         return None
     return SyncJob.objects.get(pk=job_id)
+
+
+def claim_ruz_slot_for_cli(
+    *,
+    job_type: str,
+    parameters: dict | None = None,
+) -> SyncJob:
+    """Take the global RUZ slot for a manually-run command, or refuse to start.
+
+    A command typed by an operator is the one RUZ entry point nothing upstream
+    claims the slot for: every Celery path goes through `_run_ruz_command`, and
+    the admin through `_dispatch_job`, but a hand-run command arrives with no
+    `--sync-job-id` and therefore got no job row, no heartbeat, no outcome, and
+    -- the part that matters -- no claim on `ruz:global`. It wrote company rows
+    beside a running walk, which is the one thing that key exists to prevent.
+
+    `fetch_ruz_data` grew this block first; the two repair commands were left
+    out of it, and the operator was pointed straight at them by
+    `repair_ruz_gaps`'s own Ctrl+C message ("Pokračujte: python manage.py
+    repair_ruz_gaps --resume").
+
+    Raises `CommandError` rather than returning a sentinel. Its only callers are
+    management commands, and the refusal *is* the behaviour: a caller that
+    forgot to check would be the defect back again, silently.
+
+    The caller owns the lifecycle from here -- `complete_job`, `pause_job` and
+    `fail_job` are its to call, because no task is waiting to do it (see
+    `fetch_ruz_data`'s `owns_job_lifecycle`).
+    """
+    job, created = enqueue_ruz_job(
+        job_type=job_type,
+        parameters=parameters or {},
+        triggered_via="cli",
+    )
+    if not created:
+        raise CommandError(
+            f"RUZ sync job #{job.pk} is already active; refusing concurrent import."
+        )
+    if claim_ruz_job(job.pk) is None:
+        raise CommandError(f"Unable to claim RUZ sync job #{job.pk}.")
+    return job
 
 
 def start_job(job: SyncJob, *, total_items: int | None = None, celery_task_id: str = "") -> None:

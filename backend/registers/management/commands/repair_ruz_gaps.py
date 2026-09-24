@@ -1,11 +1,13 @@
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from registers.integrations.ruz_api import RuzApi
 from registers.models import SyncGapAnalysis, SyncJob
 from registers.services.ruz_repair_writer import (
     CREATED, REFUSED, SKIPPED, UPDATED, RepairWriter,
 )
-from registers.services.sync_engine import set_job_outcome
+from registers.services.sync_engine import (
+    claim_ruz_slot_for_cli, complete_job, fail_job, pause_job, set_job_outcome,
+)
 import logging
 import time
 import concurrent.futures
@@ -89,16 +91,27 @@ class Command(BaseCommand):
         if options['resume'] and analysis.repair_progress_id:
             self.stdout.write(f'Pokračujem od ID: {analysis.repair_progress_id:,}')
         
-        analysis.status = 'repairing'
-        analysis.save()
-
-        # Heartbeat for the job the caller claimed -- without it this run looks
-        # dead to the watchdog and is reaped mid-repair. See `fetch_ruz_data`.
-        job_row = (
-            SyncJob.objects.filter(pk=options['sync_job_id']).first()
-            if options.get('sync_job_id') else None
-        )
-        sync_job_id = job_row.pk if job_row is not None else None
+        # Heartbeat for the job this run holds -- the one a Celery dispatcher
+        # claimed and handed down, or, for a command typed by an operator, the
+        # one claimed further down. `beat` closes over `job_row`, so rebinding
+        # that name after the claim is what makes the write loop below beat the
+        # row this run claimed. Without a heartbeat this run looks dead to the
+        # watchdog and is reaped mid-repair. See `fetch_ruz_data`.
+        #
+        # `--sync-job-id` names the row this run reports against, and a run
+        # given one that names no row has to refuse: every write below would go
+        # untracked -- `beat` a no-op, `set_job_outcome` an UPDATE that matches
+        # nothing. `fetch_ruz_data` refuses the same input for the same reason
+        # ("refusing to walk untracked"). The test is `is not None` rather than
+        # truthiness, and that is the whole of it: `--sync-job-id 0` is falsy,
+        # so the claim further down was skipped as well and the run imported
+        # company rows beside a live walk, unguarded and unrecorded.
+        sync_job_id = options.get('sync_job_id')
+        job_row = SyncJob.objects.filter(pk=sync_job_id).first() if sync_job_id else None
+        if sync_job_id is not None and job_row is None:
+            raise CommandError(
+                f"RUZ sync job #{sync_job_id} does not exist; refusing to walk untracked."
+            )
 
         def beat() -> None:
             if job_row is not None:
@@ -126,19 +139,73 @@ class Command(BaseCommand):
                 missing_ids.append(ruz_id)
 
         if not missing_ids:
+            # Nothing is claimed yet at this point, so this return has no job to
+            # close -- and must not have one. A run with no work to do did no
+            # work; a row claimed above this would be a job for having done
+            # nothing, and if anything raised between claiming it and here it
+            # would hold `ruz:global` until the watchdog reaped it.
             self.stdout.write(self.style.SUCCESS('Všetky ID už boli opravené!'))
             analysis.status = 'completed'
             analysis.completed_at = timezone.now()
             analysis.save()
             return
-        
+
         self.stdout.write(f'Zostáva opraviť: {len(missing_ids):,} ID')
         self.stdout.write(f'Používam {num_workers} workerov...')
-        
+
+        # The slot is claimed here, and both "here" and "now" are the point.
+        #
+        # A claimed row holds `ruz:global`: migration 0012's partial unique index
+        # keeps it for `queued` and `running` only. So every statement between
+        # this claim and the `try` below is a window in which a raise leaves that
+        # row open, refusing every later RUZ run until `detect_and_fail_stuck_jobs`
+        # reaps it -- up to the 30-minute staleness threshold. Claiming above the
+        # work-list build would open that window across a loop with one iteration
+        # per missing RUZ id, minutes on a real analysis, and a Ctrl+C in there is
+        # caught by nothing: `except KeyboardInterrupt` is inside the `try`. The
+        # only statements left between the claim and the `try` are assignments and
+        # a read of the in-memory `analysis`; the first database write this run
+        # makes after claiming is the first statement inside the `try`.
+        #
+        # A command typed by an operator is the one RUZ entry point nothing
+        # upstream claims the slot for: no task and no admin dispatch hands it a
+        # `--sync-job-id`, so it wrote company rows beside whatever else was
+        # running. This is also the path the Ctrl+C message at the end of
+        # `handle` sends operators down.
+        owns_job_lifecycle = False
+        job = None
+        if sync_job_id is None:
+            job = claim_ruz_slot_for_cli(
+                job_type="ruz_repair",
+                # What this run was actually typed with, for the same reason
+                # `repair_ruz_sync_v2` records its own: `ruz_repair` covers two
+                # commands and the row has to say which one, and how.
+                parameters={
+                    "command": "repair_ruz_gaps",
+                    "command_args": [
+                        f'--workers={num_workers}',
+                        f'--batch-size={batch_size}',
+                        f'--analysis-id={analysis.pk}',
+                    ] + (['--resume'] if options['resume'] else []),
+                },
+            )
+            sync_job_id = job.pk
+            # `beat` closes over this name; see its comment above.
+            job_row = job
+            owns_job_lifecycle = True
+
         processed = 0
         start_time = time.time()
-        
+
         try:
+            # Marked repairing only now: the slot is held, the work list is
+            # built, and the next thing that happens is the first write. That is
+            # what keeps the claim -> `try` window free of database writes, which
+            # is what the comment above the claim is about -- and it is also why
+            # a refusal leaves the analysis row exactly as it was.
+            analysis.status = 'repairing'
+            analysis.save()
+
             # Spracujeme v batch-och pre lepší progress tracking
             for i in range(0, len(missing_ids), batch_size):
                 beat()
@@ -198,14 +265,37 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(
                     f'Dôvody chýb sú v `SyncGapAnalysis(id={analysis.pk}).last_error`.'
                 ))
-            
+            if owns_job_lifecycle:
+                # Only when this run holds the job itself; a Celery dispatch
+                # owns the status of the row it handed down. See
+                # `set_job_outcome` for why the counters are a separate writer.
+                complete_job(job)
+
         except KeyboardInterrupt:
+            if owns_job_lifecycle:
+                # `paused`, not `completed`. The command catches the interrupt
+                # and returns normally, so nothing else would mark this job --
+                # and this is exactly the run the message below tells the
+                # operator to resume. A paused row releases `ruz:global`: the
+                # partial unique index holds the slot only for `queued` and
+                # `running`.
+                pause_job(job, reason="Interrupted by operator (Ctrl+C)")
             self.stdout.write(self.style.WARNING(
                 f'\nPrerušené na ID {analysis.repair_progress_id:,}. '
                 f'Pokračujte: python manage.py repair_ruz_gaps --resume'
             ))
-            
+
         except Exception as e:
+            if owns_job_lifecycle:
+                # Before the `analysis.save()` below, not after it. This handler
+                # runs because the run just died, most likely on the database,
+                # and the write that records the failure is then the write most
+                # likely to raise again -- if it did, the exception would leave
+                # this handler with `fail_job` never called, and the claimed row
+                # would sit `running`, holding `ruz:global` until the watchdog
+                # reaped it. Freeing the slot must not depend on a write that can
+                # fail.
+                fail_job(job, error=f"{type(e).__name__}: {e}")
             analysis.status = 'failed'
             analysis.last_error = str(e)
             analysis.save()

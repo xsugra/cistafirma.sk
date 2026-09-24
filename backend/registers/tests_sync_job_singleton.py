@@ -189,6 +189,37 @@ class ResumeFullRuzSyncTests(TestCase):
         self.assertIn("1900000", "\n".join(logs.output))
 
 
+class HandRunResumeWithNothingToResumeTests(TestCase):
+    """The walk's own claim, on the one exit that only the hand-run path owns.
+
+    A Celery-dispatched `--resume` always arrives with a `--sync-job-id`, so
+    the task above owns the row it handed down. Typed by an operator there is
+    no id, so the command claims the slot itself -- and this return sits far
+    above the `try` that owns `complete_job`, so the row it had just claimed
+    was left `running` on `ruz:global`. Every later RUZ run, the keeper's own
+    resume among them, was then refused for the watchdog's ~30 minutes with
+    nothing on the row to say why. `docs/DEVELOPER_GUIDE.md` documents this
+    command, so it is an ordinary input rather than an edge case.
+    """
+
+    def test_it_releases_the_slot_it_took(self):
+        with patch("registers.management.commands.fetch_ruz_data.RuzApi"):
+            call_command(
+                "fetch_ruz_data", resume=True, stdout=StringIO(), stderr=StringIO()
+            )
+
+        job = SyncJob.objects.get(concurrency_key="ruz:global")
+        self.assertEqual(job.status, "completed")
+        self.assertEqual(job.triggered_via, "cli")
+        # The slot really is free again, which is the assertion that fails
+        # while the row is left `running`: migration 0012's partial unique
+        # index admits only `queued`/`running`, so a new RUZ job enqueues
+        # immediately once this one is closed.
+        again, created = sync_engine.enqueue_ruz_job(job_type="ruz_full")
+        self.assertTrue(created)
+        self.assertNotEqual(again.pk, job.pk)
+
+
 class StartFullRuzSyncFromIdTests(TestCase):
     """The sibling of the resume task, and the same defect.
 

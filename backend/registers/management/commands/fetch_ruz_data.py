@@ -74,24 +74,21 @@ class Command(BaseCommand):
 
         sync_job_id = options.get("sync_job_id")
         if sync_job_id is None:
-            from registers.services.sync_engine import claim_ruz_job, enqueue_ruz_job
+            from registers.services.sync_engine import claim_ruz_slot_for_cli
 
             job_type = {
                 "full": "ruz_full",
                 "full_companies": "ruz_full_firmy",
                 "full_individuals": "ruz_full_szco",
             }.get(sync_type, "ruz_incremental")
-            job, created = enqueue_ruz_job(
+            # The claim, the refusal and the two error messages live in one
+            # place now: this block was the pattern the repair commands were
+            # missing, and a second copy of it is how one of them ended up
+            # without it.
+            job = claim_ruz_slot_for_cli(
                 job_type=job_type,
                 parameters={"sync_type": sync_type, "entity_type": entity_type},
-                triggered_via="cli",
             )
-            if not created:
-                raise CommandError(
-                    f"RUZ sync job #{job.pk} is already active; refusing concurrent import."
-                )
-            if claim_ruz_job(job.pk) is None:
-                raise CommandError(f"Unable to claim RUZ sync job #{job.pk}.")
             sync_job_id = job.pk
             owns_job_lifecycle = True
 
@@ -123,6 +120,21 @@ class Command(BaseCommand):
                 ))
             else:
                 self.stdout.write(self.style.ERROR('Nenájdený žiadny sync na pokračovanie.'))
+                if owns_job_lifecycle:
+                    # The slot was claimed above, before this lookup, and this
+                    # return sits far above the `try` that owns `complete_job`,
+                    # `pause_job` and `fail_job` -- so without this the row
+                    # stayed `running` and held `ruz:global` against every later
+                    # RUZ run until `detect_and_fail_stuck_jobs` reaped it, ~30
+                    # minutes, with nothing on the row saying why. `completed`
+                    # with zero counters is the honest record: the run looked,
+                    # found nothing to resume, and did nothing. An operator is
+                    # sent here by `docs/DEVELOPER_GUIDE.md` typing the
+                    # documented `--resume`, so it is an ordinary input, not an
+                    # edge case.
+                    from registers.services.sync_engine import complete_job
+
+                    complete_job(job)
                 return
         else:
             # Určíme typ synchronizácie
