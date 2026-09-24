@@ -21,9 +21,14 @@ vi.mock('../api', () => ({api: mocks.api}));
  * The tab bar itself, so a section's label is looked for where a tab would be
  * rather than anywhere on the page -- `Prehľad o firme` is also an InfoCard
  * title, and a match outside the bar would prove nothing about reachability.
+ *
+ * Found by its accessible label rather than a CSS class: the bar is now the
+ * shared `SectionNav` (the same list the company page draws), so this view no
+ * longer owns its markup and the test must not reach for a class that belongs
+ * to whichever component draws it.
  */
 const tabBar = (container: HTMLElement): HTMLElement => {
-    const bar = container.querySelector('.tab-nav');
+    const bar = container.querySelector('nav[aria-label="Sekcie firmy"]');
     if (!bar) throw new Error('CompanyDetail rendered no tab bar');
     return bar as HTMLElement;
 };
@@ -96,11 +101,16 @@ describe('CompanyDetail', () => {
         // `DEFAULT_SECTION_ID` is the registry's, and the standalone page
         // redirects to the same one -- an inline view that started somewhere
         // else would disagree with the URL a reader shares.
+        //
+        // Which section is open is read from `aria-current`. The `active` class
+        // used to be the hook and no longer exists here: it was styling, and a
+        // restyle could have silently broken the only assertion that says what
+        // the bar is showing.
         const {container} = renderWithProviders(<CompanyDetail company={makeCompany()}/>);
 
         const active = within(tabBar(container)).getByRole('button', {
             name: getSection(DEFAULT_SECTION_ID)!.label,
         });
-        expect(active.classList.contains('active')).toBe(true);
+        expect(active.getAttribute('aria-current')).toBe('true');
     });
 });

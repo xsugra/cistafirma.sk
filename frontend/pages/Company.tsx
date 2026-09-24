@@ -9,7 +9,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { SearchBar } from '../components/SearchBar';
 import { CompanyHeader } from '../components/company/CompanyHeader';
 import { CompanySummaryStrip } from '../components/company/CompanySummaryStrip';
-import { CompanyNav } from '../components/company/CompanyNav';
+import { SectionNav } from '../components/company/SectionNav';
 import { SectionNotice } from '../components/company/SectionNotice';
 import { useCompanyProfile } from '../components/company/useCompanyProfile';
 // The body map lives below both presentations of a company, not in this one --
@@ -133,7 +133,7 @@ const CompanyBody: React.FC<{
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
                 <div className="lg:col-span-1">
                     <div className="lg:sticky lg:top-6 rounded-xl border border-gray-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
-                        <CompanyNav ico={company.ico} />
+                        <SectionNav ico={company.ico} />
                     </div>
                 </div>
                 <div className="lg:col-span-3">

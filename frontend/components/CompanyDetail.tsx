@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import type { Company } from '../types';
 import {
-    COMPANY_SECTIONS,
     DEFAULT_SECTION_ID,
     getSection,
     type CompanySectionId,
     type ReadySectionId,
 } from '../companySections';
+import { SectionNav } from './company/SectionNav';
 import { CompanyHeader } from './company/CompanyHeader';
 import { CompanySummaryStrip } from './company/CompanySummaryStrip';
 import { SectionNotice } from './company/SectionNotice';
@@ -48,24 +48,20 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
 
             <CompanySummaryStrip company={company} />
 
-            {/* Tab Navigation. Twenty entries do not fit on one line, and they
-                wrap rather than scroll sideways. The scroll was the first
-                attempt and it undid the fix above: a reader saw the first five
-                tabs and had no reason to suspect fifteen more, which is the
-                same unreachability this view was just cured of, only quieter.
-                Wrapping shows all twenty at once, so the price is a taller bar
-                instead of hidden sections. */}
-            <div className="tab-nav flex-wrap pb-1 mb-6">
-                {COMPANY_SECTIONS.map((entry) => (
-                    <button
-                        key={entry.id}
-                        onClick={() => setActiveTab(entry.id)}
-                        className={`tab-btn whitespace-nowrap flex-shrink-0 ${activeTab === entry.id ? 'active' : ''}`}
-                    >
-                        <i className={`fas ${entry.icon}`}></i>
-                        {entry.label}
-                    </button>
-                ))}
+            {/* The same section list the company page draws, in its `strip`
+                layout -- one component, so the two views cannot disagree about
+                which sections exist or what we can fill.
+
+                This view used to wrap the twenty entries into a grid instead,
+                to keep all of them visible at once: a sideways strip showed the
+                first five and gave no sign of fifteen more. That reasoning was
+                sound and the fix is still a strip, because the product owner
+                asked for one mechanism across both views and the company page's
+                is the one that already works. The scrollbar is the affordance
+                the grid was buying -- `pb-1` keeps it visible rather than hiding
+                it behind `no-scrollbar`, so the row still says it continues. */}
+            <div className="mb-6">
+                <SectionNav layout="strip" activeId={activeTab} onSelect={setActiveTab} />
             </div>
 
             {/* Tab Content. The key is the tab, so a switch unmounts what was
