@@ -8689,6 +8689,145 @@ Je to teda mŕtve pole, nie chýbajúce zverejnenie.
 
 ---
 
+### 11.19 Ručne spustené opravné príkazy si berú job riadok aj slot (2026-09-24, `7c6aa48`)
+
+§11.14 medzi nálezmi, ktoré prežili re-deriváciu, zapísal tento
+(`docs/PLAN.md:8202-8207`):
+
+> **ručne** spustené `manage.py repair_ruz_sync_v2|repair_ruz_gaps` si neberú job
+> riadok ani slot — a `repair_ruz_gaps.py:205` to operátorovi priamo odporúča
+> („Pokračujte: python manage.py repair_ruz_gaps --resume"). Správny vzor je o
+> kus vedľa: `fetch_ruz_data.py:75-98` si pri chýbajúcom flagu sám nárokuje slot
+> a pri kolízii vyhodí `CommandError`. Toto je jediné reziduum, ktoré si podľa
+> mňa zaslúži opravu bez rozhodnutia — je to tá istá get-then-create trieda,
+> ktorú projekt už raz meral.
+
+Opravené v `7c6aa48`. Zvyšok tejto sekcie je záznam — vrátane troch dier, ktoré
+v pôvodnom zadaní neboli, a jednej veci, ktorú som takmer zapísal ako dokázanú
+chybu a dokázaná nie je.
+
+**Mechanizmus.** Nárokovanie je teraz jedna funkcia,
+`claim_ruz_slot_for_cli` v `backend/registers/services/sync_engine.py`: zavolá
+`enqueue_ruz_job(triggered_via="cli", job_type="ruz_repair", …)`, a keď je slot
+obsadený (`created is False`), vyhodí `CommandError`. Hlášky sú **bajt na bajt**
+tie, ktoré `fetch_ruz_data` vyhadzoval predtým, takže refaktor toho príkazu na
+helper je bez zmeny správania — a to je overiteľné, nie tvrdené: `fetch_ruz_data`
+mal obe hlášky aj predtým. Oba opravné príkazy ju volajú, keď im nikto
+`--sync-job-id` neodovzdal, a `owns_job_lifecycle` je `True` len vtedy: na tej
+ceste nemá status riadku kto zapísať, takže ho zapisuje príkaz sám
+(`complete_job` / `pause_job` / `fail_job`); na ceste z Celery riadok vlastní
+dispatcher a druhý writer by ho označil za hotový skôr, než to niekto rozhodol.
+
+**Kde nárok stojí — a prečo práve tam.** Slot drží len `queued`/`running`
+(partial unique index `reg_one_active_ruz_job`, migrácia
+`0012_syncjob_ruz_singleton.py`), takže **každý príkaz medzi nárokom a `try` je
+okno, v ktorom výnimka nechá riadok otvorený** a odmietne každý ďalší RUZ beh
+až do `detect_and_fail_stuck_jobs` (~30 minút). Preto je nárok až **pod**
+stavbou zoznamu práce a `analysis.status` / `progress.status` sa zapisuje až
+vnútri `try`: v `repair_ruz_gaps` je stavba zoznamu slučka s jednou iteráciou
+na chýbajúce RUZ id — na reálnej analýze minúty — a `except KeyboardInterrupt`
+je vnútri `try`, takže Ctrl+C počas nej nezachytáva nič. Prvé dvojici riadkov
+medzi nárokom a `try` ostali len priradenia a čítanie `analysis` z pamäte.
+`repair_ruz_gaps` má v tom istom duchu aj skorý návrat „Všetky ID už boli
+opravené!" **pred** nárokom: beh, ktorý nemá čo robiť, nemá čo zamknúť.
+
+**Tri diery, ktoré review našiel — všetky tri overené, nie odvodené.**
+
+- **`--sync-job-id` s akoukoľvek hodnotou obchádzal aj kontrolu, aj nárok.**
+  Riadok `sync_job_id = options.get('sync_job_id')`, ktorý rozhodoval, bol
+  v oboch príkazoch dva razy a prvý test bol na pravdivosť — `--sync-job-id 0`
+  je teda falsy, nárok sa preskočil a beh importoval firemné riadky **vedľa
+  živého walku**, neoznačený a nezaznamenaný. To isté pre preklep alebo
+  neexistujúce id: `set_job_outcome` je potom UPDATE, ktorý nič nenájde, a
+  `beat()` je no-op. Oba príkazy teraz odmietnu s `does not exist; refusing to
+  walk untracked` — rovnako ako `fetch_ruz_data`, ktorý to isté hlási na svojom
+  `--sync-job-id` už predtým. Test je `is not None`, nie pravdivosť. Nový test
+  `test_a_run_given_a_job_id_that_names_no_row_refuses` prechádza `0` aj
+  `999999` cez oba príkazy; na kóde pred opravou padá vo všetkých štyroch
+  podtestoch (`CommandError not raised`).
+- **`fetch_ruz_data --resume`, ktorý nemá čo obnoviť, držal slot 30–40 minút.**
+  Nárok je v tomto príkaze vysoko nad `try`, ktoré vlastní `complete_job`, a miss
+  cesta sa z neho vracala holým `return` — riadok, ktorý si príkaz práve
+  nárokoval, ostal `running`. A to nie je okrajový vstup: `docs/DEVELOPER_GUIDE.md:266`
+  dokumentuje `python manage.py fetch_ruz_data --resume` a **vlastné odporúčanie
+  príkazu po Ctrl+C** (`fetch_ruz_data.py`, hláška na konci `handle`) posiela
+  operátora presne tam — po prerušenom `--full-resync` pritom `full` progress
+  riadok lookup pre `incremental` nenájde, takže do stavu „nič na obnovenie" sa
+  ide zhora. Bežný kľudový stav (incremental riadok `completed`) je druhý.
+  Následok je horší než státie: `_run_ruz_command` na obsadený slot zaloguje
+  INFO „already running" a vráti sa **bez opakovania**, takže 6-hodinový beat
+  incremental aj dispatch `ruz_keeper_tick` sa ticho preskočia, a keeper číta
+  uviaznutý `ruz_full` riadok ako bežiaci → sloveso „wait" → walk, ktorý v tom
+  okne zomrel, sa už nikdy nereštartuje. Miss cesta teraz volá `complete_job(job)`
+  (a to je `UPDATE status="completed"`, teda mimo `status IN
+  ('queued','running')` — slot sa naozaj uvoľní, čo je aj tvrdenie nového testu
+  `HandRunResumeWithNothingToResumeTests`: po ňom `enqueue_ruz_job` vráti
+  `created=True`).
+- **`test_an_analysis_with_nothing_left_still_records_its_outcome` nemohol
+  padnúť na mechanizmus, ktorý menoval.** Docstring tvrdil, že „skorý návrat je
+  pred `try`, takže `finally` musí prebehnúť aj preň" — neprebehne, a oba
+  countery boli na riadku z fixture už `0`. Test teda prechádzal z dôvodu, ktorý
+  nesúvisel s tým, čo tvrdil. Prepísaný na
+  `test_a_dispatched_run_with_nothing_left_writes_no_status`, kde tvrdenie má
+  zuby: status musí ostať `running` (píše ho až dispatcher), takže
+  bezpodmienečné `complete_job` na tej ceste test zhodí.
+
+**Poradie handlerov — čo to naozaj robí.** V `except` blokoch je `fail_job` /
+`pause_job` **pred** `progress.save()` / `analysis.save()`, a komentár na tom
+mieste hovorí prečo. Počas review som to chcel zapísať ako opravu mŕtveho
+spojenia — lenže pri mŕtvom spojení padne aj `fail_job`, oba idú po tom istom
+spojení, a `CONN_HEALTH_CHECKS` v `backend/backend/settings.py` nie je, takže
+Django sa vnútri management príkazu nepripája znovu. Hodnota je teda
+v **selektívnom** zlyhaní zápisu (napr. `DataError` na riadku `analysis` alebo
+`progress`): vtedy `fail_job` prejde a slot sa uvoľní, kým bez tohto poradia by
+sa beh skončil s otvoreným slotom. Je to zámer, nie dokázaná oprava, a je to tu
+tak aj napísané.
+
+**Dve nezamknuté write cesty, ktoré s tým súvisia a nechal som ich na
+rozhodnutie.** Obe zapisujú firemné riadky mimo `ruz:global` a obe potrebujú
+rozhodnutie, nie opravu:
+
+- `backend/registers/management/commands/repair_ico_shape.py` — `_report_strip`
+  (`:125`) prepisuje `ico` na `Company`, `IndividualEntity` a `OrsrCompanyProfile`
+  (namerané: 3 riadky, len tie, ktorých uložené IČO má medzery), a `_reimport`
+  (`:159`) volá `walk.update_or_create_company(details, 'both')`, teda presne tú
+  metódu, ktorou walk zapisuje.
+- `_update_company_from_ruz_data` (`backend/registers/tasks.py:578`, zápis na
+  `:636`) — dosiahnuteľná zo `sync_single_company_from_ruz` (`:541`) a teda zo
+  šiestich miest: admin changelist akcie (`backend/companies/admin.py:418`,
+  `:465`), pridať-firmu view (`:866` asynchrónne, `:871` synchrónne len
+  v `except`), admin-API refresh (`backend/adminapi/views/sync.py:574` →
+  `orchestrate_full_company_sync` `tasks.py:1537`, dispatch `:1551`),
+  `sync_company_now` (`tasks.py:1560`, volaný z `adminapi/views/sync.py:414`),
+  a `search_and_add_company_by_ico` (`tasks.py:674`), ktorá nemá volajúceho.
+  Zdôvodnenie, ktoré je pri tom zapísané (`adminapi/views/sync.py:532-537`),
+  vysvetľuje, prečo tam nie je `SyncJob` riadok — nevysvetľuje, prečo je bezpečné
+  písať mimo slotu.
+
+Toto je **nový nález, nie vyvrátenie §11.14** — a to rozlíšenie je podstatné.
+§11.14 na `docs/PLAN.md:8205` hovorí „Toto je jediné reziduum, ktoré si podľa
+mňa zaslúži opravu bez rozhodnutia", čo je tvrdenie o **priorite v rámci
+vlastného zoznamu nálezov tej sekcie** (nálezy, ktoré prežili jej
+re-deriváciu), nie tvrdenie o výlučnosti naprieč repom; `repair_ico_shape` tam
+nie je spomenutý vôbec. Overoval som to proti textu, lebo som to takmer zapísal
+ako nepravdu plánu.
+
+**Overené.** `make test` → **1 059 testov `OK`** (o dva viac než pred touto
+opravou). Oba nové testy majú pozitívnu kontrolu: proti kódu pred opravou padajú
+(`'running' != 'completed'` pre `--resume`; `CommandError not raised` štyrikrát
+pre `--sync-job-id`), a po obnovení opravených súborov prechádzajú — vrátane
+kontrolného súčtu, nie len behu.
+
+**Čo zostáva otvorené.** Dve write cesty vyššie (majú dostať slot, alebo byť
+výslovne vyňaté?) a jedna drobnosť vnútri nového helpera: keby `claim_ruz_job`
+vrátil `None`, `claim_ruz_slot_for_cli` vyhodí `CommandError` a jeho vlastný,
+práve vložený `queued` riadok ostane držať slot — okno pod milisekundu, ktoré
+`detect_and_fail_stuck_jobs` uprace a `sync_health` medzitým hlási ako „queued
+a nikdy nenárokovaný". Nie je to blocker; patrí k tomu jednořádkový komentár, ak
+sa toho kódu niekto dotkne.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
