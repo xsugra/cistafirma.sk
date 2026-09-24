@@ -8539,6 +8539,156 @@ zdravý walk**, preto každé ssh volanie nesie `ServerAliveInterval`.
 
 ---
 
+### 11.18 Duplicitné uzly osôb v grafe „Prepojenia" (2026-09-24, `687a559`)
+
+Samuel: *„teraz sa tam začal objavovať bug, kedy zobrazuje tú istú osobu na grafe
+viackrát (zbytočne zaberá miesto na grafe)."* Tvar grafu sa nemal meniť — *„ako
+funguje graf sa mi už páči aj na telefóne aj na PC"* — a nezmenil sa.
+
+**Mechanizmus, presne.** `CompanyGraphView` zhlukoval len konateľov tej jednej
+firmy (`_cluster_persons([rel.person …])`) a id uzla je `members[0].id`, teda
+najnižší riadok **lokálneho** zhluku. `PersonGraphView` kľúčoval na `person.id`,
+teda na pk, na ktoré sa prišlo. Ten istý človek má ale riadky vo viacerých
+firmách, a ktorý z nich je najnižší, závisí od toho, ktorá firma sa ho pýta.
+
+Rozhodujúci je prípad, keď **žiadna jedna firma nevidí oba riadky** — jeden
+pracuje v A, druhý v B a spája ich len pravidlo 2 (rovnaké základné meno
+a rovnaké PSČ). Vtedy firma A kreslí `person_X`, firma B `person_Y`. Klient
+dedupuje uzly presne podľa id (`useGraphData.ts:64` pre firmy, `:107` pre
+osoby), takže rozbalenie z A do B nakreslí toho istého človeka druhýkrát. To je
+presne to „zbytočne zaberá miesto", ktoré Samuel videl.
+
+Prečo sa to prejavilo až teraz, je merateľné — a **nie je to walk**. `Person`
+má `created_at`, takže prírastok po dňoch sa dá prečítať (dell, 2026-09-24):
+
+| Deň | Nových riadkov `Person` |
+|---|---|
+| 2026-09-13 → 09-16 | **124 354** (32 064 + 16 490 + 42 612 + 33 188) |
+| 2026-09-19 → 09-21 (walk bežal) | 10 + 5 + 1 = **16** |
+| 2026-09-22 → 09-24 | 32 678 |
+
+Skutočný prírastok prišiel **týždeň pred** walkom, v dňoch, keď sa rozhodovala
+identitná schéma (`#89`, rozhodnuté 2026-09-13) — a vtedy mala tabuľka
+**56 162 riadkov**, meraných naživo v tej istej sekcii. Dnešných 199 039 je teda
+~3,5-násobok stavu, v ktorom sa chyba rozhodla. Walk je RUZ resync *firiem*;
+extrakcia osôb beží inde, a počas jeho behu pribudlo za tri dni **šestnásť**
+riadkov — čiže tvrdenie „walk pridal desaťtisíce osôb" by bolo nepravdivé.
+Vyšší počet riadkov znamená viac ľudí s riadkami vo viacerých firmách, čo je
+presne trieda, v ktorej sa táto chyba prejaví — ale prišla s extrakciou osôb
+v polovici septembra, nie s dobehnutím walku.
+
+(Histogram je úplné účtovníctvo, nie vzorka: súčet po dňoch je presne 199 039,
+teda `count(*)`. `#89` meria 56 162 počas 09-13, kedy sa toho dňa vytvorilo
+32 064 — čo sedí: do merania patrí 41 839 riadkov z 08-04 → 09-12 plus časť
+toho dňa.)
+
+**Namerané** (produkcia, 2026-09-24; `$CLAUDE_JOB_DIR/tmp/probe2_out_1.txt`,
+probe 2 nad vzorkou firiem s ≥2 osobami):
+
+| Riadok | Význam |
+|---|---|
+| `SAMPLED\|3000 of 31758` | 3 000 z 31 758 firiem s ≥2 osobami |
+| `HUMANS_WITH_MULTIPLE_NODE_IDS\|144` | 144 ľudí dostalo viac než jedno id uzla |
+| `DUP\|global=168\|node_ids=[168, 848, 3606, 4741]\|Ing. Andrea Halušková` | najhorší prípad: štyri id pre jedného človeka |
+
+Ďalších deväť príkladov v tom istom výpise (`Vladimír Tvaroška` tri, `Ing.
+Jolana Šuleková` tri, `JUDr. Mikuláš Trstenský, CSc.` tri, …). Všetkých 144
+spadá do tej istej triedy: dve a viac firiem, z ktorých každá vidí iný riadok.
+
+**Oprava.** Nová `_resolve(persons)` zhlukuje **proti celému stromu**, nie proti
+riadkom, ktoré drží volajúci:
+
+- kandidáti = jeden OR dotaz `name_normalized__contains` pre každé základné meno
+  (`base_name` je sufix `name_normalized` — titul sa normalizuje dopredu — takže
+  `contains` je nadmnožina odpovede), presný `base_name` filter v Pythone odstráni
+  to, čo `contains` prestrelil (`novak` vytiahne `novakova`);
+- **zhluky cez základné meno nevedú** — obe pravidlá v `cluster_evidence`
+  zoskupujú najprv podľa neho — takže zúženie kandidátov nemôže stratiť spojenie;
+- riadok bez mena (základné meno prázdne) nemá podľa čoho sa nájsť, tak sa
+  prenáša ručne; vypadnutie by znamenalo vypadnutého konateľa z grafu.
+
+Obe zobrazenia teraz idú cez `_resolve`. `CompanyGraphView` berie `primary =
+members[0]` globálneho zhluku (teda aj `rolesCount` a `other_relations`),
+`PersonGraphView` kľúčuje na `members[0]`, nie na požadované pk. Id uzla, počet
+firiem aj rozbalenie tak pochádzajú z jedného rozhodnutia namiesto troch.
+
+**Limit 500 riadkov je preč, a je to súčasť opravy, nie upratovanie.**
+`CLUSTER_CANDIDATE_LIMIT` sa aplikoval **pred** presným filtrom, takže pri dosť
+častom mene mohol zahodiť súrodenca — a to je presne tá chyba, ktorú táto
+sekcia odstraňuje, len v inej veľkosti. Prečo limit netreba, je zmerané
+(probe 5 a 6, dell, znovu spustené 2026-09-24; `$CLAUDE_JOB_DIR/tmp/probe5_out.txt`,
+`probe6_out.txt`):
+
+```
+DISTINCT_BASES|min=1|median=4|p95=21|p99=47|max=187
+ABOVE_50|244   ABOVE_100|16   ABOVE_200|0
+BASE|jan kovac|exact=40|contains=72|contains_s=0.030
+BASES_WITH_AT_LEAST_10_ROWS|188
+BASES_WITH_AT_LEAST_50_ROWS|0
+TAIL|company_id=65575|bases=187|count=422|count_s=1.154|fetched=422|kept=352
+```
+
+Čo dotaz veľkostne určuje, je **firma, nie tabuľka**: najširšia firma má 187
+rôznych mien konateľov a jej OR dotaz vytiahne 422 riadkov za 1,15 s — z toho
+presný filter ponechá 352, čiže `contains` prestrelil 17 %, a presne na to tam
+ten filter je. Najčastejšie základné meno (`jan kovac`, 40 riadkov) vytiahne 72.
+Dotaz je jeden na firmu, nie jeden na meno.
+
+Čísla sú **snímka rastúcej tabuľky**, nie konštanta: tie isté probe o deň skôr
+čítali 143 282 mien pri 198 585 riadkoch, teraz 143 617 pri 199 095 — tabuľka
+rastie o tisíce riadkov denne. Dôležitá vlastnosť je preto štrukturálna:
+veľkosť dotazu sa odvíja od počtu mien konateľov jednej firmy, takže s tabuľkou
+nerastie. Poznámka v `_candidate_rows` nesie tie isté čísla a tú istú výhradu.
+
+**Cena, zmeraná vopred** (probe 7, 300 firiem s ≥2 osobami): globálna resolúcia
+pridá firmám firmy — medián 0, p95 +2, max +20, **37 z 300 firiem získa aspoň
+jednu**. Z toho **86 zhlukov** vo vzorke spája len meno + PSČ (pravidlo 2, to
+slabšie). To je dôvod, prečo je `rolesCount` tiež globálny: keby ostal lokálny,
+uzol, ktorý *je* ten človek, by niesol číslo závislé od cesty kliknutia — tá istá
+trieda chyby, akú Samuel nahlásil.
+
+**Testy.** `PersonGraphAPITests` **neexistoval** (overené: `git show
+bd00294:backend/connections/tests.py | grep -c PersonGraphAPITests` → `0`) —
+práve tam tá chyba žila, takže graf orientovaný na osobu nebol krytý ani jedným
+testom. Pribudlo **sedem** testov:
+
+- štyri, ktoré **na starom kóde padajú** (overené `git stash` na
+  `views.py`): `test_one_human_in_two_companies_gets_one_node_id`,
+  `test_the_graph_is_the_same_from_either_row_of_the_human`,
+  `test_the_node_is_the_clusters_first_row_not_the_requested_one`,
+  `test_the_two_graphs_draw_the_same_person_node`;
+- dva invarianty, ktoré držia pred aj po: riadok bez mena nesmie vypadnúť
+  z grafu a podobné priezvisko (`Nováková` vs `Novák`) musí ostať druhý človek;
+- jeden na 404 neznámej osoby, ktorý drží pred aj po.
+
+Prvé štyri sú zámerne kontrola proti **starému** kódu, nie proti novému: test,
+ktorý prejde na oboch, nedokazuje opravu — a keby som bol napísal len invarianty,
+zelená sada by tvrdila, že chyba nikdy neexistovala.
+
+Celá sada: 1 049 testov `OK`. Push do `gitlab-home` aj `origin`
+(`bd00294..687a559`). Pipeline 203 (`bd00294`, výber sekcií) **success**;
+204 na `687a559` beží.
+
+**Čo zostáva otvorené — a nie je súčasťou tejto opravy.** Graf je teraz jediné
+miesto, ktoré zhlukuje, a **nezverejňuje riadky, z ktorých uzol vznikol**.
+Osobná stránka to robí (`PersonRecordsNote`, `members`, ≥2 riadky) a jej
+vlastný komentár hovorí prečo: *„the reader who knows the two rows are a father
+and a son is the only one who can correct it -- which they cannot do about rows
+they are not shown"*. Graf také pole v odpovedi nemá (`graphTypes.ts`: `id`,
+`type`, `label`, `ico`, `status`, `rolesCount`), takže tú istú vetu nemá ako
+povedať. Keďže sa to zhoršilo (globálna resolúcia zlučuje aj medzi firmami),
+patrí to Samuelovi na rozhodnutie — a nie je to copy-paste: existujúca veta
+(`„Register uvádza túto osobu v jednom dokumente na viacerých miestach"`) je
+formulácia **pravidla 1** (jeden dokument) a pri zlúčení podporenom len
+pravidlom 2 by bola nepravdivá.
+
+Druhý nález, ktorý s tým nesúvisí: `records` (počet riadkov, z ktorých je osoba
+poskladaná) sa posiela do klienta (`api.ts:268`, `api.ts:310`, `types.ts:663`,
+`:726`) a **nikde sa nevykresľuje** — osobná stránka používa `members.length`.
+Je to teda mŕtve pole, nie chýbajúce zverejnenie.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
