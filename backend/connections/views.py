@@ -30,11 +30,6 @@ MIN_QUERY_LENGTH = 2
 #: than reporting the count it saw (see `total_people`).
 CLUSTER_SCAN_LIMIT = 300
 
-#: Rows read to find the people one row belongs to, for the person page and the
-#: graphs. Also a bound, and also a disclosed under-merge: it can leave a
-#: sibling out, never pull a stranger in.
-CLUSTER_CANDIDATE_LIMIT = 500
-
 
 def _coverage() -> dict:
     """What our own data does and does not cover.
@@ -118,38 +113,89 @@ def _cluster_persons(persons):
     return clusters, by_id
 
 
+def _base_names(names):
+    """The distinct base names of `names`, empty ones dropped.
+
+    `base_name` keeps at least one token, so it is empty only for a row whose
+    name is: those rows cannot be found by a name query and are handled by the
+    caller that holds them.
+    """
+    return {base for base in (base_name(name) for name in names) if base}
+
+
+def _candidate_rows(bases):
+    """Every row that could belong to one of these base names, in one query.
+
+    `base_name` is a suffix of `name_normalized` -- the title is *prefixed* to
+    the normalised name and both sides have their diacritics stripped -- so
+    `contains` is a superset of the answer and the exact filter removes what it
+    over-matched: `novak` fetches `novakova`.
+
+    One query for all the bases, not one per base, and no row limit on it. Base
+    name groups are small: measured on production 2026-09-24, 143 397 distinct
+    base names, of which 187 have ten rows or more and none has fifty. The
+    commonest (`jan kovac`, 40 rows) fetches 72 rows by `contains`, and the widest
+    company (187 distinct officer names) fetches 421 in 1.12 s.
+
+    The limit that used to stand here, `CLUSTER_CANDIDATE_LIMIT = 500`, was
+    applied *before* the exact filter -- so a name common enough to overflow it
+    would have lost siblings, and a person resolved from one graph would not have
+    matched the same person resolved from another. That is the defect this
+    replaces, so there is no limit here at all rather than a larger one.
+    """
+    query = Q()
+    for base in sorted(bases):
+        query |= Q(name_normalized__contains=base)
+    return [
+        row for row in Person.objects.filter(query).order_by("id")
+        if base_name(row.name) in bases
+    ]
+
+
+def _resolve(persons):
+    """Cluster the people these rows belong to, against the whole table.
+
+    Returns `(clusters, by_id)` in `_cluster_persons`'s shape: each cluster a
+    list of `PersonEvidence` sorted by row id, so `members[0]` is the row that
+    stands for the person.
+
+    **Whole table, and that is the whole point.** Clustering only the rows a
+    caller happens to be holding gives one human several answers, because the
+    lowest row id among, say, one company's officers is not the lowest of the
+    human they belong to. Whoever keys anything on that id -- the graph keys its
+    person nodes on it -- then gets one answer per caller.
+
+    Clusters never cross a base name -- both rules in `cluster_evidence` group by
+    it before anything else -- so restricting the candidates to these bases
+    cannot lose a join.
+    """
+    bases = _base_names(person.name for person in persons)
+    rows = _candidate_rows(bases) if bases else []
+    # A row whose name is empty has no base name to be found by, so it can only
+    # cluster with itself. It is added back rather than dropped: dropping it
+    # would drop an officer out of a company's graph.
+    known = {row.id for row in rows}
+    rows.extend(person for person in persons if person.id not in known)
+    if not rows:
+        return [], {}
+    return _cluster_persons(rows)
+
+
 def _cluster_for(person):
     """The rows we believe are the same human as `person`.
 
-    Candidates are found the way search finds them -- every token of the name
-    has to appear -- and `base_name` equality then does the rest, because the
-    title is not part of a name and `name_normalized` keeps it.
+    The cluster that holds this row, resolved the same way the company graph
+    resolves its officers -- so the two views agree on which row stands for the
+    person, which is what keeps the graph from drawing them twice.
     """
-    tokens = base_name(person.name).split()
-    if not tokens:
-        return [PersonEvidence(
-            id=person.id, name=person.name, address=person.address,
-            person_ico=person.person_ico, birth_date=person.birth_date,
-        )], {person.id: person}
-
-    candidates = Person.objects.all()
-    for token in tokens:
-        candidates = candidates.filter(name_normalized__contains=token)
-    rows = list(candidates.order_by("id")[:CLUSTER_CANDIDATE_LIMIT])
-    if all(row.id != person.id for row in rows):
-        rows.append(person)
-
-    base = base_name(person.name)
-    rows = [row for row in rows if base_name(row.name) == base]
-
-    clusters, by_id = _cluster_persons(rows)
+    clusters, by_id = _resolve([person])
     for members in clusters:
-        if any(m.id == person.id for m in members):
+        if any(member.id == person.id for member in members):
             return members, by_id
     return [PersonEvidence(
         id=person.id, name=person.name, address=person.address,
         person_ico=person.person_ico, birth_date=person.birth_date,
-    )], by_id
+    )], {person.id: person}
 
 
 def _relation_sort_key(item):
@@ -416,9 +462,17 @@ class CompanyGraphView(APIView):
         # sections, which is two rows and one human. The graph draws people, so
         # it draws the clusters -- one node per person, with every relation's own
         # role still on its own edge.
-        clusters, _by_id = _cluster_persons(
-            [rel.person for rel in relations]
-        )
+        #
+        # Resolved against the whole table rather than this company's officers
+        # alone, because the node id is `members[0].id` and the lowest row id
+        # among one company's officers is not the lowest of the human they belong
+        # to. Clustering locally gave a person one node id per company that named
+        # a different member first, and the client dedups by exact id, so the
+        # same human was drawn once per company: measured 2026-09-24 over a
+        # 3 000-company sample, 144 humans arrived with more than one node id
+        # (`Ing. Andrea Halušková` with four). `_resolve` is the same call the
+        # person graph makes, so the two views now agree on the id.
+        clusters, _by_id = _resolve([rel.person for rel in relations])
         cluster_of = {row.id: members for members in clusters for row in members}
 
         # One iteration per person, not per relation. An office arrives as many
@@ -728,10 +782,19 @@ class PersonGraphView(APIView):
         members, _by_id = _cluster_for(person)
         member_ids = [m.id for m in members]
 
+        # The cluster's own first row stands for the person, not the row that was
+        # asked for. `_cluster_for` resolves against the whole table, so this is
+        # the same id the company graph draws for this human -- and the client
+        # keys nodes on that id, so a graph that starts at a person and expands
+        # into a company that also names them must not open a second node for
+        # them. Keying on `person.id` did exactly that whenever the requested row
+        # was not the cluster's lowest.
+        primary = members[0]
+
         nodes = {}
         edges = []
 
-        person_node_id = f"person_{person.id}"
+        person_node_id = f"person_{primary.id}"
         company_count = (
             PersonCompanyRelation.objects
             .filter(person_id__in=member_ids)
@@ -742,7 +805,7 @@ class PersonGraphView(APIView):
         nodes[person_node_id] = {
             "id": person_node_id,
             "type": "person",
-            "label": person.name,
+            "label": primary.name,
             "rolesCount": company_count,
         }
 

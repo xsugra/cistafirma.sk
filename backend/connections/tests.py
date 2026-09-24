@@ -371,6 +371,173 @@ class CompanyGraphAPITests(APITestCase):
 
         self.assertEqual(len(few), len(many))
 
+    def test_one_human_in_two_companies_gets_one_node_id(self):
+        """The id must not depend on which company drew the person.
+
+        Two rows of one human that no single company's officer list holds both
+        of -- one row works here, the other works there, and only the name and
+        postcode say they are the same person (rule 2). Resolving against each
+        company's own officers therefore saw one row each and keyed the node on
+        it, so this company drew `person_<self.person>` and the other drew
+        `person_<other>`. The client dedups nodes by exact id, so expanding from
+        one into the other drew the same human twice, which is the report.
+
+        `rolesCount` moves with it, and for the same reason: a count computed
+        from the rows one company happens to hold is a number that changes with
+        the click path.
+        """
+        self.person.address = "Hlavná 1, 811 01 Bratislava"
+        self.person.save(update_fields=["address"])
+        other = Person.objects.create(
+            fingerprint="name:jan novak|addr:vedlajsia",
+            name="Ján Novák",
+            address="Vedľajšia 2, 811 01 Bratislava",
+        )
+        self.assertLess(self.person.id, other.id)
+        company2 = Company.objects.create(
+            ruz_id=7, ico="12345678", nazov_UJ="Iná Firma s.r.o."
+        )
+        PersonCompanyRelation.objects.create(
+            person=other, company=company2, role="konatel", is_active=True
+        )
+
+        data = self.client.get(f"/api/companies/{company2.ico}/graph/").json()
+
+        people = [n for n in data["nodes"] if n["type"] == "person"]
+        self.assertEqual([n["id"] for n in people], [f"person_{self.person.id}"])
+        self.assertEqual(people[0]["rolesCount"], 2)
+
+    def test_an_officer_whose_row_states_no_name_still_gets_a_node(self):
+        """A row with no name cannot be found by a name query, so it is carried.
+
+        The candidate rows come from the names the company's officers have, and
+        a blank one contributes no name to search by. It is added to the set by
+        hand rather than left out: dropping it would drop an officer from the
+        graph, which is a worse answer than a node labelled with nothing.
+        """
+        blank = Person.objects.create(fingerprint="name:|addr:", name="")
+        PersonCompanyRelation.objects.create(
+            person=blank, company=self.company, role="konatel", is_active=True
+        )
+
+        data = self.client.get(f"/api/companies/{self.company.ico}/graph/").json()
+
+        people = sorted(n["id"] for n in data["nodes"] if n["type"] == "person")
+        self.assertEqual(
+            people, sorted([f"person_{self.person.id}", f"person_{blank.id}"])
+        )
+
+    def test_a_near_miss_surname_is_a_second_person(self):
+        """`novakova` is fetched by the `novak` query and must not be merged.
+
+        The candidate query matches on a substring, so it deliberately returns
+        rows it will not use -- `base_name` equality is the gate, and applying
+        it in Python as well as in the query is what keeps the two answers the
+        same one. Both rows are officers of *this* company, so rule 1 is in play
+        too, and it keys on the base name: two surnames are two people.
+        """
+        other = Person.objects.create(
+            fingerprint="name:jan novakova|addr:hlavna",
+            name="Ján Nováková",
+            address="Hlavná 1, 811 01 Bratislava",
+        )
+        PersonCompanyRelation.objects.create(
+            person=other, company=self.company, role="konatel", is_active=True
+        )
+
+        data = self.client.get(f"/api/companies/{self.company.ico}/graph/").json()
+
+        people = sorted(n["id"] for n in data["nodes"] if n["type"] == "person")
+        self.assertEqual(
+            people,
+            sorted([f"person_{self.person.id}", f"person_{other.id}"]),
+        )
+
+
+class PersonGraphAPITests(APITestCase):
+    """The person-centred graph.
+
+    It had no test at all, which is where the duplicate-node report came from:
+    it keyed its node on the row that was asked for, so the same human arrived
+    under one id from a company's graph and another from here.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=11, ico="50059959", nazov_UJ="Prvá s.r.o."
+        )
+        self.other_company = Company.objects.create(
+            ruz_id=12, ico="12345678", nazov_UJ="Druhá s.r.o."
+        )
+        # Two rows of one human, each known to a different company, so only the
+        # name and postcode join them.
+        self.first = Person.objects.create(
+            fingerprint="name:jan novak|addr:hlavna",
+            name="Ján Novák",
+            address="Hlavná 1, 811 01 Bratislava",
+        )
+        self.second = Person.objects.create(
+            fingerprint="name:jan novak|addr:vedlajsia",
+            name="Ján Novák",
+            address="Vedľajšia 2, 811 01 Bratislava",
+        )
+        PersonCompanyRelation.objects.create(
+            person=self.first, company=self.company, role="konatel", is_active=True
+        )
+        PersonCompanyRelation.objects.create(
+            person=self.second,
+            company=self.other_company,
+            role="spolocnik",
+            is_active=True,
+        )
+
+    def test_the_graph_is_the_same_from_either_row_of_the_human(self):
+        """Asking about a row and asking about its sibling is one question."""
+        from_first = self.client.get(f"/api/persons/{self.first.id}/graph/").json()
+        from_second = self.client.get(f"/api/persons/{self.second.id}/graph/").json()
+
+        self.assertEqual(
+            sorted(n["id"] for n in from_first["nodes"]),
+            sorted(n["id"] for n in from_second["nodes"]),
+        )
+        self.assertEqual(
+            from_first["meta"]["center_node"], from_second["meta"]["center_node"]
+        )
+
+    def test_the_node_is_the_clusters_first_row_not_the_requested_one(self):
+        self.assertLess(self.first.id, self.second.id)
+
+        data = self.client.get(f"/api/persons/{self.second.id}/graph/").json()
+
+        people = [n for n in data["nodes"] if n["type"] == "person"]
+        self.assertEqual([n["id"] for n in people], [f"person_{self.first.id}"])
+        self.assertEqual(people[0]["rolesCount"], 2)
+        self.assertEqual(data["meta"]["center_node"], f"person_{self.first.id}")
+
+    def test_the_two_graphs_draw_the_same_person_node(self):
+        """One human, one id, whichever view drew them."""
+        from_company = self.client.get(
+            f"/api/companies/{self.other_company.ico}/graph/"
+        ).json()
+        from_person = self.client.get(
+            f"/api/persons/{self.second.id}/graph/"
+        ).json()
+
+        company_people = {n["id"]: n for n in from_company["nodes"] if n["type"] == "person"}
+        person_people = {n["id"]: n for n in from_person["nodes"] if n["type"] == "person"}
+        shared = set(company_people) & set(person_people)
+
+        self.assertEqual(shared, {f"person_{self.first.id}"})
+        for node_id in shared:
+            self.assertEqual(
+                company_people[node_id]["rolesCount"],
+                person_people[node_id]["rolesCount"],
+            )
+
+    def test_person_graph_404_for_unknown(self):
+        response = self.client.get("/api/persons/99999/graph/")
+        self.assertEqual(response.status_code, 404)
+
 
 class PersonDetailAPITests(APITestCase):
     def setUp(self):
