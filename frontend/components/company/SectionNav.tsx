@@ -20,26 +20,17 @@ import {
 type Section = (typeof COMPANY_SECTIONS)[number];
 
 interface SectionNavProps {
-    /** Link mode: where a section lives, so the rail can be a set of routes. */
+    /** Link mode: where a section lives, so the list can be a set of routes. */
     ico?: string;
     /** Button mode: the section currently shown, when the list drives state. */
     activeId?: CompanySectionId;
     onSelect?: (id: CompanySectionId) => void;
-    /**
-     * `rail` is the company page's: a horizontal strip on small screens that
-     * becomes a column at `lg`, where it sits in a one-of-four sidebar.
-     * `strip` stays horizontal at every width, for the inline detail on the
-     * profile, which has no column to put a rail in.
-     */
-    layout?: 'rail' | 'strip';
 }
 
-// One set of classes for both layouts and both modes. This list used to be
-// drawn twice -- as the company page's rail and, on the profile's inline detail,
-// as the same entries wrapped into a grid -- and the two had drifted: the grid
-// drew no status dot, so what we cannot fill was invisible exactly where the
-// list was longest, and it wrapped into four rows instead of scrolling like
-// every other section list here.
+// One set of classes for both modes. This list used to be drawn twice -- by the
+// company page and, on the profile's inline detail, as the same entries wrapped
+// into a grid -- and the two had drifted: the grid drew no status dot, so what
+// we cannot fill was invisible exactly where the list was longest.
 //
 // `Profile.tsx` has a `.tab-nav` bar of its own, for the five *profile* tabs
 // (Prehľad, Sledované, História, …). That is a different list, not a third copy
@@ -50,9 +41,14 @@ const ITEM =
 const ACTIVE = 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 font-medium';
 const IDLE = 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-800';
 
-const RAIL =
-    'flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0';
-const STRIP = 'flex gap-1 overflow-x-auto pb-1';
+// A horizontal strip on a narrow screen, a column at `lg`, where it sits in the
+// one-of-four sidebar both callers draw. `lg:overflow-visible` is the whole of
+// the desktop behaviour: a column needs no scrolling, and a container that does
+// not scroll draws no scrollbar. This used to be the company page's alone --
+// the profile's inline detail carried a second, always-horizontal variant, so
+// the same list showed a scrollbar on a desktop in one place and none in the
+// other. There is now one behaviour and one constant.
+const NAV = 'flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0';
 
 /**
  * The company section list. One component, because it is drawn in two places
@@ -63,29 +59,21 @@ const STRIP = 'flex gap-1 overflow-x-auto pb-1';
  *
  * Every section carries a coloured dot, so what we cannot fill is visible from
  * the list rather than only after the click. Hovering gives the reason. The
- * group headings are the rail's alone: in a strip they would break the row into
- * labelled segments, and the strip is the one place with no room for them.
+ * group headings are drawn at `lg` only, where the list is a column and they
+ * have a column to head; in the horizontal strip of a narrow screen they would
+ * break the row into labelled segments with no room for them.
  */
-export const SectionNav: React.FC<SectionNavProps> = ({
-    ico,
-    activeId,
-    onSelect,
-    layout = 'rail',
-}) => {
-    const rail = layout === 'rail';
-
+export const SectionNav: React.FC<SectionNavProps> = ({ico, activeId, onSelect}) => {
     return (
-        <nav aria-label="Sekcie firmy" className={rail ? RAIL : STRIP}>
+        <nav aria-label="Sekcie firmy" className={NAV}>
             {SECTION_GROUPS.map((group: SectionGroup) => {
                 const items = COMPANY_SECTIONS.filter((s: Section) => s.group === group);
                 if (!items.length) return null;
                 return (
                     <React.Fragment key={group}>
-                        {rail && (
-                            <p className="hidden lg:block px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 first:pt-1">
-                                {group}
-                            </p>
-                        )}
+                        <p className="hidden lg:block px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 first:pt-1">
+                            {group}
+                        </p>
                         {items.map((section: Section) => {
                             const title = `${section.label} — ${STATUS_LABEL[section.status]}`;
                             const body = (

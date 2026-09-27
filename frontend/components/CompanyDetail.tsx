@@ -48,29 +48,40 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
 
             <CompanySummaryStrip company={company} />
 
-            {/* The same section list the company page draws, in its `strip`
-                layout -- one component, so the two views cannot disagree about
-                which sections exist or what we can fill.
+            {/* The company page's layout, not a variant of it: the list in a
+                sticky one-of-four sidebar at `lg`, the section's body beside it.
+                Both views draw the same registry through the same component, so
+                they cannot disagree about which sections exist or what we can
+                fill.
 
-                This view used to wrap the twenty entries into a grid instead,
-                to keep all of them visible at once: a sideways strip showed the
-                first five and gave no sign of fifteen more. That reasoning was
-                sound and the fix is still a strip, because the product owner
-                asked for one mechanism across both views and the company page's
-                is the one that already works. The scrollbar is the affordance
-                the grid was buying -- `pb-1` keeps it visible rather than hiding
-                it behind `no-scrollbar`, so the row still says it continues. */}
-            <div className="mb-6">
-                <SectionNav layout="strip" activeId={activeTab} onSelect={setActiveTab} />
+                This used to be a sideways strip at every width, which on a
+                desktop meant five sections and a scrollbar standing in for the
+                other fifteen -- while the company page drew the identical list
+                as a column with no scrollbar at all. The product owner asked
+                for the two to work the same, and the shape below is what "the
+                same" means: there is no scrollbar to read because there is
+                nothing to scroll. On a narrow screen the list is still the
+                horizontal strip both views use.
+
+                Button mode, not `ico`: this view drives its own state rather
+                than routing to a section URL. */}
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+                <div className="lg:col-span-1">
+                    <div className="lg:sticky lg:top-6 rounded-xl border border-gray-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+                        <SectionNav activeId={activeTab} onSelect={setActiveTab} />
+                    </div>
+                </div>
+
+                <div className="lg:col-span-3">
+                    {/* Tab Content. The key is the tab, so a switch unmounts what
+                        was there: several bodies hold request state for the
+                        company they were handed, and a reused instance would
+                        draw the previous tab's rows under this tab's heading. */}
+                    {Body
+                        ? <Body key={activeTab} company={company} />
+                        : section && <SectionNotice key={activeTab} section={section} />}
+                </div>
             </div>
-
-            {/* Tab Content. The key is the tab, so a switch unmounts what was
-                there: several bodies hold request state for the company they
-                were handed, and a reused instance would draw the previous tab's
-                rows under this tab's heading. */}
-            {Body
-                ? <Body key={activeTab} company={company} />
-                : section && <SectionNotice key={activeTab} section={section} />}
         </div>
     );
 };
