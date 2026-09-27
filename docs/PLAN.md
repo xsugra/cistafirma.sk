@@ -8933,6 +8933,28 @@ Toto je obrat rozhodnutia z `bd00294`, ktorého pôvodné odôvodnenie žije v j
 (zmrazenom) commite a v komentári je prepísané, nie zmazané. Rozhodol o tom
 Samuel 27. 9. 2026.
 
+Šírka bola zmeraná, nie odhadnutá, a to z konkrétneho dôvodu: `.profile-container`
+má 72 rem, kým stránka firmy `max-w-7xl` (80 rem), takže panel je na profile
+o ~10 % užší a `whitespace-nowrap` nedovolí zalomenie. Headless Chrome proti
+buildnutému CSS, s reálnymi triedami; najdlhšia sekcia („Firmy podľa
+zamestnancov", 25 znakov) potrebuje **238,8 px**. Panel má obsah **252,0 px** pri
+okne ≥ 1 152 px (rezerva **+13,3**) a **220,0 px** pri okne 1 024 px (schodok
+**−2,8**). Vodorovný posuvník nevyjde v žiadnej z nich
+(`nav_scrollWidth == nav_clientWidth`) -- to bol Samuelov bod. Na `lg` hranici
+(1 024--1 151 px) je teda text o 2,8 px dlhší než panel, ale flexbox ho neoreže
+(`label_scroll == label_client`): stlačí ikonu, ktorá ako jediná nemá
+`flex-shrink-0`. To je stav **aj na stránke firmy** -- pri okne 1 024 px je
+`max-w-7xl` limitovaný viewportom na tých istých 1 024 px, takže panel je
+rovnaký -- takže to nie je niečo, čo by priniesol profil. Font je `system-ui`,
+lebo `IBM Plex Sans` ani `Inter` sa nenačítavajú; na Windows (Segoe UI) je
+o pár percent širší, na oboch zobrazeniach rovnako. Meranie je replikát, nie
+produkčná stránka: overuje typografiu (reálne CSS a reálny font stack), nie
+celú stránku.
+
+Push do `gitlab-home` aj `origin` (`63b3719..9804e8b`); pipeline **210** na
+`63b3719` **success**, 7 jobov, 0 zlyhaní, a **211** na `9804e8b` **success**,
+7 jobov, 0 zlyhaní.
+
 Zmena sa prejaví až nasadením: produkčný frontend je buildnutý bundle bez bind
 mountu (`docker-compose.prod.yml`), takže `git pull` na `dell` sám o sebe
 nezmení nič. Pozri `[[production-deploys-from-main]]`.
