@@ -8959,6 +8959,76 @@ Zmena sa prejaví až nasadením: produkčný frontend je buildnutý bundle bez 
 mountu (`docker-compose.prod.yml`), takže `git pull` na `dell` sám o sebe
 nezmení nič. Pozri `[[production-deploys-from-main]]`.
 
+**Nasadenie `3aaeff7` na dell (2026-09-27).** Recept `docs/DEVOPS_CICD.md:210`,
+teda `git pull gitlab-home main` → `docker compose up -d --build` → `migrate`.
+Rozdiel `9a8af0f..3aaeff7` je **5 commitov**, ale kód nesie jediný z nich
+(`63b3719`); ostatné štyri sú zápisy §11.20 a §11.21 do tohto plánu. Zmenené
+súbory sú tri (`docs/PLAN.md`, `frontend/components/CompanyDetail.tsx`,
+`frontend/components/company/SectionNav.tsx`), migrácie v rozsahu **žiadne**
+(`git diff --name-only 9a8af0f..3aaeff7 -- 'backend/*/migrations/*'` je
+prázdne) a `migrate` to potvrdil vetou `No migrations to apply.` — schéma sa
+nemení, takže brána „pred migráciou zálohu" neplatila.
+
+Postavených **8 image-ov**, rekreovaných **8 kontajnerov** (`backend`,
+`frontend`, `celery_beat` a päť workerov); `db`, `redis`, `grafana` a
+`prometheus` ostali `Up 22 hours`. `--build` bol aj tu jediná cesta k
+produkčnému frontendu — bind mount nemá. Servovaný bundle je
+`index-CiUdMtml.js`: `index.html` na publikovanom porte odkazuje presne ten
+súbor a v kontajneri je k nemu `index-DKqLIZ3g.css`. `COPY . .` v buildi nebol
+cache-hit, takže nové zdroje naozaj vošli do obrazu.
+
+Overené: `git log --oneline -1` → `3aaeff7`, pracovný strom čistý,
+`docker compose ps` → **12/12 služieb `Up`** (`backend` aj `frontend`
+`healthy`), a `ops-check` prešel cez publikovaný frontend port na API s `200`.
+Push do `gitlab-home` aj `origin` (`63b3719..3aaeff7`); pipeline **212** na
+`3aaeff7` **success**, 7 jobov, 0 zlyhaní (verdikt sa zvlášť neukladal a je
+tu).
+
+**`ops-check` napriek tomu NIE je SATISFIED: `Operational controls: 4 unmet`,
+a je to stav, ktorý som našiel, nie spôsobil.** Štyri `SyncJob` riadky (#95
+`orsr_batch`, #96 `financials_batch`, #97 `insurance_batch`, #98 `fs_update`)
+sú `running` s `last_heartbeat == started_at`, v čase nasadenia **3 h 3 min**.
+Recreate kontajnerov ich nevyriešil — čo je samo dôkaz, že nejde o strateného
+workera, hoci brána to tvrdí doslova („the worker is gone and nothing will
+finish it").
+
+Príčina stavu je **úkon v admin UI, nie porucha**. Log backendu na dell
+(2026-09-27): 10:52:46--10:53:00 CEST `GET /api/admin/sync/scheduled/` a
+dvanásť `POST /api/admin/sync/scheduled/<id>/toggle/`, po ktorých je všetkých
+**10** riadkov `PeriodicTask` v `enabled=False`; o 10:53:09--10:53:25 nasledujú
+štyri `POST /api/admin/sync/jobs/`, teda tie štyri joby. Účet
+`sugrasamuel55@gmail.com` (superuser). Focus Mode to nie je: `SyncFocusModeState`
+je `active=False`, `snapshot=[]`, `activated_at=None`, takže na tejto DB nikdy
+použitý nebol. Dôsledok: beat je nemý od 08:52:11Z (kontajner beží, ale nemá čo
+poslať) a `ops-check` na zapnutosť plánu nemá **ani jednu** kontrolu — vypnutý
+plán je odtiaľ neviditeľný.
+
+**Skutočná chyba je inde: tie riadky sú sirotské, nie zaseknuté.** Podľa
+`celery_task_id` ich Celery tasky **dobehli úspešne**:
+`schedule_missing_orsr_sync[450728b0]` za 0,49 s (#95),
+`schedule_insurance_debt_checks[14c91376]` za 12,6 s (#97) a
+`update_fs_data_task[a7892a3f]` za 212 s (#98). Chýba jediné — zápis
+`complete()` na riadok jobu, ktorý nemá kto spraviť: `_dispatch_job`
+(`backend/adminapi/views/sync.py:350`) mapuje `insurance_batch` na
+`schedule_insurance_debt_checks` a `fs_update` na `update_fs_data_task`
+(`:389--390`), teda na **tie isté dispečerské funkcie, ktoré volá beat**, a tie
+o existencii `SyncJob` riadku nevedia. Riadok sa narodí ako `running` a ostane
+ním navždy — preto včerajšie auto-faily #89--#92 (tie isté štyri typy,
+spustené 22:27, zrazené 23:02) boli watchdog zbierajúci presne tieto riadky, a
+preto bolo „riešenie" vypnúť watchdog. Práca samotná pritom beží ďalej
+(insurance worker mal v tom čase 10 299 riadkov logu za 3 h, naposledy
+11:50:19Z). Oprava `_dispatch_job` nie je súčasťou tohto kroku — je to
+samostatné rozhodnutie.
+
+**Rollback** je `git checkout 9a8af0f && docker compose up -d --build`.
+
+Jedna vec na tomto nasadení patrí sem ako pasca na znovupoužitie: `docker
+compose up -d --build` **zablokoval auto-mode classifier** (nie projektový deny
+list, ten drží len pravidlá na `down -v`, `volume rm`, `docker-reset` a
+`celery-purge`), takže git časť som spravil ja a build s `migrate` spustil
+Samuel ručne cez `!` v session. Obchádzať to inou formou toho istého úkonu
+nemá zmysel — buď to spustí človek, alebo pribudne Bash permission rule.
+
 ---
 
 ## 12. Nemenné pravidlá
