@@ -8889,6 +8889,56 @@ Push do `gitlab-home` aj `origin` (`9a8af0f..4e21fd7`); pipeline **208** na
 
 ---
 
+### 11.21 Zoznam sekcií na profile je rovnaký ako na stránke firmy (2026-09-27, `63b3719`)
+
+Samuel: „ten scroll bar funkciami v sledovaných firmách na profile nechcem ako
+scroll bar v PC zobrazení. Chcem to rovnako ako je to pri zobrazení v klasickom
+monitoringu."
+
+Nález bol presne ten, ktorý opísal, a bol to dôsledok rozhodnutia z `bd00294`.
+Ten zjednotil *komponent* (`SectionNav`), a tým aj to, ktoré sekcie existujú a čo
+vieme vyplniť, ale nie *rozloženie*: stránka firmy kreslila `layout="rail"`
+(vodorovný pruh na malom displeji, na `lg` stĺpec s `lg:overflow-visible`, takže
+žiadny posuvník), kým vložený detail na profile dostal `layout="strip"`, čo je
+`flex gap-1 overflow-x-auto pb-1` -- vodorovný v každej šírke. Na PC to bol rad
+prvých piatich sekcií a posuvník namiesto zvyšných pätnástich. `bd00294` to
+odôvodnil tak, že viditeľný posuvník je affordancia, ktorú predtým kupovala
+zalomená mriežka; `layout=` mal na svete jedného používateľa a bol to tento.
+
+Oprava je doslovné prevzatie rozloženia z `pages/Company.tsx`: mriežka
+`grid grid-cols-1 gap-6 lg:grid-cols-4`, zoznam v `lg:col-span-1`
+v `lg:sticky lg:top-6 rounded-xl border ... p-2`, telo sekcie v `lg:col-span-3`.
+Režim zostal tlačidlový (`activeId` + `onSelect`) -- vložený detail si riadi stav
+sám a nikam neroutuje, takže nesmie dostať `ico`. Zámerne to nie je „podobné":
+triedy sú tie isté, takže sa obe zobrazenia môžu rozísť len tak, že sa
+`pages/Company.tsx` rozíde sám so sebou. To platí aj pre to, čo sa z čítania
+overiť nedá -- `lg:sticky` závisí od predkov, a tí sú v oboch zobrazeniach
+rovnakí (`animate-fade-in`, teda `animation: fadeIn ... forwards` končiaca na
+`transform: translateY(0)`, je predkom stránky firmy aj profilu). Nejde teda
+o to, že sa `sticky` chová dobre, ale že sa chová rovnako.
+
+`layout` prop a `STRIP` tým osireli a zmizli; `RAIL` sa premenoval na `NAV`,
+lebo „rail" bol názov pre protiklad, ktorý už neexistuje, a hlavičky skupín
+stratili `{rail && ...}` -- boli `hidden lg:block` odjakživa, takže podmienka
+bola nadbytočná a len predstierala, že sa vo vodorovnom pruhu niekedy vykreslia.
+Nové Tailwind utility nepribudli: všetky tie triedy už emituje stránka firmy.
+
+Testy sa meniť nemuseli a je to zásluha ich vlastného komentára
+(`CompanyDetail.test.tsx:26`): lištu hľadajú podľa `aria-label="Sekcie firmy"`
+a o rozložení netvrdia nič, práve preto, že ju kreslí cudzí komponent. Overené
+v kontajneri: `npm test` (46 súborov, 426 testov), `npm run typecheck`,
+`npm run build` -- všetko zelené.
+
+Toto je obrat rozhodnutia z `bd00294`, ktorého pôvodné odôvodnenie žije v jeho
+(zmrazenom) commite a v komentári je prepísané, nie zmazané. Rozhodol o tom
+Samuel 27. 9. 2026.
+
+Zmena sa prejaví až nasadením: produkčný frontend je buildnutý bundle bez bind
+mountu (`docker-compose.prod.yml`), takže `git pull` na `dell` sám o sebe
+nezmení nič. Pozri `[[production-deploys-from-main]]`.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
