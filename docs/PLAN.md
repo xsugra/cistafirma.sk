@@ -8982,7 +8982,9 @@ Overené: `git log --oneline -1` → `3aaeff7`, pracovný strom čistý,
 `healthy`), a `ops-check` prešel cez publikovaný frontend port na API s `200`.
 Push do `gitlab-home` aj `origin` (`63b3719..3aaeff7`); pipeline **212** na
 `3aaeff7` **success**, 7 jobov, 0 zlyhaní (verdikt sa zvlášť neukladal a je
-tu).
+tu). Push tohto zápisu (`3aaeff7..9bc37ab`) prešiel pipeline **213** na
+`9bc37ab` **success**, 7 jobov, 0 zlyhaní -- a 213 je posledný verdikt, takže
+sa podľa konvencie zvlášť neukladá.
 
 **`ops-check` napriek tomu NIE je SATISFIED: `Operational controls: 4 unmet`,
 a je to stav, ktorý som našiel, nie spôsobil.** Štyri `SyncJob` riadky (#95
