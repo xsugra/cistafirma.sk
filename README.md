@@ -15,8 +15,13 @@
 
 Spája verejne dostupné zdroje — **RUZ**, **ORSR**, **poisťovne**, **Finančná správa** — do jedného workflow.  
 Rýchle preverenie firmy podľa **IČO** alebo **názvu** s jasným prehľadom o rizikách.
-
 </div>
+
+---
+
+<p align="center">
+  <img src="./docs/cistafirma.gif" alt="Ukážka aplikácie" width="800" />
+</p>
 
 ---
 
