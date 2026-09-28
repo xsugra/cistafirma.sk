@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {render, screen} from '@testing-library/react';
-import {SectionNotice} from './SectionNotice';
+import {SectionNotice, SectionStatusBanner} from './SectionNotice';
 import type {CompanySection, SectionStatus} from '../../companySections';
 
 const section = (status: SectionStatus, note: string): CompanySection => ({
@@ -29,5 +29,33 @@ describe('SectionNotice', () => {
         render(<SectionNotice section={section('unreliable', 'Čísla nesedia.')} />);
         expect(screen.getByText('Údaje sú nespoľahlivé')).toBeInTheDocument();
         expect(screen.getByText('Čísla nesedia.')).toBeInTheDocument();
+    });
+});
+
+describe('SectionStatusBanner', () => {
+    it('says the same thing as the notice, in the space above a body', () => {
+        // The same sentence, because it is the same fact: the registry's `note`
+        // is why the section is not `ready`, and a `partial` section has to say
+        // it without giving up the part it does have. Two components, one
+        // source -- if the wording ever diverges, the chip and the sentence
+        // would stop agreeing with the rail that drew the reader here.
+        render(<SectionStatusBanner section={section('partial', 'Máme časť registra.')} />);
+
+        expect(screen.getByText('Máme časť')).toBeInTheDocument();
+        expect(screen.getByText('Máme časť registra.')).toBeInTheDocument();
+    });
+
+    it('is not an empty state: it has no centred placeholder', () => {
+        // The distinction that makes it a second component rather than a prop.
+        // A centred block above real content reads as a page that failed to
+        // load, which is the one impression a section that *did* load must not
+        // give. `text-center` is what `SectionNotice` uses to say "there is
+        // nothing here"; its absence is the whole difference.
+        const {container} = render(
+            <SectionStatusBanner section={section('partial', 'Máme časť registra.')} />
+        );
+
+        expect(container.querySelector('.text-center')).toBeNull();
+        expect(container.querySelector('.py-6')).toBeNull();
     });
 });

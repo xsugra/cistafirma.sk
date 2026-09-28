@@ -31,7 +31,32 @@ export const Privacy: React.FC = () => {
                     Údaje spracúvame za účelom poskytovania služby monitoringu firiem, správy používateľského účtu, fakturácie (pri platených plánoch) a zlepšovania našich služieb.
                 </p>
 
-                <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-8 mb-4">4. Vaše práva</h3>
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-8 mb-4">4. Odvodené údaje o fyzických osobách</h3>
+                <p className="text-base text-gray-600 dark:text-gray-400 mb-4">
+                    Na stránke osoby zobrazujeme <strong>odvodené ukazovatele</strong>, ktoré
+                    vznikajú výpočtom z údajov verejných registrov — koľko firiem je s danou
+                    osobou zapísaných, v akých odvetviach, koľko z tých firiem bolo zrušených
+                    a či bol ich štatutár zapísaný aj v iných firmách. Vstup je verejný, ale
+                    <strong> výsledok je nová informácia o konkrétnej osobe</strong>, a preto
+                    je to spracúvanie osobných údajov v zmysle čl. 4 bod 1 GDPR; právnym
+                    základom je náš oprávnený záujem na poskytovaní služby preverovania
+                    obchodných partnerov (čl. 6 ods. 1 písm. f).
+                </p>
+                <p className="text-base text-gray-600 dark:text-gray-400 mb-4">
+                    Tieto ukazovatele <strong>nie sú zistením protiprávneho konania</strong> a
+                    nie sú vyjadrením o povahe, správaní ani bezúhonnosti osoby. Sú to počty
+                    s dátumami, ktoré si môžete overiť v zdrojovom registri. Zámerne sa
+                    nesčítavajú do jedného skóre osoby a <strong>neposkytujeme ich
+                    hromadne</strong> — zobrazujú sa len pri jednotlivej osobe, ktorú si
+                    vyhľadáte, a to vrátane štatutárov, ktorých firma sama zverejňuje.
+                </p>
+                <p className="text-base text-gray-600 dark:text-gray-400 mb-4">
+                    Ak chcete namietať proti tomuto spracúvaniu alebo uplatniť niektoré
+                    z práv podľa bodu 5, napíšte nám na{' '}
+                    <a href="mailto:privacy@cistafirma.sk" className="text-blue-600 hover:underline">privacy@cistafirma.sk</a>.
+                </p>
+
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-8 mb-4">5. Vaše práva</h3>
                 <p className="text-base text-gray-600 dark:text-gray-400 mb-4">
                     Máte právo kedykoľvek požiadať o prístup k vašim údajom, ich opravu, vymazanie ("právo na zabudnutie") alebo obmedzenie spracovania. Svoje práva môžete uplatniť prostredníctvom nastavení v profile alebo emailom.
                 </p>

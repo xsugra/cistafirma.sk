@@ -45,3 +45,29 @@ export const SectionNotice: React.FC<SectionNoticeProps> = ({ section }) => (
         </div>
     </InfoCard>
 );
+
+/**
+ * The same status, said above a body rather than instead of one.
+ *
+ * A `partial` section has both things to say at once: the part of the data it
+ * does have, and the reason the rest is missing. `SectionNotice` can only say
+ * the second, and dropping the first to make room for it is not honesty — it is
+ * losing the answer to keep the caveat. So the caveat moves up here, where it
+ * still precedes the first indicator, and the body keeps the section below it.
+ *
+ * Laid out as a line rather than as a centred block: this one has a page under
+ * it, and a centred empty-state above content reads as a page that failed.
+ */
+export const SectionStatusBanner: React.FC<SectionNoticeProps> = ({ section }) => (
+    <div className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900">
+        <i className={`fas ${STATUS_ICON[section.status]} mt-0.5 ${STATUS_TEXT[section.status]}`} />
+        <div className="min-w-0">
+            <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_CHIP[section.status]}`}>
+                {STATUS_LABEL[section.status]}
+            </span>
+            <p className="mt-2 text-sm leading-relaxed text-gray-600 dark:text-gray-300">
+                {section.note}
+            </p>
+        </div>
+    </div>
+);

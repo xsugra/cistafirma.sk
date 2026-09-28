@@ -3,18 +3,17 @@ import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-route
 import { api } from '../api';
 import type { Company as CompanyType } from '../types';
 import { ROUTES, companyPath } from '../constants';
-import { DEFAULT_SECTION_ID, getSection, type ReadySectionId } from '../companySections';
+import { DEFAULT_SECTION_ID, getSection } from '../companySections';
 import { searchTarget } from '../utils/searchTarget';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { SearchBar } from '../components/SearchBar';
 import { CompanyHeader } from '../components/company/CompanyHeader';
 import { CompanySummaryStrip } from '../components/company/CompanySummaryStrip';
 import { SectionNav } from '../components/company/SectionNav';
-import { SectionNotice } from '../components/company/SectionNotice';
 import { useCompanyProfile } from '../components/company/useCompanyProfile';
-// The body map lives below both presentations of a company, not in this one --
-// the inline tabbed view draws the same sections and used to keep its own list.
-import { BODIES } from '../components/company/sectionBodies';
+// The panel lives below both presentations of a company, not in this one -- the
+// inline tabbed view draws the same sections and used to keep its own list.
+import { SectionPanel } from '../components/company/SectionPanel';
 
 /**
  * The standalone company page: one section at a time, chosen from a rail.
@@ -121,9 +120,6 @@ const CompanyBody: React.FC<{
     section: NonNullable<ReturnType<typeof getSection>>;
 }> = ({ company, section }) => {
     const { profile } = useCompanyProfile(company);
-    const Body = section.status === 'ready'
-        ? BODIES[section.id as ReadySectionId]
-        : undefined;
 
     return (
         <div className="space-y-6">
@@ -137,7 +133,7 @@ const CompanyBody: React.FC<{
                     </div>
                 </div>
                 <div className="lg:col-span-3">
-                    {Body ? <Body company={company} /> : <SectionNotice section={section} />}
+                    <SectionPanel company={company} section={section} />
                 </div>
             </div>
         </div>

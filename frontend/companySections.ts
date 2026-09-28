@@ -32,7 +32,9 @@ export interface CompanySection {
     icon: string;
     group: SectionGroup;
     status: SectionStatus;
-    /** The reason, in the reader's words. Shown in place of a body. */
+    /** The reason, in the reader's words. Shown in place of a body — or above
+     * one, when the section is `partial` and the reason is why only part of it
+     * is here. */
     note: string;
 }
 
@@ -78,6 +80,10 @@ export const COMPANY_SECTIONS = [
     {
         id: 'dlhy', label: 'Dlhy a pohľadávky', icon: 'fa-hand-holding-usd', group: 'Riziká a súdy', status: 'ready',
         note: 'Zoznamy dlžníkov Finančnej správy, VšZP a Sociálnej poisťovne.',
+    },
+    {
+        id: 'rizikove-indikatory', label: 'Rizikové indikátory', icon: 'fa-flag', group: 'Riziká a súdy', status: 'partial',
+        note: 'Vzory, ktoré sa v takto vedených firmách opakujú: tržby v miliónoch bez zamestnancov, skok tržieb medzi rokmi, majetok bez dlhodobého hmotného majetku, nespoľahlivý platiteľ DPH, štatutár vo veľa firmách. Verejné registre neobsahujú faktúry ani kontrolný výkaz DPH, takže „karusel" ani „biely kôň" sa z nich preukázať nedajú — sekcia preto vypisuje, čo sa v dátach našlo, a nikdy nepíše, čo to znamená. Nič sa nesčíta do jedného čísla. Odtiaľ pochádza aj „máme časť": závierku má uloženú zlomok registra a graf osoba — firma ešte menší, a tak je pri každej firme napísané, koľko z desiatich pravidiel sa vôbec dalo vyhodnotiť.',
     },
     {
         id: 'udalosti', label: 'Udalosti vo firme', icon: 'fa-bell', group: 'Riziká a súdy', status: 'ready',
@@ -131,8 +137,21 @@ export type CompanySectionId = typeof COMPANY_SECTIONS[number]['id'];
 
 /** Sections that render a real body. The body map is typed against this, so a
  * section marked `ready` without one fails the typecheck rather than silently
- * showing an empty page. */
-export type ReadySectionId = Extract<typeof COMPANY_SECTIONS[number], { status: 'ready' }>['id'];
+ * showing an empty page.
+ *
+ * `partial` is in here with `ready`, and that is deliberate. The two statuses
+ * answer different questions: `ready` is about how much of the source we have
+ * integrated, and a body is about whether there is anything to draw. A section
+ * that has *part* of its data has that part to show, and this registry's own
+ * rule is that a section without a body states why in place of one — so leaving
+ * `partial` out would not make it more honest, it would hide the part we do
+ * have behind a notice about the part we do not. `Rizikové indikátory` is the
+ * first section to need this. What it renders is qualified in the body itself,
+ * with the counts of what was and was not assessed. */
+export type BodySectionId = Extract<
+    typeof COMPANY_SECTIONS[number],
+    { status: 'ready' | 'partial' }
+>['id'];
 
 export const DEFAULT_SECTION_ID: CompanySectionId = 'prehlad';
 

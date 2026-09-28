@@ -10,6 +10,7 @@ import { SearchBar } from '../components/SearchBar';
 import { PersonCoverageNote } from '../components/person/PersonCoverageNote';
 import { PersonRecordsNote } from '../components/person/PersonRecordsNote';
 import { PersonRelationRow } from '../components/person/PersonRelationRow';
+import { PersonRiskPanel } from '../components/person/PersonRiskPanel';
 import { OrsrRegisterGroup } from '../components/person/OrsrRegisterGroup';
 import {
     ROLE_STATE_LINE,
@@ -243,6 +244,11 @@ export const Person: React.FC = () => {
                     </ul>
                 </div>
             </section>
+
+            {/* After the list, because it is a summary of it -- and before the
+                register's own live answer, which is a different claim about the
+                same name from a different source. */}
+            <PersonRiskPanel indicators={person.red_flags} />
 
             <OrsrRegisterGroup name={person.name} />
         </div>
