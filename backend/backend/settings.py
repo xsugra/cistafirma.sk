@@ -647,32 +647,34 @@ CELERY_BEAT_SCHEDULE = {
     # and it is why 3 000 is safe to try: neither the window nor the expiry
     # refuses the work, and the size can come back down without a migration.
     #
-    # The 20 days assumes beat dispatches every 4 h, and on 2026-09-28 it did
-    # not. Measured on `dell` that evening, over the preceding 48 h: beat
-    # dispatched nothing between 2026-09-27 ~08:07Z and 2026-09-28 15:43:46Z
-    # (31.6 h) and then fired every overdue entry at once -- seven of the nine
-    # rows, every one whose interval is 4 h or longer, landed on 15:43:46Z
-    # within 5 s of each other, which is the catch-up and not a coincidence;
-    # the `ruz_incremental` series (strictly
-    # 6-hourly at HH:07:29) is missing five consecutive slots, and a
-    # `NotificationEvent` created 09-27 08:51:28Z waited until 09-28 15:47:46Z
-    # for a 15-minute task. The stack was up the whole time: the `ruz-keeper`
-    # timer ticked 276x with no gap, `db`/`redis` show `Up` since 09-15, and the
-    # insurance lane drained 4 704 + 4 704 attempts in that window while orsr,
-    # financials and ruz were at exactly 0. Refuted as causes: the beat start
-    # gate (no migration applied after 2026-09-15 19:07:40Z, `migration_plan`
-    # empty), a host or stack outage, OOM, disk.
+    # The 20 days assumes beat dispatches every 4 h. Over 2026-09-27/28 it did
+    # not -- but nothing was broken: the schedule was switched off by hand and
+    # back on 30,8 h later, and the audit log names both moments. All ten rows
+    # were toggled through `POST /api/admin/sync/scheduled/<id>/toggle/`,
+    # 2026-09-27 08:52:53-08:53:00Z off and 2026-09-28 15:43:43-15:43:47Z on,
+    # and at 08:53:09-08:53:25Z four one-off batches were queued by hand instead
+    # (orsr, financials, insurance, fs) -- the shape of "stop the schedule, run
+    # these four". The last beat-driven enqueue before the pause is 09-27
+    # 08:07:29Z (`ruz_incremental`) and the first after it 09-28 15:43:46.307Z.
     #
-    # 3 030 ORSR attempts in those 48 h against 6 000 nominal -- 50 %, which is
-    # what a 31.6 h gap predicts. So the batch size is not the binding
-    # constraint; beat uptime is. At the uptime actually measured the ~20 days
-    # above is closer to ~40, and no size fixes it. Nothing noticed: `ops-check`
-    # gates the keeper timer and the weekly backup, but there is no gate on beat
-    # liveness, and a beat that is `Up` and not ticking is invisible to
-    # `docker compose ps`. Why it stopped is not recoverable from what survives
-    # -- no `sbJoin` falls in the window (so no container was recreated) and a
-    # container's own log is destroyed by the next recreate, which is the
-    # instrument that would have answered it.
+    # A disabled row is not dispatched, so it falls behind; re-enabling it leaves
+    # it overdue by the whole pause, and beat fired all of them inside ~5 s of
+    # 15:43:46Z -- the seven rows whose interval is 4 h or longer carry
+    # `last_run_at` within 15:43:46.17-15:43:51.57Z. The toggle is
+    # `pt.save(update_fields=["enabled"])`, and exactly one of the ten rows
+    # carries a NULL `last_run_at` while the other nine do not, so that NULL is
+    # not what the toggle did; the resume alone is what spends the backlog. This
+    # ORSR row, carrying `[500]`, spent it in the 501 attempts of
+    # 15:43:46-16:17:32Z measured above.
+    #
+    # So the 3 030 ORSR attempts in those 48 h against 6 000 nominal (50 %)
+    # measure a 30,8 h pause made by hand, not an uptime ceiling, and the 20 days
+    # above stands as written. What the pause cost is what any pause will cost:
+    # while the rows are off nothing is dispatched, and while they are on nothing
+    # in the system notices that they ever were -- `ops-check` gates the keeper
+    # timer and the weekly backup, and `docker compose ps` says `Up` either way.
+    # A beat that is running with an empty schedule looks exactly like a healthy
+    # one from outside, which is how a 30,8 h hole in every source went unseen.
     # 2 000 companies every 12 h, not 500. The rotation walks the eligible
     # population (251 598 legal persons: forms 112/121/321/721/801/205, not
     # struck off) and 250 480 of them had no result yet, so at 500 a cycle the
