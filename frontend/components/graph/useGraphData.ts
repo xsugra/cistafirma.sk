@@ -6,11 +6,30 @@ interface UseGraphDataReturn {
   graphData: GraphData | null;
   loading: boolean;
   error: string | null;
-  fetchGraph: (ico: string) => Promise<void>;
+  fetchGraph: (ico: string, asOf?: string | null) => Promise<void>;
   expandNode: (ico: string) => Promise<void>;
   expandPerson: (personId: string) => Promise<void>;
   centerNode: string | null;
   truncated: boolean;
+  /**
+   * The years the company's record actually changes, newest first, as the
+   * backend computed them. Empty for the person graph, which has no periods,
+   * and empty until the first answer arrives -- so the control renders nothing
+   * rather than an empty row.
+   */
+  periods: number[];
+  /** Relations a period view could not place: the register stated no start. */
+  undatedExcluded: number;
+  /**
+   * The day the graph **currently on the canvas** was drawn for, as the backend
+   * echoed it back -- not the day the reader has just asked for.
+   *
+   * They differ for exactly as long as a request is in flight, and in that
+   * window a caption reading the requested period would put "Stav k 31. 12.
+   * 2015" above a picture of today. The backend refuses to answer a malformed
+   * date for the same reason: a period named on screen must be the period shown.
+   */
+  drawnAsOf: string | null;
 }
 
 export function useGraphData(): UseGraphDataReturn {
@@ -19,12 +38,25 @@ export function useGraphData(): UseGraphDataReturn {
   const [error, setError] = useState<string | null>(null);
   const [centerNode, setCenterNode] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [periods, setPeriods] = useState<number[]>([]);
+  const [undatedExcluded, setUndatedExcluded] = useState(0);
+  const [drawnAsOf, setDrawnAsOf] = useState<string | null>(null);
 
-  const fetchGraph = useCallback(async (ico: string) => {
+  /**
+   * `asOf` is the day the graph is drawn for; `null` or omitted is today, which
+   * is the call this made before the period control existed.
+   *
+   * The parameter is sent only when there is one. `?as_of=` with an empty value
+   * means the same thing to the backend, but a request that says nothing about
+   * a period is not the same request as one that asks for a specific day, and
+   * only the second belongs in a URL somebody might read or share.
+   */
+  const fetchGraph = useCallback(async (ico: string, asOf?: string | null) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/companies/${ico}/graph/`);
+      const query = asOf ? `?as_of=${encodeURIComponent(asOf)}` : '';
+      const response = await fetch(`${API_BASE_URL}/companies/${ico}/graph/${query}`);
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.detail || `HTTP ${response.status}`);
@@ -37,9 +69,13 @@ export function useGraphData(): UseGraphDataReturn {
       });
       setCenterNode(data.meta.center_node);
       setTruncated(data.meta.truncated);
+      setPeriods(data.meta.periods ?? []);
+      setUndatedExcluded(data.meta.undated_excluded ?? 0);
+      setDrawnAsOf(data.meta.as_of ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Nepodarilo sa načítať graf prepojení');
       setGraphData(null);
+      setDrawnAsOf(null);
     } finally {
       setLoading(false);
     }
@@ -131,5 +167,17 @@ export function useGraphData(): UseGraphDataReturn {
     }
   }, []);
 
-  return { graphData, loading, error, fetchGraph, expandNode, expandPerson, centerNode, truncated };
+  return {
+    graphData,
+    loading,
+    error,
+    fetchGraph,
+    expandNode,
+    expandPerson,
+    centerNode,
+    truncated,
+    periods,
+    undatedExcluded,
+    drawnAsOf,
+  };
 }

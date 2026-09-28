@@ -3,6 +3,8 @@ import {ENABLE_MOCK_DATA} from './constants';
 import {apiRequest} from './lib/apiClient';
 import type {
   Company,
+  CompanyPersonGroup,
+  CompanyPersonsResponse,
   DocumentListing,
   HistoryEntry,
   NotificationEvent,
@@ -280,6 +282,46 @@ function mapPersonMember(data: any): PersonMember {
     // than a placeholder -- there is no honest placeholder for "not stated"
     // next to a real date it has to be compared against.
     birth_date: data?.birth_date ?? null,
+  };
+}
+
+function mapCompanyPersonGroup(data: any): CompanyPersonGroup {
+  return {
+    id: Number(data?.id),
+    name: data?.name ?? '',
+    // Floored at 1, like `PersonSummary.records` and for the same reason: the
+    // count is rendered as "we gathered this many rows", and a missing field
+    // must not read as "we gathered none".
+    records: Math.max(1, Number(data?.records) || 1),
+    clusters: Math.max(1, Number(data?.clusters) || 1),
+    members: Array.isArray(data?.members) ? data.members.map(mapPersonMember) : [],
+    // The same mapper as a person's page, because `_office_payload` is the same
+    // shape as `_relation_payload`: one relation, one reader, so the two screens
+    // cannot disagree about the tri-state or about how many filings a tenure
+    // was folded from.
+    offices: Array.isArray(data?.offices) ? data.offices.map(mapPersonRelation) : [],
+  };
+}
+
+/**
+ * Exported for its own spec, like the mappers above.
+ *
+ * `as_of` is passed through as it arrived rather than replaced by what the
+ * caller asked for. They are the same value in every honest answer, and the
+ * point of reading the response's own field is that a screen which disagrees
+ * with its request finds out instead of printing the period it wanted over a
+ * list it did not get.
+ */
+export function mapCompanyPersonsResponse(data: any): CompanyPersonsResponse {
+  return {
+    ico: data?.ico ?? '',
+    name: data?.name ?? '',
+    as_of: data?.as_of ?? null,
+    groups: Array.isArray(data?.groups) ? data.groups.map(mapCompanyPersonGroup) : [],
+    periods: Array.isArray(data?.periods)
+      ? data.periods.map(Number).filter((year: number) => Number.isFinite(year))
+      : [],
+    undated_excluded: Math.max(0, Number(data?.undated_excluded) || 0),
   };
 }
 
@@ -891,6 +933,27 @@ export const api = {
   getPerson: async (id: number | string): Promise<PersonDetail> => {
     const data = await apiRequest<any>(`/persons/${id}/`);
     return mapPersonDetail(data);
+  },
+
+  /**
+   * One company's people, including everyone who ever held an office there.
+   *
+   * The Osoby cards read the register's extract, which is the bodies as they
+   * stand today; this is the same stored relations read whole, so a former
+   * konateľ is on the screen instead of only in the database. Grouped and folded
+   * by the backend's own helpers, which is what keeps this list and the company
+   * graph naming the same people.
+   *
+   * `asOf` asks the graph's period question of a list: who was in force on that
+   * day. Omitted, the answer is everyone we hold.
+   */
+  getCompanyPersons: async (
+    ico: string,
+    asOf?: string | null,
+  ): Promise<CompanyPersonsResponse> => {
+    const query = asOf ? `?as_of=${encodeURIComponent(asOf)}` : '';
+    const data = await apiRequest<any>(`/companies/${ico}/persons/${query}`);
+    return mapCompanyPersonsResponse(data);
   },
 
   /**

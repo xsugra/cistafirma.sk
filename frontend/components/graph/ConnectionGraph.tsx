@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas';
 import { GraphControls } from './GraphControls';
+import { GraphPeriodChips } from './GraphPeriodChips';
 import { GraphTooltip } from './GraphTooltip';
 import { GraphLegend } from './GraphLegend';
 import { useGraphData } from './useGraphData';
+import { periodLabel, undatedNote } from './period';
 import type { GraphNode } from './graphTypes';
 import { focusWindow, type Rect } from './graphFit';
 import { companyPath, personPath } from '../../constants';
@@ -62,12 +64,41 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  /**
+   * Which day the graph is drawn for, or `null` for the whole record.
+   *
+   * The relations we hold are the company's *history*: everyone who ever held
+   * an office, marked ended. Drawing all of them at once shows a company that
+   * never existed, and the reader had no way to ask for the one that did. This
+   * is that question, and it is deliberately not persisted anywhere -- a period
+   * chosen on one company's page must not follow the reader to the next.
+   *
+   * Held with the IČO it was chosen for, and *derived* rather than reset in an
+   * effect. IČO 00007838's 2015 and IČO 50059959's 2015 have nothing in common,
+   * so a period cannot survive a move between companies -- and an effect that
+   * cleared it would run *after* the fetch effect had already fired with the
+   * stale period, which is two requests for one navigation and a race between
+   * their answers. Deriving it means the period changes before the effect looks
+   * at it, and one request goes out.
+   */
+  const [period, setPeriod] = useState<{ ico: string; asOf: string | null }>({
+    ico,
+    asOf: null,
+  });
+  const asOf = period.ico === ico ? period.asOf : null;
+  const selectPeriod = useCallback(
+    (next: string | null) => setPeriod({ ico, asOf: next }),
+    [ico],
+  );
 
-  const { graphData, loading, error, fetchGraph, expandNode, expandPerson, centerNode, truncated } = useGraphData();
+  const {
+    graphData, loading, error, fetchGraph, expandNode, expandPerson,
+    centerNode, truncated, periods, undatedExcluded, drawnAsOf,
+  } = useGraphData();
 
   useEffect(() => {
-    fetchGraph(ico);
-  }, [ico, fetchGraph]);
+    fetchGraph(ico, asOf);
+  }, [ico, asOf, fetchGraph]);
 
   const attachContainer = useCallback((node: HTMLDivElement | null) => {
     containerRef.current = node;
@@ -321,6 +352,23 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
       >
         <div className="order-2 min-w-0 md:order-1 md:flex-1">
           <GraphLegend />
+          {/*
+            The period row sits inside the legend's wrapper rather than beside
+            it: the strip's bounding box is what `focusWindow` measures to keep
+            the graph out from under these overlays, and a row appended next to
+            the strip would cover the graph without being counted. Order on a
+            phone is controls, legend, period -- actions first.
+          */}
+          {periods.length > 0 && (
+            <div className="mt-2">
+              <GraphPeriodChips
+                periods={periods}
+                value={asOf}
+                onChange={selectPeriod}
+                busy={loading}
+              />
+            </div>
+          )}
         </div>
         <div className="order-1 flex justify-end md:order-2 md:flex-none">
           <GraphControls
@@ -338,7 +386,16 @@ export function ConnectionGraph({ ico }: ConnectionGraphProps) {
         </div>
       </div>
       <p ref={captionRef} className={`absolute ${edgeBottom} ${edgeLeft} text-xs text-gray-400 dark:text-gray-500 pointer-events-none`}>
+        {/*
+          The period sentence is built from `drawnAsOf`, not from the period the
+          reader just clicked: between the click and the answer those are two
+          different days, and the caption would then name a period the picture
+          above it does not show -- the one thing the backend refuses a malformed
+          date to prevent, reached from the other side.
+        */}
+        {drawnAsOf ? `${periodLabel(drawnAsOf)}. ` : ''}
         {isFullscreen ? 'Esc pre zatvorenie. ' : ''}Klikni na firmu pre rozbalenie prepojení. Dvojklik na firmu alebo osobu otvorí jej stránku.
+        {drawnAsOf && undatedExcluded > 0 ? ` ${undatedNote(undatedExcluded)}` : ''}
       </p>
     </div>
   );
