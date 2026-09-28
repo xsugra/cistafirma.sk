@@ -9892,13 +9892,24 @@ ktorý nevie matchovať, je filter, ktorý klame; opravené a overené
   (Jediný `failed` v celom výstupe je riadok *tabuľky* — `incremental_companies`,
   stáro 2462 dní, verdikt `--` — nie zlyhanie brány.)
 
-**CI:** beh **238** (`1dabe4d8` na `main`) bol v čase písania tohto záznamu ešte
-v poradí — na lenovo je `concurrent = 1` a pred ním stáli behy 236 a 237, takže
-všetkých jeho sedem jobov bolo `created`/`pending`. To, čo `backend_tests`
-overuje, však bolo vykonané priamo na delle proti reálnemu Postgresu: **27/27
-testov**. Výsledok behu 238 treba doplniť, keď dobehne — a posudzovať ho podľa
-riadkov jobov, nie podľa stavu pipeline: zlyhanie vo `validate` preskočí celú
-fázu `test`, takže zelená pipeline môže skrývať testy, ktoré nikdy nebežali.
+**CI:** behy **238** (`1dabe4d8`) aj **239** (`c0082a59`, nasadený SHA) na `main`
+= **`success`**, v každom všetkých **7 jobov** `success` s `allow_failure =
+false` — `backend_validate`, `docs_audit`, `frontend_validate`,
+`helm_render_validate`, `helm_runtime_validate`, `frontend_tests`
+a `backend_tests`. Posudzované podľa **riadkov jobov**, nie podľa stavu
+pipeline: zlyhanie vo `validate` preskočí celú fázu `test`, takže zelená
+pipeline by mohla skrývať testy, ktoré nikdy nebežali.
+
+Na ten verdikt sa čakalo a nebola to formalita: na lenovo je `concurrent = 1`,
+takže 239 stálo v poradí za behmi 236 a 237 a jeho sedem jobov bolo spočiatku
+`created`/`pending`. Časy (GitLab DB ich vedie v **UTC**, stroje sú v CEST):
+239 `created_at` 20:26:53, `started_at` až **20:40:53** — teda **14 minút
+v rade** — `finished_at` 21:02:46, takže samotný beh trval **21:53** a od
+vytvorenia po koniec **35:53**; susedný beh 238 zabral 26:55. Kód tým nebol
+neoverený ani chvíľu: to, čo `backend_tests` overuje, bežalo medzitým priamo na
+delle proti reálnemu Postgresu, **27/27 testov**, takže nasadenie neviselo na
+CI. `docs_audit` bol pritom rizikový kandidát (jeho citace sa overujú proti
+tomu, čo je v danom stroji naozaj na disku), a prešiel.
 
 **Rollback** je `git checkout 0543fa1 && docker compose up -d --build`.
 
