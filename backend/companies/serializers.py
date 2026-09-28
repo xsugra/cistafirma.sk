@@ -14,6 +14,7 @@ from .services.financial_analysis import (
     _sum_present,
 )
 from .services.nace import get_nace_section, get_nace_section_name, get_nace_division_name
+from .services.red_flags import company_red_flags
 from .services.risk_score import compute_risk_score, risk_score_for_company
 
 
@@ -72,6 +73,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     financialsState = serializers.SerializerMethodField()
     analysis = serializers.SerializerMethodField()
     riskScore = serializers.SerializerMethodField()
+    redFlags = serializers.SerializerMethodField()
     benchmark = serializers.SerializerMethodField()
     executives = serializers.SerializerMethodField()
     connections = serializers.SerializerMethodField()
@@ -306,6 +308,37 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         on its page while the watchlist, reading debt alone, called it 100/100.
         """
         return compute_risk_score(obj, self._analysis_payload(obj))
+
+    def _financial_rows(self, obj):
+        """The company's statements, oldest first, read once per object.
+
+        `riskScore` and `redFlags` both walk them, and DRF calls method fields
+        independently -- the same reason `_analysis_payload` caches.
+        """
+        cache = getattr(self, '_rows_by_pk', None)
+        if cache is None:
+            cache = self._rows_by_pk = {}
+        if obj.pk not in cache:
+            cache[obj.pk] = list(obj.financial_results.all().order_by('year'))
+        return cache[obj.pk]
+
+    def get_redFlags(self, obj):
+        """Risk *indicators* -- deliberately not part of `riskScore`.
+
+        See `services/red_flags.py` and `docs/PLAN.md` §11.22. The score is one
+        number on an attention ladder; these are a dozen separate observations,
+        each in one of three states, each carrying the number behind it. They
+        are published beside the score and never added into it: a dozen new
+        penalties inside the ladder would move every score in the product at
+        once, and a single "fraud score" is the one thing this feature must not
+        produce.
+
+        The rule that could not run is the reason the states are three. Most of
+        these need a filed statement, and only ~3,5 % of the register has one,
+        so a section that showed only what fired would read as if the rest had
+        been examined and found clean.
+        """
+        return company_red_flags(obj, self._financial_rows(obj))
 
     def get_benchmark(self, obj):
         """Return sector benchmark for the company's NACE section."""

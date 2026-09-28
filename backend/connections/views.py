@@ -13,6 +13,7 @@ from companies.models import Company
 from companies.throttles import OrsrPersonThrottle
 from .identity import PersonEvidence, base_name, cluster_evidence
 from .models import Person, PersonCompanyRelation, normalize_name
+from .person_risk import person_red_flags
 
 logger = logging.getLogger(__name__)
 
@@ -703,6 +704,13 @@ class PersonDetailView(APIView):
             "companies": _merged_relations(
                 member_ids, _relations_by_person(member_ids)
             ),
+            # Observations about the person's company footprint -- never a
+            # verdict about the person. See `person_risk.py` and §11.22.2: the
+            # register holds "konateľ v 14 firmách, z toho 5 zrušených", which is
+            # a fact with dates, and cannot hold "biely kôň", which is a claim.
+            # Computed over `member_ids`, not `person.id`: the cluster is the
+            # unit, or the counts would be of our rows rather than of a life.
+            "red_flags": person_red_flags(member_ids),
             "coverage": _coverage(),
         })
 
