@@ -646,6 +646,31 @@ CELERY_BEAT_SCHEDULE = {
     # a backlog is not discarded, it waits. That cuts both ways for this size,
     # and it is why 3 000 is safe to try: neither the window nor the expiry
     # refuses the work, and the size can come back down without a migration.
+    #
+    # The 20 days assumes beat dispatches every 4 h, and on 2026-09-28 it did
+    # not. Measured on `dell` that evening, over the preceding 48 h: beat
+    # dispatched nothing between 2026-09-27 ~08:07Z and 2026-09-28 15:43:46Z
+    # (31.6 h) and then fired every overdue entry at once -- every row's
+    # `last_run_at` landed on 15:43:46Z, the `ruz_incremental` series (strictly
+    # 6-hourly at HH:07:29) is missing five consecutive slots, and a
+    # `NotificationEvent` created 09-27 08:51:28Z waited until 09-28 15:47:46Z
+    # for a 15-minute task. The stack was up the whole time: the `ruz-keeper`
+    # timer ticked 276x with no gap, `db`/`redis` show `Up` since 09-15, and the
+    # insurance lane drained 4 704 + 4 704 attempts in that window while orsr,
+    # financials and ruz were at exactly 0. Refuted as causes: the beat start
+    # gate (no migration applied after 2026-09-15 19:07:40Z, `migration_plan`
+    # empty), a host or stack outage, OOM, disk.
+    #
+    # 3 030 ORSR attempts in those 48 h against 6 000 nominal -- 50 %, which is
+    # what a 31.6 h gap predicts. So the batch size is not the binding
+    # constraint; beat uptime is. At the uptime actually measured the ~20 days
+    # above is closer to ~40, and no size fixes it. Nothing noticed: `ops-check`
+    # gates the keeper timer and the weekly backup, but there is no gate on beat
+    # liveness, and a beat that is `Up` and not ticking is invisible to
+    # `docker compose ps`. Why it stopped is not recoverable from what survives
+    # -- no `sbJoin` falls in the window (so no container was recreated) and a
+    # container's own log is destroyed by the next recreate, which is the
+    # instrument that would have answered it.
     # 2 000 companies every 12 h, not 500. The rotation walks the eligible
     # population (251 598 legal persons: forms 112/121/321/721/801/205, not
     # struck off) and 250 480 of them had no result yet, so at 500 a cycle the
