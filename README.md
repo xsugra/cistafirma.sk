@@ -19,9 +19,9 @@ Rýchle preverenie firmy podľa **IČO** alebo **názvu** s jasným prehľadom o
 
 ---
 
-<p align="center">
+<div align="center">
   <img src="./docs/cistafirma.gif" alt="Ukážka aplikácie" width="800" />
-</p>
+</div>
 
 ---
 
