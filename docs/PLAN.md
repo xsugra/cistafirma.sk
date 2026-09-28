@@ -9627,6 +9627,157 @@ K tomu `PersonResultRow.test.tsx` (5 testov) a `CoverageQueryShapeTests`
 **Overenie pred nasadením:** `npm test` (440 testov, 48 súborov), `npm run
 typecheck`, `npm run build` — všetky tri zelené.
 
+#### Nasadenie na `dell` (2026-09-28, `b9ac4a3`)
+
+Recept `docs/DEVOPS_CICD.md:210`: na delle `git pull gitlab-home main` →
+`docker compose up -d --build` → `docker compose exec backend python manage.py
+migrate`. dellský reflog to ukazuje ako dva kroky toho istého dňa:
+`63603ab` (17:06) → `ed726ad` (18:45) → **`b9ac4a3`** (19:09).
+
+**Rozsah:** `63603ab..b9ac4a3` je **16 commitov** v **33 súboroch**
+(`git rev-list --count`; `git diff --name-only | wc -l`). Idú v nich aj §11.22
+(`15fdbc3`) a §11.23 (`718bccf`) aj ich spoločný merge `ed726ad`. Migrácie
+v rozsahu **žiadne** (`git diff --name-only 63603ab..b9ac4a3 --
+'backend/*/migrations/*'` je prázdne), takže brána „pred migráciou zálohu"
+neplatila.
+
+**Nenahraditeľného volume sa rekreácia nedotkla** — a to je na tom recepte to
+jediné, čo ho naozaj chráni. `db` aj `redis` boli po nasadení `Up 2 days`, kým
+`backend` a päť workerov `Up 2 hours` a `frontend` `Up About an hour`.
+
+**Čo bolo pomalé a čo je teraz** (`curl` na loopback backendu na delle):
+
+| cesta | pred (`63603ab`) | po (`b9ac4a3`) |
+|---|---|---|
+| `/api/persons/?q=Trnka` | 9,8–12,5 s (tabuľka vyššie) | **1,21 / 1,23 / 1,21 s** |
+| tá istá cesta cez frontend proxy | — | **200 za 1,15 s** |
+
+Odpoveďou je **44 ľudí z 57 záznamov** (`truncated: false`) a pokrytie
+`43 609 / 631 990`. Nasadený bundle je `index-zUjfcDL9.js` a obsahuje
+`createPortal` 4× (oprava našepkávača z `b9ac4a3`), `/persons/` 6× a vetu
+„Osoby máme pre" — čiže do produkcie sa naozaj dostalo UI z tohto oddielu,
+nie len backend.
+
+**CI:** behy **224**, **225** a **226** `success` a v každom všetkých **7
+jobov** `success` s `allow_failure = false` — `backend_validate` teda nespadol
+a `test` stage sa nepreskočil.
+
+**Nález, ktorý vyzeral ako chyba a nie je.** `/api/persons/?q=Trnka` nemá vo
+výsledku kľúč `detail`. Pozitívna kontrola na tom istom nasadení: `?q=a`
+(krátky dopyt) `detail` **má** — `"Zadajte aspoň 2 znaky."` — a `?q=Novak`
+`detail` nemá, ale má `role`. Kľúč teda chýba preto, že ho nesie iná vetva
+odpovede, nie preto, že by ho serializácia stratila. Bez tej kontroly by
+„kľúč chýba" vyzeralo ako regresia.
+
+**Vedome nie:** `is_active: null` (trojhodnotový príznak) sa v produkčných
+dátach zámerne nehľadal. Drží ho unit test
+(`PersonSearchAPITests.test_three_valued_is_active_survives_the_serializer`);
+naháňať ho dopytom do živých dát je otázka bez následku — ak hodnota nastane,
+frontend ju aj tak zobrazí ako „nevieme", a ak nenastane, nič to nemení.
+
+**Rollback** je `git checkout 63603ab && docker compose up -d --build`.
+
+#### Nasadenie opravy cache (2026-09-28, `a636b91`)
+
+**Nález.** `OrsrPersonSearchView` volal `cache.get` aj `cache.set` bez ochrany.
+Výpadok Redisu tak na **verejnom** endpointe znamenal 500 — hoci o riadok nižšie
+je scrape, ktorý je tou skutočnou odpoveďou a cache z neho len odstraňuje
+opakovanú prevádzku. Správne správanie je „pomalšie", nie „pokazené"; mierená
+degradácia, ktorú výnimka prebila. (Zámerný opak je `/healthz`
+v `backend/backend/urls.py:34`, ktorý pri nedostupnom Redise **schválne** vracia
+503 — zdravotná sonda má ten výpadok ohlásiť. Odtiaľ je v docstringu view
+aj odkaz na ten rozdiel.)
+
+**Oprava** (`f2e3053`, `backend/connections/views.py`, súbor má teraz 1276
+riadkov):
+
+- `import redis` a na oboch miestach `except redis.exceptions.RedisError` —
+  `cache.get` (@1156) sa chápe ako **miss**, `cache.set` (@1186) sa **ignoruje**;
+  odpoveď je v tej chvíli už správna, len ďalší volajúci zaplatí.
+- `_report_cache_outage` (@1098) s modulovým príznakom `_cache_outage_logged`
+  (@1095): prvý výpadok `logger.exception` na ERROR, každý ďalší v tom istom
+  procese na DEBUG. Je to ten istý idiom a z toho istého dôvodu ako
+  `companies.throttles.PublicRateThrottle` — inak by výpadok vyrobil jednu
+  traceback na request a tá prvá, jediná, ktorá hovorí niečo nové, by sa
+  utopila. Zároveň to nie je tichý failure: prvý výskyt je ERROR s tracebackom.
+- Docstring view dostal vetu, že výpadok cache stojí latenciu, nie endpoint
+  (@1127).
+
+**Prečo `RedisError`, a nie `Exception`.** Úzky catch je tu podstatný: skutočná
+chyba v kóde má zostať 500. Že úzky catch pokrýva oba tvary výpadku, je overené
+na delle v pinnutej redis-py 8.1.0 — `redis.exceptions.ConnectionError` aj
+`TimeoutError` sú jej podtriedy.
+
+**Testy** (`backend/connections/tests.py`, `OrsrPersonSearchCacheOutageTests`
+@1053; štyri): `test_an_unreadable_cache_is_a_miss_not_a_500` (@1092),
+`test_the_answer_survives_a_failed_write` (@1101),
+`test_a_live_cache_still_serves_the_second_caller_from_it` (@1117),
+`test_the_outage_is_reported_at_error` (@1128). Tretí je **pozitívna kontrola**:
+že endpoint vráti 200, by prešlo aj keby bola cache celá odpojená, takže
+o `_WorkingCache` sa testuje, že druhý volajúci naozaj dostane `cached: true`.
+Štvrtý overuje, že výpadok je hlásený, nie prehltnutý — trieda defektov, ktorá
+je v tomto repozitári chyba.
+
+**Tá istá trieda je inde a zámerne sa tu nerieši:** `cache.get`/`cache.set` bez
+ochrany zostávajú v `companies/services/pdf_report.py:106/146`,
+`adminapi/views/companies.py:345/367/386` a `adminapi/views/sync.py:502/579`.
+Toto zadanie bolo o verejnom endpointe; `adminapi` je personálna cesta
+a `pdf_report` je generovanie reportu, takže dopad výpadku je iný a patrí to
+samostatnému rozhodnutiu, nie tichej rozširovačke rozsahu.
+
+**Nasadenie.** Ten istý recept (`git pull gitlab-home main` → `docker compose
+up -d --build` → `migrate`), HEAD **`a636b91`**, `migrate` vrátil „No migrations
+to apply." `db` aj `redis` boli po nasadení **`Up 2 days`** a `grafana`
+s `prometheus` tiež — rekreovali sa len aplikačné kontajnery. `up -d --build`
+nikdy nedostal `-v`.
+
+Dva commit-y v rozsahu sú užívateľove a **neboli postavené na aktuálnom maine**:
+`d900739` (podtitul `predstavenstvo`) sedel na `4d57373` a `f73eece` (zarovnanie
+obrázka v README) na `d900739` — teda oba pred merge `ed726ad`
+(`git merge-base --is-ancestor b9ac4a3 d900739` aj `… f73eece` → 1). Preto boli
+prenesené cherry-pickom na `b9ac4a3`, čo im dalo nové SHA — `5143020`
+a `a636b91` — a push do `main` bol potom čistý fast-forward. Keby sa bol pushol
+pôvodný `d900739`, nebol by to fast-forward a `main` by sa rozišiel.
+
+**Overenie na delle** (`curl` na loopback backendu):
+
+| cesta | výsledok |
+|---|---|
+| `/api/persons/?q=Trnka` (3×) | 200 za **1,30 / 1,18 / 1,83 s** |
+| tá istá odpoveď | **44 ľudí z 57 záznamov**, pokrytie `43 609 / 631 990` |
+| `/api/persons/orsr/?q=Trnka` (opravený) | 200 za **0,65 s**, 20 hits / 160, `error: ''` |
+| tá istá cesta cez frontend proxy | 200 za **1,24 s** |
+
+**Čo sa u nás overiť nedalo a čím je to kryté.** Degradovaná vetva sa
+v produkcii **zámerne nespustila** — vyžadovala by zastaviť `redis`, a to je na
+produkčnom hoste neprijateľné (zastavilo by to aj frontu a beat). Kryjú ju
+štyri unit testy, ktoré v CI naozaj bežia (nižšie), nie ručné cvičenie na delle.
+
+**CI:** behy **228** (`f2e3053`) a **229** (`a636b91`) na vetve
+`deploy/person-search-cache` — v každom všetkých **7 jobov** `success`
+s `allow_failure = false`, vrátane `backend_tests` na Postgres 16 + Redis 7, takže
+nové testy sa naozaj vykonali. Behy **224**, **225**, **226** na `main` majú tiež
+7/7 `success`. Beh **230** (`a636b91` na `main`, teda náš nasadzovací push) bol
+v čase písania tohto záznamu ešte v behu (`backend_validate` `success`, zvyšok
+`pending`/`created`) — pre kód, ktorý je nasadený, je ale rozhodujúci už beh
+**229**, ktorý bežal na tom istom SHA; 230 len opakuje to isté pod iným `ref`.
+
+**Operačná brána po nasadení:** `make ops-check` na delle vrátil
+**`Operational controls: SATISFIED`** (exit 0) — najnovšia záloha 1 deň stará
+a jej checksum sedí s manifestom, off-site replika overená a zašifrovaná na
+zdroji, týždenný job aj RUZ keeper bežia. Je to read-only brána: nič neštartuje
+ani nezapisuje, takže sa dala spustiť aj na produkcii.
+
+Metodická poznámka k tomu overeniu: `p_ci_builds` **nemá** `sha` a jeho
+`commit_id` je `bigint`, ktorý sa s `p_ci_pipelines.sha` porovnať nedá
+(`operator does not exist: bigint = character varying`); tabuľka `p_ci_commits`
+neexistuje. Job rows sa dajú spoľahlivo dohľadať cez
+`p_ci_builds.stage_id → p_ci_stages.pipeline_id → p_ci_pipelines.id`. Prvý
+watcher to skúsil zlým joinom a jeho výpis jobov bol **ticho prázdny**, kým
+status pipelines bol správny — prázdny výsledok vyzeral ako hotová vec.
+
+**Rollback** je `git checkout b9ac4a3 && docker compose up -d --build`.
+
 ---
 
 ## 12. Nemenné pravidlá
