@@ -3,9 +3,10 @@ Handlery pre spracovanie dát z Finančnej správy.
 Každý handler aktualizuje Company model podľa typu datasetu.
 """
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Callable
 from companies.models import Company
-from registers.utils import parse_money, validate_iban
+from registers.utils import parse_money_decimal, validate_iban
 
 
 class FSDataHandlers:
@@ -24,13 +25,29 @@ class FSDataHandlers:
         self.verbose = verbose
 
     def handle_tax_debtors(self, company: Company, item: dict) -> bool:
-        """Handler pre daňových dlžníkov."""
+        """Handler pre daňových dlžníkov.
+
+        Suma sa číta ako `Decimal`, nie ako `float`. `tax_debt` je
+        `DecimalField`, a `Decimal != float` je v Pythone `True` aj pre rovnaké
+        číslo (`Decimal('2422.35') != 2422.35`), takže pôvodné porovnanie
+        hlásilo zmenu pri každom opakovanom videní firmy. Dôsledok nebol
+        v dátach — Postgres ich aj tak zaokrúhli na dve desatinné miesta — ale
+        v logu: „updated" prestalo znamenať „zmenilo sa" a nedalo sa z neho
+        vyčítať, či zdroj vôbec niečo posunul. Zároveň sa každý deň znovu
+        zapisovali tisíce nezmenených riadkov.
+        """
         amount_str = item.get('CIASTKA')
         if not amount_str:
             return False
 
         try:
-            debt_amount = parse_money(amount_str)
+            # `quantize` na dve miesta, aby sa sumy so viac desatinnými miestami
+            # neporovnávali proti tomu, čo stĺpec naozaj drží (`numeric(x,2)`
+            # zaokrúhľuje). `ROUND_HALF_UP` preto, že tak zaokrúhľuje aj
+            # samotný stĺpec.
+            debt_amount = parse_money_decimal(amount_str).quantize(
+                Decimal('0.01'), rounding=ROUND_HALF_UP
+            )
             if company.tax_debt != debt_amount:
                 company.tax_debt = debt_amount
                 if self.verbose:

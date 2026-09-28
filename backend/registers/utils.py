@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal, InvalidOperation
 
 
 def is_money(text: str) -> bool:
@@ -14,10 +15,37 @@ def is_money(text: str) -> bool:
         return False
 
 
+def _clean_money(text: str) -> str:
+    """Odstráni menu, medzery a nahradí desatinnú čiarku bodkou."""
+    return text.replace("€", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
+
+
 def parse_money(text: str) -> float:
     """Konvertuje '1 200,50 €' na float 1200.5"""
-    clean = text.replace("€", "").replace(" ", "").replace("\xa0", "").replace(",", ".")
-    return float(clean)
+    return float(_clean_money(text))
+
+
+def parse_money_decimal(text: str) -> Decimal:
+    """To isté ako `parse_money`, ale bez cesty cez `float`.
+
+    Sumy z FS sa ukladajú do `DecimalField`-ov, a porovnávať `Decimal` s `float`
+    sa **nedá**: Python ich porovná presne, a žiadne desatinné číslo nie je
+    v binárnej sústave presné. `Decimal('2422.35') != 2422.35` je teda `True`,
+    takže handler daňových dlžníkov hlásil „updated" pri každom opakovanom
+    videní firmy a zapisoval tisíce riadkov denne bez toho, aby sa niečo zmenilo
+    (merané na produkcii 2026-09-28).
+
+    Zámerne **nemení** `parse_money`: jeho `float` návratový typ používajú
+    `vszp_debt` a `soc_poist_debt`, ktoré si typový rozdiel riešia samy cez
+    `float(company.debt_vszp or 0)`. Meniť im kontrakt by bolo mimo tejto opravy.
+
+    Na nečíselný vstup vyhadzuje `ValueError` (nie `InvalidOperation`), aby
+    volajúci mohli ostať pri `except (ValueError, TypeError)`.
+    """
+    try:
+        return Decimal(_clean_money(text))
+    except InvalidOperation as e:
+        raise ValueError(f"nie je suma: {text!r}") from e
 
 
 def clean_company_name(name: str) -> str:
