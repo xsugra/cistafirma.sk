@@ -9275,6 +9275,51 @@ report a produkt mohli rozísť o tej istej firme, čo je presne trieda chyby,
 ktorú tu riešime. Kým sa čísla nenamerajú na `dell`, kód ani tento plán
 netvrdia, že prahy sú správne — tvrdia len, že sú označené za neoverené.
 
+#### 11.22.9 Verdikt CI — a chyba, ktorú lokálny beh nevidí (2026-09-28)
+
+Vetva má za sebou tri behy a ani jeden z dvoch dokončených nebol zelený:
+
+| beh | commit | výsledok |
+|---|---|---|
+| 217 | `21988de` | `docs_audit` ❌ — testy preskočené |
+| 218 | `fd7d563` | `docs_audit` ❌ — testy preskočené |
+
+V oboch je stav jobov rovnaký a je dôležitejší než samotný pád:
+`backend_validate` ✅, `frontend_validate` ✅, `helm_render_validate` ✅,
+`helm_runtime_validate` ✅, **`docs_audit` ❌**, a `backend_tests` aj
+`frontend_tests` **preskočené**. `test` je nasledujúca stage, takže pád vo
+`validate` znamená, že sa testy nespustia vôbec — testy týchto commitov teda
+v CI nebežali **ani raz**. Dvojica 217 a 218 je zároveň celá história behov
+tejto vetvy: pre `15fdbc3` a `0b19443` neexistuje riadok pipelinu, čiže neboli
+hrotom žiadneho pushu.
+
+**Príčina bola moja vlastná veta v 11.22.8** — citácia `staticfiles.json` v
+`backend/staticfiles/`. Ten súbor vzniká až `collectstatic`om a
+je gitignorovaný (`.gitignore:62`), takže v čistom klone neexistuje; skript ho
+číta ako tvrdenie „ten súbor existuje" a má pravdu, keď povie, že neexistuje.
+
+**Prečo to lokálne nevidno — a to je celý nález.** Obe audity u mňa hlásili OK,
+lebo v pracovnom strome ten súbor *je*. Rozdiel je merateľný: `git archive`
+commitu do prázdneho adresára (teda to, čo vidí CI) naskenuje **66** `.md`
+súborov, kým pracovný strom **72** — a tých šesť je **celých** z
+`backend/staticfiles/` (Django admin si tam vezie `LICENSE.md` a `README.md`).
+Ten istý ignorovaný adresár je teda aj dôvod, prečo bol lokálny beh zelený, aj
+to, čo tú citáciu zabilo. Zelený `make docs-audit` v pracovnom strome **nie je
+kontrola**; kontrolou je až čistý export alebo CI. (Susedná session
+`fix-duplicate-persons-graph` mala tú istú chybu nezávisle od tejto vetvy.)
+
+**Oprava (`56d51e9`)** zhadzuje tvar s koreňom repa: `staticfiles.json` ostáva
+holým menom — pravidlo A skriptu preskakuje cesty bez `/` — a adresár je
+opísaný ako gitignorovaný s odkazom na `.gitignore:62`. Overené na čistom
+exporte: **425 citácií, 0 nálezov** (predtým 426 a 1 nález).
+
+Z toho plynie jedna vec pre samotný audit, ktorú som **neurobil** a je to
+rozhodnutie, nie oprava: `check_inline_citations.py` sa pozerá len na
+filesystem, takže citáciu do gitignorovanej cesty **neuvidí nikdy** — a pritom
+je to cesta rozbitá pre každého, kto si repo naklonuje. Doplniť kontrolu proti
+`.gitignore` by tú triedu zavrelo; nechávam to na rozhodnutie, lebo je to
+zdieľaný skript a nie súčasť tejto funkcie.
+
 ---
 
 ## 12. Nemenné pravidlá
