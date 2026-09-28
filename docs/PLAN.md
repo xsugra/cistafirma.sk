@@ -9177,7 +9177,8 @@ ktoré sú známe — inak by z neznalosti vzniklo číslo, ktoré vyzerá ako n
 2. ✅ príkaz `risk_indicators_report`; ⏳ **distribúcie nenamerané** — beží na `dell`, viď 11.22.8
 3. ✅ API: `redFlags` na firemnom detaile a na osobe
 4. ✅ Frontend: sekcia `rizikove-indikatory` + panel na osobe + Privacy
-5. ✅ Doklad: výsledok, čísla a verdikt CI do tejto sekcie
+5. ✅ Doklad: výsledok a čísla v 11.22.8; **verdikt CI je v 11.22.9** — prvý beh
+   zelený nebol a testy v ňom vôbec nebežali
 
 #### 11.22.8 Výsledok F1 (2026-09-28)
 
