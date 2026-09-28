@@ -265,10 +265,18 @@ class MissingIdentifierRobustnessTests(_FsCommandTestCase):
 
         Pozitívna kontrola k testu vyššie: bez nej by `assertNotIn` prešiel aj
         vtedy, keby príkaz hlásil poruchu pri každom datasete.
+
+        Samotné `assertNotIn` ale nedokáže rozlíšiť „ticho, lebo sa riadok
+        priradil" od „ticho, lebo sa nespracoval vôbec" -- a to druhé je presne
+        ten tichý deň, ktorý tu chceme chytiť. Preto aj kladné tvrdenie: účet
+        sa na firme naozaj objavil.
         """
-        self.run_dataset("bank_accounts", [{"ICO": self.company.ico, "IBAN": "SK3112000000198742637541"}])
+        stats = self.run_dataset("bank_accounts", [{"ICO": self.company.ico, "IBAN": "SK3112000000198742637541"}])
 
         self.assertNotIn(self.LOUD, self.allOutput())
+        self.assertEqual(stats["updated"], 1)
+        self.company.refresh_from_db()
+        self.assertIn("SK3112000000198742637541", self.company.bank_accounts)
 
 
 class TaxDebtAmountComparisonTests(_FsCommandTestCase):
