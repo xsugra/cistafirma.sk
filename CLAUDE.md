@@ -142,7 +142,7 @@ make db-backup-replicate BACKUP_FILE="<abs path>"  # Uses the recorded off-site 
 make db-offsite-status                          # Read-only off-site readiness gate
 make db-offsite-configure CISTAFIRMA_OFFSITE_BACKUP_DIR="<dir>"  # Record it, once
 make db-backup-prune                            # Dry-run retention (newest 7 kept)
-make db-backup-schedule-install                 # Weekly backup job (launchd / systemd timer)
+make db-backup-schedule-install                 # Weekly backup job: launchd on macOS, systemd user timer on Linux
 make ops-check                                  # Every operational control, one verdict
 ```
 
@@ -154,9 +154,11 @@ timer is still ticking, and one live API request through the published frontend
 port). It starts no container and
 writes nothing. The weekly job runs the same gate and, on failure, writes
 `LAST_FAILURE` in the platform's log directory (`~/Library/Logs/CistaFirma` on
-macOS, `~/.local/state/CistaFirma/logs` on Linux), posts a desktop notification
-where one can be shown, and exits non-zero. See `docs/DATA_PROTECTION.md` for
-the two deliberate asymmetries that keep that alert trustworthy.
+macOS, `~/.local/state/CistaFirma/logs` on Linux — which is where production
+is), posts a desktop notification where one can be shown (`osascript` on macOS,
+`notify-send` on Linux, both best-effort), and exits non-zero. See
+`docs/DATA_PROTECTION.md` for the two deliberate asymmetries that keep that
+alert trustworthy.
 
 `make ops-check` also fails a sync job whose worker is gone — a `running`
 `SyncJob` whose heartbeat has gone stale, or a `queued` one never claimed — and
@@ -185,14 +187,15 @@ each of which makes a naive version of this gate lie.
 The off-site path is machine-specific and lives outside the repo, in
 `~/.config/cistafirma/backup.env` (mode 600), written by `db-offsite-configure`.
 Every backup script reads it through `scripts/local/lib/backup_env.sh` — which
-is what lets the **scheduled job** replicate, since the scheduler starts it with
-almost no environment. An exported variable of the same name overrides the file,
+is what lets the **unattended job** replicate, since the scheduler (launchd on
+macOS, systemd on Linux) starts it with almost no environment. An exported
+variable of the same name overrides the file,
 so `make db-offsite-status CISTAFIRMA_OFFSITE_BACKUP_DIR=/tmp/x` still works.
 
 Each successful `db-restore-drill` appends a record to `restore_drills.log` in
 the platform's state directory (`~/Library/Application Support/CistaFirma` on
-macOS, `~/.local/state/CistaFirma` on Linux), and
-`db-offsite-status` reads it back — so the documented monthly drill cadence is
+macOS, `~/.local/state/CistaFirma` on Linux), and `db-offsite-status` reads it
+back — so the documented monthly drill cadence is
 checkable rather than assumed. A drill older than `CISTAFIRMA_DRILL_MAX_AGE_DAYS`
 (default 30) fails the gate. `db-offsite-status` therefore reports on two things
 beyond the backup files: whether a drill happened recently, and whether the

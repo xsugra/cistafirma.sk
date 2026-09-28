@@ -45,7 +45,9 @@ same effect that the rule does not literally match.
    A dump that has not been verified is a file, not a backup.
 2. **Restores go to an isolated target, never over the running `cistafirma`
    database.** `make db-restore-drill BACKUP_FILE=<abs path>` exists for this
-   and appends to `~/Library/Application Support/CistaFirma/restore_drills.log`,
+   and appends to `restore_drills.log` in the platform's state directory
+   (`~/Library/Application Support/CistaFirma` on macOS,
+   `~/.local/state/CistaFirma` on Linux),
    which `db-offsite-status` reads back — the documented monthly cadence is
    checkable rather than assumed.
 3. **Prefer the reversible form.** Ask whether the operation can be written so
@@ -82,8 +84,10 @@ story: stack, database, queue depths, per-source scrape health, sync jobs,
 backups, off-site controls, the drill record, and whether the weekly job is
 still firing. It starts no container and writes nothing, so it is always safe to
 run — and it is the right thing to run before and after any change in this area.
-On failure the weekly job writes `~/Library/Logs/CistaFirma/LAST_FAILURE`, posts
-a macOS notification and exits non-zero.
+On failure the weekly job writes `LAST_FAILURE` in the platform's log directory
+(`~/Library/Logs/CistaFirma` on macOS, `~/.local/state/CistaFirma/logs` on Linux),
+posts a desktop notification where one can be shown (`osascript` on macOS,
+`notify-send` on Linux, both best-effort) and exits non-zero.
 
 Two known asymmetries keep that alert trustworthy; they are documented in
 `docs/DATA_PROTECTION.md` and should not be "simplified" without understanding
