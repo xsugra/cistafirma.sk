@@ -597,7 +597,7 @@ CELERY_BEAT_SCHEDULE = {
     'sync-missing-orsr-profiles-every-4-hours': {
         'task': 'registers.tasks.schedule_missing_orsr_sync',
         'schedule': 14400.0,
-        'args': [500],
+        'args': [3000],
         'options': {'expires': 14000.0, 'queue': 'orsr'},
     },
     # `refresh-person-history-every-4-hours` used to sit here: a one-time,
@@ -609,12 +609,43 @@ CELERY_BEAT_SCHEDULE = {
     # missing its history. The task and its dispatcher stay -- the routes above
     # cover them, and the manual dispatcher and the tests call them.
     #
-    # The `500` in `sync-missing-orsr-profiles-every-4-hours` above was sized
-    # against the same drain rate this lane was: queue `orsr` drains 15 requests
-    # a minute (orsr.sk has no API and is somebody else's server), so ~133 min
-    # for 2 000. Adding to that queue past roughly 3 000 would push the next
-    # dispatch of the entry above behind its own backlog -- the failure the
-    # insurance entry's comment describes.
+    # `sync-missing-orsr-profiles-every-4-hours` runs 3 000, not 500. The lane
+    # is the only bound and it is knowable: both tasks routed to `orsr` carry
+    # `rate_limit='15/m'` (orsr.sk has no API and is somebody else's server), so
+    # one 4-hour window holds 15 * 240 = 3 600 requests. 3 000 spends 200 min of
+    # it -- 83 %, leaving 40 min before the next dispatch would queue behind
+    # this one's own backlog, the failure the insurance entry's comment
+    # describes. 3 600 is the edge; 3 000 is the largest round number short of
+    # it.
+    #
+    # Measured on `dell` 2026-09-28: the row this dict reconciles into carried
+    # `[500]`, and a completed tick really did produce 501 attempts inside its
+    # window -- dispatched 15:43:46Z, last attempt 16:17:32Z, so 501 in 34 min,
+    # **14.8 a minute sustained**. The batch size, not the drain rate, was what
+    # limited coverage. 361 962 of 405 965 eligible companies had no ORSR status
+    # row at all. At 500 a tick that is ~121 days to read once; at 3 000, ~20.
+    #
+    # The 40 minutes of slack is the whole safety margin and it is thinner than
+    # it reads, because the dispatcher waits in this queue too: it is routed to
+    # `orsr` (see `CELERY_TASK_ROUTES`), so at 3 000 it starts selecting only
+    # after ~200 min of its own backlog has drained. That still clears before
+    # the next tick, but it means a sustained rate below ~12.5 a minute stops
+    # clearing and the queue grows instead. At 500 the same figure was ~207 min
+    # of slack. If `orsr` depth stops returning to ~0 between ticks, this is the
+    # number to put back.
+    #
+    # The dispatcher reads `PeriodicTask` rows, not this dict, so the two have
+    # to agree (docs/ARCHITECTURE.md §4). They do without a manual edit because
+    # a beat start reconciles every entry here into its row. Verified the same
+    # day: the stack was recreated at 16:46:40Z and the row read back `[500]`,
+    # the value in this file at that moment.
+    #
+    # Worth knowing before trusting the 20 days: the expiry that reasoning
+    # assumes is not in force. The row's `expires` read back `None` -- the
+    # `14000.0` above reaches `apply_async` options but not the row field -- so
+    # a backlog is not discarded, it waits. That cuts both ways for this size,
+    # and it is why 3 000 is safe to try: neither the window nor the expiry
+    # refuses the work, and the size can come back down without a migration.
     # 2 000 companies every 12 h, not 500. The rotation walks the eligible
     # population (251 598 legal persons: forms 112/121/321/721/801/205, not
     # struck off) and 250 480 of them had no result yet, so at 500 a cycle the
