@@ -68,6 +68,67 @@ describe('PersonRelationRow — the three answers', () => {
     });
 });
 
+/**
+ * The same row on a company's own history, where every relation is with the
+ * company the reader is already looking at. A list of twenty former officers
+ * would otherwise repeat one name and one IČO twenty times -- and the name it
+ * repeated would be a link back to the page under the reader's cursor.
+ */
+const rowWithoutCompany = (overrides: Partial<PersonRelation> = {}) =>
+    renderWithProviders(
+        <ul>
+            <PersonRelationRow relation={relation(overrides)} showCompany={false}/>
+        </ul>,
+    );
+
+describe('PersonRelationRow — when the company is the page', () => {
+    it('names the function instead of the company', () => {
+        // The role is the one thing that differs from row to row here, so it
+        // keeps the place the company's name has on a person's page.
+        rowWithoutCompany();
+
+        expect(screen.getByText('Konateľ')).toBeInTheDocument();
+        expect(screen.queryByRole('link')).not.toBeInTheDocument();
+        expect(screen.queryByText('IČO: 35757442')).not.toBeInTheDocument();
+    });
+
+    it('keeps every other fact the row carries exactly as the person page has it', () => {
+        // The point of the flag: one relation is one fact. The fold, the
+        // tri-state and the dates are facts about the relation and not about
+        // the screen it is drawn on, so a variant that dropped one of them
+        // would be a second, quieter reading of the same register row.
+        const facts: Partial<PersonRelation> = {
+            is_active: null,
+            vznik_funkcie: '2010-01-01',
+            zanik_funkcie: '2019-06-30',
+            intervals: 12,
+        };
+        renderWithProviders(
+            <ul>
+                <PersonRelationRow relation={relation(facts)}/>
+                <PersonRelationRow relation={relation(facts)} showCompany={false}/>
+            </ul>,
+        );
+
+        expect(screen.getAllByText('Vznik funkcie: 01.01.2010')).toHaveLength(2);
+        expect(screen.getAllByText('Zánik funkcie: 30.06.2019')).toHaveLength(2);
+        expect(screen.getAllByText('Spojené z 12 po sebe idúcich zápisov v registri')).toHaveLength(2);
+        // "we have never read this company" is the state a reader is most
+        // likely to mistake for "no", so it is spelled out on both.
+        expect(
+            screen.getAllByText('Funkciu sme pre túto firmu ešte neoverili v registri.'),
+        ).toHaveLength(2);
+        expect(screen.getAllByText('nevieme')).toHaveLength(2);
+    });
+
+    it('still answers an ended function with nie and its dates', () => {
+        rowWithoutCompany({is_active: false, zanik_funkcie: '2019-06-30'});
+
+        expect(screen.getByText('nie')).toBeInTheDocument();
+        expect(bodyText()).toContain('30.06.2019');
+    });
+});
+
 describe('PersonRelationRow — what it prints', () => {
     it('links the company by its IČO, not by its name', () => {
         row();

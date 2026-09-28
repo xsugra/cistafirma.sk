@@ -1,5 +1,7 @@
-import {describe, expect, it} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
+    api,
+    mapCompanyPersonsResponse,
     mapOrsrPersonSearchResponse,
     mapPersonDetail,
     mapPersonRelation,
@@ -272,5 +274,214 @@ describe('mapOrsrPersonSearchResponse', () => {
         expect(result.note).toBe('Register vracia len mená firiem, nie funkciu.');
         expect(result.source_url).toBe('https://www.orsr.sk/hladaj_osoba.asp?PR=Trnka');
         expect(result.total).toBe(18);
+    });
+});
+
+/**
+ * One company's people over time, as the endpoint states them.
+ *
+ * The mapper sits between the API and two screens -- the Osoby history and the
+ * company graph -- and every default it invents is one of those screens making
+ * a claim the response did not. So each of them is pinned here.
+ */
+describe('mapCompanyPersonsResponse', () => {
+    const office = {
+        ico: '35757442',
+        name: 'ESET, spol. s r. o.',
+        role: 'konatel',
+        role_display: 'Konateľ',
+        is_active: null,
+        vznik_funkcie: '2010-01-01',
+        zanik_funkcie: null,
+        intervals: 1,
+    };
+
+    const flat = {
+        ico: '12345678',
+        name: 'Testovacia, s.r.o.',
+        as_of: null,
+        groups: [
+            {
+                id: 7,
+                name: 'Ján Novák',
+                records: 2,
+                clusters: 1,
+                members: [{id: 7, name: 'Ján Novák', address: 'Hlavná 1', birth_date: null}],
+                offices: [office],
+            },
+        ],
+        periods: [2015, 2010],
+        undated_excluded: 0,
+    };
+
+    it('prečíta celú odpoveď do tvaru, ktorý čítajú obrazovky', () => {
+        const result = mapCompanyPersonsResponse(flat);
+
+        expect(result.ico).toBe('12345678');
+        expect(result.name).toBe('Testovacia, s.r.o.');
+        expect(result.as_of).toBeNull();
+        expect(result.periods).toEqual([2015, 2010]);
+        expect(result.groups).toHaveLength(1);
+        expect(result.groups[0]).toMatchObject({id: 7, name: 'Ján Novák', records: 2, clusters: 1});
+        expect(result.groups[0].members).toEqual([
+            {id: 7, name: 'Ján Novák', address: 'Hlavná 1', birth_date: null},
+        ]);
+    });
+
+    it('nesploští trojitú odpoveď o funkcii na dve', () => {
+        // The offices go through the same mapper a person's page uses -- one
+        // relation, one reader. A group mapper that built its own relation
+        // shape would be the place where `null` quietly became `false`, and the
+        // history would say a function ended at a company nobody has read.
+        const result = mapCompanyPersonsResponse(flat);
+
+        expect(result.groups[0].offices[0].is_active).toBeNull();
+        expect(result.groups[0].offices[0].role_display).toBe('Konateľ');
+    });
+
+    it('nechá `as_of` prázdne, keď ho odpoveď neuviedla', () => {
+        // `null` is what the screen reads to decide whether it is showing a
+        // period at all; `''` would be a period it cannot name.
+        expect(mapCompanyPersonsResponse({...flat, as_of: undefined}).as_of).toBeNull();
+        expect(mapCompanyPersonsResponse({...flat, as_of: '2015-12-31'}).as_of).toBe('2015-12-31');
+    });
+
+    it('nechá v rokoch len tie, z ktorých je rok', () => {
+        // The chips are built from these numbers, so one `NaN` in the list is a
+        // button labelled `NaN` that sends an unparseable date. Strings are
+        // accepted because JSON has no integer type and the field has been sent
+        // both ways.
+        expect(mapCompanyPersonsResponse({...flat, periods: [2015, Number.NaN, Infinity]}).periods)
+            .toEqual([2015]);
+        expect(mapCompanyPersonsResponse({...flat, periods: ['2010']}).periods).toEqual([2010]);
+        expect(mapCompanyPersonsResponse({...flat, periods: undefined}).periods).toEqual([]);
+        // `null` is the case finite-ness alone does not catch: `Number(null)`
+        // is `0`, which is finite, and year `0` is a chip sending `0000-12-31`
+        // -- a date the backend refuses. Zero and negatives are not years here.
+        expect(mapCompanyPersonsResponse({...flat, periods: [null, 0, -1, 2015]}).periods)
+            .toEqual([2015]);
+    });
+
+    it('nedovolí záporný počet vynechaných zápisov', () => {
+        // The note reads "this many filings could not be placed in the chosen
+        // period", and a negative count would print a sentence about minus
+        // three filings, which is not a thing that happened.
+        expect(mapCompanyPersonsResponse({...flat, undated_excluded: -3}).undated_excluded).toBe(0);
+        expect(mapCompanyPersonsResponse({...flat, undated_excluded: undefined}).undated_excluded).toBe(0);
+        expect(mapCompanyPersonsResponse({...flat, undated_excluded: 3}).undated_excluded).toBe(3);
+    });
+
+    it('počíta skupinu aspoň ako jeden záznam', () => {
+        // A group exists because at least one row produced it, so a missing or
+        // zero count cannot mean "no rows" -- the card would then be a person
+        // the register never wrote down.
+        const [group] = mapCompanyPersonsResponse({
+            ...flat,
+            groups: [{...flat.groups[0], records: 0, clusters: undefined}],
+        }).groups;
+
+        expect(group.records).toBe(1);
+        expect(group.clusters).toBe(1);
+    });
+
+    it('vráti prázdny zoznam namiesto `undefined`, keď odpoveď skupiny nemá', () => {
+        const result = mapCompanyPersonsResponse({...flat, groups: undefined});
+
+        expect(result.groups).toEqual([]);
+        expect(result.ico).toBe('12345678');
+    });
+});
+
+describe('api.getCompanyPersons', () => {
+    const people = {ico: '12345678', name: 'Testovacia, s.r.o.', groups: []};
+
+    /**
+     * One successful answer, and the URL it was asked at -- the whole subject of
+     * these specs is which request goes out, and the parameter is a day the
+     * backend filters on rather than a display value.
+     */
+    const calledWith = async (asOf?: string | null): Promise<string> => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => people,
+            text: async () => JSON.stringify(people),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await api.getCompanyPersons('12345678', asOf);
+
+        return fetchMock.mock.calls[0][0];
+    };
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('pýta sa na firmu bez parametra, keď nie je zvolené obdobie', async () => {
+        // No period and "today" are the same request: the backend reads the
+        // whole record, which is what the Osoby cards and the graph show. A
+        // `?as_of=` carrying today's date would ask a different question.
+        expect(await calledWith()).toBe('/api/companies/12345678/persons/');
+        expect(await calledWith(null)).toBe('/api/companies/12345678/persons/');
+    });
+
+    it('pošle zvolený deň ako `as_of`', async () => {
+        expect(await calledWith('2015-12-31')).toBe(
+            '/api/companies/12345678/persons/?as_of=2015-12-31',
+        );
+    });
+
+    it('zakóduje hodnotu, ktorá nie je holý dátum', async () => {
+        // Not a formality: the day reaches the query string from a caller, and
+        // a value that arrives unencoded is a different request than the one
+        // that was meant -- or a broken one.
+        expect(await calledWith('2015 12 31')).toBe(
+            '/api/companies/12345678/persons/?as_of=2015%2012%2031',
+        );
+    });
+
+    it('vráti zmapovanú odpoveď, nie surové telo', async () => {
+        // The screens read fields the response does not have; a method that
+        // handed the body straight back would compile and render nothing.
+        const body = {
+            ico: '12345678',
+            name: 'Testovacia, s.r.o.',
+            as_of: '2015-12-31',
+            groups: [
+                {
+                    id: 7,
+                    name: 'Ján Novák',
+                    records: 1,
+                    clusters: 1,
+                    members: [],
+                    offices: [
+                        {
+                            ico: '35757442',
+                            name: 'ESET, spol. s r. o.',
+                            role_display: 'Konateľ',
+                            is_active: false,
+                        },
+                    ],
+                },
+            ],
+            periods: [2015],
+            undated_excluded: 1,
+        };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: async () => body,
+                text: async () => JSON.stringify(body),
+            }),
+        );
+
+        const result = await api.getCompanyPersons('12345678', '2015-12-31');
+
+        expect(result.as_of).toBe('2015-12-31');
+        expect(result.periods).toEqual([2015]);
+        expect(result.groups[0].offices[0]).toMatchObject({is_active: false, intervals: 1});
     });
 });

@@ -318,8 +318,16 @@ export function mapCompanyPersonsResponse(data: any): CompanyPersonsResponse {
     name: data?.name ?? '',
     as_of: data?.as_of ?? null,
     groups: Array.isArray(data?.groups) ? data.groups.map(mapCompanyPersonGroup) : [],
+    // A positive integer, and not merely a finite number: `Number(null)` is `0`,
+    // which is finite, and a year `0` would reach the chips as a button labelled
+    // "0" sending `0000-12-31` -- a date the backend refuses. The backend
+    // derives these years from real filing dates and should never send a null,
+    // so this is a guard against a field that only looks numeric, not a case
+    // that is expected.
     periods: Array.isArray(data?.periods)
-      ? data.periods.map(Number).filter((year: number) => Number.isFinite(year))
+      ? data.periods
+          .map(Number)
+          .filter((year: number) => Number.isInteger(year) && year > 0)
       : [],
     undated_excluded: Math.max(0, Number(data?.undated_excluded) || 0),
   };

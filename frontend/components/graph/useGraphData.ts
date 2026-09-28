@@ -76,6 +76,15 @@ export function useGraphData(): UseGraphDataReturn {
       setError(err instanceof Error ? err.message : 'Nepodarilo sa načítať graf prepojení');
       setGraphData(null);
       setDrawnAsOf(null);
+      // The period row is cleared too, and for the same reason: `periods` is a
+      // property of *a* company's record, and this answer did not arrive. Left
+      // standing, the years of the company the reader came from would sit above
+      // an error message and offer periods of a record that is not on screen.
+      // The cost is that a failed period request takes the "Dnes" chip with it;
+      // that is the lesser wrong, because a wrong year is a claim and a missing
+      // control is only an inconvenience.
+      setPeriods([]);
+      setUndatedExcluded(0);
     } finally {
       setLoading(false);
     }

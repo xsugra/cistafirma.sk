@@ -29,9 +29,19 @@ const officeCount = (n: number): string =>
  * years this company's record actually changes.
  */
 export const CompanyPeopleHistory: React.FC<CompanyPeopleHistoryProps> = ({ ico }) => {
-    const [data, setData] = useState<CompanyPersonsResponse | null>(null);
+    /**
+     * The answer, held with the IČO it is an answer *about*.
+     *
+     * The page under this section re-renders with a new `company` when the
+     * reader moves between companies, and the same component instance is reused;
+     * a bare `data` would keep the previous company's people on screen under the
+     * new company's heading until the new answer landed. The list of who acted
+     * for a company is not a thing to show the wrong company's version of.
+     */
+    const [answer, setAnswer] = useState<{ico: string; data: CompanyPersonsResponse} | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const data = answer && answer.ico === ico ? answer.data : null;
 
     /**
      * The chosen day, held with the IČO it was chosen for, and *derived* rather
@@ -61,7 +71,7 @@ export const CompanyPeopleHistory: React.FC<CompanyPeopleHistoryProps> = ({ ico 
                 // A slower answer to an earlier question must not land on top of
                 // a newer one: the chips are clickable while a request is in
                 // flight, and the last click is the one the reader meant.
-                if (current) setData(answer);
+                if (current) setAnswer({ico, data: answer});
             })
             .catch((err) => {
                 if (current) {
