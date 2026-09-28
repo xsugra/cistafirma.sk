@@ -40,9 +40,23 @@ def _coverage() -> dict:
     would drift into a lie the first time it stopped being true.
     """
     return {
+        # `values("id")` before `distinct()`, and it is not a style choice.
+        #
+        # Without it Django builds `SELECT DISTINCT` over *every* column of the
+        # company row, and Postgres then has to sort ~168k rows of width 448 to
+        # find the unique ones: measured on production 2026-09-28, 9.5-11.8 s
+        # for this one line, while the whole person search beside it is 0.35 s.
+        # Counting distinct ids instead is the same number (both are DISTINCT
+        # over a primary key) in 0.37 s -- and it is the form every other
+        # coverage count in this project already uses; this was the only one
+        # that did not.
+        #
+        # It is not a micro-optimisation to be undone later: the cost is
+        # invisible to every functional test, because the number it returns
+        # does not change. `CoverageQueryShapeTests` is what holds it.
         "companies_with_persons": Company.objects.filter(
             person_relations__isnull=False
-        ).distinct().count(),
+        ).values("id").distinct().count(),
         "companies_total": Company.objects.count(),
     }
 
