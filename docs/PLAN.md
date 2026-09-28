@@ -9277,12 +9277,14 @@ netvrdia, že prahy sú správne — tvrdia len, že sú označené za neoveren�
 
 #### 11.22.9 Verdikt CI — a chyba, ktorú lokálny beh nevidí (2026-09-28)
 
-Vetva má za sebou tri behy a ani jeden z dvoch dokončených nebol zelený:
+Vetva má za sebou tri behy. Prvé dva zelené neboli a **testy v nich vôbec
+nebežali**; tretí je prvý, v ktorom bežali:
 
 | beh | commit | výsledok |
 |---|---|---|
 | 217 | `21988de` | `docs_audit` ❌ — testy preskočené |
 | 218 | `fd7d563` | `docs_audit` ❌ — testy preskočené |
+| 220 | `56d51e9` | ✅ všetkých 7 jobov, testy `success` |
 
 V oboch je stav jobov rovnaký a je dôležitejší než samotný pád:
 `backend_validate` ✅, `frontend_validate` ✅, `helm_render_validate` ✅,
@@ -9312,6 +9314,16 @@ kontrola**; kontrolou je až čistý export alebo CI. (Susedná session
 holým menom — pravidlo A skriptu preskakuje cesty bez `/` — a adresár je
 opísaný ako gitignorovaný s odkazom na `.gitignore:62`. Overené na čistom
 exporte: **425 citácií, 0 nálezov** (predtým 426 a 1 nález).
+
+**Verdikt:** beh 220 je zelený vo **všetkých siedmich** joboch a ani jeden z
+nich nemá `allow_failure` — `backend_tests` aj `frontend_tests` sú `success`,
+nie `skipped`. Overené zámerne na úrovni jobov, nie podľa stavu pipelinu:
+zelený pipelin so preskočenými testami vyzerá rovnako ako zelený pipelin s
+testami, ktoré prešli. Je to prvý beh tejto vetvy, v ktorom sa testy naozaj
+spustili, takže čísla z 11.22.8 (1188 backendových testov, 48 frontendových
+súborov) už nestoja len na mojom stroji. F1 je tým z CI strany uzavretá;
+otvorené ostáva nasadenie — manuálny krok na `dell`, ktorý musí počkať, kým
+`main` nesie obe vetvy (§11.23 je tá druhá).
 
 Z toho plynie jedna vec pre samotný audit, ktorú som **neurobil** a je to
 rozhodnutie, nie oprava: `check_inline_citations.py` sa pozerá len na
