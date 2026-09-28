@@ -380,14 +380,24 @@ def _dispatch_job(job: SyncJob) -> None:
             "workers": params.get("workers", 3),
             "sync_job_id": job.pk,
         }),
-        "orsr_batch": (tasks.schedule_missing_orsr_sync, {"limit": params.get("limit", 200)}),
+        # The four below are fan-out dispatchers: they select a batch, hand each
+        # company to its own task and return. They used to get no `sync_job_id`,
+        # so nothing in them could ever close the row this view had just created
+        # and put into `running` -- the watchdog recorded every one of them as
+        # "Stuck job auto-failed (no heartbeat)" half an hour later. They take
+        # the id now and close their own row when the fan-out is enqueued.
+        "orsr_batch": (tasks.schedule_missing_orsr_sync, {
+            "limit": params.get("limit", 200),
+            "sync_job_id": job.pk,
+        }),
         "financials_batch": (tasks.schedule_ruz_financials_sync, {
             "limit": params.get("limit", 200),
             "eligible_only": params.get("eligible_only", True),
             "missing_only": params.get("missing_only", True),
+            "sync_job_id": job.pk,
         }),
-        "insurance_batch": (tasks.schedule_insurance_debt_checks, {}),
-        "fs_update": (tasks.update_fs_data_task, {}),
+        "insurance_batch": (tasks.schedule_insurance_debt_checks, {"sync_job_id": job.pk}),
+        "fs_update": (tasks.update_fs_data_task, {"sync_job_id": job.pk}),
     }
     if job_type not in task_map:
         raise ValueError(f"Unknown job_type: {job_type}")

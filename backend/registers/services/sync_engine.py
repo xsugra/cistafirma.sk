@@ -582,6 +582,39 @@ def complete_job(job: SyncJob, *, notes: str = "") -> None:
     SyncJob.objects.filter(pk=job.pk).update(**update)
 
 
+def complete_dispatch_job(job_id: int | None, *, notes: str = "") -> bool:
+    """Close the SyncJob row of a *dispatcher* -- one that fans work out and returns.
+
+    Four job types (`orsr_batch`, `financials_batch`, `insurance_batch`,
+    `fs_update`) do not walk anything themselves: the task the admin API
+    dispatches selects a batch, hands each company to its own task and returns.
+    `_dispatch_job` still put them through `start_job`, so the row went `running`
+    with a heartbeat nothing advanced, and half an hour later the watchdog
+    recorded a healthy dispatch as `failed`. Measured on production before this
+    was written: of the sixteen such rows, eight were `cancelled` by hand and
+    eight `failed` with "Stuck job auto-failed by watchdog (no heartbeat)" --
+    not one of them ever reached `completed`.
+
+    Conditional on `status="running"` on purpose. The caller is a Celery task
+    holding only an id, and an operator may cancel the row while the fan-out is
+    still being enqueued; an unconditional write would resurrect it. `complete_job`
+    is the unconditional one, for callers that own the row's whole lifecycle.
+
+    `None` is not an error: each of those tasks is also run by the beat schedule,
+    which creates no row and therefore passes no id.
+    """
+    if job_id is None:
+        return False
+    update = {
+        "status": "completed",
+        "completed_at": timezone.now(),
+        "last_heartbeat": timezone.now(),
+    }
+    if notes:
+        update["notes"] = notes
+    return bool(SyncJob.objects.filter(pk=job_id, status="running").update(**update))
+
+
 def fail_job(job: SyncJob, *, error: str) -> None:
     SyncJob.objects.filter(pk=job.pk).update(
         status="failed",

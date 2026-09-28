@@ -24,6 +24,7 @@ from .models import CompanySyncStatus, OrsrCompanyProfile
 from .services.sync_engine import (
     _env_int,
     claim_ruz_job,
+    complete_dispatch_job,
     complete_job,
     detect_and_fail_stuck_jobs,
     enqueue_ruz_job,
@@ -333,7 +334,9 @@ INSURANCE_SOURCES = (
 
 
 @shared_task(queue='celery')
-def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
+def schedule_insurance_debt_checks(
+    limit: int = INSURANCE_BATCH_PER_TICK, sync_job_id: int | None = None
+):
     """Queue a bounded batch of insurance-debt checks for the companies that are due.
 
     Due means `last_insurance_debt` older than 12 hours, or never checked, *and*
@@ -505,6 +508,9 @@ def schedule_insurance_debt_checks(limit: int = INSURANCE_BATCH_PER_TICK):
         update_insurance_debt.delay(company_id)
 
     logger.info("Naplánovaných %s kontrol dlhov v poisťovniach.", len(company_ids))
+    complete_dispatch_job(
+        sync_job_id, notes=f"Naplánovaných {len(company_ids)} firiem."
+    )
     return f"Scheduled {len(company_ids)} insurance debt checks"
 
 
@@ -527,7 +533,7 @@ def force_check_all_companies_debts():
     return f"Naplánovaná kontrola pre {count} firiem."
 
 @shared_task(queue='celery')
-def update_fs_data_task():
+def update_fs_data_task(sync_job_id: int | None = None):
     """
     Celery task to trigger the update_fs_data management command.
     Runs on ruz_full/celery queue in its own worker deployment.
@@ -535,6 +541,10 @@ def update_fs_data_task():
     logger.info("Triggering update_fs_data command...")
     call_command('update_fs_data')
     logger.info("update_fs_data command finished.")
+    # Unlike the three `schedule_*` tasks this one is not a fan-out -- it runs
+    # the command itself and is over when it returns, so the row it closes is
+    # an accurate report rather than a dispatch note.
+    complete_dispatch_job(sync_job_id, notes="Príkaz update_fs_data dokončený.")
 
 
 @shared_task(base=BaseSyncTask, queue='celery')
@@ -1400,7 +1410,7 @@ def schedule_person_history_resync(limit: int = 2000):
 
 
 @shared_task(queue='orsr')
-def schedule_missing_orsr_sync(limit: int = 200):
+def schedule_missing_orsr_sync(limit: int = 200, sync_job_id: int | None = None):
     """Naplánuje ORSR sync: najprv opakovania, potom firmy bez profilu.
 
     The task name and signature stay put -- it is in
@@ -1430,6 +1440,9 @@ def schedule_missing_orsr_sync(limit: int = 200):
         sync_company_orsr_data.delay(company_id)
 
     logger.info("Scheduled ORSR sync for %s companies", len(company_ids))
+    complete_dispatch_job(
+        sync_job_id, notes=f"Naplánovaných {len(company_ids)} firiem."
+    )
     return f"Scheduled ORSR sync for {len(company_ids)} companies"
 
 
@@ -1514,7 +1527,10 @@ def financials_sync_batch(
 
 @shared_task(queue='financials')
 def schedule_ruz_financials_sync(
-    limit: int = 200, eligible_only: bool = True, missing_only: bool = False
+    limit: int = 200,
+    eligible_only: bool = True,
+    missing_only: bool = False,
+    sync_job_id: int | None = None,
 ):
     """Naplánuje RUZ financial sync pre dávku firiem, ktorá naozaj postupuje.
 
@@ -1530,6 +1546,9 @@ def schedule_ruz_financials_sync(
     for company_id in company_ids:
         sync_company_financials_from_ruz.delay(company_id)
     logger.info("Scheduled RUZ financial sync for %s companies", len(company_ids))
+    complete_dispatch_job(
+        sync_job_id, notes=f"Naplánovaných {len(company_ids)} firiem."
+    )
     return f"Scheduled RUZ financial sync for {len(company_ids)} companies"
 
 
