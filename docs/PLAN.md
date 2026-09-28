@@ -9136,10 +9136,11 @@ admin-render testy (`companies.tests.CompanyAdminSyncNowTests`,
 `registers.tests.*AdminDashboard*`) padajúce na
 `Missing staticfiles manifest entry for 'unfold/fonts/inter/styles.css'`, lebo
 `STORAGES` používa `CompressedManifestStaticFilesStorage`
-(`backend/backend/settings.py:393`) a na tomto hoste `collectstatic` nebežal
-(`backend/staticfiles/staticfiles.json` neexistuje). Vetva sa `companies/` ani
-`registers/` nedotýka, takže to nemôže byť jej regresia — **baseline som ale
-nezmeral**, tvrdím to z mechanizmu, nie z porovnania.
+(`backend/backend/settings.py:393`) a na tomto hoste `collectstatic` nebežal,
+takže manifest (`staticfiles.json` pod `STATIC_ROOT`) nie je vygenerovaný.
+Vetva sa `companies/` ani `registers/` nedotýka, takže to nemôže byť jej
+regresia — **baseline som ale nezmeral**, tvrdím to z mechanizmu, nie z
+porovnania.
 
 Frontend: `npm test` **50 súborov / 478 testov, všetky prešli** (pred touto
 vetvou 46 / 426), `npm run typecheck` exit 0 (0× `error TS`) a `npm run build`
