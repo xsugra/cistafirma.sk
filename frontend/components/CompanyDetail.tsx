@@ -4,14 +4,12 @@ import {
     DEFAULT_SECTION_ID,
     getSection,
     type CompanySectionId,
-    type ReadySectionId,
 } from '../companySections';
 import { SectionNav } from './company/SectionNav';
 import { CompanyHeader } from './company/CompanyHeader';
 import { CompanySummaryStrip } from './company/CompanySummaryStrip';
-import { SectionNotice } from './company/SectionNotice';
+import { SectionPanel } from './company/SectionPanel';
 import { useCompanyProfile } from './company/useCompanyProfile';
-import { BODIES } from './company/sectionBodies';
 
 interface CompanyDetailProps {
     company: Company;
@@ -38,9 +36,6 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
     const { profile } = useCompanyProfile(company);
 
     const section = getSection(activeTab);
-    const Body = section && section.status === 'ready'
-        ? BODIES[section.id as ReadySectionId]
-        : undefined;
 
     return (
         <div className="space-y-6 animate-fade-in mt-10">
@@ -77,9 +72,7 @@ export const CompanyDetail: React.FC<CompanyDetailProps> = ({ company }) => {
                         was there: several bodies hold request state for the
                         company they were handed, and a reused instance would
                         draw the previous tab's rows under this tab's heading. */}
-                    {Body
-                        ? <Body key={activeTab} company={company} />
-                        : section && <SectionNotice key={activeTab} section={section} />}
+                    {section && <SectionPanel key={activeTab} company={company} section={section} />}
                 </div>
             </div>
         </div>

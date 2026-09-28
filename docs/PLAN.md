@@ -9033,6 +9033,311 @@ nemá zmysel — buď to spustí človek, alebo pribudne Bash permission rule.
 
 ---
 
+### 11.22 „Biely kôň" a „karusel" — čo z toho vieme spočítať z vlastných dát (2026-09-28)
+
+Samuel: „chcel by som do môjho projektu nejako zahrnúť analýzu «biely kôň»
+a «karusel» nejakým vhodným spôsobom." Priložil k tomu metodiku pre FinStat.sk
+a Foaf.sk — sériový štatutár, trvalý pobyt na obecnom úrade, odvetvová
+rozptýlenosť, úmrtnosť firiem osoby; tržby vs. zamestnanci, skok tržieb,
+zisk ≈ 0 pri veľkých tržbách, majetok bez DHM, obrátka zásob, nespoľahlivý
+platiteľ DPH, virtuálne sídlo, náhle nedoplatky pred konkurzom.
+
+**Verdikt: áno, ale ako *indikátory rizika*, nie ako *odhalenie podvodu*.**
+Dôvod nie je v našej implementácii — je vo verejných dátach, a Samuel to vo
+svojom vlastnom texte píše presne: fakturačný reťazec, kontrolný výkaz DPH
+a pohyb tovaru nie sú verejné. Karusel sa z verejných registrov **nedá
+dokázať**; dá sa len povedať, že profil firmy na niektorú jeho rolu sedí.
+Kto tvrdí viac, predáva istotu, ktorú nemá — a pri menovaní konkrétnej osoby
+je to navyše tvrdenie o človeku, ktoré produkt nesmie vysloviť.
+
+#### 11.22.1 Inventúra: čo na to máme a čo nie
+
+Merané na bežiacej databáze (čísla z komentárov v kóde, s dátumom merania;
+živé premeranie je súčasťou práce, viď `risk_indicators_report`).
+
+| vstup | máme? | kde | pokrytie |
+|---|---|---|---|
+| väzby osoba → firma s **dátumami vzniku aj zániku** | ✅ | `connections.PersonCompanyRelation` (`vznik_funkcie`, `zanik_funkcie`, trojstavové `is_active`) | 19 906 z 445 626 firiem (4,5 %), 2026-09-13; 64 128 väzieb |
+| počet firiem na osobu | ✅ | už sa počíta ako `rolesCount` v `connections/views.py:499` a `:804` | 121 558 osôb, 2026-09-15 |
+| účtovné výkazy po rokoch | ✅ | `companies.CompanyFinancialResult` (~15 467 entít) | **~3,5 % registra** |
+| tržby, zisk, daň, aktíva, zásoby, pohľadávky, záväzky, vlastné imanie | ✅ | tamtiež | `revenue` na 98,2 % riadkov; `total_revenue` len na 22,6 % |
+| **rozdelenie tržieb na tovar vs. vlastné výkony** | ❌ | parser berie jednu prevádzkovú sumu | — |
+| **presný počet zamestnancov** | ❌ | len pásmo ŠÚ SR 0073/KATP97 (`velkost_organizacie`) | 63,3 % aktívnych firiem má `00` = „nezistený" |
+| DPH: platiteľ, IČ DPH, dátum registrácie, dátum výmazu, dôvod | ✅ | `Company.vat_payer`, `ic_dph`, `datum_reg_dph`, `vat_deleted_date`, `vat_deleted_reason` | 302 713 riadkov bez hodnoty `Platiteľ DPH` |
+| index daňovej spoľahlivosti („nespoľahlivý") | ✅ | `Company.tax_reliability` | 218 143 riadkov bez indexu |
+| **kód §81/§82** | ❌ | uložený je len voľný text `Rok porušenia: YYYY` | — |
+| daňový dlh, VšZP, Sociálna poisťovňa | ✅ | `tax_debt`, `debt_vszp`, `debt_soc_poist` | **Dôvera sa nescrapuje vôbec** |
+| sídlo (ulica, mesto, PSČ) + geokódovanie | ✅ | `Company.ulica/mesto/psc/sidlo` + `seat_*` | `seat_point_count` je počet kandidátskych bodov geokódera, **nie** počet firiem na adrese |
+| stav firmy (zrušená) | ✅ | `datum_zrusenia` | — |
+| **dátumovaný log zmien statusu** (likvidácia, konkurz, výmaz) | ❌ | len `datum_zrusenia` + voľný text „Ďalšie právne skutočnosti" | — |
+| **RPVS — register konečných užívateľov výhod** | ❌ | nula výskytov v kóde | oficiálny zdroj pre „bieleho koňa"; je to otvorené dáta, ale nová integrácia |
+| národnosť osoby | ❌ | `Person` pole nemá | — |
+| **fakturačné reťazce (odberateľ/dodávateľ)** | ❌ | **nie sú verejné** | nedá sa získať |
+
+#### 11.22.2 Prekážka, ktorá nie je technická
+
+Karusel je reťaz: missing trader → buffer → broker. Naše dáta vidia **jednotlivé
+firmy**, nie hrany medzi nimi. Preto každý indikátor hovorí o firme alebo
+o osobe, nikdy o reťazci — a sekcia to musí povedať skôr, než ukáže prvý
+indikátor. To isté platí pre osobu: „konateľ v 14 firmách, z toho 5 zrušených"
+je pozorovanie s dátumami; „biely kôň" je tvrdenie o človeku. Produkt smie
+vysloviť prvé, nikdy druhé. Sekcia preto vykresľuje **fakty a čísla, nie
+nálepy** — meno javu („toto je vzor typický pre karusel") sa píše raz,
+v úvode sekcie, nie k subjektu.
+
+#### 11.22.3 Návrh
+
+Nová sekcia firemného profilu **`rizikove-indikatory`** („Rizikové
+indikátory", skupina „Riziká a súdy", `status: 'partial'` — `partial` je
+jediná čestná voľba, keďže finančné indikátory platia pre ~3,5 % registra
+a osobný graf pre 4,5 %) a panel na `pages/Person.tsx`.
+
+Rozhodnutia, ktoré treba povedať nahlas:
+
+1. **Nezlučuje sa s `riskScore`.** `companies/services/risk_score.py` je
+   zdokumentovaný ako 0–100 *attention* rebrík a jeho docstring výslovne
+   hovorí, prečo doň Taffler nevstupuje. Pridanie dvanástich indikátorov by
+   zmenilo každé skóre v produkte naraz. Indikátory preto idú **vedľa** skóre,
+   ako vlastná štruktúra `redFlags`, nie doň.
+2. **Indikátory sa nesčítavajú.** Žiadne „skóre rizika podvodu". Súčet by bol
+   jediné číslo, ktoré si čitateľ odnesie, a bolo by to obvinenie.
+3. **Nevyhodnotené je vlastný stav, nie vynechanie.** Každé pravidlo vráti
+   buď `checked: true` s dôkazom, alebo `checked: false` s dôvodom („register
+   veľkosť neuviedol"). Vzor je `parts` v `risk_score.py:157` — faktor na nule
+   a faktor, ktorý sme neprečítali, sú dve rôzne fakty.
+4. **Backend vlastní text, frontend farbu.** `label` a `detail` posiela server
+   hotové (ako `risk_score.py`), frontend k nim priraďuje len farbu — jediný
+   vlastník formulácie, žiadne druhé odvodenie.
+
+#### 11.22.4 Katalóg pravidiel (fáza 1, všetko z vlastných dát)
+
+Firemné (`backend/companies/services/red_flags.py`):
+
+| kód | čo tvrdí | z čoho | nevyhodnotené keď |
+|---|---|---|---|
+| `trzby_bez_zamestnancov` | tržby v miliónoch pri 0–2 zamestnancoch | `revenue` + pásmo `01/02/03` | pásmo `00`/`''` |
+| `skok_trzby` | medziročný skok tržieb (≥ 10× a ≥ 1 mil. €) | `revenue` dvoch po sebe idúcich rokov | menej ako dva roky |
+| `zisk_nula_pri_trzboch` | veľké tržby, takmer nulový zisk, minimálna daň | `revenue`, `profit_after_tax`, `income_tax` | chýba ktorýkoľvek riadok |
+| `majetok_bez_dhm` | zanedbateľný DHM pri veľkých pohľadávkach a záväzkoch | `assets_tangible`, `assets_receivables_short`, `liabilities_total` | chýba závierka |
+| `obrat_zasob` | neprimerane rýchly obrat zásob pri materiálnych zásobách | `assets_inventory`, `revenue` | zásoby nulové/neznáme |
+| `dph_nespolahlivy` | index spoľahlivosti „nespoľahlivý" | `tax_reliability` | index chýba (218 143 riadkov) |
+| `dph_vymazany` | vymazaný z registra DPH, nie späť zaregistrovaný | `vat_deleted_date`, `datum_reg_dph`, `vat_deleted_reason` | oba dátumy chýbajú |
+| `nedoplatky_a_zanik` | evidované nedoplatky a firma zrušená | `total_debt`, `datum_zrusenia` | — |
+| `statutar_vo_vela_firmach` | jej štatutár je vo veľa firmách | graf osôb | firma nemá osoby (95,5 %) |
+| `sidlo_so_zhlukom` | na adrese sídla je evidovaných veľa firiem | `count()` na `ulica`+`mesto`+`psc` | **cena nie je zmeraná** — rozhodne sa po meraní |
+
+Osobné (`backend/connections/person_risk.py`):
+
+| kód | čo tvrdí | z čoho |
+|---|---|---|
+| `serialny_statutar` | funkcia vo veľa firmách | počet väzieb |
+| `odvetvova_rozptylenost` | tie firmy sú naprieč odlišnými odvetviami | SK NACE divízie |
+| `umrtnost_firiem` | podiel zrušených / s nedoplatkom / nespoľahlivých DPH | `datum_zrusenia`, `total_debt`, `tax_reliability` |
+| `nezname_funkcie` | podiel väzieb, ktorých história nebola prečítaná | `is_active is None` |
+
+**Prahy sa nesmú vymyslieť.** „Sériový štatutár" je prah na počte firiem a ten
+sa musí odčítať z rozdelenia, nie z pocitu — inak je to brána, ktorá platí
+z jedného roku a tvári sa ako pravidlo (tá istá chyba ako pri 500 v §8.6).
+Preto pribudne read-only príkaz `risk_indicators_report`, ktorý vypíše
+rozdelenia, a prahy sa do kódu zapíšu až z neho, s uvedením nameranej hodnoty.
+
+Neznáme funkcie sú **pokrytie, nie indikátor**: časť väzieb (ORSR HTML vetva)
+má `is_active=None`, čo znamená „históriu sme nečítali". Osobný panel preto
+vypíše, koľko z väzieb je neznámych, a `umrtnost_firiem` počíta len z tých,
+ktoré sú známe — inak by z neznalosti vzniklo číslo, ktoré vyzerá ako nález.
+
+#### 11.22.5 Právny rámec (súčasť práce, nie poznámka pod čiarou)
+
+- Odvodený profil o fyzickej osobe je spracúvanie osobných údajov, aj keď
+  vstup je verejný register. `pages/Privacy.tsx` to musí pomenovať.
+- Sekcia píše jednou vetou, že **nie je zistením protiprávneho konania**
+  a že verejné registre nemôžu preukázať karusel ani bieleho koňa.
+- Žiadne hromadné exporty osobných indikátorov; na firemnom paneli je
+  viditeľný len štatutár, ktorého firma sama zverejňuje.
+
+#### 11.22.6 Fázy
+
+- **F1 — bez zmeny schémy** (táto práca): čisté funkcie, nové pole v API
+  (`redFlags` na `CompanyDetailSerializer` a na `PersonDetailView`), nová
+  sekcia, osobný panel, testy každej vetvy, `risk_indicators_report`.
+  Žiadna migrácia, žiadny model, nič nemôže zošalieť — a preto ani brána
+  „pred migráciou zálohu" neplatí.
+- **F2 — perzistencia a admin zoznam** (samostatné rozhodnutie): uložiť
+  indikátory a dať analytikovi zoznam „najviac indikátorov naprieč registrom".
+  Toto si vyžiada model, migráciu a teda aj čerstvú overenú zálohu.
+- **F3 — nové zdroje**: RPVS (koneční užívatelia výhod — jediný zdroj, ktorý
+  vie odpovedať na „kto za tým naozaj stojí"), kód §81/§82 z `ds_dphz.zip`
+  (súbor je v `FS_DATASET_URLS` a **nespracúva sa**), Dôvera, a napojenie na
+  súdne rozhodnutia / exekúcie, ktoré sú v registri sekcií už dnes ako
+  `planned`/`paid`.
+
+#### 11.22.7 Poradie prác
+
+1. ✅ Backend: `red_flags.py` + `person_risk.py` + testy každej vetvy
+2. ✅ príkaz `risk_indicators_report`; ⏳ **distribúcie nenamerané** — beží na `dell`, viď 11.22.8
+3. ✅ API: `redFlags` na firemnom detaile a na osobe
+4. ✅ Frontend: sekcia `rizikove-indikatory` + panel na osobe + Privacy
+5. ✅ Doklad: výsledok a čísla v 11.22.8; **verdikt CI je v 11.22.9** — prvý beh
+   zelený nebol a testy v ňom vôbec nebežali
+
+#### 11.22.8 Výsledok F1 (2026-09-28)
+
+Overené na Macu, vo worktree `red-flags-biely-kon-karusel`:
+
+| kontrola | výsledok |
+|---|---|
+| `manage.py test` (celá backendová suita) | **1188 testov, `OK`**, exit 0, 57,0 s |
+| `npm test` (vitest) | **48 súborov, 443 testov, všetky prešli** |
+| `npm run typecheck` | čisté |
+| `npm run build` | 1675 modulov, 6,0 s |
+
+Frontendové kontroly bežali v obraze, ktorý používa CI, s **týmto** worktree
+namontovaným nad `/app` — nie cez `docker compose exec frontend`, ktorý patrí
+hlavnému checkoutu a testoval by iné súbory. To je tá istá pasca, ktorú
+`[[vite-dev-server-caches-prebundled-deps]]` opisuje pre dev server: príkaz,
+ktorý vyzerá ako kontrola, ale číta iný strom.
+
+Poznámka k prostrediu, aby sa nezamenila za regresiu: susedná session namerala
+v tej istej suite **6 chýb** v admin-render testoch (`Missing staticfiles
+manifest entry for 'unfold/fonts/inter/styles.css'`). Tu je lokálny build
+artefakt `staticfiles.json` prítomný (18 kB; celý `backend/staticfiles/` je
+gitignorovaný — `.gitignore:62`), takže beh je zelený. Chyby teda visia na
+chýbajúcom build artefakte, nie na kóde: tento krok nemení ani template, ani
+statický súbor.
+
+**`risk_indicators_report` nemal ani jeden test — a to je trieda chyby, ktorú
+tu riešime.** Príkaz je napísaný tak, aby bežal na `dell`, a **táto vývojová
+databáza nemá cistafirma schému vôbec**: spustenie proti DSN z hlavného
+checkoutu padá na `relation "Companies and SZCO" does not exist`. Prvé
+skutočné spustenie príkazu by teda bolo až na produkčných dátach. Doplnených
+je preto **5 testov** (`RiskIndicatorsReportTests`), ktoré príkaz púšťajú cez
+`call_command` nad testovacou databázou — tá schému má. Testujú tri veci, nie
+to, že to nespadne:
+
+- **nič sa nezapisuje** — a to na úrovni SQL, nie počtov riadkov. Počty by
+  sedeli aj príkazu, ktorý vloží a potom zmaže; `CaptureQueriesContext` preto
+  kontroluje, že v zázname nie je ani jeden `INSERT`/`UPDATE`/`DELETE`. Test má
+  **pozitívnu kontrolu** (namerané SQL > 0), inak by `writes == []` platilo aj
+  pre príkaz, ktorý vôbec nebežal; a overené je aj to, že detektor naozaj
+  chytí zápis — do príkazu som dočasne pridal `UPDATE` a test **spadol**
+  (`AssertionError: ... 'UPDATE "Companies and SZCO" SET "Názov UJ" = CONTROL' != []`),
+  potom som ho vrátil späť.
+- **čísla pochádzajú z pravidiel** — kumulatívny riadok „≥ 5 firiem" musí
+  povedať 1, keď má osoba päť firiem. To je to isté číslo, z ktorého sa bude
+  čítať `SERIAL_DIRECTOR_MIN`; report, ktorý by počítal inak než
+  `person_risk`, by prah nastavil z jedného čísla a aplikoval na iné.
+- **nemerateľné je pomenované** — firma bez závierky musí dať
+  `(nemerateľné na vzorke)`, nie prázdne miesto, ktoré sa číta ako „rozdelenie
+  je prázdne".
+
+Tým sa počet backendových testov zvýšil na **1188**; číslo v tabuľke vyššie je
+už po doplnení.
+
+**Tri odchýlky od návrhu, všetky vedomé.**
+
+**(a) `partial` sekcia má telo.** §11.22.3 navrhuje `status: 'partial'`, lenže
+registr sekcií poznal jedine `ReadySectionId` (`status: 'ready'`) a
+`SectionNotice` pre všetko ostatné — doslovné prečítanie plánu by teda
+**skrylo všetky indikátory** za oznam o tom, čo nemáme. `ReadySectionId` je
+preto `BodySectionId` (`'ready' | 'partial'`), pribudol `SectionStatusBanner`
+(výhradu kreslí **nad** telom, nie namiesto neho) a `SectionPanel` je jediný
+vlastník otázky „ako táto sekcia vyzerá"; dovtedy to bolo `? :` na dvoch
+miestach, ktoré sa mohli ticho rozísť. Skryť to, čo máme, za oznam o tom, čo
+nemáme, nie je čestnosť — je to ten istý tvar chyby, ktorý táto sekcia vznikla
+odstrániť. Zmena si vynútila aj opravu existujúceho testu: slučka v
+`frontend/pages/Company.test.tsx` tvrdila „vysvetli, prečo je každá sekcia,
+ktorú nevieme naplniť, prázdna" a filtrovala podľa `status !== 'ready'`; pre
+`rizikove-indikatory` by **prešla, hoci jej tvrdenie je nepravdivé** (sekcia
+prázdna nie je). Predikát je preto `!bodyFor(section.id)`.
+
+**(b) `nezname_funkcie` je pokrytie, nie pravidlo.** Tabuľka v §11.22.4 ho
+uvádza medzi osobnými pravidlami, ale próza hneď pod ňou hovorí opak („Neznáme
+funkcie sú **pokrytie, nie indikátor**"). Nasledovaná bola próza: `PERSON_RULES`
+má **tri** pravidlá (`serialny_statutar`, `odvetvova_rozptylenost`,
+`umrtnost_firiem`) a neznáma história sa vysvetľuje v pokrytí
+(`companies_function_state_unknown`) vetou, že je to medzera v našich dátach,
+nie zistenie o osobe. Tabuľkový riadok je tým neplatný.
+
+**(c) `umrtnost_firiem` počíta len zrušené firmy.** §11.22.4 mu pripisuje
+„podiel zrušených / s nedoplatkom / nespoľahlivých DPH"; implementované je len
+„zrušených". `total_debt` aj `tax_reliability` sú pre veľkú časť registra
+prázdne (218 143 riadkov bez indexu spoľahlivosti), takže by do menovateľa
+pustili firmy, o ktorých nevieme nič — a podiel z neznáma je číslo, ktoré sa
+číta ako nález. Zúženie je zámerné a je to **strata**, ktorú treba pomenovať,
+nie obísť; rozšírenie patrí do F3 spolu s kódom §81/§82.
+
+**Prahy zostávajú predbežné** a je to jediná vec, ktorá z F1 ostáva otvorená
+(bod 2 vyššie). Všetky konštanty nesú v kóde blok „Thresholds", ktorý hovorí,
+že znak (podiel, násobok, počet) pochádza z metodiky a **číslo je počiatočné,
+nie namerané**. `risk_indicators_report` je zámerne čistá agregácia toho, čo
+pravidlá hlásia v `evidence`, a nepočíta vlastnú prahovú logiku — inak by sa
+report a produkt mohli rozísť o tej istej firme, čo je presne trieda chyby,
+ktorú tu riešime. Kým sa čísla nenamerajú na `dell`, kód ani tento plán
+netvrdia, že prahy sú správne — tvrdia len, že sú označené za neoverené.
+
+#### 11.22.9 Verdikt CI — a chyba, ktorú lokálny beh nevidí (2026-09-28)
+
+Behy tejto vetvy. Prvé dva zelené neboli a **testy v nich vôbec nebežali**;
+220 je prvý, v ktorom bežali:
+
+| beh | commit | výsledok |
+|---|---|---|
+| 217 | `21988de` | `docs_audit` ❌ — testy preskočené |
+| 218 | `fd7d563` | `docs_audit` ❌ — testy preskočené |
+| 220 | `56d51e9` | ✅ všetkých 7 jobov, testy `success` |
+| 221 | `698575f` | ✅ (už len tento text) |
+
+Tabuľka tu končí zámerne: commit, ktorý dokumentuje CI, si vytvorí vlastný beh
+a dopočítavanie sa nedá zastaviť. Zaznamenané je to, čo nesie kód — beh 220.
+
+V oboch je stav jobov rovnaký a je dôležitejší než samotný pád:
+`backend_validate` ✅, `frontend_validate` ✅, `helm_render_validate` ✅,
+`helm_runtime_validate` ✅, **`docs_audit` ❌**, a `backend_tests` aj
+`frontend_tests` **preskočené**. `test` je nasledujúca stage, takže pád vo
+`validate` znamená, že sa testy nespustia vôbec — testy týchto commitov teda
+v CI nebežali **ani raz**. Dvojica 217 a 218 je zároveň celá história behov
+tejto vetvy: pre `15fdbc3` a `0b19443` neexistuje riadok pipelinu, čiže neboli
+hrotom žiadneho pushu.
+
+**Príčina bola moja vlastná veta v 11.22.8** — citácia `staticfiles.json` v
+`backend/staticfiles/`. Ten súbor vzniká až `collectstatic`om a
+je gitignorovaný (`.gitignore:62`), takže v čistom klone neexistuje; skript ho
+číta ako tvrdenie „ten súbor existuje" a má pravdu, keď povie, že neexistuje.
+
+**Prečo to lokálne nevidno — a to je celý nález.** Obe audity u mňa hlásili OK,
+lebo v pracovnom strome ten súbor *je*. Rozdiel je merateľný: `git archive`
+commitu do prázdneho adresára (teda to, čo vidí CI) naskenuje **66** `.md`
+súborov, kým pracovný strom **72** — a tých šesť je **celých** z
+`backend/staticfiles/` (Django admin si tam vezie `LICENSE.md` a `README.md`).
+Ten istý ignorovaný adresár je teda aj dôvod, prečo bol lokálny beh zelený, aj
+to, čo tú citáciu zabilo. Zelený `make docs-audit` v pracovnom strome **nie je
+kontrola**; kontrolou je až čistý export alebo CI. (Susedná session
+`fix-duplicate-persons-graph` mala tú istú chybu nezávisle od tejto vetvy.)
+
+**Oprava (`56d51e9`)** zhadzuje tvar s koreňom repa: `staticfiles.json` ostáva
+holým menom — pravidlo A skriptu preskakuje cesty bez `/` — a adresár je
+opísaný ako gitignorovaný s odkazom na `.gitignore:62`. Overené na čistom
+exporte: **425 citácií, 0 nálezov** (predtým 426 a 1 nález).
+
+**Verdikt:** beh 220 je zelený vo **všetkých siedmich** joboch a ani jeden z
+nich nemá `allow_failure` — `backend_tests` aj `frontend_tests` sú `success`,
+nie `skipped`. Overené zámerne na úrovni jobov, nie podľa stavu pipelinu:
+zelený pipelin so preskočenými testami vyzerá rovnako ako zelený pipelin s
+testami, ktoré prešli. Je to prvý beh tejto vetvy, v ktorom sa testy naozaj
+spustili, takže čísla z 11.22.8 (1188 backendových testov, 48 frontendových
+súborov) už nestoja len na mojom stroji. F1 je tým z CI strany uzavretá;
+otvorené ostáva nasadenie — manuálny krok na `dell`, ktorý musí počkať, kým
+`main` nesie obe vetvy (§11.23 je tá druhá).
+
+Z toho plynie jedna vec pre samotný audit, ktorú som **neurobil** a je to
+rozhodnutie, nie oprava: `check_inline_citations.py` sa pozerá len na
+filesystem, takže citáciu do gitignorovanej cesty **neuvidí nikdy** — a pritom
+je to cesta rozbitá pre každého, kto si repo naklonuje. Doplniť kontrolu proti
+`.gitignore` by tú triedu zavrelo; nechávam to na rozhodnutie, lebo je to
+zdieľaný skript a nie súčasť tejto funkcie.
+
+---
+
 ### 11.23 Jeden človek = jeden uzol, a graf sa dá prepnúť do histórie (2026-09-28)
 
 Zadanie bolo tri veci naraz a všetky tri majú jedného menovateľa: **obrazovka
@@ -9164,6 +9469,314 @@ brána „pred migráciou zálohu" neplatila.
 
 **Rollback** je `git checkout <predošlý commit> && docker compose up -d --build`
 na delle.
+
+---
+
+### 11.24 „Overiť" nájde aj osobu — a `_coverage()` prestane stáť 10 sekúnd (2026-09-28)
+
+> **Prečo 11.24 a nie 11.22.** Paralelná vetva `integ-redflags-graph` („Biely
+> kôň" a „karusel" → §11.22; graf osôb a história → §11.23) vznikla z toho
+> istého `4d57373` a obe čísla si nárokuje ona. V pláne nesmú byť dva §11.22,
+> takže táto sekcia je prečíslovaná — dohoda medzi session, 2026-09-28. Obsah
+> je nezmenený; mení sa len číslo.
+
+**Zadanie (Samuel, 2026-09-28):** po zadaní mena osoby do vyhľadávacieho poľa
+v monitoringu má „Overiť" nájsť tú osobu a dať nahliadnuť, kde všade pôsobí.
+„V našepkávači to funguje, ale väčšinou mu to trvá dlho, a keď kliknem na
+overiť, napíše mi → *Nenašli sa žiadne výsledky pre váš dopyt.*"
+
+**Sú to dve príčiny, nie jedna — a tá druhá je to „trvá dlho".**
+
+#### Príčina 1 — „Overiť" sa na osoby nikdy nepýta
+
+`Monitoring.tsx` volal pri podaní formulára **len** `api.searchCompanies`
+(pôvodne riadok 56; dnes je to volanie na riadku 90, v `Promise.all`).
+`api.searchPersons` volal jedine našepkávač (`SearchBar.tsx:166` — pôvodne 168).
+Nášepkávač teda osobu nájde a ponúkne — a to isté meno podané tlačidlom skončí
+vo vetve „žiadne výsledky", hoci odpoveď na osobu existuje a je o riadok nižšie.
+
+Registračné číslo (pôvodné riadky 57-63 `Monitoring.tsx`): jediný
+`searchCompanies`, a `else` vetva zapisuje
+`'Nenašli sa žiadne výsledky pre váš dopyt.'` bez toho, aby sa na osoby vôbec
+opýtala. Endpoint `/api/persons/?q=` je pritom verejný (`AllowAny`), bez
+throttlu, a vracia `id`, z ktorého sa stavia `/osoba/:id`.
+
+#### Príčina 2 — `_coverage()` stojí 10 z 10,5 sekundy
+
+Merané na **dell** (produkcia, `main`), `curl` na loopback backendu:
+
+| dopyt | `/api/persons/` | `/api/companies/` |
+|---|---|---|
+| `Trnka` | 9,84 s | 0,66 s |
+| `Novak` | 10,65 s | 0,88 s |
+| `Ján Novák` | 11,88 s | 0,81 s |
+| `ESET` | 12,50 s | 0,94 s |
+
+Rozklad toho istého dotazu v shelli backendu na delle (`manage.py shell`,
+len SELECT-y):
+
+| krok | čas |
+|---|---|
+| `_coverage()` | **10,09 s** |
+| `_coverage()` znova | **11,02 s** |
+| `persons.count()` | 0,14 s |
+| okno `[:300]` | 0,16 s |
+| `_cluster_persons(okno)` | 0,02 s |
+| `_relations_by_person(shown)` | 0,03 s |
+
+Čiže **hľadanie je 0,35 s a veta o pokrytí je zvyšok.** `EXPLAIN (ANALYZE)`
+ukázal prečo: `connections/views.py` (pôvodne riadok 44, dnes 57-59) písal
+`Company.objects.filter(...).distinct().count()`, a to Djangu vyrobí
+`SELECT DISTINCT` nad **všetkými 45 stĺpcami** firmy (`width=448`) — plán je
+`Unique → Incremental Sort` nad ~168 000 riadkov, `Execution Time: 11754 ms`.
+
+Je to **odchýlka, nie rozhodnutie**: všetkých päť ostatných pokrytí v projekte
+(`adminapi/views/dashboard.py:33`, `registers/views.py:113`, `registers/admin.py:742`,
+`companies/admin.py:923`, `registers/management/commands/financials_coverage.py:51`)
+počíta `values("company_id").distinct().count()` — úzku formu. `_coverage()` bolo
+jediné miesto, ktoré počítalo `DISTINCT` nad celým riadkom; `grep -rn
+"distinct()\.count()" backend --include="*.py"` dnes vracia šesť riadkov a všetkých
+šesť je úzkych.
+
+**Rovnaké číslo, 25× rýchlejšie** (merané na tej istej DB):
+
+| tvar | čas | výsledok |
+|---|---|---|
+| `.distinct().count()` (dnes) | 9,46 s | 43 195 |
+| `.values("id").distinct().count()` | 0,38 s | 43 198 |
+| `.aggregate(Count("id", distinct=True))` | 0,37 s | 43 198 |
+
+Rozdiel 3 riadkov **nie je chyba tvaru**: tabuľka je živá a sync do nej
+priebežne pridáva (za 20 minút 504 330 → 504 647 väzieb). V **jednom snapshot-e**
+(`SELECT` s oboma tvarmi naraz) sú totožné — 43 202 = 43 202, 43 204 = 43 204,
+43 206 = 43 206, pričom číslo medzi dvoma vykonaniami rastie o 2. Formy sú
+teda ekvivalentné a zmena je **čisto výkonová**.
+
+Dôsledok: `/api/persons/` klesne z ~10 s na ~0,7 s (0,35 s hľadanie + 0,45 s
+pokrytie), a to aj pre `GET /api/persons/<id>/` a pre krátky dopyt — `_coverage()`
+sa volá na troch miestach, dnes `connections/views.py:622`, `:677` a `:720`.
+
+#### Návrh a implementácia (frontend)
+
+1. `Monitoring.handleSearch` sa pýta **oboch** endpointov naraz
+   (`Promise.all`, chyby zvlášť — zlyhanie jedného nesmie vyprázdniť druhý,
+   presne ako v `SearchBar.tsx:161-170`).
+2. Rozhodnutie o presmere sa nemení pre firmy a je jedno pravidlo pre obe:
+   **práve jeden nález → ísť naň** (dnes to tak je pre firmu; nové je, že to
+   tak je aj pre osobu). Viac nálezov → zoznam. Počíta sa `firmy + osoby`, takže
+   jedna firma a jedna osoba naraz je zoznam, nie tichý výber jednej z nich.
+3. Výsledkový zoznam sa delí na **Firmy** a **Osoby u nás**, s vetou o pokrytí
+   pod osobnou skupinou — rovnaké rozdelenie ako v našepkávači, jeden riadok
+   osoby je **jeden komponent** (`PersonResultRow`), aby sa dve miesta nemohli
+   rozísť. Hlavička počíta obe skupiny spolu.
+4. Prázdny výsledok si ponechá vetu „Nenašli sa žiadne výsledky pre váš dopyt."
+   a **pribudne k nej veta o pokrytí** — bez nej je prázdno tvrdenie o osobe,
+   hoci náš graf drží 43 202 zo 631 990 firiem (6,8 %).
+5. Podtitulok stránky sa rozšíri o „alebo meno osoby" (placeholder to už
+   hovorí).
+
+Dve rozhodnutia, ktoré počas implementácie vyplávali a nie sú v pôvodnom
+návrhu:
+
+- **Zlyhaný request nie je odpoveď „nikto".** `personCoverage: null` znamená
+  dvoje — „endpoint neodpovedal" aj „odpovedal bez počtov" — a stránka podľa
+  toho musí povedať dve rôzne vety. Pribudol preto samostatný príznak
+  `personAnswered`; bez neho by zlyhaný request dostal vetu „V našich dátach
+  sme k tomuto menu nikoho nenašli.", čo je presne ten typ tichého zlyhania,
+  ktorý tento projekt rieši všade inde. (V `SearchBar` tá istá dvojznačnosť
+  zostáva — je to predchádzajúci stav, nie nová chyba; zaznamenané nižšie.)
+- **Veta o pokrytí sa v chybovej karte zobrazuje len vtedy, keď osobný endpoint
+  naozaj odpovedal.** Inak by tvrdenie o našich dátach vyslovil request, ktorý
+  k nim nikdy nedošiel.
+
+**Známe, neopravené (predchádzajúci stav, nie následok tejto zmeny):**
+`SearchBar` tú istú dvojznačnosť nerozlišuje — keď osobný request zlyhá a firemný
+nájde aspoň jednu firmu, dropdown pod „Osoby u nás" napíše *„V našich dátach sme
+k tomuto menu nikoho nenašli."*, hoci sa na naše dáta nikto neopýtal. Je to tá
+istá trieda chyby, ktorú na výsledkovej stránke rieši `personAnswered`; v
+`SearchBar` by si vyžiadala tretie pole v `SuggestionBundle` a jeho šesť testov,
+takže zostáva mimo tohto kroku.
+
+**Vedome nie:** živý register ORSR sa z výsledkovej stránky nevolá. Je to cudzí
+server s limitom 60 requestov/hodinu a v projekte má svoje miesto — na stránke
+osoby, za tlačidlom (`OrsrRegisterGroup`). Tlačidlo „Overiť" je vstup
+z klávesnice a nesmie sa stať druhou cestou k nemu.
+
+**Testy:** nový `frontend/pages/Monitoring.test.tsx` (9 testov) — osoba sama
+vedie na `/osoba/:id` (dnešná chyba), stránka sa pýta osobného endpointu
+**vlastným** volaním, viac nálezov vypíše zoznam s vetou o pokrytí, nič nenájde
+a povie pokrytie, jedna firma stále presmeruje (regresia), zlyhanie osobných dát
+nezmaže firemné výsledky (a neprevezme vetu „nikoho sme nenašli"), zlyhanie
+firemných nezmaže osobné, a keď zlyhá oboje, nezobrazí sa veta o pokrytí.
+K tomu `PersonResultRow.test.tsx` (5 testov) a `CoverageQueryShapeTests`
+(backend) — viď nižšie.
+
+**Dve pozitívne kontroly (aby testy neboli len zelené):**
+
+- *Frontend:* vrátenie presne pôvodnej chyby (`Promise.resolve(null)` namiesto
+  volania `api.searchPersons`) zhodí **5 z 9** testov `Monitoring.test.tsx`.
+  Prvý pokus o test „pýta sa na osoby" pritom pod mutáciou **prešel** — pretože
+  `expect(searchPersons).toHaveBeenCalled()` odpovedal našepkávač, ktorý sa pýtal
+  vždy. To je presne tá chyba, nie dôkaz opravy; test teraz hľadá volanie bez
+  `AbortSignal`, ktoré posiela len stránka.
+- *Backend:* `CoverageQueryShapeTests` so starým tvarom (`.distinct().count()`)
+  **padne** a vo výpise ukáže `SELECT DISTINCT` nad 44 stĺpcami; s úzkym tvarom
+  prejde. Celý `connections`: **100 testov OK** (Postgres 16, service kontajner
+  CI ekvivalent).
+
+**Overenie pred nasadením:** `npm test` (440 testov, 48 súborov), `npm run
+typecheck`, `npm run build` — všetky tri zelené.
+
+#### Nasadenie na `dell` (2026-09-28, `b9ac4a3`)
+
+Recept `docs/DEVOPS_CICD.md:210`: na delle `git pull gitlab-home main` →
+`docker compose up -d --build` → `docker compose exec backend python manage.py
+migrate`. dellský reflog to ukazuje ako dva kroky toho istého dňa:
+`63603ab` (17:06) → `ed726ad` (18:45) → **`b9ac4a3`** (19:09).
+
+**Rozsah:** `63603ab..b9ac4a3` je **16 commitov** v **33 súboroch**
+(`git rev-list --count`; `git diff --name-only | wc -l`). Idú v nich aj §11.22
+(`15fdbc3`) a §11.23 (`718bccf`) aj ich spoločný merge `ed726ad`. Migrácie
+v rozsahu **žiadne** (`git diff --name-only 63603ab..b9ac4a3 --
+'backend/*/migrations/*'` je prázdne), takže brána „pred migráciou zálohu"
+neplatila.
+
+**Nenahraditeľného volume sa rekreácia nedotkla** — a to je na tom recepte to
+jediné, čo ho naozaj chráni. `db` aj `redis` boli po nasadení `Up 2 days`, kým
+`backend` a päť workerov `Up 2 hours` a `frontend` `Up About an hour`.
+
+**Čo bolo pomalé a čo je teraz** (`curl` na loopback backendu na delle):
+
+| cesta | pred (`63603ab`) | po (`b9ac4a3`) |
+|---|---|---|
+| `/api/persons/?q=Trnka` | 9,8–12,5 s (tabuľka vyššie) | **1,21 / 1,23 / 1,21 s** |
+| tá istá cesta cez frontend proxy | — | **200 za 1,15 s** |
+
+Odpoveďou je **44 ľudí z 57 záznamov** (`truncated: false`) a pokrytie
+`43 609 / 631 990`. Nasadený bundle je `index-zUjfcDL9.js` a obsahuje
+`createPortal` 4× (oprava našepkávača z `b9ac4a3`), `/persons/` 6× a vetu
+„Osoby máme pre" — čiže do produkcie sa naozaj dostalo UI z tohto oddielu,
+nie len backend.
+
+**CI:** behy **224**, **225** a **226** `success` a v každom všetkých **7
+jobov** `success` s `allow_failure = false` — `backend_validate` teda nespadol
+a `test` stage sa nepreskočil.
+
+**Nález, ktorý vyzeral ako chyba a nie je.** `/api/persons/?q=Trnka` nemá vo
+výsledku kľúč `detail`. Pozitívna kontrola na tom istom nasadení: `?q=a`
+(krátky dopyt) `detail` **má** — `"Zadajte aspoň 2 znaky."` — a `?q=Novak`
+`detail` nemá, ale má `role`. Kľúč teda chýba preto, že ho nesie iná vetva
+odpovede, nie preto, že by ho serializácia stratila. Bez tej kontroly by
+„kľúč chýba" vyzeralo ako regresia.
+
+**Vedome nie:** `is_active: null` (trojhodnotový príznak) sa v produkčných
+dátach zámerne nehľadal. Drží ho unit test
+(`PersonSearchAPITests.test_three_valued_is_active_survives_the_serializer`);
+naháňať ho dopytom do živých dát je otázka bez následku — ak hodnota nastane,
+frontend ju aj tak zobrazí ako „nevieme", a ak nenastane, nič to nemení.
+
+**Rollback** je `git checkout 63603ab && docker compose up -d --build`.
+
+#### Nasadenie opravy cache (2026-09-28, `a636b91`)
+
+**Nález.** `OrsrPersonSearchView` volal `cache.get` aj `cache.set` bez ochrany.
+Výpadok Redisu tak na **verejnom** endpointe znamenal 500 — hoci o riadok nižšie
+je scrape, ktorý je tou skutočnou odpoveďou a cache z neho len odstraňuje
+opakovanú prevádzku. Správne správanie je „pomalšie", nie „pokazené"; mierená
+degradácia, ktorú výnimka prebila. (Zámerný opak je `/healthz`
+v `backend/backend/urls.py:34`, ktorý pri nedostupnom Redise **schválne** vracia
+503 — zdravotná sonda má ten výpadok ohlásiť. Odtiaľ je v docstringu view
+aj odkaz na ten rozdiel.)
+
+**Oprava** (`f2e3053`, `backend/connections/views.py`, súbor má teraz 1276
+riadkov):
+
+- `import redis` a na oboch miestach `except redis.exceptions.RedisError` —
+  `cache.get` (@1156) sa chápe ako **miss**, `cache.set` (@1186) sa **ignoruje**;
+  odpoveď je v tej chvíli už správna, len ďalší volajúci zaplatí.
+- `_report_cache_outage` (@1098) s modulovým príznakom `_cache_outage_logged`
+  (@1095): prvý výpadok `logger.exception` na ERROR, každý ďalší v tom istom
+  procese na DEBUG. Je to ten istý idiom a z toho istého dôvodu ako
+  `companies.throttles.PublicRateThrottle` — inak by výpadok vyrobil jednu
+  traceback na request a tá prvá, jediná, ktorá hovorí niečo nové, by sa
+  utopila. Zároveň to nie je tichý failure: prvý výskyt je ERROR s tracebackom.
+- Docstring view dostal vetu, že výpadok cache stojí latenciu, nie endpoint
+  (@1127).
+
+**Prečo `RedisError`, a nie `Exception`.** Úzky catch je tu podstatný: skutočná
+chyba v kóde má zostať 500. Že úzky catch pokrýva oba tvary výpadku, je overené
+na delle v pinnutej redis-py 8.1.0 — `redis.exceptions.ConnectionError` aj
+`TimeoutError` sú jej podtriedy.
+
+**Testy** (`backend/connections/tests.py`, `OrsrPersonSearchCacheOutageTests`
+@1053; štyri): `test_an_unreadable_cache_is_a_miss_not_a_500` (@1092),
+`test_the_answer_survives_a_failed_write` (@1101),
+`test_a_live_cache_still_serves_the_second_caller_from_it` (@1117),
+`test_the_outage_is_reported_at_error` (@1128). Tretí je **pozitívna kontrola**:
+že endpoint vráti 200, by prešlo aj keby bola cache celá odpojená, takže
+o `_WorkingCache` sa testuje, že druhý volajúci naozaj dostane `cached: true`.
+Štvrtý overuje, že výpadok je hlásený, nie prehltnutý — trieda defektov, ktorá
+je v tomto repozitári chyba.
+
+**Tá istá trieda je inde a zámerne sa tu nerieši:** `cache.get`/`cache.set` bez
+ochrany zostávajú v `companies/services/pdf_report.py:106/146`,
+`adminapi/views/companies.py:345/367/386` a `adminapi/views/sync.py:502/579`.
+Toto zadanie bolo o verejnom endpointe; `adminapi` je personálna cesta
+a `pdf_report` je generovanie reportu, takže dopad výpadku je iný a patrí to
+samostatnému rozhodnutiu, nie tichej rozširovačke rozsahu.
+
+**Nasadenie.** Ten istý recept (`git pull gitlab-home main` → `docker compose
+up -d --build` → `migrate`), HEAD **`a636b91`**, `migrate` vrátil „No migrations
+to apply." `db` aj `redis` boli po nasadení **`Up 2 days`** a `grafana`
+s `prometheus` tiež — rekreovali sa len aplikačné kontajnery. `up -d --build`
+nikdy nedostal `-v`.
+
+Dva commit-y v rozsahu sú užívateľove a **neboli postavené na aktuálnom maine**:
+`d900739` (podtitul `predstavenstvo`) sedel na `4d57373` a `f73eece` (zarovnanie
+obrázka v README) na `d900739` — teda oba pred merge `ed726ad`
+(`git merge-base --is-ancestor b9ac4a3 d900739` aj `… f73eece` → 1). Preto boli
+prenesené cherry-pickom na `b9ac4a3`, čo im dalo nové SHA — `5143020`
+a `a636b91` — a push do `main` bol potom čistý fast-forward. Keby sa bol pushol
+pôvodný `d900739`, nebol by to fast-forward a `main` by sa rozišiel.
+
+**Overenie na delle** (`curl` na loopback backendu):
+
+| cesta | výsledok |
+|---|---|
+| `/api/persons/?q=Trnka` (3×) | 200 za **1,30 / 1,18 / 1,83 s** |
+| tá istá odpoveď | **44 ľudí z 57 záznamov**, pokrytie `43 609 / 631 990` |
+| `/api/persons/orsr/?q=Trnka` (opravený) | 200 za **0,65 s**, 20 hits / 160, `error: ''` |
+| tá istá cesta cez frontend proxy | 200 za **1,24 s** |
+
+**Čo sa u nás overiť nedalo a čím je to kryté.** Degradovaná vetva sa
+v produkcii **zámerne nespustila** — vyžadovala by zastaviť `redis`, a to je na
+produkčnom hoste neprijateľné (zastavilo by to aj frontu a beat). Kryjú ju
+štyri unit testy, ktoré v CI naozaj bežia (nižšie), nie ručné cvičenie na delle.
+
+**CI:** behy **228** (`f2e3053`) a **229** (`a636b91`) na vetve
+`deploy/person-search-cache` — v každom všetkých **7 jobov** `success`
+s `allow_failure = false`, vrátane `backend_tests` na Postgres 16 + Redis 7, takže
+nové testy sa naozaj vykonali. Behy **224**, **225**, **226** na `main` majú tiež
+7/7 `success`. Beh **230** (`a636b91` na `main`, teda náš nasadzovací push) bol
+v čase písania tohto záznamu ešte v behu (`backend_validate` `success`, zvyšok
+`pending`/`created`) — pre kód, ktorý je nasadený, je ale rozhodujúci už beh
+**229**, ktorý bežal na tom istom SHA; 230 len opakuje to isté pod iným `ref`.
+
+**Operačná brána po nasadení:** `make ops-check` na delle vrátil
+**`Operational controls: SATISFIED`** (exit 0) — najnovšia záloha 1 deň stará
+a jej checksum sedí s manifestom, off-site replika overená a zašifrovaná na
+zdroji, týždenný job aj RUZ keeper bežia. Je to read-only brána: nič neštartuje
+ani nezapisuje, takže sa dala spustiť aj na produkcii.
+
+Metodická poznámka k tomu overeniu: `p_ci_builds` **nemá** `sha` a jeho
+`commit_id` je `bigint`, ktorý sa s `p_ci_pipelines.sha` porovnať nedá
+(`operator does not exist: bigint = character varying`); tabuľka `p_ci_commits`
+neexistuje. Job rows sa dajú spoľahlivo dohľadať cez
+`p_ci_builds.stage_id → p_ci_stages.pipeline_id → p_ci_pipelines.id`. Prvý
+watcher to skúsil zlým joinom a jeho výpis jobov bol **ticho prázdny**, kým
+status pipelines bol správny — prázdny výsledok vyzeral ako hotová vec.
+
+**Rollback** je `git checkout b9ac4a3 && docker compose up -d --build`.
 
 ---
 

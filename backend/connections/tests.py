@@ -1,5 +1,8 @@
+import re
 from datetime import date
+from unittest import mock
 
+import redis
 from django.db import connection
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -7,6 +10,9 @@ from rest_framework.test import APITestCase
 
 from companies.models import Company
 from registers.models import OrsrCompanyProfile
+from registers.scrapers.orsr_person_search import OrsrPersonHit, OrsrPersonResult
+from . import views
+from .views import _coverage
 from .models import (
     Person,
     PersonCompanyRelation,
@@ -1025,6 +1031,111 @@ class PersonSearchAPITests(APITestCase):
         self.assertEqual(coverage["companies_total"], 1)
 
 
+class _WorkingCache:
+    """Just enough of `django.core.cache.cache` to tell a hit from a miss.
+
+    A bare `Mock` cannot do this: `get` would return the same thing every time,
+    so "the second caller was served from cache" would be untestable -- and
+    with it the question of whether the outage tests below exercise a path the
+    endpoint actually takes.
+    """
+
+    def __init__(self):
+        self.store = {}
+
+    def get(self, key, default=None):
+        return self.store.get(key, default)
+
+    def set(self, key, value, timeout=None):
+        self.store[key] = value
+
+
+class OrsrPersonSearchCacheOutageTests(APITestCase):
+    """A dead cache costs latency here, not the endpoint.
+
+    `/api/persons/orsr/` consults the cache before it asks the register, and it
+    did so unprotected: an unreachable Redis raised straight out of the view.
+    That is the wrong branch to lose, because the whole design of this view is
+    degradation -- the scrape one line below already carries `result.error`
+    into the payload rather than failing, and the cache is only there to save
+    repeat traffic. The failure mode has to be the register answering slowly,
+    never a 500.
+    """
+
+    def setUp(self):
+        # Module-level and never reset in production, where it buys one
+        # traceback per outage instead of one per request. Here it would leak
+        # the first test's ERROR into the next test's DEBUG.
+        views._cache_outage_logged = False
+
+        patcher = mock.patch("registers.scrapers.orsr_person_search.OrsrPersonSearch")
+        self.addCleanup(patcher.stop)
+        self.scraper = patcher.start()
+        self.scraper.return_value.search.return_value = OrsrPersonResult(
+            hits=[
+                OrsrPersonHit(
+                    person_name="Miroslav Trnka",
+                    company_name="Test Firma s.r.o.",
+                )
+            ],
+            total=1,
+            source_url="https://www.orsr.sk/hladaj_osoba.asp",
+        )
+
+    def _dead_cache(self):
+        """Every operation raises, the way a stopped Redis does."""
+        dead = mock.Mock()
+        dead.get.side_effect = redis.exceptions.ConnectionError("redis is down")
+        dead.set.side_effect = redis.exceptions.ConnectionError("redis is down")
+        return mock.patch("connections.views.cache", dead)
+
+    def test_an_unreadable_cache_is_a_miss_not_a_500(self):
+        with self._dead_cache():
+            response = self.client.get("/api/persons/orsr/", {"q": "Trnka"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertNotIn("cached", response.json())
+        self.scraper.return_value.search.assert_called_once_with("Trnka")
+
+    def test_the_answer_survives_a_failed_write(self):
+        # The scrape succeeded, so this response is already correct; only the
+        # next caller pays. Losing it to an exception would be gratuitous.
+        half_dead = mock.Mock()
+        half_dead.get.return_value = None
+        half_dead.set.side_effect = redis.exceptions.ConnectionError("redis is down")
+
+        with mock.patch("connections.views.cache", half_dead):
+            response = self.client.get("/api/persons/orsr/", {"q": "Trnka"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [hit["person_name"] for hit in response.json()["hits"]],
+            ["Miroslav Trnka"],
+        )
+
+    def test_a_live_cache_still_serves_the_second_caller_from_it(self):
+        # The positive control for the two tests above: if the view stopped
+        # consulting the cache, both would still pass while proving nothing.
+        with mock.patch("connections.views.cache", _WorkingCache()):
+            first = self.client.get("/api/persons/orsr/", {"q": "Trnka"})
+            second = self.client.get("/api/persons/orsr/", {"q": "Trnka"})
+
+        self.assertNotIn("cached", first.json())
+        self.assertTrue(second.json()["cached"])
+        self.scraper.return_value.search.assert_called_once_with("Trnka")
+
+    def test_the_outage_is_reported_at_error(self):
+        # A degradation nobody can see is the defect class this repo keeps
+        # finding: the endpoint would read healthy while scraping orsr.sk on
+        # every keystroke.
+        with self.assertLogs("connections.views", level="ERROR") as caught:
+            with self._dead_cache():
+                self.client.get("/api/persons/orsr/", {"q": "Trnka"})
+
+        self.assertIn("Cache is unavailable (get)", caught.output[0])
+
+
 class CompanyPersonFusionTests(APITestCase):
     """One human, one node -- even when the register wrote them twice.
 
@@ -1641,3 +1752,64 @@ class CompanyPersonsAPITests(APITestCase):
         self.assertEqual(data["groups"], [])
         self.assertEqual(data["periods"], [])
         self.assertEqual(data["name"], self.company.nazov_UJ)
+
+
+class CoverageQueryShapeTests(TestCase):
+    """`_coverage()` must count ids, not whole company rows.
+
+    This is a test of a query's *shape*, which is usually a smell -- it is here
+    because the defect it guards is invisible to every other kind of test. Both
+    forms return the same number, so `test_coverage_is_reported_with_every_answer`
+    passes either way; the difference is that one of them makes Postgres sort
+    every column of every matched company row.
+
+    Measured on production 2026-09-28: `SELECT DISTINCT <all 45 columns>` over
+    ~168k rows took 9.5-11.8 s per call, and the call sits in the response path
+    of the person search, the person detail page and the short-query refusal.
+    Counting distinct ids took 0.37 s and is the form the other five coverage
+    counts in this project already use.
+
+    A rewrite that is fast but shaped differently is fine and will pass: what is
+    forbidden is a DISTINCT that selects more than one expression.
+    """
+
+    def test_no_coverage_query_distincts_over_a_whole_row(self):
+        Company.objects.create(ruz_id=1, ico="50059959", nazov_UJ="Test Firma")
+
+        with CaptureQueriesContext(connection) as captured:
+            _coverage()
+
+        wide = [
+            sql
+            for sql in (q["sql"] for q in captured.captured_queries)
+            if self._distinct_selects(sql)
+        ]
+
+        self.assertEqual(wide, [], "DISTINCT must be over ids, not whole rows")
+
+    @staticmethod
+    def _distinct_selects(sql: str) -> list[str]:
+        """The expressions of every `SELECT DISTINCT ... FROM` in `sql`."""
+        selects = []
+        for match in re.finditer(
+            r"SELECT\s+DISTINCT\s+(.*?)\s+FROM\s", sql, re.IGNORECASE | re.DOTALL
+        ):
+            # Split on commas that are not inside parentheses: `AS "col1"` and
+            # `COUNT(DISTINCT x)` both appear in this project's SQL.
+            body = match.group(1)
+            depth = 0
+            expression = ""
+            parts = []
+            for char in body:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                if char == "," and depth == 0:
+                    parts.append(expression)
+                    expression = ""
+                    continue
+                expression += char
+            parts.append(expression)
+            selects.append([p.strip() for p in parts if p.strip()])
+        return [s for s in selects if len(s) > 1]

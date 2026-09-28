@@ -1,11 +1,10 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import type { PersonCoverage, PersonSummary } from '../types';
-import { personPath } from '../constants';
 import { PersonCoverageNote } from './person/PersonCoverageNote';
-import { RoleStateBadge } from './person/RoleStateBadge';
+import { PersonResultRow } from './person/PersonResultRow';
 
 /**
  * One debounced answer, both halves of it.
@@ -32,6 +31,16 @@ const EMPTY_BUNDLE: SuggestionBundle = {
   personCoverage: null,
   personDetail: null,
 };
+
+/**
+ * The distance between the pill and the menu it drops, in pixels.
+ *
+ * It used to be a `mt-2` on the menu itself -- the same 8 px. The menu is no
+ * longer a child of the box it drops from, so the gap is a number in a `top`
+ * now instead of a utility class, and it is named here so that it stays one
+ * number rather than one per variant.
+ */
+const MENU_GAP_PX = 8;
 
 /**
  * Two sizes of one box, with one behaviour.
@@ -65,16 +74,16 @@ const VARIANT_STYLES = {
     // outer edge -- exactly what the old `right-2` gave on the desktop, where
     // the wrapper has no padding at all.
     button: 'right-1.5 py-2 sm:py-3 px-4 sm:px-8 text-sm sm:text-base',
-    dropdown: 'mt-2 mx-4 sm:mx-0',
     placeholder: 'Zadajte IČO, názov firmy alebo meno osoby...',
     label: 'Overiť',
   },
   compact: {
     // No side padding here on purpose: this one is placed inside a page that
     // already has its own gutter, and a second one would inset the box from the
-    // content it stands above. The hero's `px-4` is compensated for in its own
-    // dropdown offsets, which is why the two wrappers cannot simply share a
-    // class list.
+    // content it stands above. The two wrappers therefore cannot share a class
+    // list -- but nothing downstream depends on that difference any more, since
+    // the suggestion menu is measured from the pill itself (`placeMenu`) rather
+    // than from either wrapper.
     wrapper: 'relative w-full',
     frame: 'border border-gray-300 dark:border-slate-700 rounded-full shadow-sm',
     icon: 'pl-4 pr-2 text-base',
@@ -84,7 +93,6 @@ const VARIANT_STYLES = {
     // a trapdoor into a permanently scaled page. The desktop size is unchanged.
     input: 'text-base sm:text-sm py-2.5 pr-24',
     button: 'right-1 py-2 px-4 text-sm',
-    dropdown: 'mt-2',
     placeholder: 'Hľadať inú firmu alebo osobu…',
     label: 'Hľadať',
   },
@@ -101,21 +109,73 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const [suggestions, setSuggestions] = useState<SuggestionBundle>(EMPTY_BUNDLE);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pillRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const isFocused = useRef(false);
   const autocompleteRequestRef = useRef<{ query: string; controller: AbortController } | null>(null);
   const autocompleteCacheRef = useRef(new Map<string, SuggestionBundle>());
+
+  /**
+   * Where the suggestion menu is drawn, in *document* coordinates.
+   *
+   * `null` means "not placed yet", and nothing is drawn then. The menu is a
+   * child of `document.body` rather than of this component, and that is the
+   * whole point of the field: as a child of the pill it was laid out inside
+   * whatever box the page put around the search field, so any ancestor carrying
+   * `overflow: hidden` cut it off. Home's hero section carried one, and it hid
+   * the bottom of the menu -- measured in a real browser, not deduced: 228 px of
+   * 422 on a 1280 px window and 276 px on a 393 px phone, with the next
+   * section's card painted exactly where the menu's own rows should have been
+   * (`document.elementFromPoint` inside the menu's own rectangle returned
+   * `div.app-card.p-8.flex`, which is the "another part of the page is drawn
+   * over it" half of the report).
+   *
+   * Anchored to the pill in document coordinates rather than to the viewport,
+   * which is what keeps this free of a scroll handler: the menu scrolls with the
+   * page it belongs to, exactly as the pill does.
+   */
+  const [menuBox, setMenuBox] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const placeMenu = useCallback(() => {
+    const pill = pillRef.current;
+    if (!pill) return;
+    const rect = pill.getBoundingClientRect();
+    setMenuBox({
+      top: rect.bottom + window.scrollY + MENU_GAP_PX,
+      left: rect.left + window.scrollX,
+      width: rect.width,
+    });
+  }, []);
+
+  useEffect(() => {
+    const open =
+      showSuggestions && (suggestions.companies.length > 0 || suggestions.persons.length > 0);
+    if (!open) {
+      setMenuBox(null);
+      return;
+    }
+    placeMenu();
+    // A resize is the only thing that moves the pill in document coordinates.
+    // Anything else that shifts the page lands on the next keystroke, which
+    // re-runs this effect because `suggestions` is a fresh object.
+    window.addEventListener('resize', placeMenu);
+    return () => window.removeEventListener('resize', placeMenu);
+  }, [showSuggestions, suggestions, placeMenu]);
 
   useEffect(() => {
     setQuery(initialIco);
   }, [initialIco]);
 
-  // Handle click outside to close suggestions
+  // Handle click outside to close suggestions. Two refs, because the menu is
+  // no longer a descendant of the root: a click inside the portalled menu is
+  // still a click inside this component.
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setShowSuggestions(false);
-      }
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setShowSuggestions(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -225,7 +285,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const showPersons = persons.length > 0 || companies.length > 0;
 
   return (
-    <div className={styles.wrapper} ref={dropdownRef}>
+    <div className={styles.wrapper} ref={rootRef}>
       <form onSubmit={handleSubmit}>
         {/* `relative` is what makes this box -- the visible pill -- the containing
             block for the absolutely positioned button below. Without it the
@@ -234,7 +294,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             past the pill's right edge (measured on Home at 393 px). With it, the
             offset is measured from the pill at every width, which is also why
             the button no longer needs a `sm:` variant. */}
-        <div className={`relative flex items-center bg-white dark:bg-slate-900 overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300 ${styles.frame}`}>
+        <div ref={pillRef} className={`relative flex items-center bg-white dark:bg-slate-900 overflow-hidden focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200 dark:focus-within:ring-blue-900 transition-all duration-300 ${styles.frame}`}>
           <i className={`fas fa-search text-gray-400 ${styles.icon}`}></i>
           <input
             // One box per page, so one id. `name` is what Chrome asks for
@@ -264,9 +324,22 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         </div>
       </form>
 
-      {/* Suggestions Dropdown */}
-      {showSuggestions && hasResults && (
-        <div className={`absolute left-0 right-0 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-[100] animate-fade-in ${styles.dropdown}`}>
+      {/* The suggestion menu, portalled to `document.body` so that no ancestor
+          of the search box can clip it and no page stacking context can decide
+          whether it is on top. It is positioned from the pill in document
+          coordinates, so it tracks the box it drops from without a scroll
+          handler -- see `menuBox`.
+
+          `absolute` and `z-[100]`: as a child of `body` it competes with the
+          sticky header (`z-index: 50` in `.header-wrapper`) and the Vanta
+          canvas (`z-index: 0`), and wins against both. The `overflow-hidden`
+          here is its own, clipping its rounded corners, not an ancestor's. */}
+      {showSuggestions && hasResults && menuBox && createPortal(
+        <div
+          ref={menuRef}
+          style={{ top: menuBox.top, left: menuBox.left, width: menuBox.width }}
+          className="absolute bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-[100] animate-fade-in"
+        >
           <div className="max-h-[420px] overflow-y-auto">
             {companies.length > 0 && (
               <>
@@ -310,32 +383,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 </p>
 
                 {persons.length > 0 ? (
-                  persons.map((person) => {
-                    const first = person.companies[0];
-                    const rest = person.companies.length - 1;
-                    return (
-                      <Link
-                        key={person.id}
-                        to={personPath(person.id)}
-                        onClick={() => setShowSuggestions(false)}
-                        className="px-6 py-3 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex justify-between items-center gap-4 group transition-colors border-b border-gray-100/70 dark:border-slate-800/50 last:border-0"
-                      >
-                        <div className="flex-grow min-w-0">
-                          <p className="font-bold text-gray-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                            {person.name}
-                          </p>
-                          {first && (
-                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                              {first.role_display ? `${first.role_display} · ` : ''}
-                              {first.name}
-                              {rest > 0 ? ` a ďalšie ${rest}` : ''}
-                            </p>
-                          )}
-                        </div>
-                        {first && <RoleStateBadge isActive={first.is_active} />}
-                      </Link>
-                    );
-                  })
+                  persons.map((person) => (
+                    <PersonResultRow
+                      key={person.id}
+                      person={person}
+                      onClick={() => setShowSuggestions(false)}
+                      className="border-b border-gray-100/70 px-6 py-3 last:border-0 dark:border-slate-800/50"
+                    />
+                  ))
                 ) : (
                   <p className="px-6 py-3 text-xs text-gray-500 dark:text-gray-400">
                     {suggestions.personDetail ||
@@ -349,7 +404,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event';
 import {Route, Routes, useLocation, useParams} from 'react-router-dom';
 import {Company} from './Company';
 import {Monitoring} from './Monitoring';
-import {COMPANY_SECTIONS} from '../companySections';
+import {COMPANY_SECTIONS, getSection} from '../companySections';
+import {bodyFor} from '../components/company/sectionBodies';
 import {renderWithProviders} from '../test/testUtils';
 import type {Company as CompanyType} from '../types';
 
@@ -119,7 +120,16 @@ describe('Company page', () => {
         // empty panel leaves the reader guessing whether the firm has no data or
         // we have no feature, and *every* section without a body has to say
         // which. Naming one of them tested the example, not the rule.
-        const unfilled = COMPANY_SECTIONS.filter((section) => section.status !== 'ready');
+        //
+        // The predicate is the body map and not the status, which it used to be.
+        // `status !== 'ready'` was a good enough stand-in while only `ready`
+        // sections had bodies; `rizikove-indikatory` is `partial` and draws one,
+        // and it is *not* an empty panel -- it prints its note above a full
+        // table, so the loop's claim ("says why it is empty") would be false
+        // about it even though the assertion would still pass. Asking `bodyFor`
+        // asks the question the test means, through the same owner the views
+        // use.
+        const unfilled = COMPANY_SECTIONS.filter((section) => !bodyFor(section.id));
         // If this ever hits zero the loop below proves nothing, and the honest
         // thing is to delete this test rather than let it pass vacuously.
         expect(unfilled.length).toBeGreaterThan(0);
@@ -158,6 +168,41 @@ describe('Company page', () => {
             await screen.findByText(/stahujú priamo odtiaľto, z registra účtovných závierok/),
         ).toBeInTheDocument();
         expect(screen.queryByText('Zatiaľ nemáme')).not.toBeInTheDocument();
+    });
+
+    it('draws a partial section its body and keeps the reason above it', async () => {
+        // The new case, and the one the two tests above do not cover: a section
+        // that has some of its data. Before this, `partial` was in the same bin
+        // as `planned` -- status was the only thing consulted, and anything not
+        // `ready` got a notice and no body, so marking this section `partial`
+        // would have hidden every indicator behind a sentence about the ones we
+        // lack. Both halves have to be on the page at once, and in that order:
+        // the caveat before the first number it qualifies.
+        const partial = getSection('rizikove-indikatory')!;
+        expect(partial.status).toBe('partial');
+        expect(bodyFor(partial.id)).toBeDefined();
+
+        renderWithProviders(
+            <Routes>
+                <Route path="/firma/:ico/:sekcia" element={<Company/>}/>
+            </Routes>,
+            {route: `/firma/12345678/${partial.id}`},
+        );
+
+        expect(await screen.findByText(partial.note)).toBeInTheDocument();
+        expect(screen.getByText('Máme časť')).toBeInTheDocument();
+        // A sentence only the body has, so this cannot pass on the banner alone.
+        expect(
+            screen.getByText(/Indikátory sa pre túto firmu nepodarilo načítať/),
+        ).toBeInTheDocument();
+
+        // And the order, read off the DOM rather than assumed: the banner is
+        // what tells the reader the table below it covers part of the register.
+        const note = screen.getByText(partial.note);
+        const body = screen.getByText(/Indikátory sa pre túto firmu nepodarilo načítať/);
+        expect(
+            note.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
     });
 
     it('names which of the four reasons left the balance sheet empty', async () => {

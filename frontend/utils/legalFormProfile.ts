@@ -73,7 +73,6 @@ const PROFILES: Record<string, LegalFormProfile> = {
         predstavenstvo: {
             title: 'Predstavenstvo',
             icon: 'fa-users',
-            subtitle: 'Štatutárny orgán akciovej spoločnosti',
             emptyLabel: 'Žiadni členovia predstavenstva',
         },
         dozornaRada: {

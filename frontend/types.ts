@@ -88,6 +88,13 @@ export interface Company {
   debts: Debt[];
   vatStatus: VatStatus;
   riskScore: RiskScore;
+  /** Risk *indicators*, deliberately beside `riskScore` and not inside it:
+   *  adding twelve rules to the score would move every number in the product
+   *  at once, and the two answer different questions -- "how much attention"
+   *  versus "what did we find". `undefined` on a response mapped before this
+   *  field existed, which the section renders as a notice rather than as an
+   *  empty table. */
+  redFlags?: CompanyRiskIndicators;
   financials: Financials[];
   financialsState: FinancialsState;
   executives: Executive[];
@@ -727,6 +734,12 @@ export interface PersonDetail {
     members: PersonMember[];
     companies: PersonRelation[];
     coverage: PersonCoverage | null;
+    /** Observations about this person's company footprint, computed over the
+     *  whole cluster and never over one row. `undefined` on a response mapped
+     *  before the field existed; the panel renders a notice then, not an empty
+     *  panel. Snake_case because this endpoint's own convention is
+     *  (`person_ico`, `birth_date`) -- it is not a `Company`. */
+    red_flags?: PersonRiskIndicators;
 }
 
 /**
@@ -881,4 +894,92 @@ export interface NotificationPreferences {
     onDebtChange: boolean;
     onStatusChange: boolean;
     onExecutiveChange: boolean;
+}
+
+// --- RISK INDICATORS ---
+
+/**
+ * One risk rule's outcome.
+ *
+ * Three states, not two, for the same reason `RiskScorePart.delta` has three:
+ * a rule that looked and found nothing and a rule that could not look are
+ * different facts, and rendering the second as an all-clear claims a look that
+ * never happened. `detail` and `reason` are therefore mutually exclusive --
+ * every state carries exactly one of them, and these types say so by allowing
+ * both to be null rather than by pretending one is always there.
+ *
+ * `label`, `detail` and `reason` are written by the server. The frontend picks
+ * the colour and nothing else: two people writing the same sentence in two
+ * places is how one fact ends up stated two different ways.
+ */
+export interface RiskFlag {
+    code: string;
+    label: string;
+    /** How much attention a *found* pattern deserves. A colour input, not a
+     *  verdict -- what the pattern means is the section's intro, written once. */
+    severity: 'low' | 'medium' | 'high';
+    state: 'fired' | 'clear' | 'unassessed';
+    /** What was found. `null` when the rule could not be assessed. */
+    detail: string | null;
+    /** Why it could not be assessed. `null` when it was. */
+    reason: string | null;
+    /** The raw numbers behind the outcome, for a reader who wants to check. */
+    evidence: Record<string, any>;
+}
+
+/** How many rules ended in each state. Never summed into a single score: one
+ *  number is the only thing a reader would carry away, and it would be an
+ *  accusation dressed as arithmetic. */
+export interface RiskFlagCounts {
+    fired: number;
+    clear: number;
+    unassessed: number;
+}
+
+/** What the company rules were able to look at. Printed beside the flags,
+ *  because the honest reading of "no flags" depends entirely on it. */
+export interface CompanyRiskCoverage {
+    /** Statements we have read. Zero means the six financial rules could not run. */
+    financial_years: number;
+    has_financials: boolean;
+    /** Persons linked to this company. Zero means the two graph rules could not run. */
+    persons_linked: number;
+    /** Whether the register states a size band ("00" means it does not). */
+    size_band_known: boolean;
+    /** Whether we hold any VAT registration or deregistration date. */
+    vat_register_dated: boolean;
+}
+
+/** The company payload, as `CompanyDetailSerializer.redFlags` sends it. */
+export interface CompanyRiskIndicators {
+    flags: RiskFlag[];
+    counts: RiskFlagCounts;
+    coverage: CompanyRiskCoverage;
+}
+
+/**
+ * What the person rules were able to look at.
+ *
+ * `companies_function_state_unknown` is the important one and it is *here*
+ * rather than among the flags: when the ORSR history for a company was never
+ * read, `is_active` is null, which is a hole in our own scraping. Reporting it
+ * as an indicator would dress that hole up as a fact about a person.
+ */
+export interface PersonRiskCoverage {
+    companies: number;
+    companies_dissolved: number;
+    companies_active_known: number;
+    companies_function_state_unknown: number;
+    /** Rows in the graph that resolved to this person, however many companies
+     *  they hold. More rows than companies is normal -- see §11.18. */
+    relations: number;
+}
+
+/** The person payload, as `PersonDetailView` sends it. Deliberately the same
+ *  flag shape as the company side: a person rule and a company rule answer the
+ *  same way, so a reader who has seen one panel has seen both. */
+export interface PersonRiskIndicators {
+    flags: RiskFlag[];
+    counts: RiskFlagCounts;
+    coverage: PersonRiskCoverage;
 }

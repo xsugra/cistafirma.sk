@@ -2,6 +2,7 @@ import logging
 from collections import defaultdict
 from datetime import date
 
+import redis
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import F, Q
@@ -14,6 +15,7 @@ from companies.models import Company
 from companies.throttles import OrsrPersonThrottle
 from .identity import PersonEvidence, base_name, cluster_evidence
 from .models import Person, PersonCompanyRelation, normalize_name
+from .person_risk import person_red_flags
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +43,23 @@ def _coverage() -> dict:
     would drift into a lie the first time it stopped being true.
     """
     return {
+        # `values("id")` before `distinct()`, and it is not a style choice.
+        #
+        # Without it Django builds `SELECT DISTINCT` over *every* column of the
+        # company row, and Postgres then has to sort ~168k rows of width 448 to
+        # find the unique ones: measured on production 2026-09-28, 9.5-11.8 s
+        # for this one line, while the whole person search beside it is 0.35 s.
+        # Counting distinct ids instead is the same number (both are DISTINCT
+        # over a primary key) in 0.37 s -- and it is the form every other
+        # coverage count in this project already uses; this was the only one
+        # that did not.
+        #
+        # It is not a micro-optimisation to be undone later: the cost is
+        # invisible to every functional test, because the number it returns
+        # does not change. `CoverageQueryShapeTests` is what holds it.
         "companies_with_persons": Company.objects.filter(
             person_relations__isnull=False
-        ).distinct().count(),
+        ).values("id").distinct().count(),
         "companies_total": Company.objects.count(),
     }
 
@@ -1061,8 +1077,40 @@ class PersonDetailView(APIView):
             "companies": _merged_relations(
                 member_ids, _relations_by_person(member_ids)
             ),
+            # Observations about the person's company footprint -- never a
+            # verdict about the person. See `person_risk.py` and §11.22.2: the
+            # register holds "konateľ v 14 firmách, z toho 5 zrušených", which is
+            # a fact with dates, and cannot hold "biely kôň", which is a claim.
+            # Computed over `member_ids`, not `person.id`: the cluster is the
+            # unit, or the counts would be of our rows rather than of a life.
+            "red_flags": person_red_flags(member_ids),
             "coverage": _coverage(),
         })
+
+
+#: A cache outage on a public endpoint would otherwise log one traceback per
+#: request for as long as it lasted, which buries the first one -- the only one
+#: that says anything new. Module-level, and the same idiom for the same reason
+#: as `companies.throttles.PublicRateThrottle`.
+_cache_outage_logged = False
+
+
+def _report_cache_outage(operation: str) -> None:
+    """Log a dead cache once at ERROR, then at DEBUG until the process ends.
+
+    Called from inside an `except` block, so `logger.exception` carries the
+    traceback without it having to be threaded through here.
+    """
+    global _cache_outage_logged
+    if _cache_outage_logged:
+        logger.debug("Cache still unavailable (%s).", operation, exc_info=True)
+        return
+    _cache_outage_logged = True
+    logger.exception(
+        "Cache is unavailable (%s) -- /api/persons/orsr/ now asks the register "
+        "on every request instead of serving repeats from the cache.",
+        operation,
+    )
 
 
 class OrsrPersonSearchView(APIView):
@@ -1076,6 +1124,11 @@ class OrsrPersonSearchView(APIView):
     * cached for `ORSR_PERSON_CACHE_SECONDS`, which removes nearly all repeat
       traffic;
     * rate-limited per caller, because the input is free text typed by anyone;
+    * a cache outage costs latency, not the endpoint. The scrape below is the
+      answer and the cache only removes repeat traffic, so losing Redis means
+      every request asks the register again until it recovers -- it never turns
+      into a 500. (Contrast `/healthz`, where a Redis failure is deliberately a
+      503: a health probe is supposed to report the outage, this is not.)
     * it returns the register's answer as the register gives it, including the
       fact that it does not say in what capacity the person is recorded --
       that would cost one request per company, and we do not spend other
@@ -1099,7 +1152,12 @@ class OrsrPersonSearchView(APIView):
             })
 
         cache_key = f"orsr_person_search:{normalize_name(query)}"
-        cached = cache.get(cache_key)
+        try:
+            cached = cache.get(cache_key)
+        except redis.exceptions.RedisError:
+            # A miss, not a failure: the next line answers from the register.
+            _report_cache_outage("get")
+            cached = None
         if cached is not None:
             return Response({**cached, "cached": True})
 
@@ -1124,7 +1182,11 @@ class OrsrPersonSearchView(APIView):
         }
 
         if not result.error:
-            cache.set(cache_key, payload, settings.ORSR_PERSON_CACHE_SECONDS)
+            try:
+                cache.set(cache_key, payload, settings.ORSR_PERSON_CACHE_SECONDS)
+            except redis.exceptions.RedisError:
+                # The answer is already correct; only the next caller pays.
+                _report_cache_outage("set")
 
         return Response(payload)
 
