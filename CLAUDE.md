@@ -147,10 +147,11 @@ make ops-check                                  # Every operational control, one
 ```
 
 `make ops-check` is the single read-only gate over the whole protection story
-(stack, database, queue depths, per-source scrape health, sync jobs, backups,
-off-site controls, drill record, whether the weekly job is still firing, whether
-the RUZ keeper timer is still ticking, and one live API request through the
-published frontend port). It starts no container and
+(stack, database, queue depths, per-source scrape health, sync jobs, whether
+every beat schedule entry is still dispatching, backups, off-site controls,
+drill record, whether the weekly job is still firing, whether the RUZ keeper
+timer is still ticking, and one live API request through the published frontend
+port). It starts no container and
 writes nothing. The weekly job runs the same gate and, on failure, writes
 `~/Library/Logs/CistaFirma/LAST_FAILURE`, posts a macOS notification, and exits
 non-zero. See `docs/DATA_PROTECTION.md` for the two deliberate asymmetries that
@@ -165,6 +166,20 @@ beat-scheduled job type that ended `failed` within `CISTAFIRMA_FAILED_JOB_HOURS`
 (default 24) — the one failure with nobody in front of it. Judging the newest
 attempt rather than any failed one is what keeps it a state instead of a scar: a
 later successful run clears it.
+
+`make ops-check` also chains `python manage.py beat_health`
+(`backend/registers/management/commands/beat_health.py`), which judges the beat
+schedule entries themselves. It is the one control that reads the *absence* of a
+run: a task that never fires writes nothing anywhere, so queue depth, source
+health and sync jobs all stay green while an entry is dead —
+`compute-sector-benchmarks-daily` did exactly that for 32 h. It fails an enabled
+entry whose `last_run_at` is older than that entry's own interval plus
+`CISTAFIRMA_BEAT_GRACE_MINUTES` (default 15; negative values are refused, and it
+must stay below the shortest interval, 10 min). It reports without judging
+celery's own `celery.` entries, switched-off entries (naming Focus Mode when
+that is what switched them off), non-interval schedules, and rows that have
+never run. Read that file before changing it — it carries four measured traps,
+each of which makes a naive version of this gate lie.
 
 The off-site path is machine-specific and lives outside the repo, in
 `~/.config/cistafirma/backup.env` (mode 600), written by `db-offsite-configure`.

@@ -40,6 +40,13 @@ SOURCE_MIN_SUCCESSES="${CISTAFIRMA_SOURCE_MIN_SUCCESSES:-20}"
 # times the 0.26 s the endpoint needs on production, so a slow-but-working API
 # does not redden the gate; raise it on a host whose database is slower.
 API_TIMEOUT="${CISTAFIRMA_API_TIMEOUT:-10}"
+# How far past its own interval a schedule entry may sit before the miss is
+# reported. A healthy beat dispatches within seconds of an entry coming due, so
+# this is not jitter tolerance -- it is the slack a restarted beat is given
+# before it reads as a missed run. It has to stay well below the shortest
+# interval in the schedule (10 min), or the gate stops being able to see an
+# entry that has missed a whole run.
+BEAT_GRACE_MINUTES="${CISTAFIRMA_BEAT_GRACE_MINUTES:-15}"
 
 LABEL="sk.cistafirma.backup"
 OUT_LOG="$(log_dir)/backup.out.log"
@@ -268,6 +275,50 @@ else
                 ;;
         esac
     fi
+fi
+
+# --- beat schedule -------------------------------------------------------
+# Every section below reads something a *run* left behind: queue depth, what a
+# source achieved, the state of a sync job. None of them can see a schedule
+# entry that has stopped firing, because a task that never runs writes nothing
+# anywhere -- no row to be stale, no error, no failed job. That is the one
+# failure with nobody in front of it, and it is not hypothetical here:
+# `compute-sector-benchmarks-daily` had a settings entry, a row and an admin
+# listing while it dispatched nothing for 32 h, and this whole gate stayed
+# green. `beat_health` owns what "an entry is still firing" means, so it is
+# chained here rather than re-implemented, exactly as offsite_status.sh owns the
+# off-site verdict below.
+section "Beat schedule"
+
+if docker compose ps --status running --services 2>/dev/null | grep -qx 'backend'; then
+    # Forwarded explicitly: `exec` does not inherit the caller's environment,
+    # so an exported override would otherwise be silently ignored and the run
+    # would look stricter or looser than it was asked to be.
+    set +e
+    beat_output=$(docker compose exec -T \
+        -e "CISTAFIRMA_BEAT_GRACE_MINUTES=$BEAT_GRACE_MINUTES" \
+        backend python manage.py beat_health --skip-checks 2>&1)
+    beat_rc=$?
+    set -e
+    printf '%s\n' "$beat_output" | sed 's/^/  /'
+
+    if [ "$beat_rc" -eq 0 ]; then
+        ok "every enabled schedule entry has dispatched within its own interval"
+    else
+        # Reuse the count rather than the FAIL lines, so the command stays the
+        # single owner of what its failures are -- and fail closed if its
+        # summary is ever unreadable, since a changed format must not read as
+        # success.
+        unmet=$(printf '%s\n' "$beat_output" \
+            | sed -n 's/^Beat schedule: \([0-9][0-9]*\) unmet$/\1/p' | tail -n 1)
+        if [ -z "$unmet" ]; then
+            bad "beat_health exited $beat_rc without a readable verdict"
+        else
+            failures=$((failures + unmet))
+        fi
+    fi
+else
+    bad "the backend is not running, so no schedule entry can be judged"
 fi
 
 # --- celery queues -------------------------------------------------------

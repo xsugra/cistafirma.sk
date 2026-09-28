@@ -597,6 +597,62 @@ attached lately?" matters most. No recorded replica within
 `CISTAFIRMA_REPLICA_MAX_AGE_DAYS` (default 14) fails the gate, and no record at
 all fails it immediately: that means no off-site protection exists yet.
 
+### Beat schedule
+
+Every other control here reads something a *run* left behind, so none of them
+can see a schedule entry that has stopped firing: a task that never runs writes
+nothing anywhere — no row to be stale, no error, no failed job. That is not
+hypothetical. `compute-sector-benchmarks-daily` had a `CELERY_BEAT_SCHEDULE`
+entry, a `PeriodicTask` row and a listing in the admin, and dispatched nothing
+for 32 h while this whole gate stayed green; the benchmark block was simply
+absent from every company page. It is the one failure with nobody in front of
+it.
+
+The gate therefore also chains `python manage.py beat_health`
+(`backend/registers/management/commands/`), which judges the rows themselves —
+not the settings dict, because the live schedule *is* the row (see
+`docs/ARCHITECTURE.md` §4). An enabled entry whose `last_run_at` is older than
+that entry's own interval plus `CISTAFIRMA_BEAT_GRACE_MINUTES` (default 15) is
+unmet. The grace is not scheduling jitter — beat dispatches within seconds of an
+entry coming due — it is the slack a restarted beat is given before its silence
+reads as a missed run, and it has to stay below the shortest interval in the
+schedule (10 min). A negative value is refused rather than obeyed, since it
+would fail every entry at once and a control that is always red protects
+nothing.
+
+Four things are printed with their reason instead of judged, and each one would
+otherwise make the gate lie:
+
+- **celery's own entries** (`celery.` prefix). `celery.backend_cleanup` is
+  `enabled=True`, `one_off=False` and `last_run_at=NULL` with 33 runs behind it,
+  because beat re-saves it from the in-memory default at every start — so an
+  exemption written for one-off or never-run rows does not reach it.
+- **a switched-off entry.** Switched off is the only marker of a deliberate
+  pause this table carries: `enabled` is not among the fields the scheduler
+  reconciles, so a pause survives a beat start, and Focus Mode switches entries
+  off through exactly this field. Such a row is still shown with the age of its
+  last run, so a pause meant for an afternoon and now three weeks old is
+  visible — but telling that from an intended long pause is not something this
+  table can do, and a threshold invented for it would be a guess wearing a
+  control's clothes.
+- **a schedule that is not an interval.** A `crontab`'s `remaining_estimate` is
+  a different quantity from an interval's, so reading one as the other would
+  produce a confident wrong age.
+- **an interval whose `period` cannot be read.** No duration means nothing to
+  compare the last run against.
+
+A row that has **never run** is the case this control exists for, and it is
+deliberately not judged through `last_run_at or date_changed`: the scheduler
+substitutes `date_changed` for a missing `last_run_at` *in memory*, so a
+never-run row presents itself as one that just ran and the `or` form hides
+exactly the row in question. What is used instead is `date_changed` on its own,
+as an upper bound only — a row cannot be older than its own last write, so a row
+older than its interval has provably lived through a due date without running.
+The other direction is a **stated blind spot**, printed whenever such a row is
+in scope: every beat start rewrites `date_changed`, so a first run pushed out
+indefinitely by a beat that restarts more often than the interval is invisible
+here.
+
 ### Celery queue depth
 
 The gate prints the depth of every queue, because nothing else in the stack

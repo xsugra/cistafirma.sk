@@ -121,6 +121,21 @@ and a queue that has silently stopped draining is otherwise indistinguishable
 from one that is merely busy. See `docs/DATA_PROTECTION.md` for the gate as a
 whole, and for why the insurance bound is the one that differs.
 
+### Beat schedule
+
+Queue depth and job rows all read what a *run* left behind, so none of them can
+see a schedule entry that has stopped firing — and a task that never runs writes
+nothing anywhere. `compute-sector-benchmarks-daily` sat like that for 32 h with
+an entry, a row and an admin listing, and the gate stayed green.
+
+`python manage.py beat_health`
+(`backend/registers/management/commands/`) is chained by the gate for exactly
+that: it judges each `PeriodicTask` row's own `last_run_at` against that row's
+own interval, printing `Beat schedule: N unmet` and exiting 1 when an enabled
+entry is past its interval plus `CISTAFIRMA_BEAT_GRACE_MINUTES` (default 15).
+It is the one control that judges the *absence* of a run. What it deliberately
+does not judge, and why, is in `docs/DATA_PROTECTION.md`.
+
 ### Sync jobs
 
 Depth measures load, and for the same reason it cannot answer whether an
@@ -137,8 +152,8 @@ definition across the whole repository — never scheduled, no management comman
 no tests — while the module docstring already claimed "heartbeat watchdog flips
 it to `failed` after staleness". Two things now close that gap:
 
-- `detect-stuck-sync-jobs-every-10-min` in `CELERY_BEAT_SCHEDULE` (the schedule
-  now has 7 entries) runs `registers.tasks.detect_stuck_sync_jobs` on the
+- `detect-stuck-sync-jobs-every-10-min` in `CELERY_BEAT_SCHEDULE` runs
+  `registers.tasks.detect_stuck_sync_jobs` on the
   `celery` queue every 600 s, expires 550 s — on `celery` rather than `ruz_full`
   so the reaper can never wait behind the backlog it is meant to notice. It
   flips a `running` job to `failed` once its heartbeat is past the staleness
@@ -152,10 +167,11 @@ it to `failed` after staleness". Two things now close that gap:
 past the staleness threshold, a `queued` job older than `--queued-minutes`
 (`CISTAFIRMA_QUEUED_JOB_MINUTES`, default 720) that was never claimed, and the
 newest run of a `triggered_via='beat_schedule'` job type that ended `failed`
-within `CISTAFIRMA_FAILED_JOB_HOURS` (default 24). The third covers the one
-failure nobody is watching: a run that dies in the beat has no operator in
-front of it, so before this the table showed the failed row while the verdict
-still read `0 unmet`. It is judged on the *newest* attempt, so a later
+within `CISTAFIRMA_FAILED_JOB_HOURS` (default 24). The third covers a failure
+with no operator in front of it: a run that dies in the beat, so before this the
+table showed the failed row while the verdict still read `0 unmet`. (The other
+such failure — an entry that never fires at all, which leaves no failed row
+either — is Beat schedule above.) It is judged on the *newest* attempt, so a later
 successful run clears it rather than leaving the gate red for a transient
 failure. Counters
 are printed but never judged — how many items a job *should* process depends on
