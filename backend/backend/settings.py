@@ -650,8 +650,10 @@ CELERY_BEAT_SCHEDULE = {
     # The 20 days assumes beat dispatches every 4 h, and on 2026-09-28 it did
     # not. Measured on `dell` that evening, over the preceding 48 h: beat
     # dispatched nothing between 2026-09-27 ~08:07Z and 2026-09-28 15:43:46Z
-    # (31.6 h) and then fired every overdue entry at once -- every row's
-    # `last_run_at` landed on 15:43:46Z, the `ruz_incremental` series (strictly
+    # (31.6 h) and then fired every overdue entry at once -- seven of the nine
+    # rows, every one whose interval is 4 h or longer, landed on 15:43:46Z
+    # within 5 s of each other, which is the catch-up and not a coincidence;
+    # the `ruz_incremental` series (strictly
     # 6-hourly at HH:07:29) is missing five consecutive slots, and a
     # `NotificationEvent` created 09-27 08:51:28Z waited until 09-28 15:47:46Z
     # for a 15-minute task. The stack was up the whole time: the `ruz-keeper`
