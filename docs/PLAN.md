@@ -9780,6 +9780,130 @@ status pipelines bol správny — prázdny výsledok vyzeral ako hotová vec.
 
 ---
 
+### 11.25 Brána na `last_run_at` — plán, ktorý prestal dávkovať, je vidieť (2026-09-28, `1dabe4d`)
+
+**Problém, kvôli ktorému to existuje.** `compute-sector-benchmarks-daily` mal
+záznam v `CELERY_BEAT_SCHEDULE`, riadok v `PeriodicTask` aj v adminu, a **32 h
+nedispečoval nič**. Celá brána `make ops-check` pritom zostala zelená — a to
+nie je náhoda: každá jej doterajšia kontrola číta, čo po sebe nechal *beh*
+(hĺbku fronty, úspech zdroja, riadky `SyncJob`, prírastkové okná). Úloha, ktorá
+nikdy nebeží, nepíše nikde nič — žiadny riadok na zastaranie, žiadnu chybu,
+žiadny zlyhaný job. Je to zlyhanie, pred ktorým nikto nestojí, a dovtedy ho
+nevidela ani jedna kontrola.
+
+**Kde je pravda.** Nie v `CELERY_BEAT_SCHEDULE`. Ten je len vstup, ktorý
+scheduler *rekonsciluje* do riadkov `PeriodicTask`, a `queue`, `args` či
+`expires` na riadku vyhrávajú — posudzovať settings dict by znamenalo
+posudzovať konfiguráciu, ktorou sa dispatcher nemusí riadiť. `beat_health`
+preto číta **riadok sám**: jeho `last_run_at` proti jeho vlastnému intervalu.
+
+**Grace** (`CISTAFIRMA_BEAT_GRACE_MINUTES`, default 15) nie je tolerancia
+jitteru — zdravý beat odošle beh v sekundách od chvíle, keď riadok dozrel. Je to
+okno, v ktorom reštartovaný beat ešte nie je zlyhanie, a musí zostať pod
+najkratším intervalom (10 min), inak brána prestane vidieť riadok, ktorý
+vynechal celý beh. Záporná grace sa **odmieta**: urobila by červené všetko
+naraz, a kontrola, ktorá je vždy červená, je tá, ktorú nikto nečíta.
+
+**Štyri výnimky, každá preto, že bez nej by brána klamala:**
+
+- **celeryho vlastné záznamy** (`celery.*`). Merané na produkcii 2026-09-28:
+  `celery.backend_cleanup` má `enabled=True`, `one_off=False`,
+  `total_run_count=33` a zároveň `last_run_at IS NULL` — ani výnimka na
+  „one_off", ani na „never-run" ho nepokryje. Jeho NULL prežíva, lebo
+  `install_default_entries` ho pri každom štarte beatu prepíše z defaultu
+  v pamäti. Posudzovaný na `last_run_at` by zlyhal navždy na zdravom systéme.
+- **vypnutý riadok.** `enabled` je jediná známka zámernej pauzy, ktorú tabuľka
+  nesie — nie je medzi `defaults`, ktoré scheduler rekonsciluje, takže pauza od
+  ruky prežije štart beatu, a Focus Mode používa práve toto pole. Vypíše sa
+  s vekom posledného behu, takže pauza zamýšľaná na popoludnie a teraz tretí
+  týždeň je *vidieť* — bez toho, aby bránu zčervenala. Rozlíšiť ju od zámernej
+  dlhej pauzy táto tabuľka nevie a prah vymyslený pre ňu by bol odhad oblečený
+  do kontroly.
+- **neintervalový plán.** Deväť z desiatich živých riadkov sú `IntervalSchedule`;
+  desiaty je celeryho vlastný, na ktorý sa dostane skôr výnimka na prefix.
+  `remaining_estimate` crontabu neznamená to isté čo intervalu, a čítať jedno
+  ako druhé by dalo sebavedomý nesprávny vek. Dôsledok: **túto vetvu na
+  produkcii nič necvičí**, preto má vlastný test.
+- **interval, ktorý sa nedá prečítať.** `IntervalSchedule.schedule` stavia
+  `timedelta(**{period: every})`, takže `period` mimo choices vyhodí výnimku.
+  Riadok sa vypíše s dôvodom; brána nespadne a nič sa nezamlčí.
+
+Každá výnimka sa vypisuje **s dôvodom**, aby „neposúdené" nešlo čítať ako
+„nevidené".
+
+**Riadok, ktorý nikdy nebežal** — prípad, pre ktorý to celé existuje. Jeho
+`last_run_at` ho neposúdi, a obvyklá náhrada je horšia než nič:
+`ModelEntry.__init__` nahradí prázdne `last_run_at` za `date_changed or now()`
+**v pamäti**, takže nikdy nebežiaci riadok sa scheduleru tvári ako ten, čo
+práve bežal, a jeho prvý beh sa odsunie o celý interval. `last_run_at or
+date_changed` preto schová presne tento riadok — a tak sa to tu nikdy nečíta.
+
+Číta sa `date_changed` **samotný**, a len ako **horná hranica**: `auto_now` sa
+pohne pri každom plnom save a `update_from_dict` prepisuje kódové riadky pri
+každom štarte beatu (merané 2026-09-28: desať riadkov zapísaných do 300 ms od
+štartu beatu, ktorý nedispečoval nič). Riadok nemôže byť starší než jeho
+`date_changed`, takže NULL riadok s `date_changed` starším než interval + grace
+preukázateľne prežil termín bez behu — a zlyhá. Opačný smer je **slepé miesto,
+ktoré sa vypisuje, nie skrýva**: riadok, ktorého `date_changed` beat prepisuje
+častejšie než je jeho interval, tu nikdy nenazbiera vek.
+
+**Dve veci nájdené meraním, obe by inak ticho klamali:**
+
+1. **`finalize()` nestačí na načítanie registra úloh.** V `manage.py` procese
+   nechal `app.tasks` na deviatich celeryho builtinoch pred aj po volaní, takže
+   *každý* živý riadok hlásil „úlohu, ktorú menuje, tu nikto neimplementuje" —
+   vrátane `detect-stuck-sync-jobs`, ktorý bežal tri minúty predtým. Rieši to
+   `loader.import_default_modules()` (41 mien, každé meno z `CELERY_BEAT_SCHEDULE`
+   medzi nimi). Testovací proces to skrýval, lebo tam task moduly naimportoval
+   už Django — odpoveď vychádzala správne zo zlého dôvodu. Preto test pinuje
+   **volanie**, nie množinu; množinu by totiž v teste vrátil správne aj
+   nesprávny kód.
+2. **Nota „všetky posúdené riadky sú stale naraz" počítala aj neposúdené.**
+   Nikdy nebežiaci a zatiaľ nepreukázateľne oneskorený riadok prejde tým istým
+   blokom a skončí `--`; jeho započítaním (`judged` sa zvyšoval pri vstupe do
+   bloku) nota prestala svietiť presne vtedy, keď mala. A pri jedinom posúdenom
+   riadku zas tvrdila rozlíšenie („beat je mŕtvy" vs. „jedna úloha sa pokazila"),
+   ktoré pri N=1 neexistuje — odtiaľ `judged >= 2`. Opravené počítadlo aj prah
+   majú vlastné testy, a ten na počítadlo je postavený tak, aby ho **staré**
+   počítanie nechalo prejsť (dva stale + jeden `--` → nota musí svietiť; so
+   zlým počítadlom nesvieti).
+
+**Tretia chyba bola v mojom vlastnom strážcovi na CI**, a je to tá istá trieda:
+riadok je `meno|stav|allow_failure`, ale moja regex bola
+`\|(created|pending|running)$` — `$` nikdy nesedí, lebo za stavom nasleduje
+`|f`. Filter teda nematchol **nič**, `nonterm` vyšiel 0 a strážca okamžite
+a nepravdivo vyhlásil „všetko terminálne" pri siedmich pending úlohách. Filter,
+ktorý nevie matchovať, je filter, ktorý klame; opravené a overené
+(`total=7, nonterm=7, finished=0`) — a pribudla kontrola neznámych stavov, lebo
+„neznámy" nie je „terminálny".
+
+**Nasadenie na dell** (2026-09-28):
+
+- `git pull gitlab-home main` — fast-forward `0543fa1..1dabe4d`, `PULL_EXIT=0`
+  (pull sa ťahá **menom**; dellov globálny gitconfig má `fetch.all=true`, takže
+  holý `git pull` skončí 1 a nepohne ničím).
+- `docker compose up -d --build` — `UP_EXIT=0`; `db` a `redis` sa len čakali ako
+  healthy, **nerekrovali sa**.
+- `migrate` — `No migrations to apply` (zmena je nový management command, žiadna
+  schéma, žiadny zápis).
+- `make ops-check` — **`Operational controls: SATISFIED`** (exit 0), nula `FAIL`
+  riadkov; nová sekcia **Beat schedule** vypísala deväť posúdených riadkov `OK`,
+  `celery.backend_cleanup` vyňatý aj s dôvodom, a `Beat schedule: 0 unmet`.
+  (Jediný `failed` v celom výstupe je riadok *tabuľky* — `incremental_companies`,
+  stáro 2462 dní, verdikt `--` — nie zlyhanie brány.)
+
+**CI:** beh **238** (`1dabe4d8` na `main`) bol v čase písania tohto záznamu ešte
+v poradí — na lenovo je `concurrent = 1` a pred ním stáli behy 236 a 237, takže
+všetkých jeho sedem jobov bolo `created`/`pending`. To, čo `backend_tests`
+overuje, však bolo vykonané priamo na delle proti reálnemu Postgresu: **27/27
+testov**. Výsledok behu 238 treba doplniť, keď dobehne — a posudzovať ho podľa
+riadkov jobov, nie podľa stavu pipeline: zlyhanie vo `validate` preskočí celú
+fázu `test`, takže zelená pipeline môže skrývať testy, ktoré nikdy nebežali.
+
+**Rollback** je `git checkout 0543fa1 && docker compose up -d --build`.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.

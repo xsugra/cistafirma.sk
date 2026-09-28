@@ -38,11 +38,13 @@ far behind a restart may put a run before that counts as a miss.
   without reddening the gate. Telling that apart from a deliberate long pause
   is not something this table can do, and a threshold invented for it would be
   a guess wearing a control's clothes.
-- **a schedule that is not an interval.** All nine live entries are
-  `IntervalSchedule` rows; another kind is printed with its reason rather than
+- **a schedule that is not an interval.** Nine of the ten live rows are
+  `IntervalSchedule`; the tenth is celery's own, which the prefix exemption
+  above reaches first. Another kind is printed with its reason rather than
   judged, because `remaining_estimate` does not mean the same thing for a
   `crontab` as for a `schedule`, and reading one as the other would produce a
-  confident wrong age.
+  confident wrong age. The consequence is that **nothing on production
+  exercises this branch** -- which is why it has a test of its own.
 
 **`last_run_at IS NULL`** -- a row that has never run -- is the case this
 command exists for: `compute-sector-benchmarks-daily` had both an entry and a
