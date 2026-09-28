@@ -19,10 +19,13 @@ carefully as the numbers: a detail string that said "biely kôň" would be a
 product making an accusation it cannot support.
 """
 
+import re
 from datetime import date
 from decimal import Decimal
+from io import StringIO
 from types import SimpleNamespace
 
+from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
 
 from companies.models import Company
@@ -768,3 +771,150 @@ class CompanyDetailPublishesRedFlagsTests(TestCase):
             second = serializer._financial_rows(self.company)
         self.assertIs(first, second)
         self.assertEqual(len(second), 3)
+
+
+class RiskIndicatorsReportTests(TestCase):
+    """The measuring command, which is the one thing that cannot run here.
+
+    `risk_indicators_report` is written to be run against the production
+    database on `dell`, and this development database has no cistafirma schema
+    at all -- so the command's *real* execution is a fresh code path the first
+    time it touches production. That is the shape of defect this repository
+    keeps paying for: a branch that cannot run on the healthy host is the one
+    that lies (see the `stub-every-branch-of-a-new-gate` note). Every test here
+    therefore runs the command through `call_command` on the test database,
+    which does have the schema.
+
+    Two claims are pinned beyond "it does not crash":
+
+    * **It writes nothing.** The command's docstring promises read-only and it
+      is meant to be safe on production. That promise is asserted by comparing
+      row counts across the run rather than trusted.
+    * **The numbers it prints come from the rules.** The person-count table is
+      the measurement `SERIAL_DIRECTOR_MIN` is read from, so it is checked
+      against the rule that consumes the same count -- a report that counted
+      differently from `person_risk` would set the threshold from one number
+      and apply it to another.
+    """
+
+    def _company(self, ico, index, **kwargs):
+        return Company.objects.create(
+            ruz_id=990000 + index, ico=ico, nazov_UJ=f'Firma {index} s. r. o.',
+            **kwargs,
+        )
+
+    def _run(self, *args):
+        out = StringIO()
+        call_command('risk_indicators_report', *args, stdout=out)
+        return out.getvalue()
+
+    def _register(self):
+        """A tiny register with one person in five companies."""
+        from connections.models import Person, PersonCompanyRelation
+
+        person = Person.objects.create(
+            name='Ján Príklad', fingerprint='name:jan priklad|addr:'
+        )
+        for index in range(5):
+            company = self._company(f'9910000{index}', index, sk_NACE='4610')
+            PersonCompanyRelation.objects.create(
+                person=person, company=company, role='konatel'
+            )
+        return person
+
+    def test_it_runs_end_to_end_and_writes_nothing(self):
+        from companies.models import CompanyFinancialResult
+        from connections.models import Person, PersonCompanyRelation
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self._register()
+        before = (
+            Company.objects.count(),
+            CompanyFinancialResult.objects.count(),
+            Person.objects.count(),
+            PersonCompanyRelation.objects.count(),
+        )
+
+        # Row counts alone would also hold for a command that inserted and then
+        # deleted. What is promised is stronger -- this runs against production
+        # -- so the statement log is what is checked: not one write, anywhere.
+        with CaptureQueriesContext(connection) as captured:
+            output = self._run('--sample', '10', '--skip-address')
+
+        writes = [
+            query['sql']
+            for query in captured.captured_queries
+            if query['sql'].lstrip()[:6].upper()
+            in ('INSERT', 'UPDATE', 'DELETE', 'REPLACE')
+        ]
+        self.assertEqual(writes, [], 'the report issued a write')
+        # The positive control for the line above. An empty capture would make
+        # `writes == []` true for a command that never ran -- and "the
+        # instrument saw nothing" is indistinguishable from "there was nothing
+        # to see" unless something is asserted to have been seen.
+        self.assertGreater(len(captured.captured_queries), 0, 'captured no SQL')
+
+        self.assertIn('1. Rozsah dát', output)
+        self.assertIn('5. Pravidlá na náhodnej vzorke firiem', output)
+        self.assertIn('Hotovo — nič sa nezapísalo.', output)
+        self.assertEqual(
+            before,
+            (
+                Company.objects.count(),
+                CompanyFinancialResult.objects.count(),
+                Person.objects.count(),
+                PersonCompanyRelation.objects.count(),
+            ),
+        )
+
+    def test_the_person_count_table_is_the_measurement_the_threshold_needs(self):
+        # Five companies for one person, and the cumulative row for `≥ 5` has to
+        # say one -- that row is what `SERIAL_DIRECTOR_MIN` will be set from.
+        self._register()
+
+        output = self._run('--sample', '10', '--skip-address')
+
+        match = re.search(r'≥\s+5 firiem:\s+(\d+)', output)
+        self.assertIsNotNone(match, 'the cumulative table did not print a ≥ 5 row')
+        self.assertEqual(int(match.group(1)), 1)
+
+        # These companies have no filed statement, so the quantities the
+        # financial thresholds cut cannot be plotted at all. The report has to
+        # say that per quantity: a blank where a distribution should be reads as
+        # "the distribution is empty", which is a different and false claim.
+        self.assertIn('(nemerateľné na vzorke)', output)
+
+    def test_the_expensive_address_rule_runs_only_when_it_is_not_skipped(self):
+        self._register()
+
+        skipped = self._run('--sample', '5', '--skip-address')
+        self.assertNotIn('6. Pravidlo o adrese', skipped)
+        self.assertIn('pravidlo o adrese preskočené cez --skip-address', skipped)
+
+        run = self._run('--sample', '5', '--address-sample', '5')
+        self.assertIn('6. Pravidlo o adrese', run)
+
+    def test_an_empty_register_produces_a_readable_report_rather_than_a_crash(self):
+        # `dell` is not empty, but the first run of any command should not be
+        # the one that discovers a `ZeroDivisionError` in the summary -- and the
+        # reported figure for a person with no companies is exactly the case
+        # where a share would be division by zero.
+        output = self._run('--sample', '10', '--skip-address')
+
+        self.assertIn('Hotovo — nič sa nezapísalo.', output)
+        self.assertIn('nikto — prah sa nedá zmerať na tejto vzorke', output)
+
+    def test_percentile_returns_a_value_the_data_actually_contains(self):
+        # Nearest-rank, not interpolated: every threshold the report prints has
+        # to be a number some company really has. An interpolated p95 would be a
+        # value nobody has, which is the invented figure the command exists to
+        # avoid -- so this asserts membership, not an arithmetic result.
+        from companies.management.commands.risk_indicators_report import percentile
+
+        values = [Decimal(v) for v in (1, 2, 3, 4, 5)]
+        for fraction in (0.05, 0.25, 0.5, 0.75, 0.95, 0.99):
+            with self.subTest(fraction=fraction):
+                self.assertIn(percentile(values, fraction), values)
+
+        self.assertIsNone(percentile([], 0.5))

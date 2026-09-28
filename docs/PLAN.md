@@ -9185,7 +9185,7 @@ Overené na Macu, vo worktree `red-flags-biely-kon-karusel`:
 
 | kontrola | výsledok |
 |---|---|
-| `manage.py test` (celá backendová suita) | **1183 testov, `OK`**, exit 0, 59,7 s |
+| `manage.py test` (celá backendová suita) | **1188 testov, `OK`**, exit 0, 57,0 s |
 | `npm test` (vitest) | **48 súborov, 443 testov, všetky prešli** |
 | `npm run typecheck` | čisté |
 | `npm run build` | 1675 modulov, 6,0 s |
@@ -9203,6 +9203,34 @@ manifest entry for 'unfold/fonts/inter/styles.css'`). Tu je
 artefakt — `.gitignore:62`), takže beh je zelený. Chyby teda visia na
 chýbajúcom build artefakte, nie na kóde: tento krok nemení ani template, ani
 statický súbor.
+
+**`risk_indicators_report` nemal ani jeden test — a to je trieda chyby, ktorú
+tu riešime.** Príkaz je napísaný tak, aby bežal na `dell`, a **táto vývojová
+databáza nemá cistafirma schému vôbec**: spustenie proti DSN z hlavného
+checkoutu padá na `relation "Companies and SZCO" does not exist`. Prvé
+skutočné spustenie príkazu by teda bolo až na produkčných dátach. Doplnených
+je preto **5 testov** (`RiskIndicatorsReportTests`), ktoré príkaz púšťajú cez
+`call_command` nad testovacou databázou — tá schému má. Testujú tri veci, nie
+to, že to nespadne:
+
+- **nič sa nezapisuje** — a to na úrovni SQL, nie počtov riadkov. Počty by
+  sedeli aj príkazu, ktorý vloží a potom zmaže; `CaptureQueriesContext` preto
+  kontroluje, že v zázname nie je ani jeden `INSERT`/`UPDATE`/`DELETE`. Test má
+  **pozitívnu kontrolu** (namerané SQL > 0), inak by `writes == []` platilo aj
+  pre príkaz, ktorý vôbec nebežal; a overené je aj to, že detektor naozaj
+  chytí zápis — do príkazu som dočasne pridal `UPDATE` a test **spadol**
+  (`AssertionError: ... 'UPDATE "Companies and SZCO" SET "Názov UJ" = CONTROL' != []`),
+  potom som ho vrátil späť.
+- **čísla pochádzajú z pravidiel** — kumulatívny riadok „≥ 5 firiem" musí
+  povedať 1, keď má osoba päť firiem. To je to isté číslo, z ktorého sa bude
+  čítať `SERIAL_DIRECTOR_MIN`; report, ktorý by počítal inak než
+  `person_risk`, by prah nastavil z jedného čísla a aplikoval na iné.
+- **nemerateľné je pomenované** — firma bez závierky musí dať
+  `(nemerateľné na vzorke)`, nie prázdne miesto, ktoré sa číta ako „rozdelenie
+  je prázdne".
+
+Tým sa počet backendových testov zvýšil na **1188**; číslo v tabuľke vyššie je
+už po doplnení.
 
 **Tri odchýlky od návrhu, všetky vedomé.**
 
