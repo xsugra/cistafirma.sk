@@ -9033,6 +9033,221 @@ nemá zmysel — buď to spustí človek, alebo pribudne Bash permission rule.
 
 ---
 
+### 11.22 „Biely kôň" a „karusel" — čo z toho vieme spočítať z vlastných dát (2026-09-28)
+
+Samuel: „chcel by som do môjho projektu nejako zahrnúť analýzu «biely kôň»
+a «karusel» nejakým vhodným spôsobom." Priložil k tomu metodiku pre FinStat.sk
+a Foaf.sk — sériový štatutár, trvalý pobyt na obecnom úrade, odvetvová
+rozptýlenosť, úmrtnosť firiem osoby; tržby vs. zamestnanci, skok tržieb,
+zisk ≈ 0 pri veľkých tržbách, majetok bez DHM, obrátka zásob, nespoľahlivý
+platiteľ DPH, virtuálne sídlo, náhle nedoplatky pred konkurzom.
+
+**Verdikt: áno, ale ako *indikátory rizika*, nie ako *odhalenie podvodu*.**
+Dôvod nie je v našej implementácii — je vo verejných dátach, a Samuel to vo
+svojom vlastnom texte píše presne: fakturačný reťazec, kontrolný výkaz DPH
+a pohyb tovaru nie sú verejné. Karusel sa z verejných registrov **nedá
+dokázať**; dá sa len povedať, že profil firmy na niektorú jeho rolu sedí.
+Kto tvrdí viac, predáva istotu, ktorú nemá — a pri menovaní konkrétnej osoby
+je to navyše tvrdenie o človeku, ktoré produkt nesmie vysloviť.
+
+#### 11.22.1 Inventúra: čo na to máme a čo nie
+
+Merané na bežiacej databáze (čísla z komentárov v kóde, s dátumom merania;
+živé premeranie je súčasťou práce, viď `risk_indicators_report`).
+
+| vstup | máme? | kde | pokrytie |
+|---|---|---|---|
+| väzby osoba → firma s **dátumami vzniku aj zániku** | ✅ | `connections.PersonCompanyRelation` (`vznik_funkcie`, `zanik_funkcie`, trojstavové `is_active`) | 19 906 z 445 626 firiem (4,5 %), 2026-09-13; 64 128 väzieb |
+| počet firiem na osobu | ✅ | už sa počíta ako `rolesCount` v `connections/views.py:499` a `:804` | 121 558 osôb, 2026-09-15 |
+| účtovné výkazy po rokoch | ✅ | `companies.CompanyFinancialResult` (~15 467 entít) | **~3,5 % registra** |
+| tržby, zisk, daň, aktíva, zásoby, pohľadávky, záväzky, vlastné imanie | ✅ | tamtiež | `revenue` na 98,2 % riadkov; `total_revenue` len na 22,6 % |
+| **rozdelenie tržieb na tovar vs. vlastné výkony** | ❌ | parser berie jednu prevádzkovú sumu | — |
+| **presný počet zamestnancov** | ❌ | len pásmo ŠÚ SR 0073/KATP97 (`velkost_organizacie`) | 63,3 % aktívnych firiem má `00` = „nezistený" |
+| DPH: platiteľ, IČ DPH, dátum registrácie, dátum výmazu, dôvod | ✅ | `Company.vat_payer`, `ic_dph`, `datum_reg_dph`, `vat_deleted_date`, `vat_deleted_reason` | 302 713 riadkov bez hodnoty `Platiteľ DPH` |
+| index daňovej spoľahlivosti („nespoľahlivý") | ✅ | `Company.tax_reliability` | 218 143 riadkov bez indexu |
+| **kód §81/§82** | ❌ | uložený je len voľný text `Rok porušenia: YYYY` | — |
+| daňový dlh, VšZP, Sociálna poisťovňa | ✅ | `tax_debt`, `debt_vszp`, `debt_soc_poist` | **Dôvera sa nescrapuje vôbec** |
+| sídlo (ulica, mesto, PSČ) + geokódovanie | ✅ | `Company.ulica/mesto/psc/sidlo` + `seat_*` | `seat_point_count` je počet kandidátskych bodov geokódera, **nie** počet firiem na adrese |
+| stav firmy (zrušená) | ✅ | `datum_zrusenia` | — |
+| **dátumovaný log zmien statusu** (likvidácia, konkurz, výmaz) | ❌ | len `datum_zrusenia` + voľný text „Ďalšie právne skutočnosti" | — |
+| **RPVS — register konečných užívateľov výhod** | ❌ | nula výskytov v kóde | oficiálny zdroj pre „bieleho koňa"; je to otvorené dáta, ale nová integrácia |
+| národnosť osoby | ❌ | `Person` pole nemá | — |
+| **fakturačné reťazce (odberateľ/dodávateľ)** | ❌ | **nie sú verejné** | nedá sa získať |
+
+#### 11.22.2 Prekážka, ktorá nie je technická
+
+Karusel je reťaz: missing trader → buffer → broker. Naše dáta vidia **jednotlivé
+firmy**, nie hrany medzi nimi. Preto každý indikátor hovorí o firme alebo
+o osobe, nikdy o reťazci — a sekcia to musí povedať skôr, než ukáže prvý
+indikátor. To isté platí pre osobu: „konateľ v 14 firmách, z toho 5 zrušených"
+je pozorovanie s dátumami; „biely kôň" je tvrdenie o človeku. Produkt smie
+vysloviť prvé, nikdy druhé. Sekcia preto vykresľuje **fakty a čísla, nie
+nálepy** — meno javu („toto je vzor typický pre karusel") sa píše raz,
+v úvode sekcie, nie k subjektu.
+
+#### 11.22.3 Návrh
+
+Nová sekcia firemného profilu **`rizikove-indikatory`** („Rizikové
+indikátory", skupina „Riziká a súdy", `status: 'partial'` — `partial` je
+jediná čestná voľba, keďže finančné indikátory platia pre ~3,5 % registra
+a osobný graf pre 4,5 %) a panel na `pages/Person.tsx`.
+
+Rozhodnutia, ktoré treba povedať nahlas:
+
+1. **Nezlučuje sa s `riskScore`.** `companies/services/risk_score.py` je
+   zdokumentovaný ako 0–100 *attention* rebrík a jeho docstring výslovne
+   hovorí, prečo doň Taffler nevstupuje. Pridanie dvanástich indikátorov by
+   zmenilo každé skóre v produkte naraz. Indikátory preto idú **vedľa** skóre,
+   ako vlastná štruktúra `redFlags`, nie doň.
+2. **Indikátory sa nesčítavajú.** Žiadne „skóre rizika podvodu". Súčet by bol
+   jediné číslo, ktoré si čitateľ odnesie, a bolo by to obvinenie.
+3. **Nevyhodnotené je vlastný stav, nie vynechanie.** Každé pravidlo vráti
+   buď `checked: true` s dôkazom, alebo `checked: false` s dôvodom („register
+   veľkosť neuviedol"). Vzor je `parts` v `risk_score.py:157` — faktor na nule
+   a faktor, ktorý sme neprečítali, sú dve rôzne fakty.
+4. **Backend vlastní text, frontend farbu.** `label` a `detail` posiela server
+   hotové (ako `risk_score.py`), frontend k nim priraďuje len farbu — jediný
+   vlastník formulácie, žiadne druhé odvodenie.
+
+#### 11.22.4 Katalóg pravidiel (fáza 1, všetko z vlastných dát)
+
+Firemné (`backend/companies/services/red_flags.py`):
+
+| kód | čo tvrdí | z čoho | nevyhodnotené keď |
+|---|---|---|---|
+| `trzby_bez_zamestnancov` | tržby v miliónoch pri 0–2 zamestnancoch | `revenue` + pásmo `01/02/03` | pásmo `00`/`''` |
+| `skok_trzby` | medziročný skok tržieb (≥ 10× a ≥ 1 mil. €) | `revenue` dvoch po sebe idúcich rokov | menej ako dva roky |
+| `zisk_nula_pri_trzboch` | veľké tržby, takmer nulový zisk, minimálna daň | `revenue`, `profit_after_tax`, `income_tax` | chýba ktorýkoľvek riadok |
+| `majetok_bez_dhm` | zanedbateľný DHM pri veľkých pohľadávkach a záväzkoch | `assets_tangible`, `assets_receivables_short`, `liabilities_total` | chýba závierka |
+| `obrat_zasob` | neprimerane rýchly obrat zásob pri materiálnych zásobách | `assets_inventory`, `revenue` | zásoby nulové/neznáme |
+| `dph_nespolahlivy` | index spoľahlivosti „nespoľahlivý" | `tax_reliability` | index chýba (218 143 riadkov) |
+| `dph_vymazany` | vymazaný z registra DPH, nie späť zaregistrovaný | `vat_deleted_date`, `datum_reg_dph`, `vat_deleted_reason` | oba dátumy chýbajú |
+| `nedoplatky_a_zanik` | evidované nedoplatky a firma zrušená | `total_debt`, `datum_zrusenia` | — |
+| `statutar_vo_vela_firmach` | jej štatutár je vo veľa firmách | graf osôb | firma nemá osoby (95,5 %) |
+| `sidlo_so_zhlukom` | na adrese sídla je evidovaných veľa firiem | `count()` na `ulica`+`mesto`+`psc` | **cena nie je zmeraná** — rozhodne sa po meraní |
+
+Osobné (`backend/connections/person_risk.py`):
+
+| kód | čo tvrdí | z čoho |
+|---|---|---|
+| `serialny_statutar` | funkcia vo veľa firmách | počet väzieb |
+| `odvetvova_rozptylenost` | tie firmy sú naprieč odlišnými odvetviami | SK NACE divízie |
+| `umrtnost_firiem` | podiel zrušených / s nedoplatkom / nespoľahlivých DPH | `datum_zrusenia`, `total_debt`, `tax_reliability` |
+| `nezname_funkcie` | podiel väzieb, ktorých história nebola prečítaná | `is_active is None` |
+
+**Prahy sa nesmú vymyslieť.** „Sériový štatutár" je prah na počte firiem a ten
+sa musí odčítať z rozdelenia, nie z pocitu — inak je to brána, ktorá platí
+z jedného roku a tvári sa ako pravidlo (tá istá chyba ako pri 500 v §8.6).
+Preto pribudne read-only príkaz `risk_indicators_report`, ktorý vypíše
+rozdelenia, a prahy sa do kódu zapíšu až z neho, s uvedením nameranej hodnoty.
+
+Neznáme funkcie sú **pokrytie, nie indikátor**: časť väzieb (ORSR HTML vetva)
+má `is_active=None`, čo znamená „históriu sme nečítali". Osobný panel preto
+vypíše, koľko z väzieb je neznámych, a `umrtnost_firiem` počíta len z tých,
+ktoré sú známe — inak by z neznalosti vzniklo číslo, ktoré vyzerá ako nález.
+
+#### 11.22.5 Právny rámec (súčasť práce, nie poznámka pod čiarou)
+
+- Odvodený profil o fyzickej osobe je spracúvanie osobných údajov, aj keď
+  vstup je verejný register. `pages/Privacy.tsx` to musí pomenovať.
+- Sekcia píše jednou vetou, že **nie je zistením protiprávneho konania**
+  a že verejné registre nemôžu preukázať karusel ani bieleho koňa.
+- Žiadne hromadné exporty osobných indikátorov; na firemnom paneli je
+  viditeľný len štatutár, ktorého firma sama zverejňuje.
+
+#### 11.22.6 Fázy
+
+- **F1 — bez zmeny schémy** (táto práca): čisté funkcie, nové pole v API
+  (`redFlags` na `CompanyDetailSerializer` a na `PersonDetailView`), nová
+  sekcia, osobný panel, testy každej vetvy, `risk_indicators_report`.
+  Žiadna migrácia, žiadny model, nič nemôže zošalieť — a preto ani brána
+  „pred migráciou zálohu" neplatí.
+- **F2 — perzistencia a admin zoznam** (samostatné rozhodnutie): uložiť
+  indikátory a dať analytikovi zoznam „najviac indikátorov naprieč registrom".
+  Toto si vyžiada model, migráciu a teda aj čerstvú overenú zálohu.
+- **F3 — nové zdroje**: RPVS (koneční užívatelia výhod — jediný zdroj, ktorý
+  vie odpovedať na „kto za tým naozaj stojí"), kód §81/§82 z `ds_dphz.zip`
+  (súbor je v `FS_DATASET_URLS` a **nespracúva sa**), Dôvera, a napojenie na
+  súdne rozhodnutia / exekúcie, ktoré sú v registri sekcií už dnes ako
+  `planned`/`paid`.
+
+#### 11.22.7 Poradie prác
+
+1. ✅ Backend: `red_flags.py` + `person_risk.py` + testy každej vetvy
+2. ✅ príkaz `risk_indicators_report`; ⏳ **distribúcie nenamerané** — beží na `dell`, viď 11.22.8
+3. ✅ API: `redFlags` na firemnom detaile a na osobe
+4. ✅ Frontend: sekcia `rizikove-indikatory` + panel na osobe + Privacy
+5. ✅ Doklad: výsledok, čísla a verdikt CI do tejto sekcie
+
+#### 11.22.8 Výsledok F1 (2026-09-28)
+
+Overené na Macu, vo worktree `red-flags-biely-kon-karusel`:
+
+| kontrola | výsledok |
+|---|---|
+| `manage.py test` (celá backendová suita) | **1183 testov, `OK`**, exit 0, 59,7 s |
+| `npm test` (vitest) | **48 súborov, 443 testov, všetky prešli** |
+| `npm run typecheck` | čisté |
+| `npm run build` | 1675 modulov, 6,0 s |
+
+Frontendové kontroly bežali v obraze, ktorý používa CI, s **týmto** worktree
+namontovaným nad `/app` — nie cez `docker compose exec frontend`, ktorý patrí
+hlavnému checkoutu a testoval by iné súbory. To je tá istá pasca, ktorú
+`[[vite-dev-server-caches-prebundled-deps]]` opisuje pre dev server: príkaz,
+ktorý vyzerá ako kontrola, ale číta iný strom.
+
+Poznámka k prostrediu, aby sa nezamenila za regresiu: susedná session namerala
+v tej istej suite **6 chýb** v admin-render testoch (`Missing staticfiles
+manifest entry for 'unfold/fonts/inter/styles.css'`). Tu je
+`backend/staticfiles/staticfiles.json` prítomný (18 kB, gitignorovaný lokálny
+artefakt — `.gitignore:62`), takže beh je zelený. Chyby teda visia na
+chýbajúcom build artefakte, nie na kóde: tento krok nemení ani template, ani
+statický súbor.
+
+**Tri odchýlky od návrhu, všetky vedomé.**
+
+**(a) `partial` sekcia má telo.** §11.22.3 navrhuje `status: 'partial'`, lenže
+registr sekcií poznal jedine `ReadySectionId` (`status: 'ready'`) a
+`SectionNotice` pre všetko ostatné — doslovné prečítanie plánu by teda
+**skrylo všetky indikátory** za oznam o tom, čo nemáme. `ReadySectionId` je
+preto `BodySectionId` (`'ready' | 'partial'`), pribudol `SectionStatusBanner`
+(výhradu kreslí **nad** telom, nie namiesto neho) a `SectionPanel` je jediný
+vlastník otázky „ako táto sekcia vyzerá"; dovtedy to bolo `? :` na dvoch
+miestach, ktoré sa mohli ticho rozísť. Skryť to, čo máme, za oznam o tom, čo
+nemáme, nie je čestnosť — je to ten istý tvar chyby, ktorý táto sekcia vznikla
+odstrániť. Zmena si vynútila aj opravu existujúceho testu: slučka v
+`frontend/pages/Company.test.tsx` tvrdila „vysvetli, prečo je každá sekcia,
+ktorú nevieme naplniť, prázdna" a filtrovala podľa `status !== 'ready'`; pre
+`rizikove-indikatory` by **prešla, hoci jej tvrdenie je nepravdivé** (sekcia
+prázdna nie je). Predikát je preto `!bodyFor(section.id)`.
+
+**(b) `nezname_funkcie` je pokrytie, nie pravidlo.** Tabuľka v §11.22.4 ho
+uvádza medzi osobnými pravidlami, ale próza hneď pod ňou hovorí opak („Neznáme
+funkcie sú **pokrytie, nie indikátor**"). Nasledovaná bola próza: `PERSON_RULES`
+má **tri** pravidlá (`serialny_statutar`, `odvetvova_rozptylenost`,
+`umrtnost_firiem`) a neznáma história sa vysvetľuje v pokrytí
+(`companies_function_state_unknown`) vetou, že je to medzera v našich dátach,
+nie zistenie o osobe. Tabuľkový riadok je tým neplatný.
+
+**(c) `umrtnost_firiem` počíta len zrušené firmy.** §11.22.4 mu pripisuje
+„podiel zrušených / s nedoplatkom / nespoľahlivých DPH"; implementované je len
+„zrušených". `total_debt` aj `tax_reliability` sú pre veľkú časť registra
+prázdne (218 143 riadkov bez indexu spoľahlivosti), takže by do menovateľa
+pustili firmy, o ktorých nevieme nič — a podiel z neznáma je číslo, ktoré sa
+číta ako nález. Zúženie je zámerné a je to **strata**, ktorú treba pomenovať,
+nie obísť; rozšírenie patrí do F3 spolu s kódom §81/§82.
+
+**Prahy zostávajú predbežné** a je to jediná vec, ktorá z F1 ostáva otvorená
+(bod 2 vyššie). Všetky konštanty nesú v kóde blok „Thresholds", ktorý hovorí,
+že znak (podiel, násobok, počet) pochádza z metodiky a **číslo je počiatočné,
+nie namerané**. `risk_indicators_report` je zámerne čistá agregácia toho, čo
+pravidlá hlásia v `evidence`, a nepočíta vlastnú prahovú logiku — inak by sa
+report a produkt mohli rozísť o tej istej firme, čo je presne trieda chyby,
+ktorú tu riešime. Kým sa čísla nenamerajú na `dell`, kód ani tento plán
+netvrdia, že prahy sú správne — tvrdia len, že sú označené za neoverené.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
