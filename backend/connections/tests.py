@@ -1,3 +1,4 @@
+import re
 from datetime import date
 
 from django.db import connection
@@ -7,6 +8,7 @@ from rest_framework.test import APITestCase
 
 from companies.models import Company
 from registers.models import OrsrCompanyProfile
+from .views import _coverage
 from .models import (
     Person,
     PersonCompanyRelation,
@@ -1641,3 +1643,64 @@ class CompanyPersonsAPITests(APITestCase):
         self.assertEqual(data["groups"], [])
         self.assertEqual(data["periods"], [])
         self.assertEqual(data["name"], self.company.nazov_UJ)
+
+
+class CoverageQueryShapeTests(TestCase):
+    """`_coverage()` must count ids, not whole company rows.
+
+    This is a test of a query's *shape*, which is usually a smell -- it is here
+    because the defect it guards is invisible to every other kind of test. Both
+    forms return the same number, so `test_coverage_is_reported_with_every_answer`
+    passes either way; the difference is that one of them makes Postgres sort
+    every column of every matched company row.
+
+    Measured on production 2026-09-28: `SELECT DISTINCT <all 45 columns>` over
+    ~168k rows took 9.5-11.8 s per call, and the call sits in the response path
+    of the person search, the person detail page and the short-query refusal.
+    Counting distinct ids took 0.37 s and is the form the other five coverage
+    counts in this project already use.
+
+    A rewrite that is fast but shaped differently is fine and will pass: what is
+    forbidden is a DISTINCT that selects more than one expression.
+    """
+
+    def test_no_coverage_query_distincts_over_a_whole_row(self):
+        Company.objects.create(ruz_id=1, ico="50059959", nazov_UJ="Test Firma")
+
+        with CaptureQueriesContext(connection) as captured:
+            _coverage()
+
+        wide = [
+            sql
+            for sql in (q["sql"] for q in captured.captured_queries)
+            if self._distinct_selects(sql)
+        ]
+
+        self.assertEqual(wide, [], "DISTINCT must be over ids, not whole rows")
+
+    @staticmethod
+    def _distinct_selects(sql: str) -> list[str]:
+        """The expressions of every `SELECT DISTINCT ... FROM` in `sql`."""
+        selects = []
+        for match in re.finditer(
+            r"SELECT\s+DISTINCT\s+(.*?)\s+FROM\s", sql, re.IGNORECASE | re.DOTALL
+        ):
+            # Split on commas that are not inside parentheses: `AS "col1"` and
+            # `COUNT(DISTINCT x)` both appear in this project's SQL.
+            body = match.group(1)
+            depth = 0
+            expression = ""
+            parts = []
+            for char in body:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                if char == "," and depth == 0:
+                    parts.append(expression)
+                    expression = ""
+                    continue
+                expression += char
+            parts.append(expression)
+            selects.append([p.strip() for p in parts if p.strip()])
+        return [s for s in selects if len(s) > 1]

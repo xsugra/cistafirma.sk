@@ -9472,6 +9472,163 @@ na delle.
 
 ---
 
+### 11.24 „Overiť" nájde aj osobu — a `_coverage()` prestane stáť 10 sekúnd (2026-09-28)
+
+> **Prečo 11.24 a nie 11.22.** Paralelná vetva `integ-redflags-graph` („Biely
+> kôň" a „karusel" → §11.22; graf osôb a história → §11.23) vznikla z toho
+> istého `4d57373` a obe čísla si nárokuje ona. V pláne nesmú byť dva §11.22,
+> takže táto sekcia je prečíslovaná — dohoda medzi session, 2026-09-28. Obsah
+> je nezmenený; mení sa len číslo.
+
+**Zadanie (Samuel, 2026-09-28):** po zadaní mena osoby do vyhľadávacieho poľa
+v monitoringu má „Overiť" nájsť tú osobu a dať nahliadnuť, kde všade pôsobí.
+„V našepkávači to funguje, ale väčšinou mu to trvá dlho, a keď kliknem na
+overiť, napíše mi → *Nenašli sa žiadne výsledky pre váš dopyt.*"
+
+**Sú to dve príčiny, nie jedna — a tá druhá je to „trvá dlho".**
+
+#### Príčina 1 — „Overiť" sa na osoby nikdy nepýta
+
+`Monitoring.tsx` volal pri podaní formulára **len** `api.searchCompanies`
+(pôvodne riadok 56; dnes je to volanie na riadku 90, v `Promise.all`).
+`api.searchPersons` volal jedine našepkávač (`SearchBar.tsx:166` — pôvodne 168).
+Nášepkávač teda osobu nájde a ponúkne — a to isté meno podané tlačidlom skončí
+vo vetve „žiadne výsledky", hoci odpoveď na osobu existuje a je o riadok nižšie.
+
+Registračné číslo (pôvodné riadky 57-63 `Monitoring.tsx`): jediný
+`searchCompanies`, a `else` vetva zapisuje
+`'Nenašli sa žiadne výsledky pre váš dopyt.'` bez toho, aby sa na osoby vôbec
+opýtala. Endpoint `/api/persons/?q=` je pritom verejný (`AllowAny`), bez
+throttlu, a vracia `id`, z ktorého sa stavia `/osoba/:id`.
+
+#### Príčina 2 — `_coverage()` stojí 10 z 10,5 sekundy
+
+Merané na **dell** (produkcia, `main`), `curl` na loopback backendu:
+
+| dopyt | `/api/persons/` | `/api/companies/` |
+|---|---|---|
+| `Trnka` | 9,84 s | 0,66 s |
+| `Novak` | 10,65 s | 0,88 s |
+| `Ján Novák` | 11,88 s | 0,81 s |
+| `ESET` | 12,50 s | 0,94 s |
+
+Rozklad toho istého dotazu v shelli backendu na delle (`manage.py shell`,
+len SELECT-y):
+
+| krok | čas |
+|---|---|
+| `_coverage()` | **10,09 s** |
+| `_coverage()` znova | **11,02 s** |
+| `persons.count()` | 0,14 s |
+| okno `[:300]` | 0,16 s |
+| `_cluster_persons(okno)` | 0,02 s |
+| `_relations_by_person(shown)` | 0,03 s |
+
+Čiže **hľadanie je 0,35 s a veta o pokrytí je zvyšok.** `EXPLAIN (ANALYZE)`
+ukázal prečo: `connections/views.py` (pôvodne riadok 44, dnes 57-59) písal
+`Company.objects.filter(...).distinct().count()`, a to Djangu vyrobí
+`SELECT DISTINCT` nad **všetkými 45 stĺpcami** firmy (`width=448`) — plán je
+`Unique → Incremental Sort` nad ~168 000 riadkov, `Execution Time: 11754 ms`.
+
+Je to **odchýlka, nie rozhodnutie**: všetkých päť ostatných pokrytí v projekte
+(`adminapi/views/dashboard.py:33`, `registers/views.py:113`, `registers/admin.py:742`,
+`companies/admin.py:923`, `registers/management/commands/financials_coverage.py:51`)
+počíta `values("company_id").distinct().count()` — úzku formu. `_coverage()` bolo
+jediné miesto, ktoré počítalo `DISTINCT` nad celým riadkom; `grep -rn
+"distinct()\.count()" backend --include="*.py"` dnes vracia šesť riadkov a všetkých
+šesť je úzkych.
+
+**Rovnaké číslo, 25× rýchlejšie** (merané na tej istej DB):
+
+| tvar | čas | výsledok |
+|---|---|---|
+| `.distinct().count()` (dnes) | 9,46 s | 43 195 |
+| `.values("id").distinct().count()` | 0,38 s | 43 198 |
+| `.aggregate(Count("id", distinct=True))` | 0,37 s | 43 198 |
+
+Rozdiel 3 riadkov **nie je chyba tvaru**: tabuľka je živá a sync do nej
+priebežne pridáva (za 20 minút 504 330 → 504 647 väzieb). V **jednom snapshot-e**
+(`SELECT` s oboma tvarmi naraz) sú totožné — 43 202 = 43 202, 43 204 = 43 204,
+43 206 = 43 206, pričom číslo medzi dvoma vykonaniami rastie o 2. Formy sú
+teda ekvivalentné a zmena je **čisto výkonová**.
+
+Dôsledok: `/api/persons/` klesne z ~10 s na ~0,7 s (0,35 s hľadanie + 0,45 s
+pokrytie), a to aj pre `GET /api/persons/<id>/` a pre krátky dopyt — `_coverage()`
+sa volá na troch miestach, dnes `connections/views.py:622`, `:677` a `:720`.
+
+#### Návrh a implementácia (frontend)
+
+1. `Monitoring.handleSearch` sa pýta **oboch** endpointov naraz
+   (`Promise.all`, chyby zvlášť — zlyhanie jedného nesmie vyprázdniť druhý,
+   presne ako v `SearchBar.tsx:161-170`).
+2. Rozhodnutie o presmere sa nemení pre firmy a je jedno pravidlo pre obe:
+   **práve jeden nález → ísť naň** (dnes to tak je pre firmu; nové je, že to
+   tak je aj pre osobu). Viac nálezov → zoznam. Počíta sa `firmy + osoby`, takže
+   jedna firma a jedna osoba naraz je zoznam, nie tichý výber jednej z nich.
+3. Výsledkový zoznam sa delí na **Firmy** a **Osoby u nás**, s vetou o pokrytí
+   pod osobnou skupinou — rovnaké rozdelenie ako v našepkávači, jeden riadok
+   osoby je **jeden komponent** (`PersonResultRow`), aby sa dve miesta nemohli
+   rozísť. Hlavička počíta obe skupiny spolu.
+4. Prázdny výsledok si ponechá vetu „Nenašli sa žiadne výsledky pre váš dopyt."
+   a **pribudne k nej veta o pokrytí** — bez nej je prázdno tvrdenie o osobe,
+   hoci náš graf drží 43 202 zo 631 990 firiem (6,8 %).
+5. Podtitulok stránky sa rozšíri o „alebo meno osoby" (placeholder to už
+   hovorí).
+
+Dve rozhodnutia, ktoré počas implementácie vyplávali a nie sú v pôvodnom
+návrhu:
+
+- **Zlyhaný request nie je odpoveď „nikto".** `personCoverage: null` znamená
+  dvoje — „endpoint neodpovedal" aj „odpovedal bez počtov" — a stránka podľa
+  toho musí povedať dve rôzne vety. Pribudol preto samostatný príznak
+  `personAnswered`; bez neho by zlyhaný request dostal vetu „V našich dátach
+  sme k tomuto menu nikoho nenašli.", čo je presne ten typ tichého zlyhania,
+  ktorý tento projekt rieši všade inde. (V `SearchBar` tá istá dvojznačnosť
+  zostáva — je to predchádzajúci stav, nie nová chyba; zaznamenané nižšie.)
+- **Veta o pokrytí sa v chybovej karte zobrazuje len vtedy, keď osobný endpoint
+  naozaj odpovedal.** Inak by tvrdenie o našich dátach vyslovil request, ktorý
+  k nim nikdy nedošiel.
+
+**Známe, neopravené (predchádzajúci stav, nie následok tejto zmeny):**
+`SearchBar` tú istú dvojznačnosť nerozlišuje — keď osobný request zlyhá a firemný
+nájde aspoň jednu firmu, dropdown pod „Osoby u nás" napíše *„V našich dátach sme
+k tomuto menu nikoho nenašli."*, hoci sa na naše dáta nikto neopýtal. Je to tá
+istá trieda chyby, ktorú na výsledkovej stránke rieši `personAnswered`; v
+`SearchBar` by si vyžiadala tretie pole v `SuggestionBundle` a jeho šesť testov,
+takže zostáva mimo tohto kroku.
+
+**Vedome nie:** živý register ORSR sa z výsledkovej stránky nevolá. Je to cudzí
+server s limitom 60 requestov/hodinu a v projekte má svoje miesto — na stránke
+osoby, za tlačidlom (`OrsrRegisterGroup`). Tlačidlo „Overiť" je vstup
+z klávesnice a nesmie sa stať druhou cestou k nemu.
+
+**Testy:** nový `frontend/pages/Monitoring.test.tsx` (9 testov) — osoba sama
+vedie na `/osoba/:id` (dnešná chyba), stránka sa pýta osobného endpointu
+**vlastným** volaním, viac nálezov vypíše zoznam s vetou o pokrytí, nič nenájde
+a povie pokrytie, jedna firma stále presmeruje (regresia), zlyhanie osobných dát
+nezmaže firemné výsledky (a neprevezme vetu „nikoho sme nenašli"), zlyhanie
+firemných nezmaže osobné, a keď zlyhá oboje, nezobrazí sa veta o pokrytí.
+K tomu `PersonResultRow.test.tsx` (5 testov) a `CoverageQueryShapeTests`
+(backend) — viď nižšie.
+
+**Dve pozitívne kontroly (aby testy neboli len zelené):**
+
+- *Frontend:* vrátenie presne pôvodnej chyby (`Promise.resolve(null)` namiesto
+  volania `api.searchPersons`) zhodí **5 z 9** testov `Monitoring.test.tsx`.
+  Prvý pokus o test „pýta sa na osoby" pritom pod mutáciou **prešel** — pretože
+  `expect(searchPersons).toHaveBeenCalled()` odpovedal našepkávač, ktorý sa pýtal
+  vždy. To je presne tá chyba, nie dôkaz opravy; test teraz hľadá volanie bez
+  `AbortSignal`, ktoré posiela len stránka.
+- *Backend:* `CoverageQueryShapeTests` so starým tvarom (`.distinct().count()`)
+  **padne** a vo výpise ukáže `SELECT DISTINCT` nad 44 stĺpcami; s úzkym tvarom
+  prejde. Celý `connections`: **100 testov OK** (Postgres 16, service kontajner
+  CI ekvivalent).
+
+**Overenie pred nasadením:** `npm test` (440 testov, 48 súborov), `npm run
+typecheck`, `npm run build` — všetky tri zelené.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.

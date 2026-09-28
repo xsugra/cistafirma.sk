@@ -1,11 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { PersonCoverage, PersonSummary } from '../types';
-import { personPath } from '../constants';
 import { PersonCoverageNote } from './person/PersonCoverageNote';
-import { RoleStateBadge } from './person/RoleStateBadge';
+import { PersonResultRow } from './person/PersonResultRow';
 
 /**
  * One debounced answer, both halves of it.
@@ -310,32 +308,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                 </p>
 
                 {persons.length > 0 ? (
-                  persons.map((person) => {
-                    const first = person.companies[0];
-                    const rest = person.companies.length - 1;
-                    return (
-                      <Link
-                        key={person.id}
-                        to={personPath(person.id)}
-                        onClick={() => setShowSuggestions(false)}
-                        className="px-6 py-3 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex justify-between items-center gap-4 group transition-colors border-b border-gray-100/70 dark:border-slate-800/50 last:border-0"
-                      >
-                        <div className="flex-grow min-w-0">
-                          <p className="font-bold text-gray-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
-                            {person.name}
-                          </p>
-                          {first && (
-                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                              {first.role_display ? `${first.role_display} · ` : ''}
-                              {first.name}
-                              {rest > 0 ? ` a ďalšie ${rest}` : ''}
-                            </p>
-                          )}
-                        </div>
-                        {first && <RoleStateBadge isActive={first.is_active} />}
-                      </Link>
-                    );
-                  })
+                  persons.map((person) => (
+                    <PersonResultRow
+                      key={person.id}
+                      person={person}
+                      onClick={() => setShowSuggestions(false)}
+                      className="border-b border-gray-100/70 px-6 py-3 last:border-0 dark:border-slate-800/50"
+                    />
+                  ))
                 ) : (
                   <p className="px-6 py-3 text-xs text-gray-500 dark:text-gray-400">
                     {suggestions.personDetail ||
