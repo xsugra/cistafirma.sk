@@ -9033,6 +9033,139 @@ nemá zmysel — buď to spustí človek, alebo pribudne Bash permission rule.
 
 ---
 
+### 11.23 Jeden človek = jeden uzol, a graf sa dá prepnúť do histórie (2026-09-28)
+
+Zadanie bolo tri veci naraz a všetky tri majú jedného menovateľa: **obrazovka
+kreslila viac, než register tvrdí.** Graf „Prepojenia" kreslil jedného človeka
+dvakrát (konateľ a zároveň spoločník = dva uzly), kreslil spolu všetky funkcie,
+ktoré kedy platili (teda firmu, ktorá nikdy neexistovala), a sekcia „Osoby"
+vedela len dnešný stav — kto z firmy odišiel, z obrazovky zmizol, hoci riadok
+v tabuľke ostal.
+
+**Toto je iná trieda než §11.18, a preto odpoveď na „už je to opravené?" bola
+„nie".** `687a559` opravil to, že **ten istý** človek dostal **rôzne id uzla v
+rôznych firmách** (`_resolve` proti celému stromu namiesto lokálneho zhluku), a
+jeho meranie bolo 144 ľudí s viac než jedným id na vzorke 3 000 firiem. Na
+obrázku, ktorý toto zadanie otvorilo, je ale jedna firma a v nej **dva uzly
+toho istého mena** — a to je iný mechanizmus, ktorý `687a559` nechal stáť.
+
+**Prečo to kreslilo dvakrát.** `cluster_evidence` (pravidlo 1: jedna firma, jedno
+základné meno) zlúčenie **odmietne**, keď dva riadky nesú dve rôzne neprázdne
+PSČ — vtedy to *môžu* byť dvaja ľudia. To odmietnutie je správne o dôkazoch a
+nesprávne na obrazovke: oba riadky nesú to isté meno, takže graf kreslí jedného
+človeka dvakrát a čitateľ nemá ako rozlíšiť duplicitu od menovca. Typický
+prípad je človek, ktorý sa presťahoval (`Poráč 053 23` a `Spišská Nová Ves
+052 01`), nie dvaja ľudia.
+
+**O rozsahu tejto triedy mám len prevzaté číslo, a hovorím to nahlas.**
+Docstring `_company_person_groups` tvrdí: *„Measured on production 2026-09-28
+over 300 companies holding officers: 12 companies (4.0 %) hold a name this
+splits, 21 duplicate labels in all."* To meranie som **nezopakoval** a v tomto
+kroku sa zopakovať nedalo: lokálna `cistafirma` na Macu má **0 tabuliek**
+(volume purge 2026-09-17), takže tento host nemá čo merať, a na delle by to bol
+beh nad produkciou. Beriem to teda ako prevzatý údaj z návrhovej session, nie
+ako vlastné meranie — mechanizmus je pinovaný testami, rozsah nie.
+
+**Fold sa robí a priznáva, `cluster_evidence` sa nemení.** `_company_person_groups`
+skladá clustery podľa základného mena v rámci jednej firmy, ale len keď to
+`_can_fuse` dovolí: dva rôzne dátumy narodenia alebo dve rôzne IČO osôb fold
+**odmietnu** — to je jediný dôkaz v tabuľke, ktorý vie zlúčenie vyvrátiť, a
+nesmie sa obísť. Čo fold spravil, to povie: uzol nesie `records` a `clusters`,
+tooltip to zopakuje a zoznam v „Osoby" pridá `PersonRecordsNote` s adresami,
+ktoré register k tomu človeku napísal. Riadok identity sa teda nehýbe; mení sa
+len to, koľko uzlov z neho obrazovka nakreslí.
+
+**Dve línie na jednu osobu.** Hrany sú kľúčované na `(source, target, role)`,
+takže konateľ a spoločník jedného človeka sú dve hrany s dvomi vlastnými
+legendami — presne to, čo zadanie žiadalo — a nie dva uzly s jednou.
+
+**Historické obdobie.** `?as_of=YYYY-MM-DD` pýta firmu k dátumu: vzťah platí,
+ak `vznik <= D` a (`zanik IS NULL` alebo `zanik >= D`). Riadok s neznámym
+vznikom sa do obdobia **nedá** priradiť — môže začať pred aj po tom dátume —
+takže sa vynechá a spočíta (`undated_excluded`), a to isté číslo sa povie
+čitateľovi. `meta.periods` ponúka len roky, ktorých 31. 12. kreslí **inú
+množinu funkcií** než nasledujúci pozorovací bod, najnovšie prvé; aktuálny rok
+sa neponúka nikdy, lebo jeho 31. 12. je v budúcnosti a „teraz" je tlačidlo
+`Dnes`. Neplatný dátum je **400**, nie ticho dnešok: odpovedať dneškom, kým
+ovládač stále svieti na 2015, je presne tá chyba, ktorú tu riešime.
+
+Vo zvolenom období je `isActive` na každej hrane `True` (`_edge_currency`),
+lebo každá hrana tam bola v sile k tomu dátumu — to je otázka obdobia, nie
+dneška; vrátiť `rel.is_active` by na rok 2015 nalepilo dnešnú menu (#86
+zrkadlovo).
+
+**História v „Osoby".** `CompanyPersonsView` (`GET /api/companies/<ico>/persons/`)
+číta **tie isté riadky tými istými pomocníkmi** ako graf, takže zoznam a obrázok
+nemôžu menovať iných ľudí ani sa rozísť v tom, koľko zápisov jedna funkcia
+zastupuje. Sekcia „Osoby" dostala prepínač **Aktuálne / História** namiesto
+druhej sekcie: sú to tie isté otázky položené k dvom dátumom, nie dva predmety.
+Prepnúť sa dá vždy, aj u firmy, ktorá dnes nemá nikoho — „nikto tam teraz nie
+je" a „nikto tam nikdy nebol" sú dve rôzne tvrdenia a práve firma, ktorej
+jediný konateľ odišiel, je prípad, pre ktorý tá obrazovka existuje.
+
+**Štyri pasce, ktoré som pri tom musel obísť a patria sem.** Prvé dve sú
+návrhové, druhé dve som našiel až pri čítaní vlastného kódu pred commitom.
+
+(1) Zvolené obdobie sa drží spolu s IČO, pre ktoré bolo zvolené, a **odvodzuje
+sa** (`period.ico === ico ? period.asOf : null`), nie resetuje v efekte — efekt
+by bežal až po tom, čo fetch efekt odišiel so starým obdobím, čo sú dva requesty
+na jednu navigáciu a preteky medzi odpoveďami.
+
+(2) Popis pod grafom a banner v zozname čítajú `drawnAsOf` (echo `meta.as_of`),
+nie kliknutý rok: medzi klikom a odpoveďou sú to dva rôzne dni a popis by
+menoval obdobie, ktoré obrázok nad ním neukazuje.
+
+(3) `useGraphData` pri **zlyhanom** requeste nechával stáť `periods` z
+predošlej firmy, takže rok firmy A sa ponúkal nad chybovou hláškou firmy B.
+Teraz sa ruší spolu s `graphData` — „odpoveď neprišla" nie je tvrdenie o
+obdobiach. Cena je, že neúspešný request o obdobie si vezme aj tlačidlo `Dnes`;
+to je menšia krivda, lebo zlý rok je **tvrdenie** a chýbajúci ovládač len
+nepríjemnosť.
+
+(4) `CompanyPeopleHistory` držal odpoveď v holom `data`, kým stránka pod ním sa
+pri prechode na inú firmu re-renderuje s novým `company` a **tá istá inštancia
+komponentu sa použije znova** — takže zoznam ľudí firmy A by ostal na obrazovke
+pod hlavičkou firmy B, kým by neprišla nová odpoveď. Odpoveď sa preto drží
+spolu s IČO, o ktorom je (`{ico, data}`), a číta sa len keď sedí.
+
+**Overenie.** `manage.py test connections` **131 OK** (32 z nich je nových, v
+troch nových triedach: `CompanyPersonFusionTests` 9, `CompanyGraphPeriodTests`
+12, `CompanyPersonsAPITests` 11). Celá suita `manage.py test` **1091 testov, 0
+failures, 6 errors** — a tých 6 chýb je **prostredie, nie kód**: všetky sú to
+admin-render testy (`companies.tests.CompanyAdminSyncNowTests`,
+`registers.tests.*AdminDashboard*`) padajúce na
+`Missing staticfiles manifest entry for 'unfold/fonts/inter/styles.css'`, lebo
+`STORAGES` používa `CompressedManifestStaticFilesStorage`
+(`backend/backend/settings.py:393`) a na tomto hoste `collectstatic` nebežal
+(`backend/staticfiles/staticfiles.json` neexistuje). Vetva sa `companies/` ani
+`registers/` nedotýka, takže to nemôže byť jej regresia — **baseline som ale
+nezmeral**, tvrdím to z mechanizmu, nie z porovnania.
+
+Frontend: `npm test` **50 súborov / 478 testov, všetky prešli** (pred touto
+vetvou 46 / 426), `npm run typecheck` exit 0 (0× `error TS`) a `npm run build`
+exit 0. Všetky tri proti **tejto vetve** v jednorazovom `docker run`
+s mountom vetvy a zdieľaným volume `cistafirma_frontend_node_modules` —
+bežiaci `cistafirma_frontend` patrí hlavnému checkoutu a jeho bind mount túto
+vetvu **nevidí**, takže `docker compose exec -T frontend npm test` by testoval
+iné súbory, než aké sa tu commitovali.
+
+Jedna vec na tom overení stojí za záznam ako pasca: prvé kolo `npm test` bolo
+**9× červené** a nebola to chyba implementácie — mock `./useGraphData`
+v `ConnectionGraph.test.tsx` vracia pevný objekt, takže `periods`, ktoré hook
+naozaj vracia, prišli do komponentu ako `undefined` a `periods.length` spadlo.
+Mock, ktorý pole **vynechá**, nie je prísnejší test, je to iný komponent; preto
+má teraz mock aj `periods`, `undatedExcluded` a `drawnAsOf` a `beforeEach`,
+ktorý ich pred každým testom vynuluje.
+
+**Migrácie: žiadne.** Všetko je čítanie za behu, schéma sa nemení
+(`git diff --name-only main...HEAD -- 'backend/*/migrations/*'` je prázdne), takže
+brána „pred migráciou zálohu" neplatila.
+
+**Rollback** je `git checkout <predošlý commit> && docker compose up -d --build`
+na delle.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
