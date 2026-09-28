@@ -185,3 +185,52 @@ describe('SearchBar — the button is placed against the pill, not the wrapper',
         if (variant === 'hero') expect(wrapper.className).toContain('px-4');
     });
 });
+
+describe('SearchBar — the suggestion menu escapes the box it drops from', () => {
+    // Measured in a browser, not here. Home's hero section carries
+    // `overflow-hidden` and the menu used to be laid out inside it, so the
+    // section clipped the menu to its padding box -- 228 px of the menu's 422 on
+    // a 1280 px window and 276 px on a 393 px phone, with the next section's
+    // card painted over the rows (`document.elementFromPoint`, inside the
+    // menu's own rectangle, returned `div.app-card.p-8.flex`).
+    //
+    // jsdom has no layout engine and loads no Tailwind, so it cannot see a
+    // clipped box -- which is why a green suite sat on top of this bug. What is
+    // pinned here is the property that makes the clipping impossible whatever
+    // the surrounding page does: the menu is not a descendant of the search
+    // box, so no ancestor of that box is in the menu's containing-block chain
+    // and no ancestor's `z-index` decides whether it is on top.
+    const menuOf = async (text: string) => {
+        const {container} = renderWithProviders(
+            <SearchBar onSearch={() => {}} isLoading={false} initialIco="" />,
+        );
+        const user = userEvent.setup();
+        await user.type(screen.getByRole('textbox'), text);
+        const heading = await screen.findByText('Osoby u nás');
+        // The menu is the topmost ancestor of that heading that is still inside
+        // this document body -- i.e. the portal target's child.
+        let menu: HTMLElement | null = heading;
+        while (menu && menu.parentElement !== document.body) menu = menu.parentElement;
+        return {container, user, menu};
+    };
+
+    it('renders the menu as a child of body rather than inside the search box', async () => {
+        const {container, menu} = await menuOf('trnka');
+
+        expect(menu).not.toBeNull();
+        expect(container.contains(menu!)).toBe(false);
+    });
+
+    it('closes on a click outside but not on one inside the portalled menu', async () => {
+        // The two refs in the click-outside effect exist because of the portal:
+        // a click on a suggestion row is no longer a click inside the root, so
+        // the menu would close under the reader's finger on its way to the row.
+        const {user, menu} = await menuOf('trnka');
+
+        await user.click(screen.getByText('Osoby u nás'));
+        expect(menu).toBeInTheDocument();
+
+        await user.click(document.body);
+        await waitFor(() => expect(screen.queryByText('Osoby u nás')).not.toBeInTheDocument());
+    });
+});
