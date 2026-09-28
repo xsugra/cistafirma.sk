@@ -636,16 +636,34 @@ CELERY_BEAT_SCHEDULE = {
     #
     # The dispatcher reads `PeriodicTask` rows, not this dict, so the two have
     # to agree (docs/ARCHITECTURE.md §4). They do without a manual edit because
-    # a beat start reconciles every entry here into its row. Verified the same
-    # day: the stack was recreated at 16:46:40Z and the row read back `[500]`,
-    # the value in this file at that moment.
+    # a beat start reconciles every entry here into its row -- the mechanism,
+    # read on `dell` 2026-09-28 rather than inferred: `setup_schedule` calls
+    # `update_from_dict(self.app.conf.beat_schedule)`, which calls
+    # `from_entry` for every key (not only the missing ones), and that is
+    # `update_or_create(name=..., defaults=_unpack_fields(...))`, which rewrites
+    # an existing row. So `[3000]` takes effect on the next beat start after
+    # this file reaches the host, with no SQL. The same path is why a hand-edit
+    # of `args` in the admin UI would not survive: `args` is in `defaults`.
+    # `enabled` is not, which is what lets a pause by hand hold.
     #
     # Worth knowing before trusting the 20 days: the expiry that reasoning
-    # assumes is not in force. The row's `expires` read back `None` -- the
-    # `14000.0` above reaches `apply_async` options but not the row field -- so
-    # a backlog is not discarded, it waits. That cuts both ways for this size,
-    # and it is why 3 000 is safe to try: neither the window nor the expiry
-    # refuses the work, and the size can come back down without a migration.
+    # assumes is not in force, and writing it the celery way does not reach it.
+    # `django_celery_beat`'s `ModelEntry._unpack_options` has no `expires`
+    # parameter -- it takes `expire_seconds` and swallows everything else in
+    # `**kwargs` -- so `options={'expires': 14000.0}` is dropped before any row
+    # is written. Measured on `dell` 2026-09-28, raw SQL: `expire_seconds` is
+    # NULL for all nine of our rows and non-NULL only for
+    # `celery.backend_cleanup`, which `install_default_entries` writes itself
+    # using the spelling that works, `options={'expire_seconds': 12 * 3600}`.
+    # `ModelEntry.__init__` then reads the row's `expires_` (`expires or
+    # expire_seconds`), finds `None`, and passes no `expires` to `apply_async`.
+    # So a backlog is not discarded, it waits. That cuts both ways for this
+    # size, and it is why 3 000 is safe to try: neither the window nor the
+    # expiry refuses the work, and the size can come back down without a
+    # migration. The unarmed expiry is a spelling accident, not a decision --
+    # 14 000 s was meant to bound a stale batch, and arming it is a one-word
+    # change that should be made deliberately, together with deciding what a
+    # 3,9-hour-old batch ought to do.
     #
     # The 20 days assumes beat dispatches every 4 h. Over 2026-09-27/28 it did
     # not -- but nothing was broken: the schedule was switched off by hand and
