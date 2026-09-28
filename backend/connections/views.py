@@ -5,6 +5,7 @@ from datetime import date
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import F, Q
+from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -433,7 +434,270 @@ def _edges_by_identity(candidates):
     return list(merged.values())
 
 
+def _parse_as_of(value):
+    """The date a caller asked for, as `(date, error)`.
+
+    `(None, None)` is "today", which is what the graph draws without the
+    parameter. A malformed date is **refused** rather than ignored: quietly
+    answering with today's company while the control still reads 2015 would put
+    a period on the screen that the picture below it does not show, and nothing
+    in the answer would say so.
+    """
+    if value is None or not str(value).strip():
+        return None, None
+    try:
+        return date.fromisoformat(str(value).strip()), None
+    except ValueError:
+        return None, "Neplatný dátum. Očakávam formát RRRR-MM-DD."
+
+
+def _in_force_at(rel, as_of) -> bool:
+    """Whether this office was running on `as_of`.
+
+    A period view asks a different question from the one the graph normally
+    answers. Today's graph draws every relation we hold and marks each one
+    current, ended or unknown; a period view draws only the offices in force on
+    the date asked for -- which is why it can look like a different company.
+
+    **The start date has to be known.** A row whose `vznik` we never read cannot
+    be placed on a timeline at all: it may have begun before the date in
+    question or after it, so drawing it would be a claim the row does not
+    support. Those rows are left out and counted (`undated_excluded`) -- the
+    same treatment `_continues_period` gives a filing with no start.
+
+    An open end is not an unknown one. `zanik is None` means the office has not
+    ended, so it was running on every date from the start onwards, and that is
+    a statement about the past that the two dates it does carry support.
+    """
+    if rel.vznik_funkcie is None or rel.vznik_funkcie > as_of:
+        return False
+    return rel.zanik_funkcie is None or rel.zanik_funkcie >= as_of
+
+
+def _state_at(relations, when):
+    """Which offices this company's record holds on `when`.
+
+    The identity of the state is the set of offices and not how many there are:
+    one office ending as another begins is a different company drawn with the
+    same number of lines.
+    """
+    return frozenset(
+        (rel.person_id, rel.role, rel.vznik_funkcie, rel.zanik_funkcie)
+        for rel in relations
+        if _in_force_at(rel, when)
+    )
+
+
+def _period_years(relations, today):
+    """The years worth offering a reader, newest first.
+
+    A year is offered only when its 31 December shows a company that the next
+    observation point does not -- otherwise two of these would draw the same
+    graph, and a long-lived company would carry a chip for every year any
+    filing happens to mention. That is what keeps the row a control rather than
+    a list of dates.
+
+    The current year is never offered: its 31 December is in the future, and
+    the chip that means "now" is `Dnes`.
+    """
+    years = sorted(
+        {
+            value.year
+            for rel in relations
+            for value in (rel.vznik_funkcie, rel.zanik_funkcie)
+            if value
+        },
+        reverse=True,
+    )
+    periods = []
+    following = _state_at(relations, today)
+    for year in years:
+        if year >= today.year:
+            continue
+        state = _state_at(relations, date(year, 12, 31))
+        if state != following:
+            periods.append(year)
+        following = state
+    return periods
+
+
+def _company_person_relations(company, as_of):
+    """This company's relation rows, in three shapes.
+
+    Returns `(all_relations, relations, undated)`: everything we hold for the
+    company, the ones the date asked for leaves in force, and how many could not
+    be placed at all because we never read their start date.
+
+    `all_relations` is returned alongside because the period chips are a
+    property of the whole record and must not move when one of them is chosen.
+    """
+    all_relations = list(
+        PersonCompanyRelation.objects
+        .filter(company=company)
+        # `company` as well as `person`: the company graph knows the company
+        # already, but `CompanyPersonsView` reads each relation's own company
+        # back off the row for its office payload, and one join is what keeps a
+        # company with 187 officers from answering with 187 more queries.
+        .select_related("person", "company")
+    )
+    if as_of is None:
+        return all_relations, all_relations, 0
+    return (
+        all_relations,
+        [rel for rel in all_relations if _in_force_at(rel, as_of)],
+        sum(1 for rel in all_relations if rel.vznik_funkcie is None),
+    )
+
+
+def _office_payload(rel) -> dict:
+    """One office, as seen from a company.
+
+    The mirror of `_relation_payload`, and deliberately the same shape: a
+    company's own screen and a person's page state one fact, so they fold it
+    with the same code (`_merged_relations`) and cannot disagree about how many
+    register filings one tenure stands for. `ico` stays even though every row
+    here shares it -- that is what `_merged_relations` and `_joined_periods` key
+    on, and a second shape would be a second set of rules to drift.
+    """
+    return {
+        "ico": rel.company.ico,
+        # The company's name, which every row here shares: present because
+        # `_relation_payload` carries it and the frontend reads one mapper for
+        # both shapes. A field the other side of the contract fills in and this
+        # one leaves empty is how `name` becomes the string "undefined" on
+        # somebody's screen.
+        "name": rel.company.nazov_UJ,
+        "role": rel.role,
+        "role_display": rel.role_display or rel.get_role_display(),
+        "is_active": rel.is_active,
+        "vznik_funkcie": rel.vznik_funkcie,
+        "zanik_funkcie": rel.zanik_funkcie,
+        "intervals": 1,
+    }
+
+
+def _edge_currency(rel, as_of):
+    """What an edge's `isActive` says in the view the caller asked for.
+
+    Today's graph carries the tri-state, because its question is whether the
+    office still runs. A period view asks whether it ran *then*, and every edge
+    it draws was in force on the date asked for -- that is what the filter
+    means -- so `True` is the answer, and it is a claim about the period rather
+    than about today. Reporting `rel.is_active` there would stamp today's
+    currency on a past company, which is the defect #86 removed, mirrored.
+    """
+    return rel.is_active if as_of is None else True
+
+
+def _person_company_count(member_ids, as_of=None) -> int:
+    """How many companies we hold for this person, at the date asked for.
+
+    Counted over the relations rather than read from a stored column, so a
+    period view counts the companies the person was in *then*: printing today's
+    count on a 2015 graph would be a number nothing in the data supports.
+    """
+    relations = list(
+        PersonCompanyRelation.objects.filter(person_id__in=member_ids)
+    )
+    if as_of is not None:
+        relations = [rel for rel in relations if _in_force_at(rel, as_of)]
+    return len({rel.company_id for rel in relations})
+
+
+def _can_fuse(entry, members) -> bool:
+    """Whether these rows may be drawn as the person `entry` already holds.
+
+    The two guards `cluster_evidence` refuses a join on, applied to the fold the
+    graph does by name: rows stating two different birth dates, or two different
+    person IČOs, are not one human however their names read. Without this, the
+    drawing fix would quietly undo the only evidence in the table that can
+    *refute* a merge -- which is the one thing `cluster_evidence` says that
+    evidence is good for.
+    """
+    dates = {m.birth_date for m in members if m.birth_date}
+    icos = {m.person_ico for m in members if m.person_ico}
+    return len(entry["dates"] | dates) <= 1 and len(entry["icos"] | icos) <= 1
+
+
+def _company_person_groups(relations):
+    """One entry per human this company's relations describe.
+
+    Clustering already gathers the rows one register document wrote twice --
+    which is 84 % of the duplication -- but it refuses to when two of them carry
+    two different postal codes, because then they *may* be two people. That
+    refusal is right about the evidence and wrong on the screen: the two rows
+    carry the same name, so the graph draws one person twice and the reader has
+    no way to tell a duplicate from a colleague who happens to share the name.
+
+    So this folds the clusters by base name inside one company anyway, and
+    **discloses** what it folded -- `clusters` and `records` travel in the
+    payload -- rather than hiding it. Measured on production 2026-09-28 over 300
+    companies holding officers: 12 companies (4.0 %) hold a name this splits,
+    21 duplicate labels in all. One of them, `00007838 Rudné bane, š.p.`, is
+    František Pramuka written once at `Poráč 053 23` and once at `Spišská Nová
+    Ves 052 01`, the second tenure starting a month after the first ended --
+    a person who moved, not two people.
+
+    What it will not fold is two rows that can be shown to be different people:
+    see `_can_fuse`. Those keep a node each, which is the register's own answer.
+
+    `relations` is what the caller decided to draw, in the order it wants them;
+    the entries come back in that order.
+    """
+    clusters, _by_id = _resolve([rel.person for rel in relations])
+    cluster_of = {row.id: members for members in clusters for row in members}
+
+    entries = defaultdict(list)
+    ordered = []
+    for rel in relations:
+        members = cluster_of[rel.person.id]
+        primary = members[0]
+        # Keyed on the base name, so `Ing. Miroslav Trnka` and `Miroslav Trnka`
+        # are one person -- the same fold `cluster_evidence` rule 1 makes. A row
+        # whose name is empty has no base name, and stays its own node rather
+        # than joining every other nameless row in the company.
+        key = primary.base or f"row:{primary.id}"
+        entry = next((e for e in entries[key] if _can_fuse(e, members)), None)
+        if entry is None:
+            entry = {
+                "members": {}, "clusters": [], "rows": [],
+                "dates": set(), "icos": set(),
+            }
+            entries[key].append(entry)
+            ordered.append(entry)
+        if members not in entry["clusters"]:
+            entry["clusters"].append(members)
+        for member in members:
+            entry["members"][member.id] = member
+            if member.birth_date:
+                entry["dates"].add(member.birth_date)
+            if member.person_ico:
+                entry["icos"].add(member.person_ico)
+        entry["rows"].append(rel)
+
+    groups = []
+    for entry in ordered:
+        members = sorted(entry["members"].values(), key=lambda m: m.id)
+        groups.append({
+            "primary": members[0],
+            "members": members,
+            # How many resolver clusters this one drawn person gathered. One is
+            # the common case and means nothing; more is the merge this function
+            # exists for, and the payload has to say so.
+            "clusters": len(entry["clusters"]),
+            "rows": entry["rows"],
+        })
+    return groups
+
+
 class CompanyGraphView(APIView):
+    """`GET /api/companies/<ico>/graph/`, optionally `?as_of=YYYY-MM-DD`.
+
+    Without `as_of` this is the company as it stands now. With it, the same
+    graph drawn from the offices in force on that date -- which is why the
+    picture can differ completely, and why `meta.as_of` is echoed back.
+    """
+
     permission_classes = [permissions.AllowAny]
 
     MAX_NODES = 200
@@ -445,6 +709,12 @@ class CompanyGraphView(APIView):
             return Response(
                 {"detail": "Firma s týmto IČO nebola nájdená."},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        as_of, error = _parse_as_of(request.query_params.get("as_of"))
+        if error:
+            return Response(
+                {"detail": error}, status=status.HTTP_400_BAD_REQUEST
             )
 
         nodes = {}
@@ -459,11 +729,7 @@ class CompanyGraphView(APIView):
             "status": "Vymazaná" if company.datum_zrusenia else "Aktívna",
         }
 
-        relations = list(
-            PersonCompanyRelation.objects
-            .filter(company=company)
-            .select_related("person")
-        )
+        all_relations, relations, undated = _company_person_relations(company, as_of)
 
         # The document this company was read from may name one person under two
         # sections, which is two rows and one human. The graph draws people, so
@@ -479,55 +745,52 @@ class CompanyGraphView(APIView):
         # 3 000-company sample, 144 humans arrived with more than one node id
         # (`Ing. Andrea Halušková` with four). `_resolve` is the same call the
         # person graph makes, so the two views now agree on the id.
-        clusters, _by_id = _resolve([rel.person for rel in relations])
-        cluster_of = {row.id: members for members in clusters for row in members}
-
-        # One iteration per person, not per relation. An office arrives as many
-        # rows (#93), so the old shape drew the same edge once per period -- and
-        # read that person's other companies once per period too. Measured on
+        #
+        # One entry per person, not per relation. An office arrives as many rows
+        # (#93), so the old shape drew the same edge once per period -- and read
+        # that person's other companies once per period too. Measured on
         # FREYSSINET CS: 21 edges of which 9 distinct, one pair twelve times.
-        by_person = {}
-        for rel in relations:
-            members = cluster_of[rel.person.id]
-            primary = members[0]
-            by_person.setdefault(primary.id, (members, []))[1].append(rel)
-
-        for members, rows in by_person.values():
-            primary = members[0]
+        # `_company_person_groups` also folds the same-name clusters the resolver
+        # deliberately leaves apart; see there for why, and for what it refuses.
+        for group in _company_person_groups(relations):
+            primary = group["primary"]
             person_node_id = f"person_{primary.id}"
-            member_ids = [m.id for m in members]
+            member_ids = [m.id for m in group["members"]]
 
-            company_count = (
-                PersonCompanyRelation.objects
-                .filter(person_id__in=member_ids)
-                .values("company")
-                .distinct()
-                .count()
-            )
             nodes[person_node_id] = {
                 "id": person_node_id,
                 "type": "person",
                 "label": primary.name,
-                "rolesCount": company_count,
+                "rolesCount": _person_company_count(member_ids, as_of),
+                # What stands behind this one drawn person, so a merge is
+                # visible rather than silent: `records` is how many register
+                # rows it gathered and `clusters` how many of them identity
+                # resolution had kept apart. One and one is the common case.
+                "records": len(group["members"]),
+                "clusters": group["clusters"],
             }
 
-            for rel in rows:
+            for rel in group["rows"]:
                 candidates.append((
                     person_node_id,
                     company_node_id,
                     rel.get_role_display(),
-                    rel.is_active,
+                    _edge_currency(rel, as_of),
                 ))
 
             if len(nodes) >= self.MAX_NODES:
                 break
 
-            other_relations = (
+            other_relations = list(
                 PersonCompanyRelation.objects
                 .filter(person_id__in=member_ids)
                 .exclude(company=company)
                 .select_related("company")
             )
+            if as_of is not None:
+                other_relations = [
+                    rel for rel in other_relations if _in_force_at(rel, as_of)
+                ]
 
             for other_rel in other_relations:
                 other_company = other_rel.company
@@ -546,7 +809,7 @@ class CompanyGraphView(APIView):
                     person_node_id,
                     other_node_id,
                     other_rel.get_role_display(),
-                    other_rel.is_active,
+                    _edge_currency(other_rel, as_of),
                 ))
 
                 if len(nodes) >= self.MAX_NODES:
@@ -563,7 +826,102 @@ class CompanyGraphView(APIView):
                 "depth": 1,
                 "total_nodes": len(nodes),
                 "truncated": len(nodes) >= self.MAX_NODES,
+                # The period the picture shows, echoed back so a cached or
+                # hand-made request cannot be read as the current company.
+                "as_of": as_of.isoformat() if as_of else None,
+                # Which periods are worth offering. Computed from the whole
+                # record and not from what was drawn, so the control does not
+                # change shape when one of its own options is chosen.
+                "periods": _period_years(all_relations, timezone.localdate()),
+                # Relations the period asked for could not place, because the
+                # register never stated when they began. Counted and sent rather
+                # than silently dropped: a graph that quietly loses an officer
+                # looks exactly like a company that never had one.
+                "undated_excluded": undated,
             },
+        })
+
+
+class CompanyPersonsView(APIView):
+    """`GET /api/companies/<ico>/persons/` -- the company's people, over time.
+
+    The register's extract, and the Osoby cards built from it, show the bodies
+    as they stand today. Everyone who held an office before is in the same
+    stored relations -- the extractor keeps them and marks them ended
+    (`is_active = False`) -- and until now nothing read them.
+
+    Grouped by the same helper and from the same rows as `CompanyGraphView`, so
+    the list and the graph cannot disagree about who is in the company, about
+    how many register rows one person stands for, or about how many filings one
+    tenure was folded from.
+
+    `?as_of=YYYY-MM-DD` asks the graph's period question: who was in force then.
+    Without it the answer is everyone we hold, which is the whole record this
+    screen exists to show.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, ico):
+        try:
+            company = Company.objects.get(ico=ico)
+        except Company.DoesNotExist:
+            return Response(
+                {"detail": "Firma s týmto IČO nebola nájdená."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        as_of, error = _parse_as_of(request.query_params.get("as_of"))
+        if error:
+            return Response(
+                {"detail": error}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        all_relations, relations, undated = _company_person_relations(company, as_of)
+
+        groups = []
+        for group in _company_person_groups(relations):
+            members = group["members"]
+            by_row = defaultdict(list)
+            for rel in group["rows"]:
+                by_row[rel.person_id].append(_office_payload(rel))
+            groups.append({
+                "id": members[0].id,
+                "name": members[0].name,
+                # How many register rows this one person gathered, and how many
+                # of them identity resolution had kept apart -- the same two
+                # disclosures the graph node carries, in the place where the
+                # reader can act on them.
+                "records": len(members),
+                "clusters": group["clusters"],
+                # The rows behind the grouping, with the evidence each one
+                # carries. Not decoration: the grouping is a judgement about
+                # identity, and one that is wrong has to be visible to the reader
+                # it is wrong about. `birth_date` stays per row for the same
+                # reason `PersonDetailView` keeps it there -- rows stating two
+                # different dates are the one case this must not present as one
+                # person, and `_can_fuse` is what keeps them apart.
+                "members": [
+                    {
+                        "id": member.id,
+                        "name": member.name,
+                        "address": member.address,
+                        "birth_date": member.birth_date,
+                    }
+                    for member in members
+                ],
+                "offices": _merged_relations(
+                    [m.id for m in members], by_row
+                ),
+            })
+
+        return Response({
+            "ico": company.ico,
+            "name": company.nazov_UJ,
+            "as_of": as_of.isoformat() if as_of else None,
+            "groups": groups,
+            "periods": _period_years(all_relations, timezone.localdate()),
+            "undated_excluded": undated,
         })
 
 

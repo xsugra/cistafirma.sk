@@ -743,6 +743,58 @@ export interface PersonDetail {
 }
 
 /**
+ * One person of one company, and every office we hold for them there.
+ *
+ * The company's own screen, seen from the person's side: `PersonSummary` lists a
+ * person's companies, this lists a company's people, and both carry the same
+ * `offices` shape (`PersonRelation`) because both are folded by the same
+ * backend helper -- the register's filings are grouped and joined identically
+ * whichever way round the question is asked.
+ */
+export interface CompanyPersonGroup {
+    /** The lowest stored row id of the group: the row that stands for them. */
+    id: number;
+    name: string;
+    /** Stored rows gathered here; more than one is the register writing twice. */
+    records: number;
+    /**
+     * How many of those rows identity resolution had kept apart, and the group
+     * folded anyway. `1` is the ordinary case; above that, the merge is a
+     * judgement and `members` is the evidence for it.
+     */
+    clusters: number;
+    members: PersonMember[];
+    offices: PersonRelation[];
+}
+
+/**
+ * The company's people over time, as `GET /api/companies/<ico>/persons/` states
+ * them.
+ *
+ * `as_of` is echoed back rather than assumed: a caller who asked for 2015 and
+ * reads a list without looking at this field has no way to tell the 2015 answer
+ * from today's, and the screen would print the period it asked for over a list
+ * it did not get.
+ */
+export interface CompanyPersonsResponse {
+    ico: string;
+    name: string;
+    as_of: string | null;
+    groups: CompanyPersonGroup[];
+    /**
+     * The years worth offering, newest first. The same list the graph's chips
+     * offer, computed once from the whole record by the same helper.
+     */
+    periods: number[];
+    /**
+     * Relations a period view could not place, because the register never stated
+     * a start date. Dropping them silently would make the list look complete
+     * while it is not.
+     */
+    undated_excluded: number;
+}
+
+/**
  * One row of the register's own answer.
  *
  * The register names the company, never the capacity -- it has no column for it

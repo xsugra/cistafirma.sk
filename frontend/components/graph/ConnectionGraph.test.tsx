@@ -3,7 +3,21 @@ import {screen} from '@testing-library/react';
 import {renderWithProviders} from '../../test/testUtils';
 import type {GraphData} from './graphTypes';
 
-const graphMock = vi.hoisted(() => ({data: null as unknown}));
+/**
+ * What the hook hands the component, per spec.
+ *
+ * `data` is the only field the specs at the top of this file care about, and
+ * the period fields are defaulted here rather than left out: this mock is a
+ * fixed object, so a field the hook really returns but the mock does not would
+ * arrive as `undefined`, and `periods.length` would throw on the default path.
+ * A mock that omits a field is not a stricter test, it is a different component.
+ */
+const graphMock = vi.hoisted(() => ({
+    data: null as unknown,
+    periods: [] as number[],
+    undatedExcluded: 0,
+    drawnAsOf: null as string | null,
+}));
 
 vi.mock('./useGraphData', () => ({
     useGraphData: () => ({
@@ -15,6 +29,9 @@ vi.mock('./useGraphData', () => ({
         expandPerson: vi.fn(),
         centerNode: vi.fn(),
         truncated: false,
+        periods: graphMock.periods,
+        undatedExcluded: graphMock.undatedExcluded,
+        drawnAsOf: graphMock.drawnAsOf,
     }),
 }));
 
@@ -56,6 +73,19 @@ const DATA: GraphData = {
     ],
     links: [],
 };
+
+/**
+ * Reset before every spec, in every block, and not only the fields that block
+ * uses. `graphMock` is one object shared by the whole file, so a period set by
+ * one spec would still be set in the next one -- and a spec about the default
+ * view that inherits a year is not testing the default view.
+ */
+beforeEach(() => {
+    graphMock.data = DATA;
+    graphMock.periods = [];
+    graphMock.undatedExcluded = 0;
+    graphMock.drawnAsOf = null;
+});
 
 /**
  * The legend and the controls used to be two independent `absolute` corners.

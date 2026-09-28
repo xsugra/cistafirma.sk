@@ -1023,3 +1023,621 @@ class PersonSearchAPITests(APITestCase):
 
         self.assertEqual(coverage["companies_with_persons"], 1)
         self.assertEqual(coverage["companies_total"], 1)
+
+
+class CompanyPersonFusionTests(APITestCase):
+    """One human, one node -- even when the register wrote them twice.
+
+    The register keeps filings, not people. One human who moved is written
+    under two sections in two tenures, each row carrying the address the
+    register knew at the time -- and `cluster_evidence` rule 1 refuses to join
+    rows stating two different postcodes, because two postcodes *may* be two
+    people. That refusal is right about the evidence and wrong on the screen:
+    the two rows carry the same name, so the graph drew one person twice with
+    nothing to say which was which. The graph folds them by name itself, inside
+    one company, and discloses that it did.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=1,
+            ico="50059959",
+            nazov_UJ="Test Firma s.r.o.",
+        )
+
+    def _person(self, fingerprint, name, address="", **kwargs):
+        return Person.objects.create(
+            fingerprint=fingerprint, name=name, address=address, **kwargs
+        )
+
+    def _office(self, person, role, **kwargs):
+        return PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role=role, **kwargs
+        )
+
+    def _graph(self, **params):
+        return self.client.get(
+            f"/api/companies/{self.company.ico}/graph/", params
+        ).json()
+
+    def _people(self, data):
+        return [node for node in data["nodes"] if node["type"] == "person"]
+
+    def test_one_officer_in_two_roles_is_one_node_with_two_edges(self):
+        # The live shape, from 00007838 Rudné bane: one human, moved, written
+        # once as konateľ and once as spoločník, the two rows carrying the two
+        # postcodes. Two nodes with one label each is what this replaces.
+        old = self._person(
+            "name:jan novak|addr:porac", "Ján Novák", "Poráč 12, 053 23",
+        )
+        new = self._person(
+            "name:jan novak|addr:snp", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(
+            old, "konatel",
+            vznik_funkcie=date(2004, 4, 1),
+            zanik_funkcie=date(2025, 3, 13),
+            is_active=False,
+        )
+        self._office(
+            new, "spolocnik",
+            vznik_funkcie=date(2025, 4, 15),
+            is_active=True,
+        )
+
+        data = self._graph()
+        people = self._people(data)
+
+        self.assertEqual([node["label"] for node in people], ["Ján Novák"])
+        # One line per role, which is what the request was: two lines, each
+        # carrying its own legend, off one node. The edge carries the register's
+        # own wording in `role` -- the graph has no separate display field.
+        self.assertEqual(
+            sorted(edge["role"] for edge in data["edges"]),
+            ["Konateľ", "Spoločník"],
+        )
+        self.assertEqual(
+            {edge["isActive"] for edge in data["edges"]}, {False, True}
+        )
+
+    def test_the_fold_is_disclosed_on_the_node(self):
+        # A merge the reader cannot see is a merge the reader cannot check.
+        old = self._person(
+            "name:jan novak|addr:porac", "Ján Novák", "Poráč 12, 053 23",
+        )
+        new = self._person(
+            "name:jan novak|addr:snp", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(old, "konatel", is_active=False)
+        self._office(new, "spolocnik", is_active=True)
+
+        node = self._people(self._graph())[0]
+
+        self.assertEqual(node["records"], 2)
+        self.assertEqual(node["clusters"], 2)
+
+    def test_the_node_is_the_lowest_row_of_the_group(self):
+        # The id has to be stable and it has to be the one the person table
+        # would give, or two screens keyed on it disagree about who this is.
+        old = self._person(
+            "name:jan novak|addr:porac", "Ján Novák", "Poráč 12, 053 23",
+        )
+        new = self._person(
+            "name:jan novak|addr:snp", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(old, "konatel", is_active=False)
+        self._office(new, "spolocnik", is_active=True)
+
+        self.assertEqual(
+            self._people(self._graph())[0]["id"], f"person_{old.id}"
+        )
+
+    def test_two_birth_dates_are_not_one_person(self):
+        # The one piece of evidence in the table that can *refute* a merge. A
+        # drawing fix that folds over it would undo the only guard there is.
+        first = self._person(
+            "name:jan novak|addr:a", "Ján Novák", "Poráč 12, 053 23",
+            birth_date=date(1960, 1, 1),
+        )
+        second = self._person(
+            "name:jan novak|addr:b", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+            birth_date=date(1985, 6, 30),
+        )
+        self._office(first, "konatel", is_active=True)
+        self._office(second, "spolocnik", is_active=True)
+
+        self.assertEqual(len(self._people(self._graph())), 2)
+
+    def test_two_person_icos_are_not_one_person(self):
+        first = self._person(
+            "name:jan novak|addr:a", "Ján Novák", "Poráč 12, 053 23",
+            person_ico="11111111",
+        )
+        second = self._person(
+            "name:jan novak|addr:b", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+            person_ico="22222222",
+        )
+        self._office(first, "konatel", is_active=True)
+        self._office(second, "spolocnik", is_active=True)
+
+        self.assertEqual(len(self._people(self._graph())), 2)
+
+    def test_one_address_still_gathers_without_a_fold(self):
+        # The control. When the two rows agree on the postcode, clustering
+        # already joins them -- so this node is one *cluster*, not one cluster
+        # standing in for two, and the disclosure has to say so.
+        first = self._person(
+            "name:jan novak|addr:one", "Ján Novák",
+            "Hlavná 5, 811 03 Bratislava",
+        )
+        second = self._person(
+            "name:jan novak|addr:two", "Ján Novák",
+            "Hlavná 7, 811 03 Bratislava",
+        )
+        self._office(first, "konatel", is_active=True)
+        self._office(second, "spolocnik", is_active=True)
+
+        people = self._people(self._graph())
+
+        self.assertEqual(len(people), 1)
+        self.assertEqual(people[0]["records"], 2)
+        self.assertEqual(people[0]["clusters"], 1)
+
+    def test_a_title_does_not_hide_the_fold(self):
+        # `base_name` strips leading academic titles, and the fold keys on it --
+        # so `Ing. Ján Novák` and `Ján Novák` are one node, which is what a
+        # reader sees too.
+        titled = self._person(
+            "name:ing jan novak|addr:a", "Ing. Ján Novák", "Poráč 12, 053 23",
+        )
+        plain = self._person(
+            "name:jan novak|addr:b", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(titled, "konatel", is_active=True)
+        self._office(plain, "spolocnik", is_active=True)
+
+        people = self._people(self._graph())
+
+        self.assertEqual(len(people), 1)
+        self.assertEqual(people[0]["records"], 2)
+
+    def test_two_people_with_different_names_stay_two_nodes(self):
+        # The other control: the fold keys on the base name and nothing else.
+        self._office(
+            self._person("f-a", "Ján Novák"), "konatel", is_active=True,
+        )
+        self._office(
+            self._person("f-b", "Peter Malý"), "spolocnik", is_active=True,
+        )
+
+        self.assertEqual(len(self._people(self._graph())), 2)
+
+    def test_the_fold_does_not_cross_into_another_company(self):
+        # Two same-named officers of two different companies are not one
+        # person, and one company's graph must not say they are.
+        other = Company.objects.create(
+            ruz_id=2, ico="12345678", nazov_UJ="Iná Firma s.r.o.",
+        )
+        mine = self._person(
+            "name:jan novak|addr:a", "Ján Novák", "Poráč 12, 053 23",
+        )
+        theirs = self._person(
+            "name:jan novak|addr:b", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(mine, "konatel", is_active=True)
+        PersonCompanyRelation.objects.create(
+            person=theirs, company=other, role="konatel", is_active=True,
+        )
+
+        people = self._people(self._graph())
+
+        self.assertEqual(len(people), 1)
+        self.assertEqual(people[0]["records"], 1)
+        self.assertEqual(people[0]["clusters"], 1)
+
+
+class CompanyGraphPeriodTests(APITestCase):
+    """The graph, asked about a day instead of about today.
+
+    The relations we hold are the company's whole record: everyone who ever
+    held an office, marked ended. A graph that draws all of them at once shows
+    a company that never existed -- and the reader has no way to ask for the
+    one that did. `?as_of=YYYY-MM-DD` is that question.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=1,
+            ico="50059959",
+            nazov_UJ="Test Firma s.r.o.",
+        )
+        self.old = Person.objects.create(fingerprint="f-old", name="Ján Novák")
+        self.new = Person.objects.create(fingerprint="f-new", name="Peter Malý")
+        PersonCompanyRelation.objects.create(
+            person=self.old,
+            company=self.company,
+            role="konatel",
+            vznik_funkcie=date(2000, 1, 1),
+            zanik_funkcie=date(2010, 12, 31),
+            is_active=False,
+        )
+        PersonCompanyRelation.objects.create(
+            person=self.new,
+            company=self.company,
+            role="konatel",
+            vznik_funkcie=date(2015, 1, 1),
+            is_active=True,
+        )
+
+    def _graph(self, **params):
+        return self.client.get(
+            f"/api/companies/{self.company.ico}/graph/", params
+        ).json()
+
+    def _people(self, data):
+        return [node for node in data["nodes"] if node["type"] == "person"]
+
+    def test_a_period_draws_the_officer_of_that_day(self):
+        data = self._graph(as_of="2005-06-01")
+
+        self.assertEqual(
+            [node["label"] for node in self._people(data)], ["Ján Novák"]
+        )
+
+    def test_a_period_draws_the_other_officer_on_another_day(self):
+        data = self._graph(as_of="2020-01-01")
+
+        self.assertEqual(
+            [node["label"] for node in self._people(data)], ["Peter Malý"]
+        )
+
+    def test_a_day_between_two_tenures_draws_nobody(self):
+        # Not an error and not an empty answer: on 1 January 2012 this company
+        # had filed neither office, and the picture has to be able to say so.
+        data = self._graph(as_of="2012-01-01")
+
+        self.assertEqual(self._people(data), [])
+        self.assertEqual(len(data["nodes"]), 1)
+
+    def test_an_office_running_then_is_not_drawn_as_ended(self):
+        # `is_active` is False today because the office ended in 2010. On a 2005
+        # graph it was running, and a dashed "Ukončené" line would be a claim
+        # about a company the caller did not ask about.
+        data = self._graph(as_of="2005-06-01")
+
+        self.assertEqual([edge["isActive"] for edge in data["edges"]], [True])
+
+    def test_today_is_still_todays_answer(self):
+        data = self._graph()
+
+        self.assertIsNone(data["meta"]["as_of"])
+        by_label = {node["label"]: node for node in self._people(data)}
+        self.assertEqual(sorted(by_label), ["Ján Novák", "Peter Malý"])
+
+    def test_a_relation_without_a_start_date_cannot_be_placed(self):
+        # `vznik` unknown means the office cannot be shown to have run on any
+        # day, so a period view leaves it out -- and counts it, because a row
+        # dropped in silence is a row the reader cannot miss.
+        undated = Person.objects.create(fingerprint="f-undated", name="Anna Malá")
+        PersonCompanyRelation.objects.create(
+            person=undated,
+            company=self.company,
+            role="spolocnik",
+            is_active=True,
+        )
+
+        period = self._graph(as_of="2005-06-01")
+        today = self._graph()
+
+        self.assertNotIn(
+            "Anna Malá", [n["label"] for n in self._people(period)]
+        )
+        self.assertEqual(period["meta"]["undated_excluded"], 1)
+        self.assertIn("Anna Malá", [n["label"] for n in self._people(today)])
+        self.assertEqual(today["meta"]["undated_excluded"], 0)
+
+    def test_the_periods_offered_are_the_days_the_company_changed(self):
+        # A chip for every year would be 27 chips of which 25 draw the same
+        # picture. The record changes on 31 December 2010 (the konateľ ends) and
+        # not again until 2015, which is today's shape -- so one chip.
+        self.assertEqual(self._graph()["meta"]["periods"], [2010])
+
+    def test_the_current_year_is_never_offered(self):
+        # Its 31 December is in the future, and the chip that means "now" is
+        # `Dnes`.
+        self.assertNotIn(date.today().year, self._graph()["meta"]["periods"])
+
+    def test_as_of_is_echoed_back(self):
+        self.assertEqual(
+            self._graph(as_of="2005-06-01")["meta"]["as_of"], "2005-06-01"
+        )
+
+    def test_a_malformed_date_is_refused(self):
+        # Quietly answering with today while the control still reads 2015 would
+        # put a period on the screen that the picture below it does not show.
+        response = self.client.get(
+            f"/api/companies/{self.company.ico}/graph/", {"as_of": "31.12.2015"}
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("RRRR-MM-DD", response.json()["detail"])
+
+    def test_an_empty_as_of_is_today(self):
+        # The control's "Dnes" sends nothing; that has to mean today rather than
+        # a 400.
+        self.assertIsNone(self._graph(as_of="")["meta"]["as_of"])
+
+    def test_the_other_companies_of_a_person_are_filtered_too(self):
+        # The expanded node says "Pôsobí v N firmách". On a period graph N is
+        # the count for that period, and a company the person joined later must
+        # not be drawn at all.
+        later = Company.objects.create(
+            ruz_id=2, ico="12345678", nazov_UJ="Neskoršia Firma s.r.o.",
+        )
+        PersonCompanyRelation.objects.create(
+            person=self.old,
+            company=later,
+            role="spolocnik",
+            vznik_funkcie=date(2018, 1, 1),
+            is_active=True,
+        )
+
+        period = self._graph(as_of="2005-06-01")
+        today = self._graph()
+
+        self.assertEqual(self._people(period)[0]["rolesCount"], 1)
+        self.assertEqual(self._people(today)[0]["rolesCount"], 2)
+        self.assertNotIn(
+            "Neskoršia Firma s.r.o.",
+            [node["label"] for node in period["nodes"]],
+        )
+        self.assertIn(
+            "Neskoršia Firma s.r.o.",
+            [node["label"] for node in today["nodes"]],
+        )
+
+
+class CompanyPersonsAPITests(APITestCase):
+    """`GET /api/companies/<ico>/persons/` -- the record behind the graph.
+
+    The Osoby cards read the register's extract, which is the bodies as they
+    stand today; everyone who held an office before is in the same stored
+    relations and nothing read them. This endpoint is the history, from the
+    same helper and the same rows as the graph, so the list and the picture
+    cannot disagree.
+    """
+
+    def setUp(self):
+        self.company = Company.objects.create(
+            ruz_id=1,
+            ico="50059959",
+            nazov_UJ="Test Firma s.r.o.",
+        )
+
+    def _person(self, fingerprint, name, address="", **kwargs):
+        return Person.objects.create(
+            fingerprint=fingerprint, name=name, address=address, **kwargs
+        )
+
+    def _office(self, person, role, **kwargs):
+        return PersonCompanyRelation.objects.create(
+            person=person, company=self.company, role=role, **kwargs
+        )
+
+    def _persons(self, **params):
+        return self.client.get(
+            f"/api/companies/{self.company.ico}/persons/", params
+        ).json()
+
+    def test_lists_every_person_the_company_ever_had(self):
+        current = self._person("f-now", "Peter Malý")
+        former = self._person("f-then", "Ján Novák")
+        self._office(
+            current, "konatel", vznik_funkcie=date(2015, 1, 1), is_active=True,
+        )
+        self._office(
+            former, "konatel",
+            vznik_funkcie=date(2000, 1, 1), zanik_funkcie=date(2010, 12, 31),
+            is_active=False,
+        )
+
+        data = self._persons()
+
+        self.assertEqual(data["ico"], self.company.ico)
+        self.assertEqual(
+            sorted(group["name"] for group in data["groups"]),
+            ["Ján Novák", "Peter Malý"],
+        )
+        by_name = {group["name"]: group for group in data["groups"]}
+        self.assertIs(by_name["Peter Malý"]["offices"][0]["is_active"], True)
+        self.assertIs(by_name["Ján Novák"]["offices"][0]["is_active"], False)
+        self.assertEqual(
+            by_name["Ján Novák"]["offices"][0]["zanik_funkcie"], "2010-12-31"
+        )
+
+    def test_one_person_written_twice_is_one_group_with_both_addresses(self):
+        old = self._person(
+            "name:jan novak|addr:porac", "Ján Novák", "Poráč 12, 053 23",
+        )
+        new = self._person(
+            "name:jan novak|addr:snp", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(
+            old, "konatel",
+            vznik_funkcie=date(2004, 4, 1), zanik_funkcie=date(2025, 3, 13),
+            is_active=False,
+        )
+        self._office(
+            new, "spolocnik", vznik_funkcie=date(2025, 4, 15), is_active=True,
+        )
+
+        group = self._persons()["groups"][0]
+
+        self.assertEqual(group["records"], 2)
+        self.assertEqual(group["clusters"], 2)
+        # The judgement is a judgement, so the evidence behind it travels with
+        # it: two addresses is exactly what a reader would use to disagree.
+        self.assertEqual(
+            sorted(member["address"] for member in group["members"]),
+            ["Letná 4, 052 01 Spišská Nová Ves", "Poráč 12, 053 23"],
+        )
+        self.assertEqual(
+            sorted(office["role_display"] for office in group["offices"]),
+            ["Konateľ", "Spoločník"],
+        )
+
+    def test_a_birth_date_stays_on_the_row_that_states_it(self):
+        # Two dates are the case this must not present as one person, and the
+        # rows are kept apart -- so the dates must stay per row, not be lifted
+        # onto a grouping that is one person by definition.
+        first = self._person(
+            "name:jan novak|addr:a", "Ján Novák", "Poráč 12, 053 23",
+            birth_date=date(1960, 1, 1),
+        )
+        second = self._person(
+            "name:jan novak|addr:b", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+            birth_date=date(1985, 6, 30),
+        )
+        self._office(first, "konatel", is_active=True)
+        self._office(second, "spolocnik", is_active=True)
+
+        data = self._persons()
+
+        self.assertEqual(len(data["groups"]), 2)
+        for group in data["groups"]:
+            for member in group["members"]:
+                self.assertIsNotNone(member["birth_date"])
+
+    def test_consecutive_filings_of_one_office_are_one_office(self):
+        # The register keeps filings, not functions. One tenure from 2011 to
+        # 2020 arrives as two rows that meet day to day, and the history list
+        # has to show one line -- and say it was folded from two, because a row
+        # that quietly replaced two filings reads like a row that always was one.
+        person = self._person("f-jan", "Ján Novák")
+        self._office(
+            person, "konatel",
+            vznik_funkcie=date(2011, 1, 1), zanik_funkcie=date(2015, 12, 31),
+            is_active=False,
+        )
+        self._office(
+            person, "konatel",
+            vznik_funkcie=date(2016, 1, 1), zanik_funkcie=date(2020, 12, 31),
+            is_active=False,
+        )
+
+        offices = self._persons()["groups"][0]["offices"]
+
+        self.assertEqual(len(offices), 1)
+        self.assertEqual(offices[0]["intervals"], 2)
+        self.assertEqual(offices[0]["vznik_funkcie"], "2011-01-01")
+        self.assertEqual(offices[0]["zanik_funkcie"], "2020-12-31")
+
+    def test_a_period_shows_only_the_people_in_force_then(self):
+        current = self._person("f-now", "Peter Malý")
+        former = self._person("f-then", "Ján Novák")
+        self._office(
+            current, "konatel", vznik_funkcie=date(2015, 1, 1), is_active=True,
+        )
+        self._office(
+            former, "konatel",
+            vznik_funkcie=date(2000, 1, 1), zanik_funkcie=date(2010, 12, 31),
+            is_active=False,
+        )
+
+        data = self._persons(as_of="2005-06-01")
+
+        self.assertEqual([group["name"] for group in data["groups"]], ["Ján Novák"])
+        self.assertEqual(data["as_of"], "2005-06-01")
+
+    def test_the_periods_offered_match_the_ones_the_graph_offers(self):
+        # Same helper, same rows: a chip that draws one thing on the canvas and
+        # another in the list is worse than no chip.
+        former = self._person("f-then", "Ján Novák")
+        current = self._person("f-now", "Peter Malý")
+        self._office(
+            former, "konatel",
+            vznik_funkcie=date(2000, 1, 1), zanik_funkcie=date(2010, 12, 31),
+            is_active=False,
+        )
+        self._office(
+            current, "konatel", vznik_funkcie=date(2015, 1, 1), is_active=True,
+        )
+
+        graph = self.client.get(
+            f"/api/companies/{self.company.ico}/graph/"
+        ).json()
+
+        self.assertEqual(self._persons()["periods"], graph["meta"]["periods"])
+
+    def test_the_list_and_the_graph_name_the_same_people(self):
+        old = self._person(
+            "name:jan novak|addr:a", "Ján Novák", "Poráč 12, 053 23",
+        )
+        new = self._person(
+            "name:jan novak|addr:b", "Ján Novák",
+            "Letná 4, 052 01 Spišská Nová Ves",
+        )
+        self._office(old, "konatel", is_active=False)
+        self._office(new, "spolocnik", is_active=True)
+
+        graph = self.client.get(
+            f"/api/companies/{self.company.ico}/graph/"
+        ).json()
+        listed = self._persons()
+
+        self.assertEqual(
+            sorted(group["name"] for group in listed["groups"]),
+            sorted(
+                node["label"] for node in graph["nodes"]
+                if node["type"] == "person"
+            ),
+        )
+        self.assertEqual(
+            [group["records"] for group in listed["groups"]],
+            [
+                node["records"] for node in graph["nodes"]
+                if node["type"] == "person"
+            ],
+        )
+
+    def test_a_relation_without_a_start_date_is_listed_and_counted(self):
+        # Today's answer is everyone we hold, so an undated row is in it -- and
+        # a *period* answer says how many rows it had to leave out.
+        person = self._person("f-undated", "Anna Malá")
+        self._office(person, "spolocnik", is_active=True)
+
+        today = self._persons()
+        period = self._persons(as_of="2005-06-01")
+
+        self.assertEqual([group["name"] for group in today["groups"]], ["Anna Malá"])
+        self.assertEqual(today["undated_excluded"], 0)
+        self.assertEqual(period["groups"], [])
+        self.assertEqual(period["undated_excluded"], 1)
+
+    def test_a_malformed_date_is_refused(self):
+        response = self.client.get(
+            f"/api/companies/{self.company.ico}/persons/", {"as_of": "nope"}
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_unknown_company_is_404(self):
+        response = self.client.get("/api/companies/00000000/persons/")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_a_company_with_no_people_answers_with_an_empty_list(self):
+        data = self._persons()
+
+        self.assertEqual(data["groups"], [])
+        self.assertEqual(data["periods"], [])
+        self.assertEqual(data["name"], self.company.nazov_UJ)

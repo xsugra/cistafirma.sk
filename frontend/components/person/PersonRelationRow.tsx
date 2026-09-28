@@ -12,6 +12,17 @@ import { ROLE_STATE_SENTENCE, roleStateOf } from './roleState';
 
 interface PersonRelationRowProps {
     relation: PersonRelation;
+    /**
+     * Whether to name the company this relation is with.
+     *
+     * `true` on a person's page, where every row is a different company. `false`
+     * on a company's own history, where every row names the company the reader
+     * is already looking at -- a list of twenty former officers would repeat the
+     * same name and the same IČO twenty times and say nothing with any of them.
+     * The row is otherwise identical, which is the point: one relation is one
+     * fact, and it is worded and dated the same way on both screens.
+     */
+    showCompany?: boolean;
 }
 
 /**
@@ -31,22 +42,30 @@ interface PersonRelationRowProps {
  * always was one line, and those are different claims about how the register
  * recorded this person.
  */
-export const PersonRelationRow: React.FC<PersonRelationRowProps> = ({ relation }) => {
+export const PersonRelationRow: React.FC<PersonRelationRowProps> = ({ relation, showCompany = true }) => {
     const state = roleStateOf(relation.is_active);
 
     return (
         <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div className="min-w-0">
-                <Link
-                    to={companyPath(relation.ico)}
-                    className="font-medium text-gray-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
-                >
-                    {relation.name}
-                </Link>
+                {showCompany ? (
+                    <Link
+                        to={companyPath(relation.ico)}
+                        className="font-medium text-gray-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
+                    >
+                        {relation.name}
+                    </Link>
+                ) : (
+                    relation.role_display && (
+                        <span className="font-medium text-gray-900 dark:text-white">
+                            {relation.role_display}
+                        </span>
+                    )
+                )}
 
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {relation.ico && <span className="font-mono">IČO: {relation.ico}</span>}
-                    {relation.role_display && (
+                    {showCompany && relation.ico && <span className="font-mono">IČO: {relation.ico}</span>}
+                    {showCompany && relation.role_display && (
                         <span className="uppercase tracking-wide">{relation.role_display}</span>
                     )}
                 </div>

@@ -46,6 +46,24 @@ export function GraphTooltip({ node, position }: GraphTooltipProps) {
         )}
         {node.type === 'person' && (
           <div className="text-gray-500 dark:text-gray-400 text-xs space-y-0.5">
+            {/*
+              The register wrote this person down more than once in this company
+              and the node draws them once. That is a judgement, and a judgement
+              the reader cannot check is one they cannot correct -- so where it
+              had to fold rows that identity resolution had kept apart, it says
+              so. The addresses behind the grouping are listed in the Osoby
+              section, which is where a reader can act on it; a tooltip is not
+              visible on a touch screen, so this is the pointer, not the record.
+            */}
+            {node.records !== undefined && node.records > 1 && (
+              <div>
+                <i className="fas fa-layer-group mr-1 text-[9px]" />
+                Register ju v tejto firme vedie v {node.records} zápisoch
+                {node.clusters !== undefined && node.clusters > 1
+                  ? `, zlúčené z ${node.clusters} skupín`
+                  : ''}
+              </div>
+            )}
             {node.rolesCount && node.rolesCount > 1 && (
               <div>
                 <i className="fas fa-briefcase mr-1 text-[9px]" />
