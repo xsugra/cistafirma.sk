@@ -8998,9 +8998,9 @@ Príčina stavu je **úkon v admin UI, nie porucha**. Log backendu na dell
 (2026-09-27): 10:52:46--10:53:00 CEST `GET /api/admin/sync/scheduled/` a
 dvanásť `POST /api/admin/sync/scheduled/<id>/toggle/`, po ktorých je všetkých
 **10** riadkov `PeriodicTask` v `enabled=False`; o 10:53:09--10:53:25 nasledujú
-štyri `POST /api/admin/sync/jobs/`, teda tie štyri joby. Účet
-`sugrasamuel55@gmail.com` (superuser). Focus Mode to nie je: `SyncFocusModeState`
-je `active=False`, `snapshot=[]`, `activated_at=None`, takže na tejto DB nikdy
+štyri `POST /api/admin/sync/jobs/`, teda tie štyri joby. Účet superusera.
+Focus Mode to nie je: `SyncFocusModeState` je `active=False`, `snapshot=[]`,
+`activated_at=None`, takže na tejto DB nikdy
 použitý nebol. Dôsledok: beat je nemý od 08:52:11Z (kontajner beží, ale nemá čo
 poslať) a `ops-check` na zapnutosť plánu nemá **ani jednu** kontrolu — vypnutý
 plán je odtiaľ neviditeľný.
