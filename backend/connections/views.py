@@ -2,6 +2,7 @@ import logging
 from collections import defaultdict
 from datetime import date
 
+import redis
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import F, Q
@@ -1087,6 +1088,31 @@ class PersonDetailView(APIView):
         })
 
 
+#: A cache outage on a public endpoint would otherwise log one traceback per
+#: request for as long as it lasted, which buries the first one -- the only one
+#: that says anything new. Module-level, and the same idiom for the same reason
+#: as `companies.throttles.PublicRateThrottle`.
+_cache_outage_logged = False
+
+
+def _report_cache_outage(operation: str) -> None:
+    """Log a dead cache once at ERROR, then at DEBUG until the process ends.
+
+    Called from inside an `except` block, so `logger.exception` carries the
+    traceback without it having to be threaded through here.
+    """
+    global _cache_outage_logged
+    if _cache_outage_logged:
+        logger.debug("Cache still unavailable (%s).", operation, exc_info=True)
+        return
+    _cache_outage_logged = True
+    logger.exception(
+        "Cache is unavailable (%s) -- /api/persons/orsr/ now asks the register "
+        "on every request instead of serving repeats from the cache.",
+        operation,
+    )
+
+
 class OrsrPersonSearchView(APIView):
     """`GET /api/persons/orsr/?q=` -- the register's own answer, on request.
 
@@ -1098,6 +1124,11 @@ class OrsrPersonSearchView(APIView):
     * cached for `ORSR_PERSON_CACHE_SECONDS`, which removes nearly all repeat
       traffic;
     * rate-limited per caller, because the input is free text typed by anyone;
+    * a cache outage costs latency, not the endpoint. The scrape below is the
+      answer and the cache only removes repeat traffic, so losing Redis means
+      every request asks the register again until it recovers -- it never turns
+      into a 500. (Contrast `/healthz`, where a Redis failure is deliberately a
+      503: a health probe is supposed to report the outage, this is not.)
     * it returns the register's answer as the register gives it, including the
       fact that it does not say in what capacity the person is recorded --
       that would cost one request per company, and we do not spend other
@@ -1121,7 +1152,12 @@ class OrsrPersonSearchView(APIView):
             })
 
         cache_key = f"orsr_person_search:{normalize_name(query)}"
-        cached = cache.get(cache_key)
+        try:
+            cached = cache.get(cache_key)
+        except redis.exceptions.RedisError:
+            # A miss, not a failure: the next line answers from the register.
+            _report_cache_outage("get")
+            cached = None
         if cached is not None:
             return Response({**cached, "cached": True})
 
@@ -1146,7 +1182,11 @@ class OrsrPersonSearchView(APIView):
         }
 
         if not result.error:
-            cache.set(cache_key, payload, settings.ORSR_PERSON_CACHE_SECONDS)
+            try:
+                cache.set(cache_key, payload, settings.ORSR_PERSON_CACHE_SECONDS)
+            except redis.exceptions.RedisError:
+                # The answer is already correct; only the next caller pays.
+                _report_cache_outage("set")
 
         return Response(payload)
 
