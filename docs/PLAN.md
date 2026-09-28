@@ -9198,9 +9198,9 @@ ktorý vyzerá ako kontrola, ale číta iný strom.
 
 Poznámka k prostrediu, aby sa nezamenila za regresiu: susedná session namerala
 v tej istej suite **6 chýb** v admin-render testoch (`Missing staticfiles
-manifest entry for 'unfold/fonts/inter/styles.css'`). Tu je
-`backend/staticfiles/staticfiles.json` prítomný (18 kB, gitignorovaný lokálny
-artefakt — `.gitignore:62`), takže beh je zelený. Chyby teda visia na
+manifest entry for 'unfold/fonts/inter/styles.css'`). Tu je lokálny build
+artefakt `staticfiles.json` prítomný (18 kB; celý `backend/staticfiles/` je
+gitignorovaný — `.gitignore:62`), takže beh je zelený. Chyby teda visia na
 chýbajúcom build artefakte, nie na kóde: tento krok nemení ani template, ani
 statický súbor.
 
