@@ -9033,7 +9033,13 @@ nemá zmysel — buď to spustí človek, alebo pribudne Bash permission rule.
 
 ---
 
-### 11.22 „Overiť" nájde aj osobu — a `_coverage()` prestane stáť 10 sekúnd (2026-09-28)
+### 11.24 „Overiť" nájde aj osobu — a `_coverage()` prestane stáť 10 sekúnd (2026-09-28)
+
+> **Prečo 11.24 a nie 11.22.** Paralelná vetva `integ-redflags-graph` („Biely
+> kôň" a „karusel" → §11.22; graf osôb a história → §11.23) vznikla z toho
+> istého `4d57373` a obe čísla si nárokuje ona. V pláne nesmú byť dva §11.22,
+> takže táto sekcia je prečíslovaná — dohoda medzi session, 2026-09-28. Obsah
+> je nezmenený; mení sa len číslo.
 
 **Zadanie (Samuel, 2026-09-28):** po zadaní mena osoby do vyhľadávacieho poľa
 v monitoringu má „Overiť" nájsť tú osobu a dať nahliadnuť, kde všade pôsobí.
