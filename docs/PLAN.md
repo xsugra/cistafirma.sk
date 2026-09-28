@@ -9277,14 +9277,18 @@ netvrdia, že prahy sú správne — tvrdia len, že sú označené za neoveren�
 
 #### 11.22.9 Verdikt CI — a chyba, ktorú lokálny beh nevidí (2026-09-28)
 
-Vetva má za sebou tri behy. Prvé dva zelené neboli a **testy v nich vôbec
-nebežali**; tretí je prvý, v ktorom bežali:
+Behy tejto vetvy. Prvé dva zelené neboli a **testy v nich vôbec nebežali**;
+220 je prvý, v ktorom bežali:
 
 | beh | commit | výsledok |
 |---|---|---|
 | 217 | `21988de` | `docs_audit` ❌ — testy preskočené |
 | 218 | `fd7d563` | `docs_audit` ❌ — testy preskočené |
 | 220 | `56d51e9` | ✅ všetkých 7 jobov, testy `success` |
+| 221 | `698575f` | ✅ (už len tento text) |
+
+Tabuľka tu končí zámerne: commit, ktorý dokumentuje CI, si vytvorí vlastný beh
+a dopočítavanie sa nedá zastaviť. Zaznamenané je to, čo nesie kód — beh 220.
 
 V oboch je stav jobov rovnaký a je dôležitejší než samotný pád:
 `backend_validate` ✅, `frontend_validate` ✅, `helm_render_validate` ✅,
