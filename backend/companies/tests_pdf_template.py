@@ -184,5 +184,9 @@ class PdfNoStatementTests(TestCase):
         self.assertIn('Prázdna, s.r.o.', html)
         self.assertNotIn('Finančná analýza', html)
         self.assertNotIn('Prehľad hospodárskych výsledkov', html)
-        # The disclaimer is the one block that must always be there.
-        self.assertIn('CistaFirma nenesie zodpovednosť', html)
+        # The disclaimer is the one block that must always be there. The brand
+        # inside it is lowercase -- `db6d431` renamed `cistafirma.sk` to
+        # `cistafirma` and this line, the only one without a `.sk`, came out of
+        # it as the half-changed `Cistafirma`; the assertion pins the finished
+        # spelling so the two cannot drift apart again.
+        self.assertIn('cistafirma nenesie zodpovednosť', html)
