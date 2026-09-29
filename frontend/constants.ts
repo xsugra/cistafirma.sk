@@ -10,7 +10,6 @@ export const ROUTES = {
   MONITORING: '/monitoring',
   COMPANY: '/firma',
   PERSON: '/osoba',
-  BLOG: '/blog',
   ABOUT: '/about',
   PRIVACY: '/privacy',
   TERMS: '/terms',

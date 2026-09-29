@@ -31,10 +31,14 @@ describe('Header (pricing-removal regression)', () => {
         renderWithProviders(<Header/>, {route: '/'});
         // The desktop <nav> and the always-mounted mobile overlay both render
         // these labels, so they appear more than once — assert via getAllBy*.
-        for (const label of ['DOMOV', 'MONITORING', 'BLOG', 'API']) {
+        for (const label of ['DOMOV', 'MONITORING', 'API']) {
             expect(screen.getAllByText(label).length).toBeGreaterThan(0);
         }
         expect(screen.queryAllByText(/cenník/i)).toHaveLength(0);
+        // The blog page was removed outright, so its nav entry has to be gone
+        // from both the desktop nav and the mobile overlay — checked with the
+        // same absence assertion the pricing removal above uses.
+        expect(screen.queryAllByText(/blog/i)).toHaveLength(0);
     });
 
     it('shows auth actions and no CENNÍK for anonymous users', () => {
