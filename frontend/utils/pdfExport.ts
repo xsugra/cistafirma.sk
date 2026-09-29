@@ -1,10 +1,10 @@
-import type { Company, OrsrStructured, OrsrPerson, Financials } from '../types';
-import type { GraphNode, GraphEdge } from '../components/graph/graphTypes';
-import { API_BASE_URL } from '../constants';
-import { getLegalFormProfile } from './legalFormProfile';
-import { normalizePeople, formatDate, normalizeAmountText } from '../components/company/helpers';
-import { formatNumber } from './format';
-import { vatStanding, vatReliability, VAT_STANDING_LABEL } from './vatStatus';
+import type {Company, Financials, OrsrPerson, OrsrStructured} from '../types';
+import type {GraphEdge, GraphNode} from '../components/graph/graphTypes';
+import {API_BASE_URL} from '../constants';
+import {getLegalFormProfile} from './legalFormProfile';
+import {formatDate, normalizeAmountText, normalizePeople} from '../components/company/helpers';
+import {formatNumber} from './format';
+import {VAT_STANDING_LABEL, vatReliability, vatStanding} from './vatStatus';
 
 // ── helpers ────────────────────────────────────────────────────────
 
@@ -760,7 +760,7 @@ ${buildCapital(c, structured, profile)}
 ${buildBusiness(c, structured, profile)}
 ${graphSection}
 <div class="footer">
-  <span>Vygenerované: ${now} • cistafirma.sk</span>
+  <span>Vygenerované: ${now} • cistafirma</span>
   <span>IČO: ${esc(c.ico)}</span>
 </div>
 <script>

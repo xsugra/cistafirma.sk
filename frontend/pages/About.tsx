@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 export const About: React.FC = () => {
@@ -6,7 +5,7 @@ export const About: React.FC = () => {
         <div className="max-w-4xl mx-auto w-full animate-fade-in py-10">
             <div className="text-center mb-12">
                 <h1 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white mb-6">
-                    O projekte cistafirma.sk
+                    O projekte cistafirma
                 </h1>
                 <p className="text-lg text-gray-600 dark:text-gray-400">
                     Transparentnosť a dáta v službách bezpečného podnikania.
@@ -20,7 +19,10 @@ export const About: React.FC = () => {
                         <div className="flex-1">
                             <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-4">Naša misia</h2>
                             <p className="text-base text-gray-600 dark:text-gray-300 leading-relaxed mb-4">
-                                Projekt <strong>cistafirma.sk</strong> vznikol z jednoduchej potreby: mať rýchly, prehľadný a spoľahlivý nástroj na overovanie obchodných partnerov. V dobe, kedy sa ekonomika zrýchľuje, nemôžu podnikatelia strácať hodiny manuálnym prehľadávaním desiatok registrov.
+                                Projekt <strong>cistafirma</strong> vznikol z jednoduchej potreby: mať rýchly, prehľadný
+                                a spoľahlivý nástroj na overovanie obchodných partnerov. V dobe, kedy sa ekonomika
+                                zrýchľuje, nemôžu podnikatelia strácať hodiny manuálnym prehľadávaním desiatok
+                                registrov.
                             </p>
                             <p className="text-base text-gray-600 dark:text-gray-300 leading-relaxed">
                                 Veríme, že transparentnosť je základom zdravého podnikateľského prostredia. Našim cieľom je poskytnúť každému podnikateľovi – od živnostníkov po veľké korporácie – nástroje, ktoré odhalia riziká skôr, než sa stanú problémom.

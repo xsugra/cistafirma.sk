@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
@@ -503,7 +503,7 @@ export const ApiDocs: React.FC = () => {
           API Dokumentácia
         </h1>
         <p className="text-gray-600 dark:text-gray-400 text-lg">
-          REST API referencia pre integráciu s cistafirma.sk
+          REST API referencia pre integráciu s cistafirma
         </p>
         <div className="flex flex-wrap gap-3 mt-4 text-sm text-gray-500 dark:text-gray-400">
           <span className="flex items-center gap-1.5">

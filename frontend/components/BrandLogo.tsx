@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect } from 'react';
+import React, {useEffect, useState} from 'react';
 // Imported, not written as a URL, and that difference is the whole bug this
 // fixes. `/logo/cistafirma-logo.png` was a hand-written absolute path into a
 // directory the bundler never carries: `frontend/logo/` is not `frontend/public/`,
@@ -50,7 +49,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({ onClick }) => {
                 className={`text-2xl font-bold font-heading text-gray-900 dark:text-white tracking-tight group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors ${animate ? 'logo-animate' : ''}`}
                 style={{ animationDelay: '0.1s' }}
             >
-                cistafirma.sk
+                cistafirma
             </span>
         </div>
     );

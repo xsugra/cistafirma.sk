@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🏢 cistafirma.sk
+# 🏢 cistafirma
 
 **Moderná platforma na overovanie firiem, rizík, dlhov a registrových dát na Slovensku.**
 

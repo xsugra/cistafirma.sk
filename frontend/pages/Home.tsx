@@ -1,6 +1,6 @@
 import React from 'react';
-import { formatNumber } from '../utils/format';
-import { useNavigate } from 'react-router-dom';
+import {formatNumber} from '../utils/format';
+import {useNavigate} from 'react-router-dom';
 import {AnimatedSubtitle} from '../components/AnimatedSubtitle';
 import {SearchBar} from '../components/SearchBar';
 import {ROUTES} from '../constants';
@@ -132,7 +132,7 @@ export const Home: React.FC = () => {
                         </h2>
                         <div className="prose prose-lg dark:prose-invert text-gray-600 dark:text-gray-400">
                             <p>
-                                V dnešnom dynamickom prostredí je dôvera kľúčová. <strong>cistafirma.sk</strong> prináša
+                                V dnešnom dynamickom prostredí je dôvera kľúčová. <strong>cistafirma</strong> prináša
                                 radikálnu transparentnosť do slovenského ekosystému.
                             </p>
                             <p>
@@ -202,7 +202,7 @@ export const Home: React.FC = () => {
             <section className="mb-24 px-4 container mx-auto">
                 <div className="text-center mb-16 max-w-3xl mx-auto">
                     <h2 className="hero-text text-3xl md:text-5xl font-bold text-gray-900 dark:text-white mb-6">Prečo
-                        cistafirma.sk?</h2>
+                        cistafirma?</h2>
                     <p className="hero-text-muted text-xl text-gray-600 dark:text-gray-400">
                         Komplexný nástroj, ktorý šetrí váš čas, chráni vaše peniaze a dáva vám konkurenčnú výhodu.
                     </p>

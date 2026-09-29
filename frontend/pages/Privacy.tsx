@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 export const Privacy: React.FC = () => {
@@ -10,7 +9,9 @@ export const Privacy: React.FC = () => {
             
             <div className="app-card p-8 md:p-12 prose dark:prose-invert max-w-none">
                 <p className="text-lg text-gray-600 dark:text-gray-300 mb-6">
-                    Vaše súkromie je pre nás prioritou. Tento dokument vysvetľuje, ako <strong>cistafirma.sk</strong> spracúva, ukladá a chráni vaše osobné údaje v súlade s nariadením GDPR a platnou legislatívou Slovenskej republiky.
+                    Vaše súkromie je pre nás prioritou. Tento dokument vysvetľuje,
+                    ako <strong>cistafirma</strong> spracúva, ukladá a chráni vaše osobné údaje v súlade s nariadením
+                    GDPR a platnou legislatívou Slovenskej republiky.
                 </p>
 
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-8 mb-4">1. Prevádzkovateľ údajov</h3>

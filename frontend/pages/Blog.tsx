@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 // Mock Data for the blog
@@ -124,7 +123,8 @@ export const Blog: React.FC = () => {
                      <i className="fas fa-envelope-open-text text-4xl text-blue-600 mb-4"></i>
                      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Nezmeškajte žiadne novinky</h2>
                      <p className="text-base text-gray-600 dark:text-gray-400 mb-6">
-                         Prihláste sa na odber newslettra cistafirma.sk a dostávajte týždenný prehľad legislatívnych zmien priamo do mailu.
+                         Prihláste sa na odber newslettra cistafirma a dostávajte týždenný prehľad legislatívnych zmien
+                         priamo do mailu.
                      </p>
                      <div className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
                          <input 

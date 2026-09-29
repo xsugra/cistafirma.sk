@@ -1,5 +1,4 @@
 import React from 'react';
-import {ROUTES} from '../constants';
 // Imported rather than written as `/logo/cistafirma-logo.png` -- see the longer
 // note in `BrandLogo.tsx`. The short version: `frontend/logo/` is not
 // `frontend/public/`, so `vite build` never carried it into `dist/`, and nginx's
@@ -43,7 +42,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({children, title, subtitle
                                 className="h-10 w-auto object-contain"
                             />
                             <span
-                                className="text-2xl font-bold font-heading tracking-tight text-white drop-shadow-sm">cistafirma.sk</span>
+                                className="text-2xl font-bold font-heading tracking-tight text-white drop-shadow-sm">cistafirma</span>
                         </div>
 
                         <h2 className="text-3xl md:text-4xl font-bold leading-tight mb-6 text-transparent bg-clip-text bg-gradient-to-r from-white to-blue-200">

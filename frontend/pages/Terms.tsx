@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 export const Terms: React.FC = () => {
@@ -13,7 +12,9 @@ export const Terms: React.FC = () => {
                 
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-3">1. Úvodné ustanovenia</h3>
                 <p className="text-base text-gray-600 dark:text-gray-400 mb-4">
-                    Tieto podmienky upravujú používanie portálu <strong>cistafirma.sk</strong>. Registráciou alebo používaním služby vyjadrujete súhlas s týmito podmienkami. Služba slúži na informačné účely a nenahrádza oficiálne výpisy z verejných registrov pre právne úkony.
+                    Tieto podmienky upravujú používanie portálu <strong>cistafirma</strong>. Registráciou alebo
+                    používaním služby vyjadrujete súhlas s týmito podmienkami. Služba slúži na informačné účely a
+                    nenahrádza oficiálne výpisy z verejných registrov pre právne úkony.
                 </p>
 
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white mt-6 mb-3">2. Zodpovednosť za dáta</h3>
