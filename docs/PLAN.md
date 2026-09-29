@@ -9915,6 +9915,158 @@ tomu, čo je v danom stroji naozaj na disku), a prešiel.
 
 ---
 
+### 11.26 Blog page je preč — celá, aj so všetkými referenciami (2026-09-29, `a8ccd95`)
+
+**Prečo to nešlo nechať tak.** `Blog.tsx` v `frontend/pages/` bol statický mock: dva
+vymyslené články a formulár na odber noviniek. Na portáli, ktorý predáva dáta z
+verejných registrov, je vymyslený obsah tá istá chyba ako nesprávne dáta — a
+odkaz naň sedel v hlavnom menu na každej stránke. Odstránila sa preto stránka aj
+**každá** referencia, nie len route.
+
+**Kde všetky referencie boli** (6 súborov, `847e746`): `pages/Blog.tsx` (celý,
+143 riadkov), `App.tsx` (import + `<Route>`), `constants.ts` (`ROUTES.BLOG`),
+`Header.tsx` — **dve** miesta, desktopové `<nav>` aj mobilný overlay, na čo sa
+pri hľadaní odkazov ľahko zabudne — `Home.tsx` (sekcia „ABOUT / BLOG": odznak,
+nadpis, tlačidlo a dve mock karty, dokopy tri volania `navigate(ROUTES.BLOG)`) a
+`components/Header.test.tsx`.
+
+**Route sa nepresmerúva.** `/blog` po novom padá do catch-all `<Route path="*">`
+na `NotFound`. Presmerovať na domov by predstieralo, že stránka existuje inde;
+404 je pravda.
+
+**Layout.** Karta „O projekte" bola v dvojstĺpcovej mriežke s blogovou kartou.
+Keď blog zmizol, mriežka sa zbala na jediný kontajner na plnú šírku — rovnako ako
+sekcie STATS a FEATURES, ktoré plnú šírku majú tiež. `.prose` sa sám zastropuje
+na `65ch` (typography plugin je v `main.css` deklarovaný), takže text nepreteká.
+
+**Test na neprítomnosť potrebuje pozitívnu kontrolu.** Pribudlo
+`expect(screen.queryAllByText(/blog/i)).toHaveLength(0)` — a hneď sa overilo, že
+**vie zlyhať**: do `Header.tsx` sa dočasne vrátilo
+`<button className="nav-link">BLOG</button>`, test spadol (`exit 1`,
+`expected [ <button class="nav-link"></button> ] to have a length of +0 but got 1`,
+riadok 41), a zmena sa vrátila. Assertions, ktorá nikdy nebola červená, sa nedá
+odlíšiť od assertions, ktorá nematchuje nič.
+
+**Zlúčenie, ktoré nebolo samozrejmé.** Rebranding používateľa (`db6d431`,
+„cistafirma.sk → cistafirma") vznikol na `370264b`, teda **nie** na `847e746` —
+vetvy sa rozišli. Konflikt sa pred zlúčením ohodnotil nástrojom, ktorý na to repo
+má: `git merge-tree --write-tree --name-only db6d431 origin/main` vrátil presne
+jeden — `CONFLICT (modify/delete): frontend/pages/Blog.tsx deleted in origin/main
+and modified in db6d431` — plus čistý auto-merge `Home.tsx`; skutočné zlúčenie
+sedelo na to do bodu. Vyriešilo sa prijatím zmazania (`git rm`): rebrandingová
+úprava *vnútri* zmazaného súboru je bezpredmetná. Zlúčené ako **merge**
+(`a8ccd95`), nie rebase — commit používateľa drží svoj SHA a obe vetvy
+(`847e746` aj `db6d431`) sú jeho predkovia, takže oba remoty idú fast-forwardom.
+
+**Dve merania, ktoré takmer vyzerali ako chyba:**
+
+1. **`cistafirma.sk` nie je použiteľná nulová assertions.** Rebranding ju
+   odstránil z marketingových textov, ale reťazec v strome **oprávnene ostáva**:
+   e-mailové adresy (`info@` a `sales@cistafirma.sk` v `Contact.tsx`, `privacy@`
+   v `Privacy.tsx`, `noreply@cistafirma.sk` v `settings.py`) a názov balíka v
+   `package.json`, `package-lock.json` aj `metadata.json`. `grep -c
+   'cistafirma.sk' == 0` by klamalo v oboch smeroch. Preto sa overujú **presné**
+   reťazce, ktoré rebranding zmenil: starý `cistafirma.sk?` = 0, nový
+   `cistafirma?` = 1.
+2. **`grep -c 'Všetky'` vrátil 3.** To nie je zvyšok blogu — „Všetky" je
+   všeobecné slovo (pätka: „Všetky práva vyhradené"). Assertions musí menovať
+   reťazec *blogu* („Všetky články"), inak meria niečo iné.
+
+**Šablóna reportu si vyžiadala reštart backendu.** Rebranding zasiahol aj
+`backend/companies/templates/company_report.html`. Backend má `./backend:/app`
+bind mount, takže súbor je v kontajneri hneď — ale `TEMPLATES` v `settings.py`
+nemá explicitné `loaders`, takže s `DEBUG=False` Django obalí loadery
+`cached.Loader` a skompilovanú šablónu **drží v pamäti**. Nový súbor na disku
+teda nestačí; proces musí dostať nový. Preto sa rekreoval aj `backend`.
+
+**Celery workery sa zámerne nereštartovali.** `company_report.html` renderuje
+jediný volajúci — `companies/views.py:256`, web view, nie úloha. Rekreovanie
+workerov by prerušilo bežiaci RUZ sync a neprinieslo nič.
+
+**Kesh hotových PDF.** `get_company_report` keshuje vyrenderované PDF do Redisu
+pod kľúčom odvodeným z **firemných dát** (pk, `datum_poslednej_upravy`, finančné
+výsledky, ORSR profil), nie z brandingu. Už vygenerovaný report preto ponesie
+starý reťazec až do expirácie — `REPORT_CACHE_TIMEOUT = 300`, teda najviac päť
+minút. Redisu sa nechytalo nič; `FLUSHDB` by okrem toho zobral aj Celery broker
+stav.
+
+**Nasadenie na dell** (2026-09-29):
+
+- `git pull gitlab-home main` — fast-forward `847e746..a8ccd95`, `PULL_EXIT=0`
+  (pull sa ťahá **menom**; dellov globálny gitconfig má `fetch.all=true`, takže
+  holý `git pull` skončí 1 a nepohne ničím).
+- `docker compose up -d --build frontend backend` — `UP_EXIT=0`.
+  `cistafirma_backend` aj `cistafirma_frontend` **Recreated**; `db` a `redis`
+  „Up 3 days" (**nerekrované**, len čakané ako healthy); celery workery „Up 24
+  hours" (nedotknuté).
+- `migrate` sa **nespúšťal** — zmena nepridáva migráciu a na schému sa bez
+  čerstvej overenej zálohy nechytá.
+- Servovaný bundle `assets/index-ka_ql_al.js` (1 008 961 B): pozitívna kontrola
+  `Transparentn` = 2, rebranding `cistafirma?` = 1, starý `cistafirma.sk?` = 0, a
+  **0** pre `Blog & Novinky`, `Najnovšie z blogu`, `Všetky články` aj `"/blog"`.
+- Šablóna v kontajneri: `CistaFirma.sk` = 0, `cistafirma — Firemný report` = 1.
+- `make ops-check` — **`Operational controls: SATISFIED`** (`OPS_EXIT=0`).
+
+**Tretia pasca bola v mojom vlastnom overovacom skripte.** `make ops-check`
+spúšťaný cez `ssh dell 'bash -s' <<EOF` **zožral zvyšok skriptu**: dieťa zdedí
+stdin a `make` (alebo niečo, čo spustí) z neho prečítalo zvyšné riadky, takže
+`OPS_EXIT` ani `tail` sa nikdy nevypísali — dvakrát, vždy na tom istom mieste. Je
+to tá istá trieda ako „filter, ktorý nevie matchovať": príkaz, ktorý nemá
+odpojený stdin, ticho zje to, čo má nasledovať. Riešenie je `< /dev/null`.
+
+### 11.26.1 CI našlo chybu — a bola v rebrandingu, nie v blogu (2026-09-30, `e3dfef4`)
+
+Pipeline **245** (`a8ccd95`) padol; **244** (`847e746`) pred ním prešiel. Rozdiel
+medzi tými dvoma commitmi v backende bol **jediný súbor a tri riadky** — šablóna
+reportu. Zlyhanie je deterministické a reprodukované na delle (`Ran 1278 tests in
+146.522s`, `FAILED (failures=1)`, presne jedno):
+
+```
+FAIL: test_a_company_with_no_financial_results_renders_without_a_ratio_block
+      (companies.tests_pdf_template.PdfNoStatementTests)
+  File "/app/companies/tests_pdf_template.py", line 188
+    self.assertIn('CistaFirma nenesie zodpovednosť', html)
+AssertionError: 'CistaFirma nenesie zodpovednosť' not found in '... Cistafirma
+                 nenesie zodpovednosť za aktuálnosť ani úplnosť ...'
+```
+
+Že je to jediná červená a že ostatné joby naozaj **bežali** (nie že ich preskočil
+spadnutý `validate`): v pipeline 245 je `backend_tests` `failed`, kým
+`backend_validate`, `frontend_validate`, `frontend_tests`, `docs_audit`,
+`helm_render_validate` aj `helm_runtime_validate` sú `success`, všetky s
+`allow_failure = false`.
+
+**Prečo to môj grep minul.** Hľadal som `CistaFirma\.sk` — s bodkou. Assertion
+však pinuje `CistaFirma nenesie zodpovednosť` — s **medzerou**. Vzor, ktorý
+hľadanú vec nemá ako matchovať, vráti nulu, a nula vyzerá ako „nič tam nie je";
+je to tá istá trieda ako „absence needs a positive control". (A `grep -c` vráti
+`0` aj vtedy, keď príkaz spadol.)
+
+**Oprava (`e3dfef4`) dokončuje rebranding — neobchádza test.** Pravidlo commitu
+je `cistafirma.sk` → `cistafirma` (malé, bez TLD). Riadok 433 disclaimeru bol
+jediný zasiahnutý riadok **bez** `.sk`, takže z neho vyšlo napoly hotové
+`Cistafirma` — tvar, ktorý sa v celom repe vyskytuje **raz**. Zjednotil sa na
+`cistafirma` v šablóne aj v teste; prepísať *test* na `Cistafirma` by ten preklep
+len zakonzervovalo. Assertion je pritom na brand naviazaná naďalej — pinuje text
+disclaimeru — takže pri ďalšom premenovaní spadne znova. Nechal som ju tak:
+odviazať ju od brandu (`nenesie zodpovednosť`) je zmena *zámeru* testu, nie jeho
+oprava, a to nie je moje rozhodnutie.
+
+**Čo som nechal tak.** Rebranding minul dva druhy reťazcov a oba som zámerne
+nemenil:
+
+- `backend/notifications/services.py:444` nesie v **tele** e-mailu
+  `'CistaFirma.sk — monitoring slovenských firiem'`.
+- `backend/backend/settings.py:747` (`SITE_TITLE = "CistaFirma"`), `:869`
+  (`DEFAULT_FROM_EMAIL = 'CistaFirma <noreply@cistafirma.sk>'`) a predmet
+  `[CistaFirma]` v `backend/notifications/services.py:383`.
+
+Prvé je text v e-maile, druhé je **identita odosielateľa** (hlavička `From` a
+predmet). Commit `db6d431` ani jeden z týchto súborov nemenoval, takže zmeniť ich
+je rozhodnutie o brandingu pošty, nie oprava chyby — nahlásené, nevykonané.
+
+---
+
 ## 12. Nemenné pravidlá
 
 Toto sa nemení bez výslovného súhlasu. Detaily v `docs/DATA_PROTECTION.md`.
