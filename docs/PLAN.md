@@ -10065,6 +10065,15 @@ Prvé je text v e-maile, druhé je **identita odosielateľa** (hlavička `From` 
 predmet). Commit `db6d431` ani jeden z týchto súborov nemenoval, takže zmeniť ich
 je rozhodnutie o brandingu pošty, nie oprava chyby — nahlásené, nevykonané.
 
+**Verdikt.** Push `5ddcb0c` spustil pipeline **246**, a tá je `success`: všetkých
+sedem jobov (`backend_validate`, `frontend_validate`, `docs_audit`,
+`helm_render_validate`, `helm_runtime_validate`, `frontend_tests`,
+`backend_tests`) `success` s `allow_failure = false` — `backend_tests` medzi nimi,
+teda presne ten, ktorý na 245 padol. Opravu teda potvrdila tá istá brána, ktorá
+chybu našla; beh na delle (`companies.tests_pdf_template`: `Ran 8 tests`, `OK`)
+bol len predbežný, lebo na Macu sa backendová sada spustiť nedá (migrácie
+potrebujú Postgres).
+
 ---
 
 ## 12. Nemenné pravidlá
