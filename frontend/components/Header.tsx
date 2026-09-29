@@ -91,9 +91,6 @@ export const Header: React.FC = () => {
                             <button onClick={() => handleNav(ROUTES.MONITORING)}
                                     className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.MONITORING ? 'active' : ''}`}>MONITORING
                             </button>
-                            <button onClick={() => handleNav(ROUTES.BLOG)}
-                                    className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.BLOG ? 'active' : ''}`}>BLOG
-                            </button>
                             <button onClick={() => handleNav(ROUTES.API_DOCS)}
                                     className={`nav-link bg-transparent border-0 ${activeRoute === ROUTES.API_DOCS ? 'active' : ''}`}>API
                             </button>
@@ -203,9 +200,6 @@ export const Header: React.FC = () => {
                     </button>
                     <button onClick={() => handleNav(ROUTES.MONITORING)}
                             className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.MONITORING ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>MONITORING
-                    </button>
-                    <button onClick={() => handleNav(ROUTES.BLOG)}
-                            className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.BLOG ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>BLOG
                     </button>
                     <button onClick={() => handleNav(ROUTES.API_DOCS)}
                             className={`py-2 border-b border-gray-100 dark:border-slate-800 w-full ${activeRoute === ROUTES.API_DOCS ? 'text-blue-600 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>API

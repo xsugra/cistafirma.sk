@@ -115,8 +115,8 @@ export const Home: React.FC = () => {
                 </div>
             </section>
 
-            {/* ABOUT / BLOG SECTION */}
-            <section className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 mb-32 px-4 container mx-auto">
+            {/* ABOUT SECTION */}
+            <section className="mb-32 px-4 container mx-auto">
                 {/* About Card */}
                 <div className="app-card p-10 relative overflow-hidden flex flex-col justify-between">
                     <div
@@ -148,51 +148,6 @@ export const Home: React.FC = () => {
                                     <i className="fas fa-check-circle text-blue-500"></i> {item}
                                 </div>
                             ))}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Blog Card */}
-                <div className="app-card p-10 relative overflow-hidden flex flex-col bg-slate-50 dark:bg-slate-900/50">
-                    <div className="flex justify-between items-end mb-8">
-                        <div>
-                            <div
-                                className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-bold uppercase tracking-wide mb-4">
-                                Blog & Novinky
-                            </div>
-                            <h3 className="text-3xl font-bold text-gray-900 dark:text-white">Najnovšie z blogu</h3>
-                        </div>
-                        <button onClick={() => navigate(ROUTES.BLOG)}
-                                className="btn btn-ghost text-sm hidden sm:flex">
-                            Všetky články <i className="fas fa-arrow-right ml-1"></i>
-                        </button>
-                    </div>
-
-                    <div className="space-y-6 flex-grow">
-                        <div
-                            className="group cursor-pointer bg-white dark:bg-slate-900 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-all"
-                            onClick={() => navigate(ROUTES.BLOG)}>
-                            <div className="flex justify-between items-start mb-2">
-                                <span
-                                    className="text-xs font-bold text-blue-600 uppercase tracking-wider">Legislatíva</span>
-                                <span className="text-xs text-gray-400">12. Feb</span>
-                            </div>
-                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                Zmeny v DPH od roku 2025: Na čo si dať pozor?
-                            </h4>
-                        </div>
-
-                        <div
-                            className="group cursor-pointer bg-white dark:bg-slate-900 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-all"
-                            onClick={() => navigate(ROUTES.BLOG)}>
-                            <div className="flex justify-between items-start mb-2">
-                                <span
-                                    className="text-xs font-bold text-blue-600 uppercase tracking-wider">Technológie</span>
-                                <span className="text-xs text-gray-400">10. Feb</span>
-                            </div>
-                            <h4 className="font-bold text-lg text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                Ako AI odhaľuje biele kone vo firmách
-                            </h4>
                         </div>
                     </div>
                 </div>
