@@ -45,8 +45,13 @@ shows up as a growing `time() - timestamp` instead of looking fresh.
 
 Read-only: every query it issues is a SELECT, and Focus Mode is read without
 creating its singleton row. The server is single-threaded on purpose -- one
-thread means one database connection, and `close_old_connections()` before each
-scrape keeps it from accumulating Postgres backends.
+thread means at most one database connection -- and the request handler calls
+`close_old_connections()` before each scrape, so the process holds no Postgres
+backend between scrapes and recovers if one went away. That call belongs to the
+handler, NOT to `collect_metrics()`: a connection is per-thread state owned by
+the caller (`CONN_MAX_AGE` is unset here, so the call really does close it), and
+`collect_metrics()` is invoked directly by tests -- closing there tears down the
+atomic block the test is running in.
 
 Run it beside the stack (its own compose service, published on loopback like
 every other port here) and scrape `http://<host>:9101/metrics`.
@@ -285,8 +290,6 @@ def collect_metrics(
     if thresholds is None:
         thresholds = _thresholds_from_env()
 
-    close_old_connections()
-
     registry = CollectorRegistry()
     subject = Gauge(METRIC_SUBJECT, DOC_SUBJECT, ["domain", "subject", "status"], registry=registry)
     unmet = Gauge(METRIC_UNMET, DOC_UNMET, ["domain"], registry=registry)
@@ -373,6 +376,11 @@ class _MetricsHandler(BaseHTTPRequestHandler):
         if self.path.split("?")[0] not in ("/metrics", "/"):
             self.send_error(404, "Not Found")
             return
+
+        # Before, not inside, `collect_metrics()`: the connection is this
+        # thread's, and closing it is the server's lifecycle decision rather
+        # than part of producing the body. See the module docstring.
+        close_old_connections()
 
         try:
             body, _ok = collect_metrics(

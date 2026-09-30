@@ -311,13 +311,25 @@ class EvaluateSourceHealthTests(TestCase):
 
 
 class EvaluateBeatHealthTests(TestCase):
-    def _entry(self, name, *, every=10, last_run_at=None, **kwargs):
+    def _entry(
+        self,
+        name,
+        *,
+        every=10,
+        last_run_at=None,
+        task="registers.tasks.fetch_ruz_data_task",
+        **kwargs,
+    ):
+        # `task` is a named parameter, not a default inside the `create()` call:
+        # the caller that needs celery's own prefix (`celery.backend_cleanup`)
+        # has to be able to override it, and passing it through `**kwargs` beside
+        # a hardcoded `task=` there is a duplicate keyword, not an override.
         interval, _ = IntervalSchedule.objects.get_or_create(
             every=every, period=IntervalSchedule.MINUTES
         )
         return PeriodicTask.objects.create(
             name=name,
-            task="registers.tasks.fetch_ruz_data_task",
+            task=task,
             interval=interval,
             last_run_at=last_run_at,
             **kwargs,
