@@ -10126,8 +10126,10 @@ a premenovať sa nesmie:
 - **Hlavičky a popisky, ktoré som nechal a hlásim** (nie sú to e-maily):
   `backend/backend/settings.py:747-748` (`SITE_TITLE`/`SITE_HEADER` Django adminu),
   `backend/backend/urls.py:25` (text v API roote), `frontend/admin/AdminLayout.tsx:90`
-  (popisok v ľavom paneli administrácie), `Makefile:9` a `scripts/local/*.sh`
-  (`ops_check`, `offsite_status`, `scheduled_backup`) — tam ide o texty výpisov.
+  (popisok v ľavom paneli administrácie), `Makefile:9`, `scripts/local/*.sh`
+  (`ops_check`, `offsite_status`, `scheduled_backup`) a
+  `backend/companies/management/commands/setup_i18n.py:2-54` — tam ide o `help`
+  a texty výpisov, ktoré vidí len ten, kto ich spustí.
 
 Zvyšok je dokumentácia (`docs/` okrem tohto plánu: 25 výskytov) a popis nástrojov
 (`.claude/`, `.codex/`, `.github/`, `CLAUDE.md`, `Makefile`, `.gitignore`: 29) —
