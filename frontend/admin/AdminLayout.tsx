@@ -87,7 +87,7 @@ export function AdminLayout({ activePage, onNavigate, onExit, children, userName
           </div>
           {sidebarOpen && (
             <div className="min-w-0">
-              <p className="text-sm font-bold text-slate-900 dark:text-white truncate">cistafirma</p>
+              <p className="text-sm font-bold text-slate-900 dark:text-white truncate">CistaFirma</p>
               <p className="text-[10px] text-slate-400 -mt-0.5">Admin Panel</p>
             </div>
           )}
