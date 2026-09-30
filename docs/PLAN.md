@@ -10228,18 +10228,67 @@ existovali pred ňou a našli sa pri čítaní kódu, nie pri písaní:
 - Sekcia Optional monitoring stack tvrdila „No alerting rules are provisioned“ —
   od tejto zmeny ich je desať.
 
-**Čo táto zmena NEtvrdí.** Grafana provisioning interpoluje `$VAR` a **nenastavená**
-premenná sa dosadí ako prázdny reťazec, nie ako chyba — takže Telegram contact
-point sa provisionuje „v poriadku“ a potom ticho nič nedoručí. **Nič v tomto
-repozitári doručenie neoveruje a overiť nemôže**: jediný spôsob, ako otestovať
-contact point, je poslať správu, a týždenná brána, ktorá každý týždeň píše do
-Telegramu, je brána, ktorú nikto nečíta. Jediný dôkaz je človek pozerajúci do
-chatu — raz, po nastavení tokenu. Súbor provisionovaný bez chýb tým dôkazom
-nie je. (Presne toto tvrdenie — „odchytí to `make ops-check`“ — som najprv
-napísal do komentára v `docker-compose.yml` a potom ho musel opraviť, lebo
-`ops_check.sh` o Grafana alertingu nevie nič.)
+**Tvrdenie, ktoré tu stálo a bolo nesprávne — opravené 2026-10-01 po tom, čo
+spadlo na produkcii.** Stálo tu, že nenastavená premenná sa dosadí ako prázdny
+reťazec a Telegram contact point sa „provisionuje v poriadku“ a potom ticho nič
+nedoručí. Interpolácia na prázdny reťazec je pravda; **zvyšok je opak.**
+Receiver `telegram` prázdny `bottoken` **odmietne** („could not find Bot Token in
+settings“), a zlyhaný provisioning modul je fatálny pre **celý proces**, nie len
+pre alerting — padá `DashboardServiceImpl`, `GrafanaLive`, `PluginsService` aj
+login, lebo provisioning je ich tvrdá závislosť. Grafana na delle preto od
+nasadenia alertingu 2026-09-30 **restart-loopovala** (`restarts=13`, exit 1).
+Nebol to teda „tichý“ stav: bola to úplná odstávka observability vrstvy, a to
+vrátane dashboardov, ktoré s tokenom nemajú nič spoločné.
 
-**Stav nasadenia:** *doplniť po nasadení na dell.*
+Reprodukované 2026-10-01 proti `grafana/grafana:13.2.1` mimo compose: s prázdnym
+tokenom kontajner po ~70 s skončí s exit 1 a tou istou hláškou; s dobre tvarovaným
+tokenom prejde provisioning celý (10 pravidiel, 3 dashboardy, policy
+`receiver: telegram`, `group_by: [alertname, instance]`), takže nič iné
+v provisioningu zlé nebolo a príčina bola jediná.
+
+Oprava: `docker-compose.yml` dosadzuje namiesto prázdneho reťazca sebapopisujúci
+placeholder, takže neúplná konfigurácia stojí **zlyhané doručenie** — viditeľné
+ako chyba notifikácie na pravidle — a nie monitorovací stack. Placeholder sa
+vypíše v chybe doručenia (`.../botUNSET-TELEGRAM-BOT-TOKEN/sendMessage`) aj
+v nastaveniach contact pointu v UI. Nie je to funkčný kanál: kým token v `.env`
+nie je, pravidlá sa vyhodnocujú, nikomu nepíšu a hlásia, že nemohli.
+
+**A druhá pasca pri nastavení tokenu:** `docker compose restart grafana`
+prehrá *existujúcu* konfiguráciu kontajnera, takže `.env` si **znova neprečíta** —
+nový token sa do kontajnera nedostane a Grafana padá s tou istou hláškou, čo sa
+číta ako zlý token, nie ako neprečítaný. Treba `make docker-metrics-up`, teda
+`up -d`, ktoré kontajner rekreuje s novým prostredím a `db`/`redis` nechá na
+pokoji.
+
+**Nič v tomto repozitári doručenie neoveruje a overiť nemôže**: jediný spôsob,
+ako otestovať contact point, je poslať správu, a týždenná brána, ktorá každý
+týždeň píše do Telegramu, je brána, ktorú nikto nečíta. Jediný dôkaz je človek
+pozerajúci do chatu — raz, po nastavení tokenu. Súbor provisionovaný bez chýb
+tým dôkazom nie je. (Presne toto tvrdenie — „odchytí to `make ops-check`“ — som
+najprv napísal do komentára v `docker-compose.yml` a potom ho musel opraviť,
+lebo `ops_check.sh` o Grafana alertingu nevie nič.)
+
+**Stav nasadenia:** *čiastočne — a ten zvyšok nie je nedokončená práca, ale
+krok, ktorý musí spraviť človek.*
+
+Pôvodná monitorovacia vrstva (`ea9a5d5`, `7f11c26`, `cea8fa1`) je na `main`
+a na delle nasadená od 2026-09-30. Odmerané na delle 2026-10-01: Prometheus má
+7/7 targetov `up`, `cistafirma_ops_scrape_ok = 1`.
+
+Oprava crash-loopu z tohto odseku (`35e8e3d`) je **commitnutá a zelená v CI** —
+pipeline 256, všetkých sedem jobov `success` s `allow_failure=false` — na vetve
+`worktree-grafana-cistafirma-ops`. Na `main` ju ale **musí pushnúť človek**:
+`git push gitlab-home HEAD:refs/heads/main` mi 2026-10-01 auto-mode classifier
+zamietol ako `[Git Destructive]`, a to zamietnutie platí na **výsledok**, nie na
+konkrétny príkaz — takže sa neobchádza iným nástrojom, iným hostom ani deployom
+z vetvy. Po pushi nasleduje na delle `git pull gitlab-home main` a
+`make docker-metrics-up`; **nie** `docker compose restart grafana`, ktorý si
+`.env` znova neprečíta a nechal by token prázdny.
+
+Dovtedy je Grafana na delle v restart-slučke s prázdnym tokenom presne tak, ako
+to popisuje odsek vyššie. Je to viditeľná odstávka UI — nie tichý stav — a táto
+oprava ju končí. Alerty sa pritom nevyhodnocujú vôbec, lebo unified alerting
+vyhodnocuje Grafana; zber metrík beží ďalej.
 
 ---
 

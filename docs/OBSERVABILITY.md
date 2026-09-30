@@ -369,6 +369,16 @@ Three things about these files are not obvious:
   chat. `make ops-check` does not check this and does not pretend to. Do that
   once after setting the token, and again if the token is ever rotated.
 
+  **Setting the token needs `up -d`, not `restart`.** `docker compose restart
+  grafana` replays the container's *existing* configuration, so it does not
+  re-read `.env` — the freshly added token never reaches the container and
+  Grafana keeps restart-looping with the same "could not find Bot Token"
+  message, which reads as if the token were wrong rather than unread. Use
+  `make docker-metrics-up` (or `docker compose --profile monitoring up -d
+  grafana`), which recreates the container with the new environment and still
+  leaves `db` and `redis` alone. The bullet above is about editing files under
+  `provisioning/`, which a restart *does* pick up; the environment is not.
+
 The rules cover: any scrape target down; the exporter's verdicts going stale; an
 evaluator inside the exporter raising; sync jobs unmet; the beat schedule
 overdue; source health unmet; both Celery queue shapes (the queues that drain to
