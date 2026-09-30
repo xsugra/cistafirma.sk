@@ -380,7 +380,7 @@ def send_pending_email_notifications() -> int:
     for event in events:
         try:
             send_mail(
-                subject=f'[CistaFirma] {event.title}',
+                subject=f'[cistafirma] {event.title}',
                 message=_build_email_body(event),
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[event.user.email],
@@ -441,7 +441,7 @@ def _build_email_body(event: NotificationEvent) -> str:
         'Zobraziť detail: https://cistafirma.sk/monitoring?ico=' + event.company_ico,
         '',
         '--',
-        'CistaFirma.sk — monitoring slovenských firiem',
+        'cistafirma — monitoring slovenských firiem',
         'Tento email bol vygenerovaný automaticky. Ak si neželáte dostávať notifikácie, upravte si nastavenia vo svojom profile.',
     ])
     return '\n'.join(lines)
