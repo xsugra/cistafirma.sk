@@ -29,4 +29,24 @@ scrape_configs:
     static_configs:
       - targets: ["backend:8000"]
 
+  # Host metrics for BOTH machines — this stack is the central monitoring for
+  # `dell` and `sam-lenovo` alike, not just for CistaFirma. Each host runs the
+  # same node_exporter agent (quay.io/prometheus/node-exporter:v1.12.1) from
+  # /home/sam/node-exporter, and each binds 9100 to its own tailnet address
+  # only, so these targets are reachable from here and from nowhere else.
+  #
+  # Targets are tailnet IPs rather than hostnames deliberately: Prometheus runs
+  # in a container on the compose network, so `dell` would not resolve and
+  # 127.0.0.1 would be this container. The `host` label is what dashboards group
+  # by, so re-IPing the tailnet is a one-line change here plus BIND_IP in that
+  # host's /home/sam/node-exporter/.env.
+  - job_name: node
+    static_configs:
+      - targets: ["100.79.47.4:9100"]
+        labels:
+          host: dell
+      - targets: ["100.120.104.84:9100"]
+        labels:
+          host: sam-lenovo
+
 # No alerting rules are provisioned — dashboards only.
