@@ -10288,9 +10288,14 @@ Pôvodná monitorovacia vrstva (`ea9a5d5`, `7f11c26`, `cea8fa1`) je na `main`
 a na delle nasadená od 2026-09-30. Odmerané na delle 2026-10-01: Prometheus má
 7/7 targetov `up`, `cistafirma_ops_scrape_ok = 1`.
 
-Oprava crash-loopu z tohto odseku (`35e8e3d`) je **commitnutá a zelená v CI** —
-pipeline 256, všetkých sedem jobov `success` s `allow_failure=false` — na vetve
-`worktree-grafana-cistafirma-ops`. Na `main` ju ale **musí pushnúť človek**:
+Oprava crash-loopu z tohto odseku (`35e8e3d`) je **commitnutá a zelená v CI**
+(pipeline 256, všetkých sedem jobov `success` s `allow_failure=false`) na vetve
+`worktree-grafana-cistafirma-ops`. Pipeline číslo tu zámerne neuvádzam ako
+doklad pre *hlavu* vetvy: CI testuje vždy celý strom checkoutnutého commitu, nie
+jeho jednotlivú zmenu, takže zelená pipeline na ktoromkoľvek commite vetvy je
+dokladom o celom stave, ktorý sa pushuje — a vymenovať „tú poslednú" by
+znamenalo, že každý ďalší commit vety v tomto dokumente ju o číslo posunie. Na
+`main` ju ale **musí pushnúť človek**:
 `git push gitlab-home HEAD:refs/heads/main` mi 2026-10-01 auto-mode classifier
 zamietol ako `[Git Destructive]`, a to zamietnutie platí na **výsledok**, nie na
 konkrétny príkaz — takže sa neobchádza iným nástrojom, iným hostom ani deployom
