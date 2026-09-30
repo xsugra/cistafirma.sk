@@ -83,65 +83,29 @@ explain a failure but cannot invent one -- which matters, because reading the
 registry is itself a trap: `finalize()` alone leaves it holding only celery's
 own entries in a `manage.py` process, so every live row claimed the task was
 gone. `_registered_task_names` carries that measurement.
+
+**The decision now lives in `registers.services.ops_health`** and this command
+renders it, so that an exporter or an admin endpoint can read the same verdict
+without re-implementing the rule. The table, the five carve-out notes and the
+`Beat schedule: N unmet` summary are unchanged -- `scripts/local/ops_check.sh`
+parses that line. The registry reader stays here and is handed to the
+evaluator, because the evaluator only needs it to decorate a verdict it has
+already reached.
 """
 
 from __future__ import annotations
 
-import os
 import sys
-from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
-from django_celery_beat.models import PeriodicTask
 
 from backend.celery import app as celery_app
-from registers.models import SyncFocusModeState
-from registers.services.focus_mode import FOCUS_KEEP_TASKS
-
-# How far past its own interval a row may sit before the miss is reported. A
-# healthy beat dispatches within seconds of a row coming due, so this is not
-# jitter tolerance -- it is the window in which a restarted beat is not yet a
-# failure, and it has to stay well below the shortest interval here (10 min) or
-# the gate stops being able to see a row that has missed a whole run.
-DEFAULT_GRACE_MINUTES = 15
-
-# Tasks celery schedules for its own housekeeping. Their rows are re-saved from
-# the in-memory defaults at every beat start, which is why one of them can hold
-# `total_run_count=33` and `last_run_at=NULL` at the same time. See the module
-# docstring.
-CELERY_OWN_PREFIX = "celery."
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _humanize(delta: timedelta) -> str:
-    """A short age, coarse enough to read at a glance in a gate's output."""
-    seconds = max(int(delta.total_seconds()), 0)
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
-    return f"{seconds // 86400}d {(seconds % 86400) // 3600}h"
-
-
-def _short(period: timedelta) -> str:
-    """An interval written the way the entry names it: 10m, 4h, 12h, 1d."""
-    seconds = int(period.total_seconds())
-    for unit, step in (("d", 86400), ("h", 3600), ("m", 60)):
-        if seconds and seconds % step == 0:
-            return f"{seconds // step}{unit}"
-    return f"{seconds}s"
+from registers.services.ops_health import (
+    CELERY_OWN_PREFIX,  # re-exported: the module's constants used to live here
+    DEFAULT_GRACE_MINUTES,
+    env_int as _env_int,
+    evaluate_beat_health,
+)
 
 
 class Command(BaseCommand):
@@ -170,165 +134,71 @@ class Command(BaseCommand):
         if grace_minutes < 0:
             # A negative grace makes every enabled entry fail at once, which is
             # a control that is always red -- and a control that is always red
-            # is one nobody reads. Refused rather than obeyed.
+            # is one nobody reads. Refused rather than obeyed. It stays in the
+            # command because it is argument validation, not a judgement.
             raise CommandError(
                 "--grace-minutes cannot be negative: it would make every "
                 "enabled entry fail at once, which is a gate nobody can read."
             )
-        grace = timedelta(minutes=grace_minutes)
-        now = timezone.now()
-        rows = list(PeriodicTask.objects.select_related("interval").order_by("name"))
-        focus_mode_active = self._focus_mode_active()
 
-        unmet = 0
-        judged = 0
-        stale = 0
-        notes: list[str] = []
-        celery_owned: list[str] = []
-        switched_off: list[str] = []
-        paused_by_focus_mode: list[str] = []
-        odd_schedule: list[str] = []
-        unreadable_interval: list[str] = []
-        never_run: list[str] = []
-
-        # The task registry is loaded at most once, and only once something has
-        # already failed -- filling it costs a full task-module import, and the
-        # sentence it produces is decoration on a verdict reached elsewhere.
-        registry: set[str] | None = None
-        registry_read = False
-
-        def outlived(task: str) -> str:
-            """A sentence for a row pointing at a task nothing implements."""
-            nonlocal registry, registry_read
-            if not registry_read:
-                registry = self._registered_task_names()
-                registry_read = True
-            if registry is None or task in registry:
-                return ""
-            return (
-                f" The task it names ({task}) is not registered in this app, so "
-                f"it cannot run at all -- the entry has outlived the task."
-            )
+        report = evaluate_beat_health(
+            grace_minutes=grace_minutes,
+            registry_loader=self._registered_task_names,
+        )
+        ctx = report.context
 
         self.stdout.write(
             f"  {'entry':<44} {'scheduled':<14} {'last run':<21} {'age':>8}  verdict"
         )
-        if not rows:
+        if not ctx["rows"]:
             self.stdout.write("  (no periodic task rows exist at all)")
 
-        for row in rows:
-            period = self._period(row)
-            last = row.last_run_at
+        for item in ctx["rows"]:
+            row = item["row"]
+            last = item["last"]
             line = (
-                f"  {row.name:<44} {self._schedule_label(row):<14} "
+                f"  {row.name:<44} {item['schedule_label']:<14} "
                 f"{(last.strftime('%Y-%m-%d %H:%M:%S') if last else '-'):<21} "
-                f"{(_humanize(now - last) if last else '-'):>8}  "
+                f"{item['age_text']:>8}  "
             )
-
-            if row.task.startswith(CELERY_OWN_PREFIX):
-                celery_owned.append(row.name)
-                self.stdout.write(f"{line}--")
-                continue
-
-            if not row.enabled:
-                if focus_mode_active and row.task not in FOCUS_KEEP_TASKS:
-                    paused_by_focus_mode.append(row.name)
-                else:
-                    switched_off.append(row.name)
-                self.stdout.write(f"{line}--")
-                continue
-
-            if period is None:
-                # Two different reasons, kept apart: a schedule kind this
-                # control does not read, and an interval it cannot read. One
-                # line of explanation for both would have to be vague enough to
-                # be nearly useless for each.
-                if row.interval_id is not None:
-                    unreadable_interval.append(f"{row.name} ({row.interval.period})")
-                else:
-                    odd_schedule.append(f"{row.name} ({self._schedule_label(row)})")
-                self.stdout.write(f"{line}--")
-                continue
-
-            # `judged` counts rows that actually got a verdict, and is
-            # incremented inside each of those arms rather than here: a
-            # never-run row that is not yet provably late reaches this block and
-            # still ends `--`, and counting it would let the "all judged entries
-            # are stale" line fire on a schedule that is merely young.
-            if last is None:
-                # Never run. Judged only in the direction `date_changed` can
-                # prove -- see the module docstring for why the other direction
-                # is a hole this command states instead of papering over.
-                existed = now - row.date_changed
-                if existed > period + grace:
-                    verdict = "FAIL"
-                    judged += 1
-                    unmet += 1
-                    stale += 1
-                    notes.append(
-                        f"{row.name}: has never run (`last_run_at` is NULL) and "
-                        f"the row itself is {_humanize(existed)} old -- longer "
-                        f"than its {_short(period)} interval plus the "
-                        f"{grace_minutes}m grace, so it has lived through a due "
-                        f"date without dispatching.{outlived(row.task)}"
-                    )
-                else:
-                    never_run.append(row.name)
-                    verdict = "--"
-            elif now - last > period + grace:
-                verdict = "FAIL"
-                judged += 1
-                unmet += 1
-                stale += 1
-                notes.append(
-                    f"{row.name}: last dispatched {_humanize(now - last)} ago "
-                    f"against a {_short(period)} interval, so it is "
-                    f"{_humanize(now - last - period)} past due. The entry is "
-                    f"enabled, so nothing is standing it down -- it has simply "
-                    f"stopped.{outlived(row.task)}"
-                )
-            else:
-                verdict = "OK"
-                judged += 1
-
-            self.stdout.write(f"{line}{verdict}")
+            self.stdout.write(f"{line}{item['verdict']}")
 
         # Each carve-out printed with its reason, so "not judged" cannot be read
         # as "not seen" -- the standard the sibling commands already hold to.
-        if celery_owned:
+        if ctx["celery_owned"]:
             self.stdout.write(
                 "  (celery's own housekeeping entries are not judged -- they are "
                 "re-saved from the in-memory defaults at every beat start, so "
                 "`last_run_at` stays NULL on one that has run 33 times and any "
-                f"age read from it would be fiction: {', '.join(celery_owned)})"
+                f"age read from it would be fiction: {', '.join(ctx['celery_owned'])})"
             )
-        if switched_off:
+        if ctx["switched_off"]:
             self.stdout.write(
                 "  (switched off, so not judged -- switched off is the only "
                 "marker of a deliberate pause this table carries, and their last "
                 "runs are in the table above, where a pause that has lasted "
-                f"weeks shows as one: {', '.join(switched_off)})"
+                f"weeks shows as one: {', '.join(ctx['switched_off'])})"
             )
-        if paused_by_focus_mode:
+        if ctx["paused_by_focus_mode"]:
             self.stdout.write(
                 "  (Focus Mode is active, which switches every entry outside "
                 "FOCUS_KEEP_TASKS off, so no run is meant while it lasts -- not "
-                f"judged for: {', '.join(paused_by_focus_mode)})"
+                f"judged for: {', '.join(ctx['paused_by_focus_mode'])})"
             )
-        if odd_schedule:
+        if ctx["odd_schedule"]:
             self.stdout.write(
                 "  (not judged -- this control reads interval schedules, and a "
                 "crontab's `remaining_estimate` does not mean the same thing as "
-                f"an interval's, so no age is claimed for: {', '.join(odd_schedule)})"
+                f"an interval's, so no age is claimed for: {', '.join(ctx['odd_schedule'])})"
             )
-        if unreadable_interval:
+        if ctx["unreadable_interval"]:
             self.stdout.write(
                 "  (not judged -- the interval on this row cannot be turned into "
                 "a duration, because its `period` is not one of the model's "
                 "choices, so there is nothing to compare the last run against: "
-                f"{', '.join(unreadable_interval)})"
+                f"{', '.join(ctx['unreadable_interval'])})"
             )
-        if never_run:
+        if ctx["never_run"]:
             self.stdout.write(
                 "  (never run, and not provably late yet, so not judged. Read "
                 "this as a hole and not as a pass: a never-run row is "
@@ -336,7 +206,7 @@ class Command(BaseCommand):
                 "substitutes `date_changed` for a missing `last_run_at` in "
                 "memory and every beat start rewrites `date_changed` -- so a "
                 "first run pushed out indefinitely by restarts is invisible "
-                f"here: {', '.join(never_run)})"
+                f"here: {', '.join(ctx['never_run'])})"
             )
         # At least two, or the note claims a distinction it cannot make: with a
         # single judged row, "beat itself is not dispatching" and "this one task
@@ -345,6 +215,8 @@ class Command(BaseCommand):
         # staleness is plural -- which is exactly when it stops being about a
         # task. (`judged` counts rows that got a verdict, so a never-run row
         # that ended `--` cannot pad it into firing.)
+        judged = report.counters.get("judged", 0)
+        stale = report.counters.get("stale", 0)
         if judged >= 2 and stale == judged:
             self.stdout.write(
                 f"  (all {judged} judged entries are stale at once, which reads "
@@ -352,48 +224,14 @@ class Command(BaseCommand):
                 "stopping independently)"
             )
 
-        for note in notes:
+        for note in report.notes:
             self.stdout.write(f"  ({note})")
 
         self.stdout.write("")
-        self.stdout.write(f"Beat schedule: {unmet} unmet")
+        self.stdout.write(f"Beat schedule: {report.unmet} unmet")
 
-        if unmet:
+        if report.unmet:
             sys.exit(1)
-
-    def _period(self, row: PeriodicTask) -> timedelta | None:
-        """A row's own interval, or None when none can be read from it."""
-        if row.interval_id is None:
-            return None
-        try:
-            return row.interval.schedule.run_every
-        except (TypeError, ValueError):
-            # `IntervalSchedule.schedule` builds `timedelta(**{period: every})`,
-            # so a `period` outside the model's choices raises here -- a row
-            # written by hand, or by a version whose constants differed. It
-            # routes into the same printed-not-judged bucket as a crontab row,
-            # which is the honest answer rather than a swallowed error: no
-            # interval can be read, so no age is claimed for the row.
-            return None
-
-    def _schedule_label(self, row: PeriodicTask) -> str:
-        period = self._period(row)
-        if period is not None:
-            return _short(period)
-        for field in ("crontab", "solar", "clocked"):
-            if getattr(row, f"{field}_id") is not None:
-                return field
-        if row.interval_id is not None:
-            return "interval?"
-        return "-"
-
-    def _focus_mode_active(self) -> bool:
-        """Whether Focus Mode is on, read without creating the singleton row."""
-        return bool(
-            SyncFocusModeState.objects.filter(pk=1)
-            .values_list("active", flat=True)
-            .first()
-        )
 
     def _registered_task_names(self) -> set[str] | None:
         """Every task name this app implements, or None if that cannot be read.

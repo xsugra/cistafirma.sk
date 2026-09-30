@@ -1,0 +1,23 @@
+# Grafana alerting provisioning — the routing tree.
+#
+# One root policy, one receiver in this stack. It is written down rather than
+# left to the UI default so that a rebuild cannot silently lose the route and
+# leave alerts evaluating with nowhere to go.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: telegram
+    # `instance` keeps the two machines' host alerts in separate groups; without
+    # it a CPU alert on del and one on sam-lenovo would be collapsed into a
+    # single notification that says only "CPU high".
+    group_by:
+      - alertname
+      - instance
+    # 30s of quiet before the first message, so a rule that flaps at scrape
+    # interval does not send one message per evaluation.
+    group_wait: 30s
+    group_interval: 5m
+    # A condition that never clears (a disk filling up) repeats once a day,
+    # not every 5 minutes. The first message is the one that matters.
+    repeat_interval: 12h

@@ -1,0 +1,545 @@
+# Grafana alerting provisioning — what is watched, and how it decides.
+#
+# Grafana's unified alerting evaluates these, not Prometheus, so the whole
+# alerting story stays in one place and the Prometheus config remains a pure
+# scrape configuration. Delivery goes to the `telegram` contact point via the
+# root notification policy in notification-policies.yml.
+#
+# This file exists because of the 2026-09-17 outage: the stack was down for
+# 3 h 43 min and nothing said so. Metrics and dashboards only answer questions
+# somebody is already asking, and for those hours nobody was. Everything below
+# is a question that gets asked on its own.
+#
+# Two shapes appear repeatedly. A threshold node (`C`) compares the query (`A`)
+# against a bound. Where the condition is "this thing is missing entirely", the
+# query spells the absence out (`or absent(...)`) rather than relying on
+# `noDataState` — an alert whose firing depends on how Grafana interprets an
+# empty result is an alert that can be silently reconfigured into never firing.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: cistafirma
+    folder: CistaFirma
+    interval: 1m
+    rules:
+      # ---------------------------------------------------------------------
+      # The monitoring stack watching itself.
+      #
+      # First on purpose: if this is broken, every other alert here is silent
+      # for the wrong reason, and silence reads exactly like health.
+      # ---------------------------------------------------------------------
+      - uid: cistafirma-scrape-target-down
+        title: CistaFirma — scrape target down
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: A Prometheus scrape target has been unreachable for 10 minutes.
+          description: >-
+            Some target in the cistafirma-ops stack stopped answering scrapes.
+            Grafana, Prometheus, the exporters, the node agents and the two
+            hosts all appear here. The instance label names which one.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: up == 0
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # The exporter's own liveness already shows up as `up == 0` above. What
+      # that cannot see is an exporter that answers scrapes happily while its
+      # evaluators fail: it would keep serving the last good numbers. This is
+      # the one alert that reads the freshness of the judgement rather than the
+      # reachability of the process.
+      - uid: cistafirma-verdicts-stale
+        title: CistaFirma — operational verdicts are stale
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: The ops exporter has not produced a fresh verdict for over 15 minutes.
+          description: >-
+            The exporter is being scraped, but at least one domain (sync,
+            source, beat) has not been re-evaluated recently. Its numbers on
+            the dashboard are therefore history, not status. This is the
+            failure mode where monitoring looks fine and is not.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: time() - cistafirma_ops_evaluated_timestamp_seconds > 900
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # The exporter answering scrapes while an evaluator fails inside it. This
+      # is a different fault from the one above, and the two do not cover each
+      # other: a domain whose evaluator raises publishes NO
+      # `cistafirma_ops_evaluated_timestamp_seconds` series at all — the
+      # exporter skips the whole domain rather than serving a stale *or* an
+      # invented timestamp, because a fresh timestamp for a domain that
+      # produced no verdict is the "looks fine while lying" pattern — so the
+      # staleness rule above matches nothing, and its `noDataState: OK` keeps
+      # it quiet. What does move is `scrape_ok`, down to 0. Without this rule a
+      # broken evaluator is visible only as a panel that quietly empties.
+      - uid: cistafirma-ops-evaluator-failing
+        title: CistaFirma — ops evaluator failing
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: The ops exporter is serving, but an evaluator inside it is raising.
+          description: >-
+            `scrape_ok` is 0, which means at least one domain (sync, source,
+            beat) failed to evaluate on the last scrape. Its subjects are
+            missing from cistafirma_ops_subject, so those panels are empty
+            rather than red. The exporter's log has the exception.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: cistafirma_ops_scrape_ok == 0
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # ---------------------------------------------------------------------
+      # The three operational gates, one alert each.
+      #
+      # These read `cistafirma_ops_unmet`, which is a count of subjects the same
+      # code `make ops-check` runs has judged as failing. That is deliberate:
+      # the alert and the weekly gate cannot disagree, because they are the
+      # same verdict read twice. A subject judged `not_judged` — a source paused
+      # by Focus Mode, a window declined — is NOT counted here. Alerting on
+      # those would mean alerting on a documented operator action.
+      #
+      # Separate rules rather than one rule with a domain matcher: the title is
+      # most of what a Telegram message says, and "beat entry overdue" sends you
+      # somewhere different from "a source stopped advancing".
+      # ---------------------------------------------------------------------
+      - uid: cistafirma-sync-jobs-unmet
+        title: CistaFirma — sync jobs unmet
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: A sync job is stuck or has failed its newest run.
+          description: >-
+            `sync_health` is reporting at least one unmet condition — a running
+            job whose heartbeat went stale, a queued job never claimed, a job
+            type whose newest scheduled run failed, or a sync window that has
+            gone stale. Run `make ops-check` on dell for the named subject and
+            the reason code.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: cistafirma_ops_unmet{domain="sync"} > 0
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      - uid: cistafirma-beat-overdue
+        title: CistaFirma — beat schedule overdue
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: A periodic task has not run inside its own interval.
+          description: >-
+            A beat entry is past its interval plus the grace period. This is the
+            one failure that leaves no other trace: a task that never fires
+            writes nothing anywhere, so queue depth, source health and sync jobs
+            all stay green while the entry is dead. The dashboard's "Beat entry
+            age" panel names it.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: cistafirma_ops_unmet{domain="beat"} > 0
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # One hour, not fifteen minutes: source health is a slow signal by design
+      # (a 24 h window against a row per company per source), so a short `for`
+      # would only add noise to a number that cannot move quickly.
+      - uid: cistafirma-source-health-unmet
+        title: CistaFirma — source health unmet
+        condition: C
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: An external source is below its coverage floor.
+          description: >-
+            For at least one source, the number of companies attempted or
+            succeeded inside the window has fallen below the floor the gate
+            sets. The dashboard's "Source coverage in window" panel shows
+            whether the source stopped being asked or started failing.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: cistafirma_ops_unmet{domain="source"} > 0
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # ---------------------------------------------------------------------
+      # Celery queue depth.
+      #
+      # The numbers are NOT invented here: they are the bounds
+      # scripts/local/ops_check.sh already uses, copied rather than re-chosen,
+      # so the alert and the operational check cannot disagree about what a
+      # backlog is. The reasoning is worth repeating, because it is the reason
+      # there are two rules instead of one:
+      #
+      # `celery`, `ruz_full`, `orsr` and `financials` drain to zero in steady
+      # state, so any large depth is work arriving faster than it is consumed.
+      #
+      # `insurance` is conserved BY DESIGN. Its dispatcher is capped so that
+      # arrivals equal drain capacity: the depth neither grows nor clears, and
+      # sawtooths around whatever it inherited (measured 2026-09-13: ~54 000
+      # before a dispatch, ~68 000 just after). The 50 000 bound would therefore
+      # warn permanently about a queue behaving exactly as designed, and a
+      # control that is always red is one nobody reads. Its own bound sits ten
+      # ticks out — five days of drain capacity — and fires on a flood or on a
+      # drain stalled for days, and on nothing else.
+      #
+      # (Measured on dell 2026-10-01, for reference: ruz_full 0, orsr 806,
+      # financials 0, insurance 37 169, celery 0. Queue depth is also visible
+      # on the dashboard's "Celery queue depth" panel if either bound needs
+      # re-tuning after some real data.)
+      # ---------------------------------------------------------------------
+      - uid: cistafirma-queue-backlog
+        title: CistaFirma — Celery queue backlog
+        condition: C
+        for: 30m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A Celery queue that normally drains has a large backlog.
+          description: >-
+            One of the queues that should sit near zero (celery, ruz_full, orsr,
+            financials) is above 50 000 items and has stayed there for half an
+            hour. Either work is arriving faster than the workers consume it, or
+            a worker has died with its queue filling behind it.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: redis_key_size{key=~"celery|ruz_full|orsr|financials"} > 50000
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      - uid: cistafirma-queue-backlog-insurance
+        title: CistaFirma — insurance queue backlog
+        condition: C
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: The insurance queue is above five days of drain capacity.
+          description: >-
+            The insurance queue is conserved by design, so its depth alone says
+            nothing. This fires only at 144 000 — ten dispatch ticks, roughly
+            twice the inherited sawtooth's peak — which means a flood, or a
+            drain stalled for days. It cannot tell those two apart, and does not
+            try: whether the drained work still achieves anything is Source
+            health's verdict.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: redis_key_size{key="insurance"} > 144000
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # ---------------------------------------------------------------------
+      # The application, and the disk under the data.
+      # ---------------------------------------------------------------------
+      - uid: cistafirma-http-5xx-ratio
+        title: CistaFirma — elevated 5xx ratio
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5% of API requests are failing.
+          description: >-
+            Over the last 15 minutes, 5xx responses have been above 5% of all
+            requests. Note this ratio needs traffic to be meaningful: with a
+            quiet API a single failure can carry it, which is why it is a
+            warning and why the denominator is not hidden from you.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: >-
+                sum(rate(cistafirma_http_requests_total{status=~"5.."}[5m]))
+                / sum(rate(cistafirma_http_requests_total[5m])) > 0.05
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+
+      # dell holds the only copy of the production database, so a full disk
+      # there is not a degraded service, it is the end of writes. This is the
+      # one alert on the dashboard whose subject is the data itself.
+      #
+      # Root filesystem only: that is where the Docker volumes live. A ratio
+      # rather than bytes, because "20 GB free" means something different on
+      # each host.
+      - uid: cistafirma-host-disk-low
+        title: CistaFirma — host disk below 15%
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A monitored host has under 15% free on its root filesystem.
+          description: >-
+            Free space on / has been under 15% of the filesystem size for 15
+            minutes. On dell this is the disk holding the Postgres volume, which
+            holds the only copy of the production database.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              editorMode: code
+              expr: >-
+                node_filesystem_avail_bytes{job="node",mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+                / node_filesystem_size_bytes{job="node",mountpoint="/",fstype!~"tmpfs|overlay|squashfs"}
+                < 0.15
+              instant: true
+              intervalMs: 1000
+              legendFormat: __auto
+              maxDataPoints: 43200
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+                  type: query
+              datasource: { type: __expr__, uid: __expr__ }
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold

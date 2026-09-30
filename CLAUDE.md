@@ -116,7 +116,10 @@ their code arrives through the bind mount — a changed import then crash-loops
 every worker. After changing `backend/requirements.txt`, rebuild them all:
 `docker compose build backend migrate celery_beat celery_worker_ruz
 celery_worker_orsr celery_worker_financials celery_worker_insurance
-celery_worker_default`.
+celery_worker_default ops_exporter`. (`ops_exporter` is the monitoring-profile
+process that serves the operational verdicts; it is not started by a plain
+`docker compose up`, but it is built from the same Dockerfile and so goes stale
+in the same way.)
 
 ### Observability (see docs/OBSERVABILITY.md)
 

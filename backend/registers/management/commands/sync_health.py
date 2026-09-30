@@ -99,57 +99,30 @@ would redden the gate for a documented action and explain it with a sentence
 that is false: there were no runs to report success.
 
 Read-only: it issues SELECTs and writes nothing.
+
+**The decision now lives in `registers.services.ops_health`** and this command
+renders it, so that an exporter or an admin endpoint can read the same verdict
+without re-implementing the rule. The text below is unchanged; the words `OK`,
+`FAIL` and `--`, the notes, the order of the sections and the summary line are
+what `scripts/local/ops_check.sh` parses.
 """
 
 from __future__ import annotations
 
-import os
 import sys
-from datetime import timedelta
 
 from django.core.management.base import BaseCommand
-from django.db.models import Q
-from django.utils import timezone
 
-from registers.models import SyncFocusModeState, SyncJob, SyncProgress
-from registers.services.sync_engine import is_stuck, stuck_heartbeat_threshold
-
-DEFAULT_QUEUED_MINUTES = 720
-DEFAULT_FAILED_JOB_HOURS = 24
-DEFAULT_WINDOW_MAX_AGE_DAYS = 3
-RECENT_LIMIT = 8
-
-# The statuses in which an incremental window is expected to be moving. A
-# `paused` row was stopped by an operator who knows, and a `running` one is a
-# walk in progress -- both legitimately hold an old window, and judging either
-# would be reporting on the operator rather than on the sync. See the module
-# docstring for why `completed` is the one that carries the signal.
-WINDOW_JUDGED_STATUSES = ("completed", "idle")
-
-# The one trigger whose runs nobody is watching. See the module docstring.
-BEAT_TRIGGER = "beat_schedule"
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _humanize(delta: timedelta) -> str:
-    """A short age, coarse enough to read at a glance in a gate's output."""
-    seconds = max(int(delta.total_seconds()), 0)
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
-    return f"{seconds // 86400}d {(seconds % 86400) // 3600}h"
+from registers.services.ops_health import (
+    DEFAULT_FAILED_JOB_HOURS,
+    DEFAULT_QUEUED_MINUTES,
+    DEFAULT_WINDOW_MAX_AGE_DAYS,
+    BEAT_TRIGGER,  # re-exported: the module's constants used to live here
+    RECENT_LIMIT,
+    WINDOW_JUDGED_STATUSES,
+    env_int as _env_int,
+    evaluate_sync_health,
+)
 
 
 class Command(BaseCommand):
@@ -204,67 +177,37 @@ class Command(BaseCommand):
         queued_minutes = options["queued_minutes"]
         failed_job_hours = options["failed_job_hours"]
         window_max_age_days = options["window_max_age_days"]
-        stuck_minutes = int(stuck_heartbeat_threshold().total_seconds() // 60)
-        now = timezone.now()
-        queued_cutoff = now - timedelta(minutes=queued_minutes)
-        failed_cutoff = now - timedelta(hours=failed_job_hours)
 
-        running = list(SyncJob.objects.filter(status="running").order_by("started_at"))
-        queued = list(SyncJob.objects.filter(status="queued").order_by("queued_at"))
-        recent = list(
-            SyncJob.objects.exclude(status__in=["running", "queued"]).order_by(
-                "-queued_at"
-            )[:RECENT_LIMIT]
+        report = evaluate_sync_health(
+            queued_minutes=queued_minutes,
+            failed_job_hours=failed_job_hours,
+            window_max_age_days=window_max_age_days,
         )
-
-        unmet = 0
-        notes = []
+        ctx = report.context
 
         self.stdout.write(
             f"  {'id':>5}  {'job_type':<18} {'status':<10} {'last sign of life':<21} "
             f"{'idle':>8}  {'processed':>9}  verdict"
         )
 
-        for job in running:
+        for item in ctx["running"]:
+            job = item["job"]
             marker = job.last_heartbeat or job.started_at
-            idle = _humanize(now - marker) if marker else "-"
-            # Asked, not re-derived: the gate must agree with the reaper, or it
-            # reports a job as healthy that the watchdog is about to fail.
-            stale = is_stuck(job, cutoff=now - timedelta(minutes=stuck_minutes))
-            if stale:
-                verdict = "FAIL"
-                unmet += 1
-                notes.append(
-                    f"job #{job.pk} ({job.job_type}): running with no heartbeat for "
-                    f"{idle} -- the worker is gone and nothing will finish it. The "
-                    f"watchdog reaps this; the API will not cancel or resume it."
-                )
-            else:
-                verdict = "OK"
             self.stdout.write(
                 f"  {job.pk:>5}  {job.job_type:<18} {job.status:<10} "
                 f"{(marker.strftime('%Y-%m-%d %H:%M:%S') if marker else '-'):<21} "
-                f"{idle:>8}  {job.processed_items:>9}  {verdict}"
+                f"{item['idle']:>8}  {job.processed_items:>9}  {item['verdict']}"
             )
 
-        for job in queued:
-            idle = _humanize(now - job.queued_at)
-            if job.queued_at < queued_cutoff:
-                verdict = "FAIL"
-                unmet += 1
-                notes.append(
-                    f"job #{job.pk} ({job.job_type}): queued {idle} and never claimed "
-                    f"-- accepted, then silently dropped (no worker is picking it up)."
-                )
-            else:
-                verdict = "OK"
+        for item in ctx["queued"]:
+            job = item["job"]
             self.stdout.write(
                 f"  {job.pk:>5}  {job.job_type:<18} {job.status:<10} "
                 f"{job.queued_at.strftime('%Y-%m-%d %H:%M:%S'):<21} "
-                f"{idle:>8}  {'-':>9}  {verdict}"
+                f"{item['idle']:>8}  {'-':>9}  {item['verdict']}"
             )
 
-        for job in recent:
+        for job in ctx["recent"]:
             marker = job.completed_at or job.started_at
             self.stdout.write(
                 f"  {job.pk:>5}  {job.job_type:<18} {job.status:<10} "
@@ -272,7 +215,7 @@ class Command(BaseCommand):
                 f"{'-':>8}  {job.processed_items:>9}  --"
             )
 
-        if not running and not queued and not recent:
+        if not ctx["running"] and not ctx["queued"] and not ctx["recent"]:
             self.stdout.write("  (no sync jobs have ever been recorded)")
 
         # Printed, never judged -- see the module docstring.
@@ -282,247 +225,69 @@ class Command(BaseCommand):
         )
 
         # --- The unattended schedule -------------------------------------
-        # Every type the beat dispatches, judged on its newest attempt inside
-        # the window. Ordered by `-queued_at` and de-duplicated in Python
-        # rather than with a `Max()` subquery: the table holds tens of rows,
-        # and reading it whole keeps the rule legible.
-        #
-        # The window is anchored on when an attempt *ended*, not on when it was
-        # queued, and a run that has not ended is always in scope. It used to
-        # filter `queued_at__gte=failed_cutoff`, which put the full walk out of
-        # reach of this control for all but its first day: job #46 was queued
-        # five days before it could possibly end, so on the day it finally
-        # failed it would already have been outside the window -- the one run
-        # this gate most needs to see, invisible exactly when it matters. A
-        # `completed_at` anchor keeps a failure visible for the whole window
-        # after it happens, whatever its queue time.
-        #
-        # A live run is kept in scope deliberately. Its status is not `failed`,
-        # so it judges OK, and a run in progress genuinely is not a failure --
-        # but leaving it out would mean the newest attempt of a five-day type
-        # was whichever *short* run happened to be queued last, and the long one
-        # would be absent rather than merely fine.
-        beat_attempts = list(
-            SyncJob.objects.filter(
-                Q(triggered_via=BEAT_TRIGGER),
-                Q(completed_at__gte=failed_cutoff) | Q(completed_at__isnull=True),
-            ).order_by("-queued_at")
-        )
-        newest_beat: dict[str, SyncJob] = {}
-        for job in beat_attempts:
-            newest_beat.setdefault(job.job_type, job)
-
         self.stdout.write("")
         self.stdout.write(
             f"  beat-scheduled job types, newest attempt within "
             f"{failed_job_hours}h"
         )
-        if not newest_beat:
+        if not ctx["beat"]:
             self.stdout.write(
                 "    (none recorded in the window -- the schedule is dispatching "
                 "nothing, or no run is reaching the job table. Not judged here: "
                 "an absence is not evidence of failure, and this control would "
                 "be lying if it said it was.)"
             )
-        for job_type, job in sorted(newest_beat.items()):
-            marker = job.completed_at or job.started_at or job.queued_at
-            age = _humanize(now - marker)
-            if job.status == "failed":
-                verdict = "FAIL"
-                unmet += 1
-                # Collapsed to one line: the gate's output is read a line at a
-                # time, and an error with newlines in it would read as several
-                # notes, only the first of which is attached to the verdict.
-                error = " ".join((job.last_error or "").split())[:300]
-                notes.append(
-                    f"job #{job.pk} ({job_type}): the newest beat-scheduled run "
-                    f"failed {age} ago, so nothing has replaced the data it was "
-                    f"meant to fetch. Last error: {error or '(none recorded)'}"
-                )
-            else:
-                verdict = "OK"
+        for item in ctx["beat"]:
+            job = item["job"]
             self.stdout.write(
-                f"    {job_type:<18} job #{job.pk:<5} {job.status:<10} "
-                f"{age:>8} ago  {verdict}"
+                f"    {item['job_type']:<18} job #{job.pk:<5} {job.status:<10} "
+                f"{item['age']:>8} ago  {item['verdict']}"
             )
 
         # --- The incremental windows -------------------------------------
-        # Printed for every incremental row and judged on age alone. The row is
-        # the only place the truth is recorded when a walk stops reaching the
-        # end: the job rows still say `completed`, because the run did complete
-        # -- it just completed over nothing.
-        windows = list(
-            SyncProgress.objects.filter(sync_type__startswith="incremental").order_by(
-                "sync_type"
-            )
-        )
-
         self.stdout.write("")
         self.stdout.write(
             f"  incremental sync windows (judged: window may be at most "
             f"{window_max_age_days}d old)"
         )
-        if not windows:
+        if not ctx["windows"]:
             self.stdout.write(
                 "    (no incremental sync has ever been recorded -- not judged, "
                 "because an absence is not evidence of a stall)"
             )
-        # Focus Mode switches the RUZ beat entry off -- `fetch_ruz_data_task`
-        # is deliberately absent from `FOCUS_KEEP_TASKS` -- so while it is
-        # active no run is meant to move this window and its age says nothing
-        # about the sync. Judging it would redden the gate for a documented
-        # operator action, and would explain it with "every run since has
-        # reported success" -- a sentence that is false precisely because there
-        # were no runs. The sibling control settled this first: `source_health`
-        # names the sources Focus Mode silences instead of judging them.
-        #
-        # The running full walk is the same situation reached another way, and
-        # it is why this carve-out exists: `enqueue_ruz_job` gives every RUZ job
-        # the one `ruz:global` slot, so while a full walk holds it the 6-hourly
-        # `fetch_ruz_data_task` is *deferred* -- `celery inspect reserved` shows
-        # the copies stacked in the worker's reserve, unacknowledged -- and no
-        # run moves the window. Judging it would redden the gate for the walk
-        # the operator deliberately started, with the same false sentence.
-        focus_mode_active = self._focus_mode_active()
-        paused_by_focus_mode: list[str] = []
-        full_walk = self._full_walk_holding_windows(now)
-        held_by_full_walk: list[str] = []
-
-        for progress in windows:
-            if progress.zmenene_od is None:
-                # Written by a run that never got as far as choosing a window.
-                # Nothing to age, so nothing to judge.
+        for item in ctx["windows"]:
+            progress = item["progress"]
+            if item["zmenene_od"] is None:
                 self.stdout.write(
                     f"    {progress.sync_type:<22} {progress.status:<10} "
                     f"{'no window set':<12}  --"
                 )
                 continue
-
-            age_days = (now.date() - progress.zmenene_od).days
-            judged = progress.status in WINDOW_JUDGED_STATUSES
-            if judged and focus_mode_active:
-                verdict = "--"
-                paused_by_focus_mode.append(progress.sync_type)
-            elif judged and full_walk is not None:
-                verdict = "--"
-                held_by_full_walk.append(progress.sync_type)
-            elif judged and age_days > window_max_age_days:
-                verdict = "FAIL"
-                unmet += 1
-                # Two different states look identical from the date alone, and
-                # the sentence has to be true for the one it describes:
-                #
-                # - the walk completes over nothing (the original bug), or
-                # - the walk deliberately holds the window because items are
-                #   failing (`fetch_ruz_data` advances it only on a clean run).
-                #
-                # Both mean the source's changes go unread, so both fail. But
-                # saying "every run since has reported success" about the second
-                # would be false -- it reported errors, on purpose, and stopped.
-                if progress.total_errors:
-                    error = " ".join((progress.last_error or "").split())[:200]
-                    cause = (
-                        f"and the walks are finishing with {progress.total_errors} "
-                        f"item error(s), so the window is being held on purpose "
-                        f"rather than silently stalled"
-                        + (f". Last recorded error: {error}" if error else "")
-                    )
-                else:
-                    cause = (
-                        "and every run since has reported success without moving "
-                        "it -- so the source is being read through a window that "
-                        "no longer covers its changes. The runs themselves are "
-                        "green; this is the only row that records it"
-                    )
-                notes.append(
-                    f"sync window '{progress.sync_type}': the last completed walk "
-                    f"left the window starting {progress.zmenene_od} ({age_days}d "
-                    f"old) {cause}."
-                )
-            elif not judged:
-                verdict = "--"
-            else:
-                verdict = "OK"
             self.stdout.write(
                 f"    {progress.sync_type:<22} {progress.status:<10} "
-                f"{str(progress.zmenene_od):<12}  {age_days}d old  {verdict}"
+                f"{str(item['zmenene_od']):<12}  {item['age_days']}d old  "
+                f"{item['verdict']}"
             )
 
-        if paused_by_focus_mode:
+        if ctx["paused_by_focus_mode"]:
             self.stdout.write(
                 "  (Focus Mode is active, which switches the RUZ beat entry "
                 "off, so no run is meant to move this window -- not judged for: "
-                f"{', '.join(paused_by_focus_mode)})"
+                f"{', '.join(ctx['paused_by_focus_mode'])})"
             )
 
-        if held_by_full_walk:
+        if ctx["held_by_full_walk"]:
             self.stdout.write(
                 "  (a full RUZ walk is running and reads every change itself, "
                 "so no incremental run is meant to move this window while it "
-                f"lasts -- not judged for: {', '.join(held_by_full_walk)})"
+                f"lasts -- not judged for: {', '.join(ctx['held_by_full_walk'])})"
             )
 
-        for note in notes:
+        for note in report.notes:
             self.stdout.write(f"  ({note})")
 
         self.stdout.write("")
-        self.stdout.write(f"Sync jobs: {unmet} unmet")
+        self.stdout.write(f"Sync jobs: {report.unmet} unmet")
 
-        if unmet:
+        if report.unmet:
             sys.exit(1)
-
-    def _focus_mode_active(self) -> bool:
-        """Whether Focus Mode is on, read without creating the singleton row.
-
-        `SyncFocusModeState.load()` is `get_or_create`, so calling it here
-        would make this command write on a fresh database -- and it says of
-        itself that it issues SELECTs and writes nothing. Same reading as
-        `source_health`, for the same reason.
-        """
-        return bool(
-            SyncFocusModeState.objects.filter(pk=1)
-            .values_list("active", flat=True)
-            .first()
-        )
-
-    def _full_walk_holding_windows(self, now) -> SyncProgress | None:
-        """The live unrestricted full walk, which supersedes the windows.
-
-        While it runs, no incremental run is meant to move the window: every RUZ
-        job shares the one `ruz:global` slot, so `enqueue_ruz_job` makes the
-        6-hourly `fetch_ruz_data_task` bounce off it and the task waits in its
-        worker's reserve instead of running. Its age is therefore not staleness
-        -- the walk is reading every change the incremental would have read, and
-        far more.
-
-        **Only `full`, not every full-ish walk.** `full_companies` reads
-        companies alone (`--entity-type companies`), and an incremental window
-        covers SZCO too, so it does *not* supersede the window; suppressing
-        there would hide real staleness.
-
-        **The walk has to be alive.** `record_progress` writes `last_activity`
-        every hundredth record (verified on the running walk, 2026-09-19: five
-        seconds old), so requiring it inside the watchdog's staleness threshold
-        is what stops this carve-out outliving the walk it describes. Without
-        that, a `full` row left `running` by a dead walk would silence the
-        window for ever -- and a gate that has gone quiet for ever is the very
-        defect this command exists to catch. The stuck-job condition already
-        fails the dead walk itself; this carve-out must not cover for it.
-
-        The same trade-off the stuck-job threshold makes applies here: the live
-        walk's writer flushes every hundred records rather than continuously, so
-        a register answering slowly enough could put `last_activity` outside the
-        threshold while the walk is healthy — and then the window is judged
-        again. That is the safe direction: it fails loudly rather than staying
-        quiet, which is what a threshold on a periodic writer has to choose.
-        """
-        walk = (
-            SyncProgress.objects.filter(sync_type="full", status="running")
-            .order_by("-last_activity")
-            .first()
-        )
-        if walk is None or walk.last_activity is None:
-            return None
-        if now - walk.last_activity > stuck_heartbeat_threshold():
-            return None
-        return walk

@@ -8112,8 +8112,9 @@ neimportovalo. Tri dôsledky z toho robia viac než no-op:
 - riadok zostal `queued` **navždy** a `cancel` pre RUZ typy vracia 409, takže
   ho nevedelo vyčistiť žiadne obrazovko;
 - po `DEFAULT_QUEUED_MINUTES` (720) ho `sync_health` ráta ako nesplnenú
-  kontrolu — filter je len `status="queued"`, bez typu (`sync_health.py:213`,
-  `:252`) — takže fantóm **natrvalo** zfarbí `make ops-check` do červena. To je
+  kontrolu — filter je len `status="queued"`, bez typu (`ops_health.py:354`,
+  `:410`; do 2026-10-01 `sync_health.py:213` a `:252`) — takže fantóm
+  **natrvalo** zfarbí `make ops-check` do červena. To je
   presne tá výstraha, ktorá naučí svojho čitateľa ju ignorovať;
 - operátor, ktorý klikol „Retry Failed", dostal beh, ktorý nikdy nebežal.
 
@@ -8142,10 +8143,10 @@ vráti tú istú hodnotu, okno by zostalo pripnuté navždy).
 Presné znenie, ktoré som si musel opraviť: `SyncProgress.total_errors` je živý
 signál počas behu (walk #46 má dnes 72) a `SyncJob.failed_items` sa zapíše pri
 ukončení. Ani jedno však pre `full` walk **nečíta žiadna kontrola** —
-`sync_health.py:355` filtruje `sync_type__startswith="incremental"` a `:520`
+`ops_health.py:510` filtruje `sync_type__startswith="incremental"` a `:328`
 berie `full` len pre výnimku z §11.13. Walk teda môže zhodiť N pomenovaných
 záznamov a skončiť `completed` so všetkým zeleným. Pre `incremental` je trieda
-`unreadable` chytená držaným oknom po 3 dňoch (`sync_health.py:422` ju aj
+`unreadable` chytená držaným oknom po 3 dňoch (`ops_health.py:572` ju aj
 pomenuje), ale `unstorable` je z držania vyňatá → neviditeľná.
 
 *Prečo to neopravujem sám:* najlacnejšia čestná verzia je podmienka „najnovší
@@ -10142,6 +10143,103 @@ backendu a stroj neopustia. Je to dokladované predvolené správanie (`.env.def
 hovorí, ako prepnúť na SMTP), ale znamená to, že táto zmena je dnes **len text
 v logu** — a že notifikačné e-maily dnes nikto nedostane. To nie je chyba tejto
 zmeny; je to stav, ktorý táto zmena len zviditeľnila.
+
+---
+
+### 11.27 Centrálna Grafana vidí aj prevádzku cistafirmy — a konečne niekto povie, keď sa niečo pokazí (2026-10-01)
+
+Centrálny monitoring (Prometheus + Grafana, `monitoring` profil na **delle**,
+prístup `https://dell.taildb03cf.ts.net:8443`) o cistafirme dovtedy vedel dve
+metriky: HTTP počítadlá a histogram z backendu, plus `up` backendu a
+node_exporter oboch strojov. Fronty, sync joby, plánovač, Postgres a Redis v ňom
+neboli vôbec — a **nebolo v ňom ani jedno alert pravidlo**. Dokumentácia to
+priznávala sama (`docs/OBSERVABILITY.md`, sekcia Known limitations): *„for 3 h
+43 min nobody was“* — výpadok z 2026-09-17 prešiel bez toho, aby si ho niekto
+všimol, pretože metríka aj dashboard odpovedajú len na otázku, ktorú sa niekto
+už pýta.
+
+Táto zmena dopĺňa **prevádzkovú vrstvu** a **alerty**.
+
+**Čo pribudlo**
+
+| Čo | Kde |
+|---|---|
+| `postgres_exporter`, `redis_exporter` | `docker-compose.yml`, `monitoring` profil, bez publikovaného portu |
+| `ops_exporter` — backend image, `manage.py run_ops_exporter`, `:9101` | tamtiež |
+| Dashboard `CistaFirma Operations` (12 panelov) | `deploy/monitoring/grafana/dashboards/cistafirma-operations.json` |
+| 10 alert pravidiel → Telegram | `deploy/monitoring/grafana/provisioning/alerting/` |
+
+**Jedno rozhodnutie, ktoré drží celú vec pokope: žiadny druhý zdroj pravdy.**
+Verdikty („je tento job zaseknutý“, „prestala táto source napredovať“, „mešká
+tento záznam plánovača“) nie sú merania — sú to **úsudky** a nedajú sa napísať
+ako PromQL nad počítadlami. Preto sa nevytiahli do exportera ako druhá
+implementácia, ale do `backend/registers/services/ops_health.py`, odkiaľ ich
+číta aj `manage.py sync_health` / `source_health` / `beat_health`, aj exporter.
+Tie tri príkazy sú odteraz **renderery** nad `Report`. Kontraktné riadky
+(`Sync jobs: N unmet`, `Source health: N unmet`, `Beat schedule: N unmet`)
+a `sys.exit(1)` ostali **znak po znaku**, pretože ich regexom parsuje
+`scripts/local/ops_check.sh` — jedna zmena formátu by ticho rozbila týždennú
+bránu. To isté platí pre `--` (nesúdené) a `not_measured`.
+
+Z toho vyplýva vlastnosť, ktorá je celý zmysel: **alert a týždenná brána sa
+nemôžu rozísť**, lebo čítajú ten istý verdikt dvakrát. `not_judged` (Focus Mode,
+bežiaci full walk) sa do `unmet` nepočíta — alert na dokumentovanú operátorskú
+akciu je alert, ktorý sa čoskoro prestane čítať.
+
+**Dve pasce, ktoré musel exporter obísť** (obe sú z kategórie „ticho vyzerá ako
+zdravie“, ktorou sa tento repozitár zaoberá všade):
+
+1. **Séria, ktorá zmizne, sa číta ako zdravá.** Preto `cistafirma_ops_subject`
+   vydáva **práve jednu sériu na každý deklarovaný subject** so `status` labelom
+   (`ok` / `fail` / `not_judged`) — subject sa berie z `JOB_TYPE_CHOICES`
+   a `SOURCE_CHOICES`, nikdy z `values()`. Source alebo typ jobu bez riadkov
+   musí byť séria hovoriaca „nie je čo súdiť“, nie chýbajúca séria.
+2. **Zlyhávajúci evaluátor aktualizuje `evaluated_at`** (pokus o vyhodnotenie
+   *bol*). Pravidlo „verdikty sú staré“ naň teda nechytí — jeho série zmiznú
+   a `scrape_ok` padne na 0. Bez samostatného pravidla na `scrape_ok == 0` by
+   pokazený evaluátor bol vidieť len ako panel, ktorý sa potichu vyprázdni.
+
+**Tretia pasca je v samotnej Grafane, nie v exporteri — a spadla by na
+produkcii.** Provisioning alertov berie len meno priečinka (`folder:`), žiadne
+`folderUid`, a chýbajúci priečinok si Grafana **vytvorí sama** s vygenerovaným
+UID. To je dobrá správa (pravidlá sa provisionujú aj na čistom volume), ale má
+dôsledok: alerting sa provisionuje **pred** dashboardami, takže keby dashboard
+provider pripol priečinok s rovnakým menom a iným UID, narazí to na unique-name
+constraint, provisioning celý spadne a Grafana ide do restart-slučky.
+`provisioning/dashboards/dashboards.yml` preto má `folder: ""` — dashboard
+pristane v **General** a nikde nie je pripnuté žiadne UID. To, že pravidlá sú v
+`CistaFirma` a dashboard v `General`, je zamýšľaný dôsledok, nie prehliadnutie.
+
+**Prahy sa nevymýšľali.** Hĺbky frontov sú prevzaté z `ops_check.sh`
+(50 000 pre `celery`/`ruz_full`/`orsr`/`financials`, 144 000 pre `insurance`)
+vrátane jeho odôvodnenia: `insurance` je navrhnutá ako *konzervovaná* (dispatcher
+pridáva presne toľko, koľko worker stíha), takže jej hĺbka neznamená nič a jediné
+číslo, ktoré je od nej odvoditeľné, je desať tickov. Odmerané na delle
+2026-10-01 pre porovnanie: `ruz_full` 0, `orsr` 806, `financials` 0,
+`insurance` 37 169, `celery` 0; Redis 63,66 MB, `maxmemory` 0 (neobmedzené),
+96 klientov.
+
+**Dve zastarané tvrdenia v `docs/OBSERVABILITY.md`, opravené touto zmenou** —
+existovali pred ňou a našli sa pri čítaní kódu, nie pri písaní:
+
+- „`sync_health` judges exactly three conditions“ — kód v tom čase súdil
+  **štyri** (štvrtá je okno `SyncProgress.zmenene_od`); modulový docstring
+  začínal správnym „Four conditions fail a job“, dokumentácia nie.
+- Sekcia Optional monitoring stack tvrdila „No alerting rules are provisioned“ —
+  od tejto zmeny ich je desať.
+
+**Čo táto zmena NEtvrdí.** Grafana provisioning interpoluje `$VAR` a **nenastavená**
+premenná sa dosadí ako prázdny reťazec, nie ako chyba — takže Telegram contact
+point sa provisionuje „v poriadku“ a potom ticho nič nedoručí. **Nič v tomto
+repozitári doručenie neoveruje a overiť nemôže**: jediný spôsob, ako otestovať
+contact point, je poslať správu, a týždenná brána, ktorá každý týždeň píše do
+Telegramu, je brána, ktorú nikto nečíta. Jediný dôkaz je človek pozerajúci do
+chatu — raz, po nastavení tokenu. Súbor provisionovaný bez chýb tým dôkazom
+nie je. (Presne toto tvrdenie — „odchytí to `make ops-check`“ — som najprv
+napísal do komentára v `docker-compose.yml` a potom ho musel opraviť, lebo
+`ops_check.sh` o Grafana alertingu nevie nič.)
+
+**Stav nasadenia:** *doplniť po nasadení na dell.*
 
 ---
 

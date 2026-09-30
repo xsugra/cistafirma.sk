@@ -30,7 +30,9 @@ So: when a control says healthy, ask what it *cannot* see before believing it.
 
 ## What `source_health` actually decides
 
-`backend/registers/management/commands/source_health.py`, roughly lines 255-300.
+`evaluate_source_health` in `backend/registers/services/ops_health.py`, roughly
+lines 726-970; `commands/source_health.py` only renders its `Report` since the
+2026-10-01 refactor.
 The rule, in order:
 
 - `attempts == 0` → **FAIL**, unless a declared silence reason applies;

@@ -163,17 +163,25 @@ it to `failed` after staleness". Two things now close that gap:
   chains: a table of active and recent jobs, then `Sync jobs: N unmet`, exiting
   1 when anything is unmet. See `docs/DATA_PROTECTION.md`.
 
-`sync_health` judges exactly three conditions: a `running` job whose heartbeat is
+`sync_health` judges **four** conditions: a `running` job whose heartbeat is
 past the staleness threshold, a `queued` job older than `--queued-minutes`
-(`CISTAFIRMA_QUEUED_JOB_MINUTES`, default 720) that was never claimed, and the
+(`CISTAFIRMA_QUEUED_JOB_MINUTES`, default 720) that was never claimed, the
 newest run of a `triggered_via='beat_schedule'` job type that ended `failed`
-within `CISTAFIRMA_FAILED_JOB_HOURS` (default 24). The third covers a failure
+within `CISTAFIRMA_FAILED_JOB_HOURS` (default 24), and an incremental sync
+window that has stopped moving — `SyncProgress.zmenene_od` older than
+`--window-max-age-days` (`CISTAFIRMA_SYNC_WINDOW_DAYS`, default 3), which is a
+*state* rather than a volume and so is exactly what a volume threshold cannot
+see. (This paragraph said "exactly three" for some time after the fourth was
+added; the module docstring, which begins "Four conditions fail a job", was
+right and this was not.) The third covers a failure
 with no operator in front of it: a run that dies in the beat, so before this the
 table showed the failed row while the verdict still read `0 unmet`. (The other
 such failure — an entry that never fires at all, which leaves no failed row
 either — is Beat schedule above.) It is judged on the *newest* attempt, so a later
 successful run clears it rather than leaving the gate red for a transient
-failure. Counters
+failure. The fourth is not judged at all while Focus Mode has the run switched
+off or a full walk holds the window — those two states make the age meaningless
+rather than stale, and both print `--` instead of a verdict. Counters
 are printed but never judged — how many items a job *should* process depends on
 the run, not on its type, so no threshold would be honest. The report and the
 reaper both ask `is_stuck()` in `registers/services/sync_engine.py` for the
@@ -226,8 +234,11 @@ per source, written by `record_ruz_date_outcome`, `record_orsr_outcome` and
 - Counter values are per *container*. With `BACKEND_WORKERS` > 1 they are
   correctly aggregated across gunicorn workers; they are not aggregated across
   replicated backend containers, because Prometheus scrapes one address.
-- Celery workers export no metrics (no HTTP endpoint). Task-level metrics would
-  need a separate exporter.
+- Celery workers export no metrics (no HTTP endpoint), and this is still true.
+  The `ops_exporter` in the Optional monitoring stack below exports the *health
+  gates' verdicts* about those workers, which is not the same thing: it says
+  whether a job is stuck, not how many tasks ran. Task-level metrics would need
+  an exporter inside the workers themselves.
 - The `process_*`/`python_*` collectors are only exported when the multiprocess
   directory is unset (tests, `runserver`, management commands); under gunicorn
   they would be one worker's view, so they are excluded.
@@ -236,7 +247,10 @@ per source, written by `record_ruz_date_outcome`, `record_orsr_outcome` and
   never arrived because nginx could not reach the backend — during the
   2026-09-17 outage the scrape target itself stayed up and reported normally.
   The outside-in check in `make ops-check` exists to cover exactly that, and it
-  is a weekly-and-by-hand gate, not an alert.
+  is a weekly-and-by-hand gate, not an alert. The alerting added to the Optional
+  monitoring stack does not change this: every one of those rules reads
+  Prometheus, which read this endpoint normally throughout the outage. See "The
+  gap that is still open" there.
 
 ## Optional monitoring stack
 
@@ -244,33 +258,134 @@ Prometheus + Grafana run under the `monitoring` compose profile, which means a
 plain `docker compose up` never starts them.
 
 ```bash
-make docker-metrics-up      # start both
-make docker-metrics-down    # stop both (volumes are kept)
+make docker-metrics-up      # start the whole stack
+make docker-metrics-down    # stop it (volumes are kept)
 ```
 
 | Service | URL | Notes |
 |---|---|---|
-| Prometheus | http://127.0.0.1:9090 | scrapes `backend:8000/metrics` every 15s, 15d retention |
+| Prometheus | http://127.0.0.1:9090 | 15 s scrape, 15 d retention |
 | Grafana | http://127.0.0.1:3000 | `admin` / `cistafirma`, unless `GRAFANA_ADMIN_PASSWORD` is set |
 
 Both ports are published on **loopback only** — the UIs are never exposed to the
-LAN. Grafana provisions its Prometheus datasource and a `CistaFirma Overview`
-dashboard (request rate by status, p95 latency, 5xx ratio, top paths, unknown
-legal-form codes) from `deploy/monitoring/`. No alerting rules are provisioned.
+LAN. The exporters publish no port at all: Prometheus reaches them by Docker DNS
+name over the compose network, which is deliberate, because none of them has an
+auth layer.
 
-That is the gap the 2026-09-17 outage fell through: with nothing alerting,
-metrics and dashboards only answer questions somebody is already asking, and for
-3 h 43 min nobody was. Availability is therefore asserted by
-`scripts/local/ops_check.sh`, whose **API availability** section GETs
-`/api/stats/landing/` through the frontend's *published* port from the host and
-requires a 200 — a path that includes nginx, the exact component whose stale
-upstream address caused the outage, and one that a running, healthy frontend
-does not make pass on its own (`/healthz` answered 200 for the whole of it). What
-it proves is deliberately bounded: that the API answers, not that its answers are
-right — correctness is the sync-jobs and source-health sections' verdict. And it
-is a weekly and by-hand gate, not an alert; a real alert would need an
-Alertmanager this stack does not run, so the weekly job's notification is what
-stands in for one.
+Six scrape targets, in `deploy/monitoring/prometheus/prometheus.yml`:
+
+| Job | What it is |
+|---|---|
+| `prometheus` | self-scrape |
+| `cistafirma-backend` | the app's own `/metrics` — HTTP counters and the duration histogram |
+| `node` | node_exporter on **both** hosts (`dell` and `sam-lenovo`), by tailnet IP |
+| `postgres` | `postgres_exporter`, using the same interpolated credentials the app uses |
+| `redis` | `redis_exporter`, with `--check-keys` so the Celery queues' list lengths appear |
+| `cistafirma-ops` | the operational verdicts — see below |
+
+### The operational verdicts (`cistafirma-ops`)
+
+Whether a sync job is stuck, whether a source stopped advancing, whether a beat
+entry is overdue: those are **judgements**, not measurements, and they cannot be
+expressed as a PromQL rule over the counters the backend exports. So they are not
+re-implemented here. `backend/registers/services/ops_health.py` holds them, the
+three management commands render that module's `Report` for a human, and
+`manage.py run_ops_exporter` serves it as metrics from the `ops_exporter`
+service (the backend image, port 9101, no published port).
+
+That shared module is the point: **the alert and `make ops-check` cannot
+disagree, because they read the same verdict twice.** The `Sync jobs: N unmet` /
+`Source health: N unmet` / `Beat schedule: N unmet` summary lines and the
+`not_judged` (`--`) states are a contract `scripts/local/ops_check.sh` parses by
+regex, so they survive the refactor unchanged.
+
+Two properties are worth knowing before you trust a panel:
+
+- `cistafirma_ops_subject` carries **exactly one series per declared subject**,
+  with a `status` label. Subjects come from the models' choice lists, never from
+  the rows that happen to exist, so a source with no data is a series saying
+  `not_judged` rather than a series that is absent. A series that vanishes reads
+  as healthy, which is the failure this whole file is about.
+- The source domain aggregates `CompanySyncStatus` (a row per company per
+  source, up to ~1.5M) and is therefore **cached inside the exporter**. Prometheus
+  scrapes it every 30 s, but the number may be up to a cache interval old;
+  `cistafirma_ops_evaluated_timestamp_seconds` says how fresh it actually is.
+
+  Measured on dell 2026-10-01, so the cache is *not* read as a scrape-timeout
+  guard: the three commands take 2.13 / 2.39 / 2.15 s wall clock from the host
+  (`sync_health` / `source_health` / `beat_health`), but running `manage.py check`
+  — Django's start-up, touching no table — takes **1.94 s** of that. Inside the
+  exporter the interpreter is already up, so a scrape that re-evaluates all three
+  domains costs roughly **0.3 s** against Prometheus's 10 s scrape timeout. The
+  60 s cache on the source domain buys database load, nothing else; if it is ever
+  removed, latency is not what will break.
+
+### Alerting
+
+Ten rules live in `deploy/monitoring/grafana/provisioning/alerting/` and are
+evaluated by **Grafana's unified alerting**, not by Prometheus — so
+`prometheus.yml` stays a pure scrape configuration and needs no `rule_files`.
+Delivery is Telegram, through the `telegram` contact point and the single root
+notification policy in that directory. `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID` come from the root `.env`; create the bot with @BotFather,
+send it a message, then read the chat id from
+`https://api.telegram.org/bot<token>/getUpdates`.
+
+Three things about these files are not obvious:
+
+- **The `folder:` name is matched by name and created if absent.** Alert rule
+  provisioning takes no `folderUid`, so Grafana creates a missing `CistaFirma`
+  folder itself and gives it a generated UID. That is why the rules provision
+  on a fresh volume — and why you must *not* try to pin that folder's UID
+  elsewhere. Alerting is provisioned **before** dashboards, so a dashboard
+  provider that pinned a folder UID with the same name would collide on the
+  unique-name constraint and take the whole provisioning service down (Grafana
+  exits 1 and restart-loops). `provisioning/dashboards/dashboards.yml` sets
+  `folder: ""` on purpose, so the dashboards land in **General** and no UID is
+  pinned anywhere. The rules sitting in `CistaFirma` while the dashboard sits in
+  `General` is the intended, harmless consequence of that.
+- **Grafana reads alerting provisioning files at start-up**, not on a timer
+  (dashboards, by contrast, are re-read every 30 s by their provider). After
+  editing anything under `provisioning/alerting/`, restart Grafana:
+  `docker compose restart grafana` — `restart`, never `--force-recreate`, which
+  is what keeps `db` and `redis` untouched.
+- **Nothing verifies that alerts are delivered, and nothing can.** Grafana
+  interpolates `$VAR` in provisioning files and substitutes the **empty string**
+  for an unset variable rather than failing, so a missing token provisions a
+  contact point that looks perfectly healthy and sends nothing. The only test is
+  to send a message: press **Test** on the contact point in Grafana and watch the
+  chat. `make ops-check` does not check this and does not pretend to. Do that
+  once after setting the token, and again if the token is ever rotated.
+
+The rules cover: any scrape target down; the exporter's verdicts going stale; an
+evaluator inside the exporter raising; sync jobs unmet; the beat schedule
+overdue; source health unmet; both Celery queue shapes (the queues that drain to
+zero, and `insurance`, which is conserved by design and needs its own bound);
+an elevated 5xx ratio; and a host filesystem below 15% — on `dell` that last one
+is the disk holding the only copy of the production database.
+
+### The gap that is still open
+
+The 2026-09-17 outage — 3 h 43 min of 502s — is why this stack grew alerting.
+It is worth being precise about what now covers it and what does not.
+
+What covers it: the operational layer above, which would have reported the
+backend's own health and the queue and schedule behaviour within minutes.
+
+What does not: **an outside-in API outage is still not alerted on.** Every rule
+above reads Prometheus, and Prometheus reads the backend's `/metrics` — which
+stayed up and reported normally throughout that outage, because it describes
+what the backend did with requests it received, not requests that never arrived.
+Availability is asserted instead by `scripts/local/ops_check.sh`, whose **API
+availability** section GETs `/api/stats/landing/` through the frontend's
+*published* port from the host and requires a 200 — a path that includes nginx,
+the exact component whose stale upstream address caused the outage, and one that
+a running, healthy frontend does not make pass on its own (`/healthz` answered
+200 for the whole of it). What it proves is deliberately bounded: that the API
+answers, not that its answers are right — correctness is the sync-jobs and
+source-health sections' verdict. It is a weekly and by-hand gate, not an alert.
+Closing that properly needs a blackbox probe Prometheus can scrape, which is not
+in this stack today.
 
 Do **not** use `docker compose down` to stop this stack: that verb is on this
 repository's never-run list and would also stop the database. Use `stop`.

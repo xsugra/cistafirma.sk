@@ -49,4 +49,36 @@ scrape_configs:
         labels:
           host: sam-lenovo
 
-# No alerting rules are provisioned — dashboards only.
+  # Database and broker. Both exporters join the compose default network and
+  # publish no host port, so these are Docker DNS names, not 127.0.0.1 and not
+  # tailnet IPs. There is deliberately no METRICS_TOKEN here: they have no auth
+  # layer at all, which is why they must never get a `ports:` entry.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres_exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis_exporter:9121"]
+
+  # Application-level operational verdicts: whether a sync job is stuck, whether
+  # a source stopped advancing, whether a beat entry is overdue. The exporter is
+  # the backend image running `manage.py run_ops_exporter`, so these numbers come
+  # out of the same code `make ops-check` runs, not a re-implementation of it.
+  #
+  # A longer interval than the other jobs on purpose. One of the three domains
+  # aggregates `CompanySyncStatus` (a row per company per source, up to ~1.5M),
+  # so it is cached inside the exporter and evaluated roughly once a minute;
+  # scraping faster than the cache would add load to production without adding
+  # information. `cistafirma_ops_evaluated_timestamp_seconds` is what tells you
+  # how fresh the number you are reading actually is.
+  - job_name: cistafirma-ops
+    metrics_path: /metrics
+    scheme: http
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["ops_exporter:9101"]
+
+# Alerting rules live in deploy/monitoring/grafana/provisioning/alerting/ and are
+# evaluated by Grafana's unified alerting, not by Prometheus — so this file stays
+# a pure scrape configuration and Prometheus needs no rule_files entry.

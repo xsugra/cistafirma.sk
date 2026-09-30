@@ -260,6 +260,23 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-cistafirma}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
+      # Alert delivery. These two are read by the provisioned Telegram contact
+      # point in provisioning/alerting/contact-points.yml.
+      #
+      # Grafana interpolates $VAR in provisioning files, and a variable that is
+      # UNSET resolves to the empty string -- it does not fail. An unset token
+      # therefore provisions a contact point that looks fine and silently sends
+      # nothing.
+      #
+      # NOTHING HERE VERIFIES DELIVERY, and nothing can: the only way to test a
+      # contact point is to send a message through it, and a weekly gate that
+      # posts to Telegram every week is a gate nobody reads. So this is the one
+      # control in the stack whose only proof is a human watching a chat: after
+      # setting the token, use Grafana's "Test" button on the contact point and
+      # confirm the message arrives. The file provisioning cleanly is not that
+      # confirmation, and neither is this comment.
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     volumes:
       - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -268,6 +285,92 @@ services:
       - "127.0.0.1:3000:3000"  # loopback only; UI never exposed to LAN
     depends_on:
       - prometheus
+
+  # Postgres exporter. Reads the SAME interpolated POSTGRES_* credentials the
+  # backend uses, so no second copy of the password exists and no new database
+  # role is created — a new role would be a schema change, and a schema change
+  # requires a fresh verified backup first.
+  #
+  # No `ports:` on purpose: Prometheus reaches it as `postgres_exporter:9187`
+  # over the compose default network, so it publishes nothing on the host.
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    container_name: cistafirma_postgres_exporter
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    environment:
+      # sslmode=disable: the connection never leaves the compose network.
+      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Redis exporter: the broker, and the Celery queues themselves. A Celery queue
+  # is a Redis list, so its depth is `redis_key_size` here — the same LLEN that
+  # scripts/local/ops_check.sh reads. `--check-keys` is what makes those keys
+  # show up at all; without it the exporter never reports list lengths.
+  #
+  # Careful: `redis_key_size` only exists for a key that exists. An empty queue
+  # that Redis has already reaped reports *nothing*, not 0, so anything consuming
+  # this must write `or vector(0)` rather than treat absence as healthy.
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.92.1
+    container_name: cistafirma_redis_exporter
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    command:
+      - "--check-keys=celery,ruz_full,orsr,financials,insurance"
+    environment:
+      - REDIS_ADDR=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Application-level operational verdicts: whether a sync job is stuck, whether
+  # a source stopped advancing, whether a beat entry is overdue. These are
+  # judgements, not measurements -- they live in Python
+  # (`backend/registers/services/ops_health.py`, which the three `*_health`
+  # management commands now only render) and cannot be expressed as a PromQL rule
+  # over the counters the backend exports.
+  #
+  # It runs from the BACKEND IMAGE, not a prebuilt exporter, because it has to
+  # read the database through the same models and the same thresholds the
+  # commands use: a second implementation of "is this stuck" is a second answer
+  # that will disagree with `make ops-check` exactly when it matters.
+  #
+  # No `ports:` here -- Prometheus reaches it at ops_exporter:9101 over the
+  # compose network. That matters more than usual: this endpoint has no auth
+  # layer, and /metrics on the backend is deliberately guarded.
+  ops_exporter:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cistafirma_ops_exporter
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    logging: *logging-default
+    env_file:
+      - ./.env
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-cistafirma}:${POSTGRES_PASSWORD:-cistafirma_secret}@db:5432/${POSTGRES_DB:-cistafirma}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-cistafirma_redis_secret}@redis:6379/0
+      # Deliberately NOT PROMETHEUS_MULTIPROC_DIR. That variable exists for
+      # gunicorn's multi-process mode; this service is one process, and sharing
+      # the backend's directory would make each scrape read the other's files.
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # The image's HEALTHCHECK probes gunicorn, which this service does not run.
+    healthcheck:
+      disable: true
+    command: ["python", "manage.py", "run_ops_exporter", "--bind", "0.0.0.0", "--port", "9101"]
 
 volumes:
   postgres_data:

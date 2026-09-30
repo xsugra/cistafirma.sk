@@ -288,14 +288,21 @@ metrics:
 	@echo "Fetching /metrics from inside the backend container (loopback client)..."
 	@docker compose exec -T backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=5).read().decode())"
 
+# Every service in the `monitoring` profile, named explicitly rather than
+# relying on `--profile monitoring up -d` with no targets: that form also
+# touches the default-profile services, and on a production host an
+# unnecessary recreate of `db` is not a risk worth taking for a shorter line.
+# If a service is added to the profile, add it here too — one that is never
+# started is a panel that is silently empty, which is the failure this whole
+# stack exists to prevent.
 docker-metrics-up:
-	@echo "Starting optional Prometheus + Grafana (monitoring profile)..."
-	@docker compose --profile monitoring up -d prometheus grafana
+	@echo "Starting optional Prometheus + Grafana + exporters (monitoring profile)..."
+	@docker compose --profile monitoring up -d prometheus grafana postgres_exporter redis_exporter ops_exporter
 	@echo "  Prometheus: http://127.0.0.1:9090   Grafana: http://127.0.0.1:3000"
 
 docker-metrics-down:
-	@echo "Stopping Prometheus + Grafana (volumes are kept)..."
-	@docker compose --profile monitoring stop prometheus grafana
+	@echo "Stopping Prometheus + Grafana + exporters (volumes are kept)..."
+	@docker compose --profile monitoring stop prometheus grafana postgres_exporter redis_exporter ops_exporter
 
 docker-migrate:
 	@echo "Running migrations in Docker (one-shot migrate service)..."

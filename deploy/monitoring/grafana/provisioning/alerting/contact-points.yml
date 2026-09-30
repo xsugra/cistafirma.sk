@@ -1,0 +1,36 @@
+# Grafana alerting provisioning — where an alert is delivered.
+#
+# Loaded from /etc/grafana/provisioning/alerting, which is the read-only bind
+# mount of deploy/monitoring/grafana/provisioning. Grafana therefore owns no
+# alert configuration that is not in the repository, and a rebuild cannot lose it.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: telegram
+    receivers:
+      - uid: cistafirma-telegram
+        type: telegram
+        # $TELEGRAM_BOT_TOKEN and $TELEGRAM_CHAT_ID are interpolated by Grafana
+        # from the container environment — see the `grafana` service in
+        # docker-compose.yml, which takes them from the root .env.
+        #
+        # A variable that is UNSET interpolates to the empty string rather than
+        # failing, so a half-configured channel provisions cleanly and then
+        # delivers nothing at all. The file existing is not evidence that alerts
+        # arrive: send a test notification and watch the chat.
+        #
+        # The message is written out in plain text on purpose. Telegram parses
+        # markup in message bodies, and every label this stack alerts on is
+        # snake_case — a formatting character that Telegram reads as markup turns
+        # the send into an error, and an error here is an alert nobody sees.
+        # Plain text cannot be misread. Verify with a test notification.
+        settings:
+          bottoken: $TELEGRAM_BOT_TOKEN
+          chatid: $TELEGRAM_CHAT_ID
+          message: |
+            {{ range .Alerts }}{{ .Status | toUpper }}: {{ .Labels.alertname }}
+            {{ .Annotations.summary }}
+            {{ if .Annotations.description }}{{ .Annotations.description }}
+            {{ end }}{{ end }}
+        disableResolveMessage: false
