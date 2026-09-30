@@ -7830,6 +7830,19 @@ tvrdili — a aby bolo vidieť, že „agent to povedal" nie je dôkaz.
    teda aj keeperovmu obnoveniu. Kto si prečíta docstring, vyvodí, že walk je
    mimo rozsahu; on je v rozsahu, len nedosiahnuteľný.
 
+   *Poznámka 2026-10-01: obe `file:line` v tomto bode už nesedia a nedajú sa
+   čítať doslovne.* Filter sa presunul do `services/ops_health.py` (dnes
+   `:454-455`, `failed_cutoff` na `:351`) a **kotví sa na `completed_at`, nie na
+   `queued_at`** — takže chyba opísaná vyššie je medzitým opravená a jej
+   docstring to zaznamenáva (`sync_health.py:35-36`, „the window runs from when
+   an attempt ended"). Veta „measured on 2026-09-10" je dnes na
+   `sync_health.py:44-46`, nie na `:32-34`; `:257-261` je vetva, ktorá tlačí
+   okná s `'no window set'` (susedí s hláškou „no incremental sync has ever been
+   recorded" na `:255-256`, ale je to iný blok), nie beat filter. Záznam
+   nechávam ako záznam o stave v čase a dopĺňam k nemu len toto: `file:line`
+   bez commitu neadresuje nič, takže bez poznámky by `:257-261` posielalo
+   čitateľa do kódu, ktorý tam už nie je.
+
 3. **VYVRÁTENÉ v premise.** „Podrž okno a prečítaj znova" pri `full` walku
    neexistuje, takže nemôže byť no-op: `fetch_ruz_data.py:408` je
    `holds_window = sync_type.startswith('full') or run["unreadable"] > 0`, čiže
