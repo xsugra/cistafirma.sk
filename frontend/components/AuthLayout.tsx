@@ -73,7 +73,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({children, title, subtitle
                     </div>
 
                     <div className="relative z-10 mt-8 text-xs text-blue-300/60 font-medium">
-                        &copy; {new Date().getFullYear()} cistafirma.sk Inc.
+                        &copy; {new Date().getFullYear()} cistafirma Inc.
                     </div>
                 </div>
 

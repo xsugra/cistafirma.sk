@@ -40,7 +40,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({ onClick }) => {
             onClick={handleClick} 
             className="flex items-center gap-3 cursor-pointer group select-none"
             role="button"
-            aria-label="cistafirma.sk Domov"
+            aria-label="cistafirma Domov"
         >
             <div className={`transition-transform duration-300 ${animate ? 'logo-animate' : ''}`}>
                  <img src={logoUrl} alt="Logo" className="h-10 w-auto" />

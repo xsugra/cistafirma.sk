@@ -201,6 +201,6 @@ make docs-audit
 
 <div align="center">
 
-**cistafirma.sk** · Overuj firmy s istotou.
+**cistafirma** · Overuj firmy s istotou.
 
 </div>
