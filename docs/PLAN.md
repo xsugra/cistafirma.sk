@@ -10062,8 +10062,9 @@ nemenil:
   `[CistaFirma]` v `backend/notifications/services.py:383`.
 
 Prvé je text v e-maile, druhé je **identita odosielateľa** (hlavička `From` a
-predmet). Commit `db6d431` ani jeden z týchto súborov nemenoval, takže zmeniť ich
-je rozhodnutie o brandingu pošty, nie oprava chyby — nahlásené, nevykonané.
+predmet). Commit `db6d431` ani jeden z týchto súborov nemenoval, takže v `e3dfef4`
+sa nemenili — boli **nahlásené, nie vykonané**. Používateľ ich potom nechal
+zjednotiť; `SITE_TITLE`/`SITE_HEADER` v administrácii ostávajú. To je §11.26.2.
 
 **Verdikt.** Push `5ddcb0c` spustil pipeline **246**, a tá je `success`: všetkých
 sedem jobov (`backend_validate`, `frontend_validate`, `docs_audit`,
@@ -10073,6 +10074,72 @@ teda presne ten, ktorý na 245 padol. Opravu teda potvrdila tá istá brána, kt
 chybu našla; beh na delle (`companies.tests_pdf_template`: `Ran 8 tests`, `OK`)
 bol len predbežný, lebo na Macu sa backendová sada spustiť nedá (migrácie
 potrebujú Postgres).
+
+### 11.26.2 Brand v e-mailoch zjednotený (2026-09-30)
+
+Na pokyn používateľa („zjednoť aj tie e-maily") sa **štyri** reťazce zjednotili
+na `cistafirma`:
+
+- `backend/notifications/services.py:383` — predmet `[CistaFirma] …` → `[cistafirma] …`
+- `backend/notifications/services.py:444` — päta tela e-mailu: `CistaFirma.sk —
+  monitoring slovenských firiem` → `cistafirma — monitoring slovenských firiem`
+- `backend/backend/settings.py:869` — `DEFAULT_FROM_EMAIL`, zobrazované meno
+  (`CistaFirma <noreply@cistafirma.sk>` → `cistafirma <noreply@cistafirma.sk>`);
+  `noreply@cistafirma.sk` sa **nemení**, to je skutočná schránka a doména
+- `.env.default:120` — zakomentovaný príklad `EMAIL_FROM`, aby kópia `.env`
+  nezaviedla starý tvar
+
+Rovnaké pravidlo ako v `db6d431`: mení sa **meno produktu**, nie doména ani URL —
+`https://cistafirma.sk/monitoring?ico=` v tele e-mailu ostáva.
+
+**Rozsah je zámerne úzky a to je podstatná časť rozhodnutia.** Po tejto zmene sa
+`CistaFirma` vyskytuje ešte **98-krát v 52 súboroch** — mimo tohto plánu, ktorý ho
+sám menuje (`scripts/` 24, agentské a config súbory 29, `docs/` 25,
+`backend/`+`frontend/` 16, `deploy/` 4). Väčšina tých výskytov **nie je branding**
+a premenovať sa nesmie:
+
+- **Cesty na disku** — `scripts/local/lib/backup_os.sh:137-152` skladá
+  `~/Library/Application Support/CistaFirma`, `~/.local/state/CistaFirma` a
+  `~/Library/Logs/CistaFirma`. Pod nimi žijú zálohy, `restore_drills.log` a
+  `replicas.log`. Premenovaný adresár by ich osirel a rozbil `ops-check`, off-site
+  bránu aj plánovač, ktorý doň píše `LAST_FAILURE`.
+- **Identita GPG kľúča** — `scripts/local/gpg_backup_key.sh:28`:
+  `CistaFirma backup <cistafirma-backup@localhost>`. Tou identitou je podpísaný
+  kľúč, ktorým sú zašifrované **existujúce** off-site repliky; nová identita by
+  z nich spravila cudzie súbory.
+- **`User-Agent`** — `CistaFirma SK App / 1.0` (`integrations/rpo_client.py:21`,
+  `integrations/ruz_api.py:38`), `Mozilla/5.0 (compatible; CistaFirma/1.0)`
+  (`scrapers/orsr_person_search.py:146`), `CistaFirmaBot/1.0`
+  (`scrapers/orsr_scraper.py:734`, `scrapers/vszp_debt.py:115`). Tým sa hlásime
+  cudzím systémom (RPO, RUZ, ORSR, VšZP) — je to identita voči nim, nie náš
+  branding, a zmena by vyzerala ako iný klient.
+- **`MapLibre` style name** — `frontend/map/style.ts:1041` (`CistaFirma dark` /
+  `CistaFirma light`), pinujú ho `frontend/components/company/SeatMap.test.tsx:485-490`.
+- **Grafana/Prometheus** — `deploy/monitoring/grafana/dashboards/cistafirma-overview.json:3`,
+  `grafana/provisioning/dashboards/dashboards.yml:8`,
+  `prometheus/prometheus.yml:8`. Súbor a priečinok sú už malé (`cistafirma-…`);
+  `CistaFirma` je v ich obsahu.
+- **systemd/launchd unity a ich `Description=`** — `scripts/local/systemd/sk.cistafirma.*.in`,
+  `scripts/local/launchd/sk.cistafirma.backup.plist.in`. Názvy unitov sú
+  `sk.cistafirma.*` a sú nainštalované na delle; premenovanie znamená preinštalovať
+  plánovač.
+- **Hlavičky a popisky, ktoré som nechal a hlásim** (nie sú to e-maily):
+  `backend/backend/settings.py:747-748` (`SITE_TITLE`/`SITE_HEADER` Django adminu),
+  `backend/backend/urls.py:25` (text v API roote), `frontend/admin/AdminLayout.tsx:90`
+  (popisok v ľavom paneli administrácie), `Makefile:9` a `scripts/local/*.sh`
+  (`ops_check`, `offsite_status`, `scheduled_backup`) — tam ide o texty výpisov.
+
+Zvyšok je dokumentácia (`docs/` okrem tohto plánu: 25 výskytov) a popis nástrojov
+(`.claude/`, `.codex/`, `.github/`, `CLAUDE.md`, `Makefile`, `.gitignore`: 29) —
+tie sa týkajú vývoja a obsluhy, nie produktu, a premenovať ich nemá čo zjednotiť.
+
+**E-maily sa v produkcii aj tak neposielajú.** dell má v `.env`
+`EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` a `EMAIL_FROM`
+nemá nastavené vôbec, takže `send_pending_email_notifications` píše správy do logu
+backendu a stroj neopustia. Je to dokladované predvolené správanie (`.env.default`
+hovorí, ako prepnúť na SMTP), ale znamená to, že táto zmena je dnes **len text
+v logu** — a že notifikačné e-maily dnes nikto nedostane. To nie je chyba tejto
+zmeny; je to stav, ktorý táto zmena len zviditeľnila.
 
 ---
 
