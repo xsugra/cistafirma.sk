@@ -263,10 +263,27 @@ services:
       # Alert delivery. These two are read by the provisioned Telegram contact
       # point in provisioning/alerting/contact-points.yml.
       #
-      # Grafana interpolates $VAR in provisioning files, and a variable that is
-      # UNSET resolves to the empty string -- it does not fail. An unset token
-      # therefore provisions a contact point that looks fine and silently sends
-      # nothing.
+      # An UNSET token does not degrade gracefully. Grafana interpolates $VAR in
+      # provisioning files and an unset variable does become the empty string --
+      # but the `telegram` receiver then REFUSES TO PROVISION ("could not find
+      # Bot Token in settings"), and a failed provisioning module is fatal for
+      # the whole process: Grafana exits 1 and restart-loops with *every* module
+      # down, dashboards and login included, not just alerting. Measured
+      # 2026-10-01 on grafana/grafana:13.2.1, reproduced outside compose with an
+      # empty token and again with a well-formed one to confirm nothing else
+      # fails. The empty-string default this file used to carry is what took the
+      # monitoring UI out on 2026-09-30; the placeholder is the fix.
+      #
+      # The placeholder is deliberately self-describing rather than merely
+      # non-empty: it travels into the delivery error as
+      # `api.telegram.org/botUNSET-TELEGRAM-BOT-TOKEN/sendMessage`, so the log
+      # line names both the fault and the fix, and the contact point's own
+      # settings field shows it in the Grafana UI. With the placeholder in
+      # place, a missing token costs a failed delivery -- visible as an error on
+      # the alert rule's notification -- and not the monitoring stack.
+      #
+      # It is NOT a working channel: until the real token is in .env, alerts
+      # evaluate, notify nobody, and report that they could not notify.
       #
       # NOTHING HERE VERIFIES DELIVERY, and nothing can: the only way to test a
       # contact point is to send a message through it, and a weekly gate that
@@ -275,8 +292,8 @@ services:
       # setting the token, use Grafana's "Test" button on the contact point and
       # confirm the message arrives. The file provisioning cleanly is not that
       # confirmation, and neither is this comment.
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-UNSET-TELEGRAM-BOT-TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-UNSET-TELEGRAM-CHAT-ID}
     volumes:
       - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro

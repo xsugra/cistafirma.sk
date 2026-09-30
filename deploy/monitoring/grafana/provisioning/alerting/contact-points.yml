@@ -15,10 +15,24 @@ contactPoints:
         # from the container environment — see the `grafana` service in
         # docker-compose.yml, which takes them from the root .env.
         #
-        # A variable that is UNSET interpolates to the empty string rather than
-        # failing, so a half-configured channel provisions cleanly and then
-        # delivers nothing at all. The file existing is not evidence that alerts
-        # arrive: send a test notification and watch the chat.
+        # An UNSET variable interpolates to the empty string, and that empty
+        # `bottoken` is then REJECTED here -- "could not find Bot Token in
+        # settings" -- which does not merely skip this file: a failed
+        # provisioning module takes the whole Grafana process down with it
+        # (exit 1, restart-loop), dashboards and login included. Measured
+        # 2026-10-01 on grafana/grafana:13.2.1.
+        #
+        # That is why neither of these two ever interpolates to empty: the
+        # `grafana` service in docker-compose.yml supplies a self-describing
+        # placeholder when the real value is missing, so an unconfigured channel
+        # costs a failed delivery instead of the monitoring stack. The
+        # placeholder is not a working channel -- it names itself in the
+        # delivery error (`.../botUNSET-TELEGRAM-BOT-TOKEN/sendMessage`) and in
+        # this file's settings in the Grafana UI, and alerts evaluate and
+        # notify nobody until the real token is in .env.
+        #
+        # Whichever of the two is in place, the file existing is not evidence
+        # that alerts arrive: send a test notification and watch the chat.
         #
         # The message is written out in plain text on purpose. Telegram parses
         # markup in message bodies, and every label this stack alerts on is

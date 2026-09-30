@@ -349,10 +349,22 @@ Three things about these files are not obvious:
   editing anything under `provisioning/alerting/`, restart Grafana:
   `docker compose restart grafana` — `restart`, never `--force-recreate`, which
   is what keeps `db` and `redis` untouched.
-- **Nothing verifies that alerts are delivered, and nothing can.** Grafana
-  interpolates `$VAR` in provisioning files and substitutes the **empty string**
-  for an unset variable rather than failing, so a missing token provisions a
-  contact point that looks perfectly healthy and sends nothing. The only test is
+- **A missing token used to take down the whole monitoring UI, and now costs
+  only a delivery.** Grafana interpolates `$VAR` in provisioning files and
+  substitutes the **empty string** for an unset variable — and the `telegram`
+  receiver then rejects that empty `bottoken` ("could not find Bot Token in
+  settings"). A failed provisioning module is fatal for the whole process, the
+  same way the folder-UID collision above is: Grafana exits 1 and restart-loops
+  with every module down, dashboards and login included. That happened on
+  2026-09-30, from exactly this cause; it was measured and reproduced on
+  2026-10-01 against `grafana/grafana:13.2.1`. The `grafana` service in
+  `docker-compose.yml` therefore substitutes a self-describing placeholder
+  (`UNSET-TELEGRAM-BOT-TOKEN`) so an unconfigured channel cannot brick the
+  stack — it fails the delivery instead, and names the fault in the error
+  (`.../botUNSET-TELEGRAM-BOT-TOKEN/sendMessage`) and in the contact point's
+  settings in the UI. So the placeholder state is *loud but useless*: alerts
+  evaluate, notify nobody, and record that they could not notify. **Nothing
+  verifies that alerts are delivered, and nothing can** — the only test is
   to send a message: press **Test** on the contact point in Grafana and watch the
   chat. `make ops-check` does not check this and does not pretend to. Do that
   once after setting the token, and again if the token is ever rotated.
