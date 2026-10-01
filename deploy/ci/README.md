@@ -144,12 +144,13 @@ Sú tam komentáre, ktoré to hovoria.
 
   Sú tam **dve mená**, nie jedno — a je to zámer, nie zvyšok po migrácii.
   GitLab je kanonicky na svojom tailnet mene (`GITLAB_HOST`, `*.ts.net`; TLS
-  terminuje `tailscaled` na 443), ale jeho vlastný nginx počúva ďalej aj plain
-  HTTP na starom `*.home.arpa` mene (`GITLAB_LEGACY_HOST`, port 8088). Obe sú
-  živé cesty k tomu istému stroju. Ktoré z nich dostane job ako clone URL,
-  závisí od `external_url` v `/home/sam/gitlab/docker-compose.yml` — a to je
-  iný súbor, ktorý sa mení v iný moment. Job kontajner, ktorý vie preložiť len
-  jedno z nich, padne vždy, keď sa tie dve veci rozídu.
+  terminuje GitLab sám na porte, ktorý publikuje Docker — viď „GitLab na
+  HTTPS" v `docs/DEVOPS_CICD.md`, a prečo to nemôže robiť `tailscaled`), a
+  staršie `*.home.arpa` meno (`GITLAB_LEGACY_HOST`, port 8088) už len
+  **presmerúva** na https. Ktoré z nich dostane job ako clone URL, závisí od
+  `external_url` v `/home/sam/gitlab/docker-compose.yml` — a to je iný súbor,
+  ktorý sa mení v iný moment. Job kontajner, ktorý vie preložiť len jedno
+  z nich, padne vždy, keď sa tie dve veci rozídu.
 
   Mená aj IP GitLabu sú preto zapísané presne dvakrát — raz v `setup-config.sh`
   (`GITLAB_HOST`, `GITLAB_LEGACY_HOST`, `GITLAB_IP`), raz v `docker-compose.yml`

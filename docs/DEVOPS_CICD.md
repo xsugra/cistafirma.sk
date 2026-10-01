@@ -11,7 +11,7 @@ beží.
 | Stroj | Rola |
 |---|---|
 | **Mac** (MacBook) | Iba vývoj. **Nemá GitLab runner** — bol odstránený 15. 9. 2026. |
-| **lenovo** | Beží GitLab (`https://sam-lenovo.taildb03cf.ts.net`; staršie aj `http://gitlab.home.arpa:8088`) **aj CI runner**, ktorý spúšťa joby. |
+| **lenovo** | Beží GitLab (`https://sam-lenovo.taildb03cf.ts.net`; starý `http://gitlab.home.arpa:8088` už len presmerúva na https) **aj CI runner**, ktorý spúšťa joby. |
 | **dell** | Produkcia. Beží `docker-compose.yml` + `docker-compose.prod.yml`. **Zámerne bez runnera.** |
 
 Prečo dell nemá runner: je to produkcia s neopraviteľným volume
@@ -184,57 +184,92 @@ keď nie. Kópia, ktorá sa nemôže rozísť, je lepšia než komentár, ktorý
 
 ### GitLab na HTTPS
 
-> **STAV 1. 10. 2026 — nasadené čiastočne, a to je podstatné.**
-> Endpoint `https://sam-lenovo.taildb03cf.ts.net` beží a má dôveryhodný cert
-> (overené bez `-k`: `ssl_verify_result: 0`, issuer `Let's Encrypt CN=YE2`,
-> platnosť 1. 10. – 30. 12. 2026). **Zmena GitLabovho `external_url` a
-> regenerácia runnera na lenove nasadené NIE sú** — menia zdieľanú službu,
-> takže čakajú na schválenie. Dôsledok, ktorý treba poznať, kým sa tak
-> nestane: GitLab ďalej emituje `http://` URL, a preto
-> `https://<meno>/` (koreň) vracia **302 na `http://<meno>/users/sign_in`** —
-> a na porte 80 nič nepočúva, takže **prehliadač na koreňovej URL skončí
-> chybou** (`Connection refused`, overené). Priame cesty
-> (`/users/sign_in`, `/explore`, `/help`, `/api/…`) fungujú, 200.
+Nasadené 1. 10. 2026. Kanonická adresa je
+`https://sam-lenovo.taildb03cf.ts.net` a cert je dôveryhodný (overené bez
+`-k`: `ssl_verify_result: 0`, issuer `Let's Encrypt CN=YE2`, platnosť
+1. 10. – 30. 12. 2026).
 
-TLS **neterminuje GitLab**, ale `tailscaled`:
+TLS **terminuje GitLab sám**, na porte, ktorý publikuje Docker
+(`100.120.104.84:443`). Prvé riešenie bolo `tailscale serve`; bolo
+jednoduchšie a bolo **nesprávne**, takže dôvod, prečo od neho upúšťame, patrí
+sem — aby ho nikto neskúsil znovu.
+
+`tailscale serve` je *hostový* listener na tailnet IP. Na lenove beží `ufw`
+(active/enabled) a root tam nie je poruke, z čoho platia dve veci naraz:
+
+- Dockerom publikovaný port ide cez DNAT v `nat PREROUTING`, a to `ufw`-ové
+  `INPUT` pravidlá obchádza — preto sa na publikovaný port dovolá aj kontajner.
+- Holý hostový listener — čokoľvek, čo si bindne `tailscaled`, alebo aj
+  jednorazový `socat` na `172.17.0.1` — `INPUT` neobchádza, takže sa naň
+  z docker bridge **nedovolá nikto**.
+
+Odmerané, nie odvodené: z runner kontajnera `dial tcp 100.120.104.84:443:
+i/o timeout`, kým na publikovaný `:8088` ten istý kontajner dostane 200 — a to
+isté pre holý hostový listener na `172.17.0.1:9999`. Následok bol presne ten,
+ktorý sa 1. 10. aj stal: GitLab po prepnutí `external_url` začal vydávať
+`https://…` clone URL a runner **neprevzal ani jeden job**, lebo na tú adresu
+nemal ako dosiahnuť. V prehliadači pritom https celý čas fungovalo —
+prehliadač nie je kontajner, a to je rozdiel, ktorý celú vec na začiatku
+zamaskoval.
+
+Z toho plynie pravidlo pre každú ďalšiu službu na tomto stroji: **na lenove
+musí TLS terminovať kontajner, nie hosť** — terminátor musí byť niečo, čo
+Docker publikuje.
+
+Tým sa ale stráca to, prečo bolo `tailscale serve` prvé: cert si `tailscaled`
+obnovoval sám. Cert preto leží na disku a obnovuje ho cron:
 
 ```bash
-# na lenovo
-tailscale serve --bg --https=443 http://100.120.104.84:8088
+# na lenovo (už nainštalované): @daily a @reboot /home/sam/gitlab/renew-cert.sh
+crontab -l
 ```
 
-Dôvod, prečo nie GitLabov vlastný nginx: `tailscale serve` si cert
-(`*.ts.net`, Let's Encrypt) **sám priebežne obnovuje**. Keby TLS robil GitLab,
-musel by existovať timer, ktorý cert pravidelne preberá a reloaduje nginx —
-a to je presne trieda veci, ktorá o tri mesiace potichu prestane fungovať
-a prejaví sa až expirovaným certom.
+`renew-cert.sh` je idempotentný — keď `tailscale cert` vráti ten istý cert,
+nginx sa **NE**reloaduje — a **hlasno zlyhá** (`exit 1`), keď certu zostáva
+menej než 21 dní. Cron výstup nikto nečíta, takže ticho zlyhaná obnova by inak
+znamenala 90 dní ticha a potom expirovaný cert v prehliadači.
+`fullchain.pem` a `privkey.pem` (mode 600) sú v `/home/sam/gitlab/ssl/` a do
+kontajnera sa montujú **read-only** — zapisuje doň výhradne skript na hoste.
 
-**Prečo `external_url` vôbec treba meniť.** GitLab berie schému absolútnych
-URL (clone URL, API `web_url`, redirecty) z `external_url`, a svoju predstavu
+**Prečo `external_url` musí byť `https`.** GitLab berie schému absolútnych URL
+(clone URL, API `web_url`, redirecty) z `external_url`, a svoju predstavu
 o schéme posiela Railsom v `X-Forwarded-Proto`. V tomto image je tam hodnota
-**odvodená od `external_url`, nie `$scheme`** — overené:
-`/var/opt/gitlab/nginx/conf/service_conf/gitlab-rails.conf` obsahuje pri
-`external_url http` doslova `proxy_set_header X-Forwarded-Proto http;`.
-Kým je tam `http`, https endpoint je len obal nad http inštanciou.
+**odvodená od `external_url`, nie `$scheme`** — a to je zároveň najlacnejšia
+kontrola, že prepnutie naozaj prebehlo:
+`/var/opt/gitlab/nginx/conf/service_conf/gitlab-rails.conf` má dnes na dvoch
+miestach `proxy_set_header X-Forwarded-Proto https;`, kým pri
+`external_url http` tam bolo `http`. Bez tejto zmeny by https endpoint bol len
+obal nad http inštanciou a GitLab by ďalej vydával `http://` clone URL.
 
-K tomu patrí `letsencrypt['enable'] = false`, a to aj napriek tomu, že je
-**dnes redundantné**: `should_auto_enable?` v
-`/opt/gitlab/embedded/cookbooks/letsencrypt/libraries/lets_encrypt.rb` vracia
-`false` už kvôli `nginx['listen_https'] = false`. Je tam preto, že keby raz
-niekto `listen_https` prepol na `true`, GitLab by si cert skúsil vyžiadať
-sám — a to nemá ako vyjsť: meno `*.ts.net` nie je z internetu na porte 80
-dosiahnuteľné (tailscaled drží 443, GitLab 8088). Nech to padne na tom
-riadku, nie na tichom pokuse o ACME, ktorý by nechal GitLab bez certu.
+K tomu patrí `letsencrypt['enable'] = false`, a to už **nie je redundantné**.
+`should_auto_enable?`
+(`/opt/gitlab/embedded/cookbooks/letsencrypt/libraries/lets_encrypt.rb`) je
+
+```
+rails_listen_https? && nginx_enabled? && nginx_listen_https? &&
+  (le_auto_enabled? || !cert_files_present? || needs_renewal?)
+```
+
+Kým bolo `listen_https = false`, celá brána bola zavretá a ACME sa nemohlo
+zapnúť ani teoreticky. Teraz je `nginx_listen_https?` pravda, takže bránu
+otvára už len posledná zátvorka — a tá sa raz otvorí: keď sa cert začne
+blížiť expirácii, `needs_renewal?` zmení výsledok na `true`. ACME pritom nemá
+ako vyjsť: meno `*.ts.net` nie je z internetu na porte 80 dosiahnuteľné.
+Ten riadok je teda to, čo v ten deň zabráni tichému pokusu o ACME. Dnes je
+posledná zátvorka `false` (certy sú na mieste a platia do 30. 12.), takže sa
+nedeje nič.
 
 Čo sa zámerne **nemení**:
 
-- **Registry** ostáva na `http://gitlab.home.arpa:5050`. Je zapnutý, ale CI
-  z neho netiahne ani raz (všetky `image:` v `.gitlab-ci.yml` sú verejné na
-  docker.io). `tailscale serve` vie pokryť len 443/8443/10000, takže TLS pre
-  registry by znamenalo vlastný cert a vlastný timer — práca za nič.
-- **Starý `http://gitlab.home.arpa:8088`** funguje ďalej: GitLabov nginx
-  počúva na porte 80 ďalej (len `external_url` sa mení) a compose ho
-  publikuje na 8088.
+- **Registry** ostáva na `http://gitlab.home.arpa:5050` (zdravý, `/v2/`
+  vracia 401). Je zapnutý, ale CI z neho netiahne ani raz (všetky `image:`
+  v `.gitlab-ci.yml` sú verejné na docker.io), takže vlastný cert a vlastná
+  obnova by bola práca za nič.
+- **Starý `http://gitlab.home.arpa:8088`** už nie je druhá živá cesta, ale
+  **presmerovanie**: `redirect_http_to_https` robí z neho 301 na https
+  (1. 10. overené na `/` aj `/users/sign_in`). V redirecte je aj port
+  (`https://sam-lenovo.taildb03cf.ts.net:443/…`) — neškodná kozmetika,
+  `:443` je default a každý klient ho prijme. Port ostáva publikovaný.
 - **SSH remote `gitlab-home`** na delle a Macu sa nemení
   (`ssh://git@gitlab.home.arpa:2222/…`) — je to tá istá cesta k tomu istému
   stroju a je to závislosť produkčného nasadenia; meniť ju by bol zásah do
