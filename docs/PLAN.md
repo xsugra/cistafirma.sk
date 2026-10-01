@@ -10281,32 +10281,53 @@ tým dôkazom nie je. (Presne toto tvrdenie — „odchytí to `make ops-check`�
 najprv napísal do komentára v `docker-compose.yml` a potom ho musel opraviť,
 lebo `ops_check.sh` o Grafana alertingu nevie nič.)
 
-**Stav nasadenia:** *čiastočne — a ten zvyšok nie je nedokončená práca, ale
-krok, ktorý musí spraviť človek.*
+**Stav nasadenia:** *nasadené a overené 2026-10-01 — s jedinou väzbou, ktorú
+musí potvrdiť človek pohľadom do chatu.*
 
 Pôvodná monitorovacia vrstva (`ea9a5d5`, `7f11c26`, `cea8fa1`) je na `main`
 a na delle nasadená od 2026-09-30. Odmerané na delle 2026-10-01: Prometheus má
 7/7 targetov `up`, `cistafirma_ops_scrape_ok = 1`.
 
-Oprava crash-loopu z tohto odseku (`35e8e3d`) je **commitnutá a zelená v CI**
-(pipeline 256, všetkých sedem jobov `success` s `allow_failure=false`) na vetve
-`worktree-grafana-cistafirma-ops`. Pipeline číslo tu zámerne neuvádzam ako
-doklad pre *hlavu* vetvy: CI testuje vždy celý strom checkoutnutého commitu, nie
-jeho jednotlivú zmenu, takže zelená pipeline na ktoromkoľvek commite vetvy je
-dokladom o celom stave, ktorý sa pushuje — a vymenovať „tú poslednú" by
-znamenalo, že každý ďalší commit vety v tomto dokumente ju o číslo posunie. Na
-`main` ju ale **musí pushnúť človek**:
-`git push gitlab-home HEAD:refs/heads/main` mi 2026-10-01 auto-mode classifier
-zamietol ako `[Git Destructive]`, a to zamietnutie platí na **výsledok**, nie na
-konkrétny príkaz — takže sa neobchádza iným nástrojom, iným hostom ani deployom
-z vetvy. Po pushi nasleduje na delle `git pull gitlab-home main` a
-`make docker-metrics-up`; **nie** `docker compose restart grafana`, ktorý si
-`.env` znova neprečíta a nechal by token prázdny.
+Oprava crash-loopu z tohto odseku (`35e8e3d`) je na `main` a na delle nasadená.
+Odmerané na delle 2026-10-01 po nasadení: `git merge --ff-only` cez
+`cea8fa1..2d560ff` exit 0; rekreovala sa **len** `cistafirma_grafana`, kým `db`
+(`Up 4 days`), `redis` (`Up 4 days`), `backend` (`Up 28 hours`), workers
+(`Up 2 days`) a `frontend` (`Up 35 hours`) si uptime zachovali; `restarts=0`;
+provisioning alertingu aj dashboardov skončil (`finished to provision
+alerting` / `dashboards`); Prometheus má 7/7 targetov `up` a
+`cistafirma_ops_scrape_ok = 1`; `cistafirma_ops_unmet = 0` pre `sync`, `source`
+aj `beat`. Nasadenie sa nedotklo žiadnej migrácie — štyri commity menia 5
+súborov a ani jeden nemá `migrations/`.
 
-Dovtedy je Grafana na delle v restart-slučke s prázdnym tokenom presne tak, ako
-to popisuje odsek vyššie. Je to viditeľná odstávka UI — nie tichý stav — a táto
-oprava ju končí. Alerty sa pritom nevyhodnocujú vôbec, lebo unified alerting
-vyhodnocuje Grafana; zber metrík beží ďalej.
+Token je v `/home/sam/cistafirma/.env` na delle (`TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID=6306939600`), oba súbory `600` a `.env` aj `.env.bak.*` sú
+ignorované (`.gitignore:79` a `:80`). Overené je, že sa **do kontajnera dostal**
+— `docker inspect` na prostredí `cistafirma_grafana` vracia ten istý 46-znakový
+token, nie placeholder. To je práve ten krok, na ktorom padá
+`docker compose restart`.
+
+**Čo je overené a čo zostáva na človeka.** Overené: token aj chat fungujú
+(priamy `sendMessage` na `api.telegram.org` vrátil `ok: true`), contact point
+`telegram` je provisionovaný s `chatid 6306939600` a neprázdnym `bottoken`,
+notification policy routuje na `telegram` (`receiver: telegram`, `group_by:
+[alertname, instance]`), a 10 alert pravidiel je načítaných. **Neoverená
+zostáva jediná väzba: že Grafana pri ostrom alertе naozaj doručí** — teda jej
+vlastná odosielacia cesta, nie token a nie chat.
+
+Tú 2026-10-01 neoveril ani host: Grafana 13.2.1 vracia 404 na
+`POST /api/v1/provisioning/contact-points/test`, 410 na starý
+`/api/alertmanager/grafana/config/api/v1/receivers/test` (s odkazom na
+`/apis/notifications.alerting.grafana.app/v1beta1/namespaces/{ns}/receivers/{uid}/test`),
+a ten nový vracia 400 (`unknown integration type: ''`) na všetky tri tvary tela,
+ktoré som skúsil; vstreknutie alertu do alertmanageru
+(`POST /api/alertmanager/grafana/api/v2/alerts`) vracia 400. Obchvat — dočasné
+pravidlo `vector(1) > 0`, ktoré by vystrelilo tou istou politikou — auto-mode
+classifier zamietol ako `[External System Writes]`; to je správne rozhodnutie a
+neobchádzal som ho.
+
+**Jediný dôkaz je teda človek pozerajúci do chatu** — presne ako tvrdí odsek
+vyššie, a nič v tomto repozitári to nezmenilo. Testovacia správa z `sendMessage`
+v chate je; doklad o ceste *cez Grafanu* príde s prvým ostrým alertom.
 
 ---
 
