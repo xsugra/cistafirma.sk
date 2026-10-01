@@ -19,10 +19,10 @@ set -euo pipefail
 RUNDIR=${RUNDIR:-/home/sam/gitlab-runner}
 TOKENFILE=${TOKENFILE:-/home/sam/gitlab-runner-setup/runner-token.txt}
 CONF="$RUNDIR/config/config.toml"
-# GitLab je kanonicky na https://<tailnet meno> — TLS terminuje tailscaled na
-# 443 (`tailscale serve --bg --https=443 http://<GITLAB_IP>:8088`) a cert si
-# sam obnovuje. GitLabov vlastny nginx pritom pocuva dalej aj plain HTTP na 80,
-# publikovane na 8088, takze OBE mena su zive cesty k tomu istemu stroju.
+# GitLab je kanonicky na https://<tailnet meno> — TLS terminuje GITLAB SAM na
+# 443, ktorú publikuje Docker. NIE `tailscale serve`: ten je hostový listener a
+# z docker bridge sa naň nikto nedovolá (viď docs/DEVOPS_CICD.md). Cert mu
+# kladie renew-cert.sh z cronu. Staré meno na 8088 je dnes už len 301 na https.
 GITLAB_HOST="sam-lenovo.taildb03cf.ts.net"
 GITLAB_LEGACY_HOST="gitlab.home.arpa"
 GITLAB_URL="https://${GITLAB_HOST}"
@@ -38,8 +38,8 @@ RUNNER_NAME="sam-lenovo"
 #  dvoma rôznymi /etc/hosts, a obe mená potrebujú preto, že DNS z docker bridge
 #  nepozná ani `*.ts.net`, ani `*.home.arpa` (viď README).
 #
-#  PREČO DVE MENÁ a nie jedno: GitLab je kanonicky na $GITLAB_HOST, ale jeho
-#  nginx počúva ďalej aj plain HTTP na $GITLAB_LEGACY_HOST. Ktoré z nich dostane
+#  PREČO DVE MENÁ a nie jedno: GitLab je kanonicky na $GITLAB_HOST a staršie
+#  $GITLAB_LEGACY_HOST naň dnes už len presmerúva (301). Ktoré z nich dostane
 #  job ako clone URL, závisí od `external_url` v /home/sam/gitlab/docker-compose.yml
 #  — a to je INÝ súbor, ktorý sa mení v iný moment. Job kontajner, ktorý vie
 #  preložiť len jedno z nich, padne vždy, keď sa tie dve veci rozídu; s oboma

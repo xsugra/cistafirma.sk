@@ -85,8 +85,8 @@ services:
     # extra_hosts v config.toml pre job kontajnery.
     #
     # DVE MENÁ, lebo GitLab je na oboch: kanonicky
-    # `https://sam-lenovo.taildb03cf.ts.net` (TLS terminuje tailscaled na 443),
-    # ale jeho nginx počúva ďalej aj plain HTTP na `gitlab.home.arpa:8088`.
+    # `https://sam-lenovo.taildb03cf.ts.net` (TLS terminuje GitLab sám na
+    # publikovanej 443), a `gitlab.home.arpa:8088` naň dnes už len presmerúva.
     # Ktoré z nich dostane job ako clone URL, závisí od `external_url`
     # v /home/sam/gitlab/docker-compose.yml — iný súbor, iný moment zmeny.
     # S oboma menami je runner na poradí tých zmien nezávislý.
