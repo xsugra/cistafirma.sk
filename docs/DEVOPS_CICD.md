@@ -3,8 +3,9 @@
 Tento dokument popisuje **skutočný** release a deployment tok projektu
 `cistafirma` — nie cieľový stav. Pre K8s/Helm budúcnosť (ktorá dnes
 nenasadená nie je a vedome sme ju odložili) platí
-[`DEPLOYMENT_CONTRACT.md`](DEPLOYMENT_CONTRACT.md); tento dokument opisuje, čo
-beží.
+[`DEPLOYMENT_CONTRACT.md`](DEPLOYMENT_CONTRACT.md) (zmluva) a
+[`K8S_DELL_PLAN.md`](K8S_DELL_PLAN.md) (konkrétny plán nasadenia k3s na dell,
+s Postgresom a Redisom mimo klastra); tento dokument opisuje, čo beží.
 
 ## Rozdelenie strojov
 

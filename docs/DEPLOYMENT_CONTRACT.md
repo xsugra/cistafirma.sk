@@ -12,6 +12,11 @@ switched to Helm until every cutover prerequisite below is recorded and
 accepted. This prevents a release from silently connecting to a different or
 empty PostgreSQL instance.
 
+The concrete, measured plan for that cutover — k3s on `dell`, with PostgreSQL
+and Redis deliberately staying **outside** the cluster so the single copy of
+production data never moves — is [`K8S_DELL_PLAN.md`](K8S_DELL_PLAN.md). It is a
+proposal, not an approved contract; this document remains the contract.
+
 ## CI runtime contract
 
 GitLab CI renders the Helm chart for both dev and prod values. The rendered
