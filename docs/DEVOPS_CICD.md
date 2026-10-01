@@ -163,16 +163,21 @@ ktorý je jediným zdrojom pravdy.
 
 Obe sú **verzionované kópie**; bežiaci runner číta `/home/sam/gitlab-runner/` na
 lenovo a obsah tých dvoch adresárov je totožný (`sha256sum`, overené 16. 9. 2026,
-znovu 17. 9. 2026 a znovu 1. 10. 2026 — vždy po zmene nižšie) — **s výnimkou
-`deploy/ci/README.md`**, ktorý na lenove zamrzol na commite `914c515` (17. 9.)
-a odvtedy sa v repozitári zmenil šesťkrát. Runner ten súbor nečíta, takže to nič
-nerozbíja, ale zhodu to popiera — a práve tá je to, čo tu majú tie dve vety
-zaručovať. Ako to obnoviť: hlavička
-[`deploy/ci/README.md`](../deploy/ci/README.md).
+znovu 17. 9. 2026 a znovu 1. 10. 2026 — vždy po zmene nižšie).
 Dovtedy existoval celý runner — vrátane `setup-config.sh`, ktorý tento dokument
 označuje za jediný zdroj pravdy — **len na jednom stroji a nikde v repozitári**:
 žiadny diff, žiadna história, žiadna záloha. `config/config.toml` sa zámerne
 nekopíruje, lebo obsahuje živý token; v skripte je zaň len placeholder.
+
+Overenie z 1. 10. 2026 malo čo naprávať. `deploy/ci/README.md` bol na lenove
+zamrznutý na commite `914c515` (17. 9.) a odvtedy sa v repozitári zmenil šesťkrát
+— stroj teda dva týždne držal verziu, v ktorej ešte nie je opravených šesť
+zastaraných tvrdení z `31181dd`. Runner ten súbor nečíta, takže to nič
+nerozbíjalo, ale popieralo to zhodu, ktorú má odsek vyššie zaručovať. Obnovené
+jedným `scp`; pôvodná verzia je na lenove odložená ako `README.md.bak-20261001`.
+`deploy/ci/README.md` je navyše **sebavzťažný** — jeho hash závisí od jeho
+vlastného obsahu, takže po každej úprave treba kópiu na lenovo obnoviť znova;
+podrobnosti a postup overenia sú v jeho hlavičke.
 
 Jedna výnimka z toho „jediného zdroja pravdy": **mená aj IP GitLabu sú zapísané
 aj v `docker-compose.yml`** (`extra_hosts` runner kontajnera), a je to minimum,

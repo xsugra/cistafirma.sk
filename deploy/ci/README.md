@@ -2,31 +2,39 @@
 
 Nasadené 11. 9. 2026 ako **dva kontajnery** cez `docker compose`.
 
-> **Toto je verzionovaná kópia.** Dva zo štyroch súborov — `setup-config.sh`
-> a `docker-compose.yml` — sú bajt na bajt totožné s tými na lenovo (`sha256sum`
-> overené 16. 9. 2026, znovu 17. 9. 2026 a znovu 1. 10. 2026 po komentárovej
-> úprave oboch). Zhodu overíš z Macu cez `shasum -a 256 deploy/ci/setup-config.sh
-> deploy/ci/docker-compose.yml` proti `sha256sum` na lenove — komentárová úprava
-> na jednej strane ju pokazí rovnako ako funkčná a nič iné to nepovie.
+> **Toto je verzionovaná kópia.** Tri zo štyroch súborov — `setup-config.sh`,
+> `docker-compose.yml` a tento `README.md` — sú bajt na bajt totožné s tými na
+> lenovo (`sha256sum`, overené 16. 9. 2026, znovu 17. 9. 2026 a znovu 1. 10. 2026).
+> Zhodu overíš z Macu cez `shasum -a 256 deploy/ci/setup-config.sh
+> deploy/ci/docker-compose.yml deploy/ci/README.md` proti `sha256sum` na lenove —
+> komentárová úprava na jednej strane ju pokazí rovnako ako funkčná a nič iné to
+> nepovie.
+>
+> **Pozor, tento súbor je sebavzťažný.** Jeho hash závisí od jeho obsahu, takže
+> každá úprava — vrátane tejto vety — ho na lenove rozladí, a **konkrétne číslo
+> sem nemožno napísať**: prestalo by platiť v momente, keď bolo napísané. Preto
+> sa tu hash neuvádza. Zhodu určuje porovnanie `shasum`/`sha256sum` na oboch
+> stranách, nikdy číslo v texte. Ak meníš tento súbor, po commite ho hneď
+> prekopíruj na lenovo — inak si práve ty príčinou tej nezhody, ktorú tento
+> odsek opisuje ako minulú.
 > Zdrojom pravdy pre **bežiaci** runner je naďalej `/home/sam/gitlab-runner/` na
 > lenovo — sem sa kopírujú preto, aby konfigurácia CI runnera mala históriu,
 > diff a zálohu: predtým existovala len na jednom stroji a nikde v repozitári.
 >
-> Dve výnimky:
+> **`README.md` zo zhody na dva týždne vypadol a je späť.** Od 17. 9. do
+> 1. 10. 2026 držal lenovo verziu z commitu `914c515`, kým repozitárová kópia sa
+> medzitým zmenila šesťkrát — stroj teda držal presne tú verziu, v ktorej ešte
+> nie je opravených šesť zastaraných tvrdení z `31181dd`. Nič to nerozbíjalo
+> (runner tento súbor nečíta), ale popieralo to zhodu, ktorú má táto hlavička
+> zaručovať. Obnovené 1. 10. 2026 jedným `scp`; pôvodná verzia je na lenove
+> odložená ako `/home/sam/gitlab-runner/README.md.bak-20261001`. Jej hash
+> uviesť možno — je to zmrazená kópia, ktorá sa už meniť nebude:
+> `6c2c194e4136…`.
 >
-> 1. **Tento `README.md` v zhode NIE JE — stav k 1. 10. 2026.** Na lenove leží
->    verzia z commitu `914c515` (17. 9. 2026), kým repozitárová kópia sa odvtedy
->    zmenila šesťkrát, naposledy v commite `4364e65`. Stroj teda drží presne tú
->    verziu, v ktorej ešte nie je opravených šesť zastaraných tvrdení z `31181dd`.
->    Nič to nerozbíja — runner tento súbor nečíta — ale zhodu to popiera, a práve
->    tú má táto hlavička zaručovať. Obnoví sa jedným `scp`; kým sa tak nestane,
->    overuj zhodu **len** na tých dvoch súboroch vyššie. Namerané 1. 10. 2026:
->    `sha256` na lenove je `6c2c194e4136…`, čo je presne hash
->    `git show 914c515:deploy/ci/README.md`.
-> 2. **`gitlab-ci.yml.new` nie je zrkadlová kópia.** Pochádza z iného adresára na
->    lenovo (`/home/sam/gitlab-runner-setup/`) a je to archív, nie kópia bežiacej
->    konfigurácie — prečo tu je a prečo sa nesmie nasadiť, je na konci v časti
->    „Archivovaný artefakt".
+> Jedna výnimka: **`gitlab-ci.yml.new` nie je zrkadlová kópia.** Pochádza z iného
+> adresára na lenovo (`/home/sam/gitlab-runner-setup/`) a je to archív, nie kópia
+> bežiacej konfigurácie — prečo tu je a prečo sa nesmie nasadiť, je na konci
+> v časti „Archivovaný artefakt".
 >
 > **`config/config.toml` sa sem NIKDY nekopíruje.** Je to generovaný výstup
 > a obsahuje živý runner token (v `setup-config.sh` je len placeholder
