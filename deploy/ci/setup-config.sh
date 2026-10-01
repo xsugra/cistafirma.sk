@@ -16,37 +16,54 @@
 
 set -euo pipefail
 
-RUNDIR=/home/sam/gitlab-runner
+RUNDIR=${RUNDIR:-/home/sam/gitlab-runner}
 TOKENFILE=${TOKENFILE:-/home/sam/gitlab-runner-setup/runner-token.txt}
 CONF="$RUNDIR/config/config.toml"
-GITLAB_URL="http://gitlab.home.arpa:8088"
+# GitLab je kanonicky na https://<tailnet meno> — TLS terminuje tailscaled na
+# 443 (`tailscale serve --bg --https=443 http://<GITLAB_IP>:8088`) a cert si
+# sam obnovuje. GitLabov vlastny nginx pritom pocuva dalej aj plain HTTP na 80,
+# publikovane na 8088, takze OBE mena su zive cesty k tomu istemu stroju.
+GITLAB_HOST="sam-lenovo.taildb03cf.ts.net"
+GITLAB_LEGACY_HOST="gitlab.home.arpa"
+GITLAB_URL="https://${GITLAB_HOST}"
 GITLAB_IP="100.120.104.84"
 RUNNER_NAME="sam-lenovo"
 
 # ---------------------------------------------------------------------------
-#  Tá istá IP je na DVOCH miestach a musia sa rovnať.
+#  Tie isté MENÁ aj IP sú na DVOCH miestach a musia sa rovnať.
 #
-#  Tu — dosadí sa cez __GITLAB_IP__ do config.toml, teda do prostredia, v ktorom
-#  bežia JOB kontajnery. A v docker-compose.yml vedľa tohto skriptu — extra_hosts
+#  Tu — dosadzujú sa do config.toml, teda do prostredia, v ktorom bežia JOB
+#  kontajnery. A v docker-compose.yml vedľa tohto skriptu — extra_hosts
 #  samotného RUNNER kontajnera. Zlúčiť sa nedajú: sú to dva rôzne kontajnery s
-#  dvoma rôznymi /etc/hosts, a oba potrebujú gitlab.home.arpa preto, že DNS z
-#  docker bridge o home.arpa nevie (viď README).
+#  dvoma rôznymi /etc/hosts, a obe mená potrebujú preto, že DNS z docker bridge
+#  nepozná ani `*.ts.net`, ani `*.home.arpa` (viď README).
 #
-#  Preto sa zhoda overuje, nie predpokladá. Keď sa IP zmení, zmeň ju tu, spusť
-#  tento skript a táto kontrola povie, ak si zabudol druhú polovicu — namiesto
-#  toho, aby to o dva týždne našel až červený job.
+#  PREČO DVE MENÁ a nie jedno: GitLab je kanonicky na $GITLAB_HOST, ale jeho
+#  nginx počúva ďalej aj plain HTTP na $GITLAB_LEGACY_HOST. Ktoré z nich dostane
+#  job ako clone URL, závisí od `external_url` v /home/sam/gitlab/docker-compose.yml
+#  — a to je INÝ súbor, ktorý sa mení v iný moment. Job kontajner, ktorý vie
+#  preložiť len jedno z nich, padne vždy, keď sa tie dve veci rozídu; s oboma
+#  je na poradí tých zmien nezávislý.
+#
+#  Preto sa zhoda overuje, nie predpokladá. Keď sa IP alebo meno zmení, zmeň ho
+#  tu, spusť tento skript a táto kontrola povie, ak si zabudol druhú polovicu —
+#  namiesto toho, aby to o dva týždne našel až červený job.
 # ---------------------------------------------------------------------------
 COMPOSE_FILE="$(dirname "$0")/docker-compose.yml"
 if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "POZOR: $COMPOSE_FILE neexistuje, zhoda GITLAB_IP sa nedá overiť." >&2
-elif ! grep -q "gitlab\.home\.arpa:${GITLAB_IP}\"" "$COMPOSE_FILE"; then
-  {
-    echo "CHYBA: $COMPOSE_FILE nemá extra_hosts \"gitlab.home.arpa:${GITLAB_IP}\"."
-    echo "       Nájdené v $COMPOSE_FILE:"
-    grep -n 'gitlab\.home\.arpa:' "$COMPOSE_FILE" || echo "       (nič)"
-    echo "       Zmeň obe miesta naraz — tu aj tam."
-  } >&2
-  exit 1
+  echo "POZOR: $COMPOSE_FILE neexistuje, zhoda extra_hosts sa nedá overiť." >&2
+else
+  for HOST in "$GITLAB_HOST" "$GITLAB_LEGACY_HOST"; do
+    if ! grep -qF "${HOST}:${GITLAB_IP}\"" "$COMPOSE_FILE"; then
+      {
+        echo "CHYBA: $COMPOSE_FILE nemá extra_hosts \"${HOST}:${GITLAB_IP}\"."
+        echo "       Nájdené v $COMPOSE_FILE:"
+        grep -n 'extra_hosts' -A4 "$COMPOSE_FILE" || echo "       (nič)"
+        echo "       Zmeň obe miesta naraz — tu aj tam."
+      } >&2
+      exit 1
+    fi
+  done
 fi
 
 [ -f "$TOKENFILE" ] || { echo "chýba $TOKENFILE" >&2; exit 1; }
@@ -122,13 +139,18 @@ log_level = "info"
     privileged = false
     volumes = ["/cache"]
 
-    # Kontajnery dostavaju DNS z routera (192.168.1.1), ktory o home.arpa
-    # nevie -> staticky zaznam. Overene: git ls-remote z kontajnera funguje.
-    extra_hosts = ["gitlab.home.arpa:__GITLAB_IP__"]
+    # Kontajnery dostavaju DNS z routera (192.168.1.1), ktory nepozna ani
+    # `*.ts.net` (MagicDNS je len v tailnete, cez 100.100.100.100), ani
+    # `*.home.arpa` -> obe mena staticky. Je to ta ista dvojica ako extra_hosts
+    # runner kontajnera v docker-compose.yml a setup-config.sh overuje, ze sedia.
+    # Overene: git ls-remote z kontajnera funguje.
+    extra_hosts = ["__GITLAB_HOST__:__GITLAB_IP__", "__GITLAB_LEGACY_HOST__:__GITLAB_IP__"]
     network_mode = "bridge"
 
-    # Registry je ciste HTTP (gitlab.home.arpa:8088), takze TLS verify off.
-    # Netahat image odznova pri kazdom jobe.
+    # Joby z GitLab registra netahaju ani raz -- vsetky `image:` v .gitlab-ci.yml
+    # su verejne (docker.io). Registry na :5050 bezi dalej po HTTP a nic ho
+    # nectta, takze do TLS ho netreba tahat. Toto je len o tom, netahat image
+    # odznova pri kazdom jobe.
     pull_policy = ["if-not-present"]
     disable_cache = false
     shm_size = 0
@@ -172,6 +194,8 @@ EOF
 sed -i \
   -e "s|__RUNNER_NAME__|$RUNNER_NAME|g" \
   -e "s|__GITLAB_URL__|$GITLAB_URL|g" \
+  -e "s|__GITLAB_HOST__|$GITLAB_HOST|g" \
+  -e "s|__GITLAB_LEGACY_HOST__|$GITLAB_LEGACY_HOST|g" \
   -e "s|__GITLAB_IP__|$GITLAB_IP|g" \
   -e "s|__TOKEN__|$TOKEN|g" \
   "$CONF"

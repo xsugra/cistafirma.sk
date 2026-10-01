@@ -134,18 +134,30 @@ Sú tam komentáre, ktoré to hovoria.
   `companies/0014` (`text_pattern_ops` je Postgres-only), takže job bol
   červený vždy a nekontroloval nič.
 - **DNS v joboch.** Kontajnery dostávajú DNS z routera (`192.168.1.1`),
-  ktorý o `home.arpa` nevie. dnsmasq na tailnet IP GitLabu (`GITLAB_IP`
-  v `setup-config.sh`) z docker bridge **neodpovedá** — Tailscale to blokuje
-  (overené: `connection timed out`). Preto statický `extra_hosts` v `config.toml`
-  (pre joby) aj v `docker-compose.yml` (pre runner). Overené: `git ls-remote`
-  z kontajnera funguje. **Ďalší `*.home.arpa` hostname treba pridať na obe miesta.**
+  ktorý nepozná ani `*.ts.net` (MagicDNS je len v tailnete, cez
+  `100.100.100.100`), ani `*.home.arpa`. dnsmasq na tailnet IP GitLabu
+  (`GITLAB_IP` v `setup-config.sh`) z docker bridge **neodpovedá** — Tailscale
+  to blokuje (overené: `connection timed out`). Preto statický `extra_hosts`
+  v `config.toml` (pre joby) aj v `docker-compose.yml` (pre runner). Overené:
+  `git ls-remote` z kontajnera funguje. **Ďalší hostname GitLabu treba pridať
+  na obe miesta.**
 
-  IP GitLabu je preto zapísaná presne dvakrát — raz v `setup-config.sh`, raz
-  v `docker-compose.yml` — a je to minimum, nie nedopatrenie: sú to dva
-  kontajnery s dvoma vlastnými `/etc/hosts`. Aby sa nemohli ticho rozísť,
-  `setup-config.sh` pri každom spustení overí, že `docker-compose.yml` nesie
-  jeho `GITLAB_IP`, a skončí s `exit 1`, keď nie. Tento odsek ju zámerne
-  neopisuje, aby nebol tretím miestom.
+  Sú tam **dve mená**, nie jedno — a je to zámer, nie zvyšok po migrácii.
+  GitLab je kanonicky na svojom tailnet mene (`GITLAB_HOST`, `*.ts.net`; TLS
+  terminuje `tailscaled` na 443), ale jeho vlastný nginx počúva ďalej aj plain
+  HTTP na starom `*.home.arpa` mene (`GITLAB_LEGACY_HOST`, port 8088). Obe sú
+  živé cesty k tomu istému stroju. Ktoré z nich dostane job ako clone URL,
+  závisí od `external_url` v `/home/sam/gitlab/docker-compose.yml` — a to je
+  iný súbor, ktorý sa mení v iný moment. Job kontajner, ktorý vie preložiť len
+  jedno z nich, padne vždy, keď sa tie dve veci rozídu.
+
+  Mená aj IP GitLabu sú preto zapísané presne dvakrát — raz v `setup-config.sh`
+  (`GITLAB_HOST`, `GITLAB_LEGACY_HOST`, `GITLAB_IP`), raz v `docker-compose.yml`
+  — a je to minimum, nie nedopatrenie: sú to dva kontajnery s dvoma vlastnými
+  `/etc/hosts`. Aby sa nemohli ticho rozísť, `setup-config.sh` pri každom
+  spustení overí, že `docker-compose.yml` nesie **obe** svoje mená, a skončí
+  s `exit 1`, keď nie. Tento odsek ich presné znenie zámerne neuvádza, aby
+  nebol tretím miestom.
 
 ## Ako na tomto runneri závisí CI
 

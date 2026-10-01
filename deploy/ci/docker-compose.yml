@@ -78,16 +78,26 @@ services:
     volumes:
       # Konfigurácia runnera. Súbor vytvára setup-config.sh, práva 0600.
       - ./config:/etc/gitlab-runner
-    # Kontajner dostáva DNS z routera (192.168.1.1), ktorý o home.arpa nevie.
-    # dnsmasq na tailnet IP z docker bridge neodpovedá (Tailscale to blokuje),
-    # preto statický záznam. Rovnaký dôvod ako extra_hosts v config.toml
-    # pre job kontajnery.
+    # Kontajner dostáva DNS z routera (192.168.1.1), ktorý nepozná ani
+    # `*.ts.net` (MagicDNS je len v tailnete, cez 100.100.100.100), ani
+    # `*.home.arpa`. dnsmasq na tailnet IP z docker bridge neodpovedá
+    # (Tailscale to blokuje), preto statické záznamy. Rovnaký dôvod ako
+    # extra_hosts v config.toml pre job kontajnery.
     #
-    # POZOR: tá istá IP je aj v setup-config.sh (GITLAB_IP) a musí sa rovnať —
-    # sú to dva kontajnery s dvoma /etc/hosts, takže jeden zdroj tu nie je možný.
-    # setup-config.sh preto pri každom spustení kontroluje, že tento riadok
-    # nesie jeho hodnotu, a skončí s exit 1, keď sa rozídu.
+    # DVE MENÁ, lebo GitLab je na oboch: kanonicky
+    # `https://sam-lenovo.taildb03cf.ts.net` (TLS terminuje tailscaled na 443),
+    # ale jeho nginx počúva ďalej aj plain HTTP na `gitlab.home.arpa:8088`.
+    # Ktoré z nich dostane job ako clone URL, závisí od `external_url`
+    # v /home/sam/gitlab/docker-compose.yml — iný súbor, iný moment zmeny.
+    # S oboma menami je runner na poradí tých zmien nezávislý.
+    #
+    # POZOR: tie isté mená aj IP sú aj v setup-config.sh (GITLAB_HOST,
+    # GITLAB_LEGACY_HOST, GITLAB_IP) a musia sa rovnať — sú to dva kontajnery
+    # s dvoma /etc/hosts, takže jeden zdroj tu nie je možný. setup-config.sh
+    # preto pri každom spustení kontroluje, že tento riadok nesie jeho hodnoty,
+    # a skončí s exit 1, keď sa rozídu.
     extra_hosts:
+      - "sam-lenovo.taildb03cf.ts.net:100.120.104.84"
       - "gitlab.home.arpa:100.120.104.84"
     networks:
       - runner-net

@@ -11,7 +11,7 @@ beží.
 | Stroj | Rola |
 |---|---|
 | **Mac** (MacBook) | Iba vývoj. **Nemá GitLab runner** — bol odstránený 15. 9. 2026. |
-| **lenovo** | Beží GitLab (`gitlab.home.arpa:8088`) **aj CI runner**, ktorý spúšťa joby. |
+| **lenovo** | Beží GitLab (`https://sam-lenovo.taildb03cf.ts.net`; staršie aj `http://gitlab.home.arpa:8088`) **aj CI runner**, ktorý spúšťa joby. |
 | **dell** | Produkcia. Beží `docker-compose.yml` + `docker-compose.prod.yml`. **Zámerne bez runnera.** |
 
 Prečo dell nemá runner: je to produkcia s neopraviteľným volume
@@ -168,13 +168,77 @@ označuje za jediný zdroj pravdy — **len na jednom stroji a nikde v repozitá
 žiadny diff, žiadna história, žiadna záloha. `config/config.toml` sa zámerne
 nekopíruje, lebo obsahuje živý token; v skripte je zaň len placeholder.
 
-Jedna výnimka z toho „jediného zdroja pravdy": **IP GitLabu je zapísaná aj
-v `docker-compose.yml`** (`extra_hosts` runner kontajnera), a je to minimum, nie
-nedopatrenie — runner a job kontajnery sú dva kontajnery s dvoma vlastnými
-`/etc/hosts`, takže jeden spoločný zdroj tu neexistuje. Aby sa nemohli ticho
-rozísť, `setup-config.sh` pri každom spustení overí, že `docker-compose.yml`
-vedľa neho nesie jeho `GITLAB_IP`, a skončí s `exit 1`, keď nie. Kópia, ktorá
-sa nemôže rozísť, je lepšia než komentár, ktorý to sľubuje.
+Jedna výnimka z toho „jediného zdroja pravdy": **mená aj IP GitLabu sú zapísané
+aj v `docker-compose.yml`** (`extra_hosts` runner kontajnera), a je to minimum,
+nie nedopatrenie — runner a job kontajnery sú dva kontajnery s dvoma vlastnými
+`/etc/hosts`, takže jeden spoločný zdroj tu neexistuje. Sú to **dve mená**
+(kanonické `*.ts.net` a staršie `*.home.arpa`, viď „GitLab na HTTPS" nižšie),
+a to je tiež zámer: ktoré z nich dostane job ako clone URL, závisí od
+`external_url` v GitLabovom compose súbore — iný súbor, menený v iný moment.
+Job kontajner, ktorý vie preložiť len jedno z nich, padne vždy, keď sa tie dve
+veci rozídu.
+
+Aby sa nemohli ticho rozísť, `setup-config.sh` pri každom spustení overí, že
+`docker-compose.yml` vedľa neho nesie **obe** svoje mená, a skončí s `exit 1`,
+keď nie. Kópia, ktorá sa nemôže rozísť, je lepšia než komentár, ktorý to sľubuje.
+
+### GitLab na HTTPS
+
+> **STAV 1. 10. 2026 — nasadené čiastočne, a to je podstatné.**
+> Endpoint `https://sam-lenovo.taildb03cf.ts.net` beží a má dôveryhodný cert
+> (overené bez `-k`: `ssl_verify_result: 0`, issuer `Let's Encrypt CN=YE2`,
+> platnosť 1. 10. – 30. 12. 2026). **Zmena GitLabovho `external_url` a
+> regenerácia runnera na lenove nasadené NIE sú** — menia zdieľanú službu,
+> takže čakajú na schválenie. Dôsledok, ktorý treba poznať, kým sa tak
+> nestane: GitLab ďalej emituje `http://` URL, a preto
+> `https://<meno>/` (koreň) vracia **302 na `http://<meno>/users/sign_in`** —
+> a na porte 80 nič nepočúva, takže **prehliadač na koreňovej URL skončí
+> chybou** (`Connection refused`, overené). Priame cesty
+> (`/users/sign_in`, `/explore`, `/help`, `/api/…`) fungujú, 200.
+
+TLS **neterminuje GitLab**, ale `tailscaled`:
+
+```bash
+# na lenovo
+tailscale serve --bg --https=443 http://100.120.104.84:8088
+```
+
+Dôvod, prečo nie GitLabov vlastný nginx: `tailscale serve` si cert
+(`*.ts.net`, Let's Encrypt) **sám priebežne obnovuje**. Keby TLS robil GitLab,
+musel by existovať timer, ktorý cert pravidelne preberá a reloaduje nginx —
+a to je presne trieda veci, ktorá o tri mesiace potichu prestane fungovať
+a prejaví sa až expirovaným certom.
+
+**Prečo `external_url` vôbec treba meniť.** GitLab berie schému absolútnych
+URL (clone URL, API `web_url`, redirecty) z `external_url`, a svoju predstavu
+o schéme posiela Railsom v `X-Forwarded-Proto`. V tomto image je tam hodnota
+**odvodená od `external_url`, nie `$scheme`** — overené:
+`/var/opt/gitlab/nginx/conf/service_conf/gitlab-rails.conf` obsahuje pri
+`external_url http` doslova `proxy_set_header X-Forwarded-Proto http;`.
+Kým je tam `http`, https endpoint je len obal nad http inštanciou.
+
+K tomu patrí `letsencrypt['enable'] = false`, a to aj napriek tomu, že je
+**dnes redundantné**: `should_auto_enable?` v
+`/opt/gitlab/embedded/cookbooks/letsencrypt/libraries/lets_encrypt.rb` vracia
+`false` už kvôli `nginx['listen_https'] = false`. Je tam preto, že keby raz
+niekto `listen_https` prepol na `true`, GitLab by si cert skúsil vyžiadať
+sám — a to nemá ako vyjsť: meno `*.ts.net` nie je z internetu na porte 80
+dosiahnuteľné (tailscaled drží 443, GitLab 8088). Nech to padne na tom
+riadku, nie na tichom pokuse o ACME, ktorý by nechal GitLab bez certu.
+
+Čo sa zámerne **nemení**:
+
+- **Registry** ostáva na `http://gitlab.home.arpa:5050`. Je zapnutý, ale CI
+  z neho netiahne ani raz (všetky `image:` v `.gitlab-ci.yml` sú verejné na
+  docker.io). `tailscale serve` vie pokryť len 443/8443/10000, takže TLS pre
+  registry by znamenalo vlastný cert a vlastný timer — práca za nič.
+- **Starý `http://gitlab.home.arpa:8088`** funguje ďalej: GitLabov nginx
+  počúva na porte 80 ďalej (len `external_url` sa mení) a compose ho
+  publikuje na 8088.
+- **SSH remote `gitlab-home`** na delle a Macu sa nemení
+  (`ssh://git@gitlab.home.arpa:2222/…`) — je to tá istá cesta k tomu istému
+  stroju a je to závislosť produkčného nasadenia; meniť ju by bol zásah do
+  deploy cesty bez funkčného zisku.
 
 ## Prečo tu nie je `build` ani `deploy`
 
