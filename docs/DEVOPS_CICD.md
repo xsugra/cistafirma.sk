@@ -161,8 +161,13 @@ Bezpečnostný model runnera (socket proxy, neprivilegované job kontajnery,
 ktorý je jediným zdrojom pravdy.
 
 Obe sú **verzionované kópie**; bežiaci runner číta `/home/sam/gitlab-runner/` na
-lenovo a obsah tých dvoch adresárov je totožný (`sha256sum`, overené 16. 9. 2026
-a znovu 17. 9. 2026 po zmene nižšie).
+lenovo a obsah tých dvoch adresárov je totožný (`sha256sum`, overené 16. 9. 2026,
+znovu 17. 9. 2026 a znovu 1. 10. 2026 — vždy po zmene nižšie) — **s výnimkou
+`deploy/ci/README.md`**, ktorý na lenove zamrzol na commite `914c515` (17. 9.)
+a odvtedy sa v repozitári zmenil šesťkrát. Runner ten súbor nečíta, takže to nič
+nerozbíja, ale zhodu to popiera — a práve tá je to, čo tu majú tie dve vety
+zaručovať. Ako to obnoviť: hlavička
+[`deploy/ci/README.md`](../deploy/ci/README.md).
 Dovtedy existoval celý runner — vrátane `setup-config.sh`, ktorý tento dokument
 označuje za jediný zdroj pravdy — **len na jednom stroji a nikde v repozitári**:
 žiadny diff, žiadna história, žiadna záloha. `config/config.toml` sa zámerne

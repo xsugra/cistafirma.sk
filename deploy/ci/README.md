@@ -2,16 +2,31 @@
 
 Nasadené 11. 9. 2026 ako **dva kontajnery** cez `docker compose`.
 
-> **Toto je verzionovaná kópia.** Súbory v `deploy/ci/` sú bajt na bajt totožné
-> s tými na lenovo (`sha256sum` overené 16. 9. 2026, znovu 17. 9. 2026).
+> **Toto je verzionovaná kópia.** Dva zo štyroch súborov — `setup-config.sh`
+> a `docker-compose.yml` — sú bajt na bajt totožné s tými na lenovo (`sha256sum`
+> overené 16. 9. 2026, znovu 17. 9. 2026 a znovu 1. 10. 2026 po komentárovej
+> úprave oboch). Zhodu overíš z Macu cez `shasum -a 256 deploy/ci/setup-config.sh
+> deploy/ci/docker-compose.yml` proti `sha256sum` na lenove — komentárová úprava
+> na jednej strane ju pokazí rovnako ako funkčná a nič iné to nepovie.
 > Zdrojom pravdy pre **bežiaci** runner je naďalej `/home/sam/gitlab-runner/` na
 > lenovo — sem sa kopírujú preto, aby konfigurácia CI runnera mala históriu,
 > diff a zálohu: predtým existovala len na jednom stroji a nikde v repozitári.
 >
-> Jedna výnimka: **`gitlab-ci.yml.new` nie je zrkadlová kópia.** Pochádza z iného
-> adresára na lenovo (`/home/sam/gitlab-runner-setup/`) a je to archív, nie kópia
-> bežiacej konfigurácie — prečo tu je a prečo sa nesmie nasadiť, je na konci
-> v časti „Archivovaný artefakt".
+> Dve výnimky:
+>
+> 1. **Tento `README.md` v zhode NIE JE — stav k 1. 10. 2026.** Na lenove leží
+>    verzia z commitu `914c515` (17. 9. 2026), kým repozitárová kópia sa odvtedy
+>    zmenila šesťkrát, naposledy v commite `4364e65`. Stroj teda drží presne tú
+>    verziu, v ktorej ešte nie je opravených šesť zastaraných tvrdení z `31181dd`.
+>    Nič to nerozbíja — runner tento súbor nečíta — ale zhodu to popiera, a práve
+>    tú má táto hlavička zaručovať. Obnoví sa jedným `scp`; kým sa tak nestane,
+>    overuj zhodu **len** na tých dvoch súboroch vyššie. Namerané 1. 10. 2026:
+>    `sha256` na lenove je `6c2c194e4136…`, čo je presne hash
+>    `git show 914c515:deploy/ci/README.md`.
+> 2. **`gitlab-ci.yml.new` nie je zrkadlová kópia.** Pochádza z iného adresára na
+>    lenovo (`/home/sam/gitlab-runner-setup/`) a je to archív, nie kópia bežiacej
+>    konfigurácie — prečo tu je a prečo sa nesmie nasadiť, je na konci v časti
+>    „Archivovaný artefakt".
 >
 > **`config/config.toml` sa sem NIKDY nekopíruje.** Je to generovaný výstup
 > a obsahuje živý runner token (v `setup-config.sh` je len placeholder
