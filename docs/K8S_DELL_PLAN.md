@@ -50,17 +50,31 @@ vyhne svojmu najrizikovejšiemu kroku.
 |---|---|
 | CPU / RAM | 4 vCPU / **7,1 GiB** |
 | Kontajnery | **16** |
-| RAM použité / dostupné | **3,3 GiB** / **3,8 GiB** (`free`) |
-| **Swap v použití** | **835 MiB** zo 7,6 GiB |
+| RAM použité / dostupné | **3,3–3,4 GiB** / **3,7–3,8 GiB** (`free`; tiež vzorka, viď nižšie) |
+| **Swap v použití** | **713 MiB** zo 7,6 GiB — **vzorka, nie konstanta** |
 | Disk | 466 GB, 47 GB použitých, **400 GB voľných** |
 | Docker | 29.8.0, swarm `inactive` |
 | k8s nástroje | `kubectl`, `k3s`, `helm`, `kubeadm`, `kind` — **žiadny** |
 
-Ten swap je dôležitejší, než vyzerá: **835 MiB odswapovaných znamená, že box už
+Ten swap je dôležitejší, než vyzerá: **odswapovaných 713 MiB znamená, že box už
 dnes nie je bez pamäťového tlaku.** k3s si vypýta ďalších zhruba 0,5–1 GiB
-(kontrolný plán, kubelet, containerd, Traefik, CoreDNS). „Dostupné 3,8 GiB" je
-teda číslo, ktoré sa nesmie prečítať ako „3,8 GiB na rozdávanie" — časť z neho
+(kontrolný plán, kubelet, containerd, Traefik, CoreDNS). „Dostupné 3,7 GiB" je
+teda číslo, ktoré sa nesmie prečítať ako „3,7 GiB na rozdávanie" — časť z neho
 je buff/cache, ktorý si systém vezme späť, len čo ho bude potrebovať.
+
+**Ale to číslo je vzorka, nie vlastnosť boxu.** Tri merania v ten istý deň dali
+835, 659 a 713 MiB. Preto sa z neho **nesmie** stať prah v bráne Fázy 1 — kto si
+do brány napíše „swap < 835 MiB", porovnáva dve rôzne vzorky a vyhodnotí to ako
+regresiu alebo ako zlepšenie podľa toho, kedy si kávu.
+
+Čo je na ňom naopak stále: **celý používaný swap sedí v `zram0`** (`swapon
+--show`: `/dev/zram0` 713,2 M, zatiaľ čo `/swap.img` má **0 B**). To je
+komprimovaná RAM, nie disk — takže „swap v použití" tu neznamená odložené
+stránky na disku, ale **skutočne zabratú pamäť** komprimovanou formou. Tlak je
+teda reálny a zram ho len zmenšuje, neodstraňuje.
+
+Preto brána Fázy 1 musí byť **rozdiel meraný v tej istej session** (`free -h`
+pred a po spustení k3s), nie porovnanie s číslom zapísaným v tomto dokumente.
 
 **Porty — a toto je najdôležitejší riadok celej sekcie:**
 
@@ -73,6 +87,16 @@ LISTEN 0      1024        100.79.47.4:8443   0.0.0.0:*
 LISTEN 0      1024  [fd7a:115c:...:2f05]:443  [::]:*
 LISTEN 0      1024  [fd7a:115c:...:2f05]:8443 [::]:*
 ```
+
+To je **výňatok** — `ss -lnt` má na delle **17** TCP listenerov. Zvyšok je
+lokálny alebo tailnetový a s k3s sa nestretáva: `127.0.0.1:5432` (Postgres),
+`127.0.0.1:6380` (Redis), `127.0.0.1:5173` (frontend), `127.0.0.1:8080`
+(backend), `127.0.0.1:3000` (Grafana), `127.0.0.1:9090` (Prometheus),
+`100.79.47.4:9100` (node_exporter), `127.0.0.53%lo:53` a `127.0.0.54:53`
+(systemd-resolved), `0.0.0.0:22` a `[::]:22` (ssh), plus dva efemérne porty
+`tailscaled`. Uvádzam to preto, lebo **17 a nie 4 je rozdiel, ktorý sa dá
+neoverene preniesť** — kto si prečíta len výňatok, bude číslo „voľných portov"
+počítať z neho.
 
 Všimni si adresu: `100.79.47.4`, teda **tailnet IP, nie `0.0.0.0`** — port je
 viazaný len na tailnet. `tailscale serve status` prezrádza aj to, kam mieri:
@@ -90,10 +114,30 @@ priestor, ktorý k3s potrebuje. (Zámerne neuvádzam pid `tailscaled`: pri
 reštarte sa zmení a tvrdenie by zastaralo bez toho, aby prestalo platiť.
 Adresa plus `serve status` dokazujú to isté a dajú sa kedykoľvek zopakovať.)
 
-**Dôsledok: k3s ingress sa na 443 nezmestí.** `tailscale serve` ostáva
-terminátorom TLS a v poslednej fáze sa jeho cieľ prepne z `127.0.0.1:5173` na
-port, ktorý vystaví klaster. Voľné ostávajú 6443 (API server), 8472 (flannel)
-a 80.
+**Dôsledok: k3s ingress sa na 443 nezmestí — a nie je to mäkké tvrdenie.**
+Linux nedovolí `bind(0.0.0.0:443)`, keď je na tom istom porte už viazaná
+konkrétna adresa (`100.79.47.4:443`); vráti `EADDRINUSE`. k3s štandardne
+nasadzuje Traefik **aj** ServiceLB (`klipper-lb`), a ten druhý si na 443 a 80
+robí `hostPort`. Jeho pod teda narazí na `EADDRINUSE` a **pôjde do crash-loopu**
+— pričom `k3s` sám, API server a zvyšok klastra budú vyzerať zdravo.
+
+Toto je zatiaľ **odvodenie, nie meranie** — a presne preto je Fáza 1
+„k3s, a nič viac": jej úlohou je to potvrdiť alebo vyvrátiť skôr, než na tom
+bude niečo stáť. Praktický dôsledok pre inštaláciu:
+
+```
+curl -sfL https://get.k3s.io | sh -s - server \
+  --disable traefik --disable servicelb \
+  --write-kubeconfig-mode 644
+```
+
+(Vypnutie Traefiku znamená aj to, že v Fáze 4 treba ingress vystaviť inak —
+NodePort, prípadne vlastný ingress controller na porte, ktorý je naozaj voľný.
+To je rozhodnutie Fázy 4, nie Fázy 1.)
+
+`tailscale serve` tak ostáva terminátorom TLS a v poslednej fáze sa jeho cieľ
+prepne z `127.0.0.1:5173` na port, ktorý vystaví klaster. Voľné ostávajú 6443
+(API server), 8472 (flannel, UDP) a 80.
 
 To, že `tailscale serve` na delle **funguje**, nie je náhoda a nie je to v rozpore
 s tým, čo bolo 1. 10. odstránené z lenova. Na lenove bol `serve` hostový listener,
@@ -208,7 +252,8 @@ overuje.
 - `scripts/k8s/rollback.sh` už existuje a robí `kubectl rollout undo`.
 
 **Neumí, alebo je rozbité — a toto treba opraviť skôr, než naň fáza narazí**
-(bod 2 už pred Fázou 3, zvyšok pred Fázou 4):
+(body 2, 8 a 9 pred Fázou 3 — Secret musí existovať a `REDIS_URL` musia dostať
+workery aj backend; body 1, 3–7 pred Fázou 4):
 
 | # | Problém | Dôkaz |
 |---|---|---|
@@ -217,6 +262,17 @@ overuje.
 | 3 | `backendResolver` default `""` → nginx **odmietne naštartovať** | `values.yaml:46`; pre k3s treba `10.43.0.10` (nie `10.96.0.10` z `values-dev.yaml:42`) |
 | 4 | `BACKEND_UPSTREAM` **nie je nastaviteľný cez values** | `templates/_helpers.tpl:34-36` ho počíta natvrdo ako `<fullname>-backend:8000` |
 | 5 | Postgres StatefulSet s 20 Gi PVC je zapnutý defaultne | `values.yaml:74,78` — v našom návrhu musí byť `postgres.enabled=false` a `redis.enabled=false` |
+| 6 | `ingressClassName: nginx`, ale k3s vezie **Traefik** (trieda `traefik`) | `values.yaml:11` → `ingress.yaml:9-11`. Ingress sa nikdy nepriradí a `https://…` vráti 404 **od Traefiku** — teda nie „nič neodpovedá", ale „odpovedá niekto iný", čo sa ladí oveľa horšie |
+| 7 | migrate Job je `post-install,post-upgrade` **hook**, ale Deploymenty čakajú na `migrate --check` | `migrate-job.yaml:10` vs `backend-deployment.yaml:38`. S `helm upgrade --wait` (ktoré celý „nulový výpadok" potrebuje) sa release **s novou migráciou zasekne do timeoutu** — hook sa spustí až po tom, čo Deploymenty zlenivia, a tie čakajú na hook |
+| 8 | Chart **nevytvára Secret**, iba naň odkazuje | `values.yaml:10` `existingSecret: cistafirma-secrets`; v `templates/` **nie je** `secret.yaml`. `configmap.yaml:8-12` nesie len 5 ne-tajomných hodnôt — `DATABASE_URL`, `SECRET_KEY` aj `REDIS_URL` si musí vyrobiť operátor ručne, a nikde to nie je napísané |
+| 9 | `REDIS_URL` chýba **aj backendu** — a zlyhá to **ticho** | `backend/backend/settings.py:248-249`: `os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL', 'redis://localhost:6379/0')`. V podu je `localhost` sám pod, takže API beží ďalej a `enqueue` padá ticho. Toto je presne trieda chyby, ktorú [§8](#8-riziká-ktoré-sa-prejavia-ticho) opisuje |
+
+**CI to neodchytí, a to je samostatný nález.** `scripts/k8s/validate_helm_runtime.py`
+je jediná runtime kontrola chartu a kontroluje **zoznam Deploymentov a názvy
+frontov** (`:98`, `:136`, `:143`) — `REDIS_URL`, `envFrom` ani existenciu
+Secretu nerieši. Zelený `helm_runtime_validate` teda znamená „workloady sú
+deklarované", **nie** „workloady naozaj naštartujú". Body 2, 8 a 9 prejdú CI
+a prejavia sa až v klastri.
 
 **Bod 4 je architektonický, nie kozmetický.** Znamená, že frontend z chartu sa
 **nedá** namieriť na backend bežiaci mimo klastra. Fázovanie sa tomu musí
@@ -233,26 +289,60 @@ Poradie je od najnižšieho rizika k najvyššiemu.
 ### Fáza 0 — príprava (bez zmeny čohokoľvek)
 
 - `make db-backup` a `make db-backup-verify BACKUP_FILE=…`.
+- **`make db-backup-replicate BACKUP_FILE=…`** — a tento krok v prvom návrhu
+  chýbal, čím bola brána Fázy 0 **nedosiahnuteľná**. Zdôvodnenie nižšie.
 - `make db-restore-drill BACKUP_FILE=…` — aby existoval čerstvý záznam v
   `restore_drills.log` a `db-offsite-status` nepadal na starobu drillu.
 - Zaznamenať baseline `make ops-check` **pred** akýmkoľvek zásahom, nech je
   s čím porovnávať.
 
-**Brána:** záloha overená, drill zapísaný, baseline zelený.
+**Prečo tam `db-backup-replicate` musí byť.** `make db-backup` volá
+`scripts/local/backup_postgres.sh`, a v tom skripte **nie je ani jedno slovo o
+replikácii** (overené: `grep -c 'replicat\|offsite'` → 0). Oddelený je aj
+`make db-backup-replicate` → `scripts/local/replicate_postgres_backup.sh`.
+`make ops-check` pritom kontroluje inú vec, než by človek čakal: nie „existuje
+nejaká replika", ale **`<offsite>/<basename najnovšieho dumpu>.gpg`**. Kým sa
+replikácia nespraví, najnovší dump repliku nemá — a brána „baseline zelený" sa
+nedá splniť, nech sa spraví čokoľvek iné.
+
+Namerané 1. 10. 2026, presne v tomto poradí:
+
+| kontrola | stav pred replikáciou |
+|---|---|
+| najnovší dump | `cistafirma_20261001T171632Z.dump` — **bez `.gpg`** |
+| najnovšia replika | `cistafirma_20260928T195631Z.dump.gpg` — o 3 dni staršia |
+| dôsledok | `ops-check`: `FAIL no off-site replica of the newest dump` |
+| po `db-backup-replicate` | `OK newest dump has a checksum-verified off-site replica, encrypted at source to F3B8F3ADFBA9DB8F` |
+
+**Brána:** záloha overená, **replika overená**, drill zapísaný, baseline zelený.
 **Rollback:** netreba, nič sa nemenilo.
+
+**Vykonané 1. 10. 2026** (všetko na delle, `/home/sam/cistafirma`): dump
+`cistafirma_20261001T171632Z.dump`, `db-backup-verify` EXIT=0, replika na
+`/mnt/cistafirma-offsite` s overeným šifrovaním na zdroji, drill
+`39 public tables restored into isolated container`, baseline `ops-check`
+`Operational controls: SATISFIED` EXIT=0.
 
 ### Fáza 1 — k3s, a nič viac
 
 Nainštalovať k3s na dell a **nenasadiť doň nič**. Cieľom je zistiť, či samo
 spustenie k3s rozbije dnešný stack.
 
-- Skontrolovať, že k3s nepoužije `443` (Traefik default) — pozri [§2](#2-cieľová-topológia-na-delle-merané-1-10-2026).
-- Odmerať prírastok RAM **a swapu** (`free -h` pred a po). Keďže už dnes je
-  835 MiB odswapovaných, rozhoduje práve to, či k3s tlak zvýši, alebo nie.
+- Inštalovať s `--disable traefik --disable servicelb`, ako je to v
+  [§2](#2-cieľová-topológia-na-delle-merané-1-10-2026) — inak ServiceLB narazí
+  na `100.79.47.4:443` a pôjde do crash-loopu.
+- Odmerať `free -h` **pred a po** spustení k3s, v jednej session. Rozhoduje
+  **rozdiel**, nie absolútne číslo — swap je vzorka (viď §2).
+- Overiť, že `100.79.47.4:443` stále drží `tailscaled` a že
+  `https://dell.taildb03cf.ts.net` stále odpovedá.
+- `kubectl get pods -A` — **žiadny pod v `CrashLoopBackOff`**. Prázdny klaster
+  bez jedného bežiaceho workloadu je práve ten stav, v ktorom by to nikto
+  nevidel, keby sa nepozrel.
 
-**Brána:** dnešný stack beží nezmenený, `make ops-check` zelený, a swap po
-spustení k3s nerastie — ak rastie, je to signál, že sa do klastra nemá
-presúvať ešte aj aplikácia.
+**Brána:** dnešný stack beží nezmenený, `make ops-check` zelený, swap po
+spustení k3s **nerastie o viac, než je šum vzorky**, a v klastri nič
+nekrachuje. Ak swap rastie, je to signál, že sa do klastra nemá presúvať ešte
+aj aplikácia.
 **Rollback:** `k3s-uninstall.sh` (k3s ho inštaluje sám).
 
 Toto je jediná fáza, kde je rollback úplný a bez následkov. Preto sa v nej nič
@@ -353,12 +443,17 @@ než tie, ktoré spadnú:
 1. **Pody nedosiahnu Postgres.** Prejaví sa to ako `wait-for-migrations` v slučke
    navždy, nie ako pád. Presne preto je Fáza 2 samostatná a s pozitívnou kontrolou.
 2. **Dva celery beaty.** Duplicitné periodické úlohy. Nič nepadne.
-3. **`REDIS_URL` nezapojený** ([§4](#4-čo-chart-naozaj-umí-a-čo-nie-overené-1-10-2026) bod 2) —
-   `celery-worker-deployment.yaml:43` ho číta v **init kontajneri**
-   v neohraničenej slučke `until …; do … sleep 2; done` s potlačenou chybou
-   (`2>/dev/null`). Worker teda **vôbec neštartuje** a pod ostane navždy
-   v `Init:0/1` s textom „Waiting for Redis…" — nie je to worker, ktorý beží
-   naprázdno, je to pod, ktorý nikdy nie je ready.
+3. **`REDIS_URL` nezapojený** ([§4](#4-čo-chart-naozaj-umí-a-čo-nie-overené-1-10-2026) body 2 a 9).
+   Dva rôzne prejavy, a ten druhý je horší:
+   - **Worker:** `celery-worker-deployment.yaml:43` ho číta v **init kontajneri**
+     v neohraničenej slučke `until …; do … sleep 2; done` s potlačenou chybou
+     (`2>/dev/null`). Worker teda **vôbec neštartuje** a pod ostane navždy
+     v `Init:0/1` s textom „Waiting for Redis…" — nie je to worker, ktorý beží
+     naprázdno, je to pod, ktorý nikdy nie je ready.
+   - **Backend:** `settings.py:248-249` padá na `redis://localhost:6379/0`.
+     V podu je `localhost` **sám pod**, takže API odpovedá, `/healthz/` je
+     zelené, liveness probe prechádza — a každé `enqueue` ticho zlyhá. Toto je
+     horšie než worker, ktorý neštartuje, lebo **nič nevyzerá rozbité**.
 4. **`PROMETHEUS_MULTIPROC_DIR`** — `docker-compose.yml:102-107` vysvetľuje, že
    s viac než jedným gunicorn procesom musí byť nastavený a **nesmie ho zdieľať
    viac kontajnerov**. Pri dvoch replikách backendu to treba držať rovnako.
